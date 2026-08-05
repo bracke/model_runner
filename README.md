@@ -124,35 +124,99 @@ mechanically from the error enumeration so a code and its message cannot drift.
 
 ## Building and testing
 
+Needs [Alire](https://alire.ada.dev) and a GNAT toolchain.
+
+`model_runner` depends on sibling crates that are not in the Alire community
+index. As the rest of this family does, `alire.toml` pins them **by path**, so
+they have to sit beside this one:
+
 ```
-alr build                                  # library and executable
-cd tests && alr build                      # test crate
-cd tests && ./bin/tests test               # 63 tests
-cd tests && ./bin/tests check              # 480 repository and layering checks
+Ada/
+├── model_runner/       <- this crate
+├── terminal_styles/    pinned here
+├── messages/           pinned here
+└── project_tools/      pinned by the tests crate
+```
+
+Those pins are transitive, and the closure is deeper than it looks: `messages`
+pins `i18n`, and sub-crates inside `i18n` and `awklib` pin further crates
+again. A bare clone of this repository alone will not build -- `alr` reports
+that a pin path is not a valid directory and names the crate it wanted, one at
+a time.
+
+The reliable way to materialise the closure is the composite action this family
+uses in CI, which walks the pins for you:
+
+```yaml
+- uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
+  with:
+    root: model_runner
+```
+
+By hand, clone each crate `alr` asks for into the same parent directory until
+it stops asking, then:
+
+```
+cd model_runner
+alr update                                 # regenerates config/ with the
+                                           # dependency withs; a fresh clone
+                                           # needs this before it will compile
+alr build --release
+cd tests && alr build && ./bin/tests test
+```
+
+I have not reduced that to a single verified command line, and would rather say
+so than print one that does not work.
+
+Two things are generated rather than committed, so a clone does not have them
+until something makes them:
+
+- **`config/`** holds the configuration project that Alire writes, and both
+  project files import it. `alr build` creates it. Calling `gprbuild` directly
+  in a fresh clone fails with `imported project file "config/..." not found`,
+  which is what that means.
+- **`tests/fixtures/tiny-model.gguf`** is written by `tests fixtures`. The test
+  suite does not need it -- it builds the same model in memory -- but the
+  command-line examples above do.
+
+Build `--release` for anything you intend to measure. The default development
+profile is a debug build, and the difference is not small: twelve tokens on a
+1.1B model take 2.2 seconds optimized and around 14 unoptimized.
+
+```
+alr build --release                        # optimized, what to ship and measure
+alr build                                  # debug: -Og, all validity checks
+cd tests && ./bin/tests test               # 67 tests
+cd tests && ./bin/tests check              # 484 repository and layering checks
 cd tests && ./bin/tests conformance        # engine vs independent reference
+cd tests && ./bin/tests benchmark          # row kernels, synthetic, no model
 cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
 cd tests && ./bin/tests fuzz --seed 1 --cases 2000
 cd tests && ./bin/tests fixtures           # write tests/fixtures/tiny-model.gguf
 cd tests && ./bin/tests external-model --model /path/to/your.gguf [--expect FILE]
 ```
 
-All 63 tests are deterministic, offline, and need no downloaded model:
+All 67 tests are deterministic, offline, and need no downloaded model:
 
-- **GGUF (13)** — truncation at *every* byte offset of a valid file, corrupt
+- **GGUF (15)** — truncation at *every* byte offset of a valid file, corrupt
   magic, unsupported versions, excessive counts, duplicate metadata keys,
   duplicate tensor names, invalid UTF-8, quantization block misalignment,
-  out-of-bounds tensor ranges, trailing-data policy, typed accessors, and a
-  450-case mutation corpus that must produce only controlled outcomes.
-- **Inference (9)** — preparation, finite logits, run-to-run determinism,
+  out-of-bounds tensor ranges, trailing-data policy, typed accessors, a
+  450-case mutation corpus that must produce only controlled outcomes, the
+  fused dot product agreeing with the reference decoder for every format, and
+  the number of vectors in one kernel call changing none of them.
+- **Inference (10)** — preparation, finite logits, run-to-run determinism,
   cancellation leaving the cache uncommitted, context exhaustion and reset,
   out-of-range token rejection, tokenizer round trip, an interrupt reaching the
-  cancellation token through a real signal, and agreement with the independent
-  reference implementation.
-- **Sampling, stops, templates (12)** — greedy maximum and tie-breaking, greedy
+  cancellation token through a real signal, agreement with the independent
+  reference implementation, and a batch producing the same bits as the same
+  tokens evaluated one at a time, down to the cache it leaves behind.
+- **Sampling, stops, templates (13)** — greedy maximum and tie-breaking, greedy
   entropy independence, fixed-seed reproducibility, top-k, min-p, repetition
   penalty, NaN and infinity rejection, stop-string earliest-then-longest
   matching, stop bounds, exact template rendering, branches and whitespace
-  control, rejection of unsupported constructs.
+  control, rejection of unsupported constructs, and automatic seeding varying
+  between runs without falling back to the fixed seed.
 - **CLI and generation (11)** — command parsing, fifteen distinct usage errors,
   end-of-options, pre-parse scans, reproducible generation, stop strings across
   token boundaries with no leak, stop tokens producing no text, closed output
@@ -238,7 +302,7 @@ external-model: ok, architecture llama, 21 tensors, prompt 3 tokens,
 
 ### Repository checks
 
-`tests check` performs 480 checks in Ada: crate structure and declared
+`tests check` performs 484 checks in Ada: crate structure and declared
 dependencies, the version in `alire.toml` against `Model_Runner.Version`,
 absence of scripting-language build files, that production code never reaches
 AUnit or `project_tools`, that nothing below the presentation layer reaches the
