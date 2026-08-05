@@ -33,6 +33,29 @@ terminal_styles = { path = "../../terminal_styles" }
 [[pins]]
 messages = { path = "../../messages" }
 
+# model_runner needs none of the following itself. They arrive because
+# `messages` pins `i18n`, whose pre-build tooling regenerates CLDR and tzdb
+# data over HTTPS and so builds `httpclient`, whose TLS backend is `ssllib`.
+# Alire honours pins only in the root crate, so every root that builds this
+# graph has to name them, exactly as versionlib and sitefetch do.
+[[pins]]
+httpclient = { path = "../../httpclient" }
+
+[[pins]]
+ssllib = { path = "../../ssllib" }
+
+[[pins]]
+cryptolib = { path = "../../cryptolib" }
+
+[[pins]]
+truststores = { path = "../../truststores" }
+
+[[pins]]
+hostkit = { path = "../../hostkit" }
+
+[[pins]]
+zlib = { path = "../../zlib" }
+
 # Build dependencies in the development profile (-Og) too, not the default
 # release (-O3). Keeping every root on the same profile lets them share object
 # files instead of forcing a rebuild whenever a different root is built.
