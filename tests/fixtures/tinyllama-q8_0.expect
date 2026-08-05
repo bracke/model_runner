@@ -1,0 +1,19 @@
+# Recorded by hand from a reference runtime; see docs/reference-runtime.md.
+# The model this refers to is NOT committed -- see docs/fixture-provenance.md
+# for where to obtain it. No mandatory test reads this file.
+#
+# Tokenization came from:
+#   llama-tokenize -m tinyllama-q8_0.gguf -p "The capital of France is" --ids
+#     -> [1, 450, 7483, 310, 3444, 338]
+#
+# Greedy continuation came from llama-cli with --temp 0, which printed
+#   "The capital of France is Paris."
+# for the same prompt, so the continuation is " Paris." -- the leading space
+# belongs to the token and is written here as the \s escape because the
+# directive value is trimmed.
+
+runtime llama.cpp b1-717dad5
+model tinyllama-1.1b-chat-v1.0.Q8_0.gguf
+prompt The capital of France is
+tokens 1 450 7483 310 3444 338
+greedy_text \sParis.

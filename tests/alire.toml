@@ -1,0 +1,39 @@
+name = "tests"
+description = "AUnit suite and project tooling for model_runner"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT"
+project-files = ["tests.gpr"]
+executables = ["tests"]
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+[[depends-on]]
+model_runner = "~0.1.0-dev"
+
+[[depends-on]]
+aunit = "~26.0.0"
+
+[[depends-on]]
+project_tools = "~0.1.0"
+
+[[pins]]
+model_runner = { path = ".." }
+
+[[pins]]
+project_tools = { path = "../../project_tools" }
+
+[[pins]]
+terminal_styles = { path = "../../terminal_styles" }
+
+[[pins]]
+messages = { path = "../../messages" }
+
+# Profiles are not overridden here. A wildcard pinning every crate to the
+# development profile made `alr build --release` silently build dependencies
+# unoptimized, and building the tests crate reverted the root crate's profile
+# behind your back. Both are worth more than sharing one set of object files.

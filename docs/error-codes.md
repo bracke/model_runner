@@ -1,0 +1,226 @@
+# Error-code reference
+
+Generated from `Model_Runner.Errors.Error_Code` by `tests docs`.
+Do not edit by hand.
+
+A code is stable: the ordinal is the literal's position within its
+domain group, so codes are appended, never reordered or removed.
+
+
+## CLI
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-CLI-0001` | `error.cli.missing_command` | recovery_user_correctable | 2 |
+| `MR-CLI-0002` | `error.cli.unknown_command` | recovery_user_correctable | 2 |
+| `MR-CLI-0003` | `error.cli.unknown_option` | recovery_user_correctable | 2 |
+| `MR-CLI-0004` | `error.cli.missing_option_value` | recovery_user_correctable | 2 |
+| `MR-CLI-0005` | `error.cli.unexpected_option_value` | recovery_user_correctable | 2 |
+| `MR-CLI-0006` | `error.cli.invalid_option_value` | recovery_user_correctable | 2 |
+| `MR-CLI-0007` | `error.cli.option_out_of_range` | recovery_user_correctable | 2 |
+| `MR-CLI-0008` | `error.cli.repeated_option` | recovery_user_correctable | 2 |
+| `MR-CLI-0009` | `error.cli.conflicting_prompt_sources` | recovery_user_correctable | 2 |
+| `MR-CLI-0010` | `error.cli.conflicting_system_sources` | recovery_user_correctable | 2 |
+| `MR-CLI-0011` | `error.cli.raw_mode_conflict` | recovery_user_correctable | 2 |
+| `MR-CLI-0012` | `error.cli.missing_model_path` | recovery_user_correctable | 2 |
+| `MR-CLI-0013` | `error.cli.unexpected_operand` | recovery_user_correctable | 2 |
+| `MR-CLI-0014` | `error.cli.invalid_locale` | recovery_user_correctable | 2 |
+| `MR-CLI-0015` | `error.cli.invalid_color_mode` | recovery_user_correctable | 2 |
+| `MR-CLI-0016` | `error.cli.invalid_backend` | recovery_user_correctable | 2 |
+| `MR-CLI-0017` | `error.cli.invalid_mapping_mode` | recovery_user_correctable | 2 |
+| `MR-CLI-0018` | `error.cli.no_prompt_available` | recovery_user_correctable | 2 |
+| `MR-CLI-0019` | `error.cli.interactive_unavailable` | recovery_user_correctable | 2 |
+| `MR-CLI-0020` | `error.cli.invalid_environment_value` | recovery_user_correctable | 2 |
+
+## IO
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-IO-0001` | `error.io.open_failed` | recovery_user_correctable | 6 |
+| `MR-IO-0002` | `error.io.read_failed` | recovery_user_correctable | 6 |
+| `MR-IO-0003` | `error.io.write_failed` | recovery_user_correctable | 6 |
+| `MR-IO-0004` | `error.io.file_too_large` | recovery_resource_limited | 6 |
+| `MR-IO-0005` | `error.io.not_a_regular_file` | recovery_user_correctable | 6 |
+| `MR-IO-0006` | `error.io.invalid_utf8` | recovery_user_correctable | 6 |
+| `MR-IO-0007` | `error.io.output_closed` | recovery_user_correctable | 6 |
+| `MR-IO-0008` | `error.io.seek_failed` | recovery_user_correctable | 6 |
+
+## GGUF
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-GGUF-0001` | `error.gguf.truncated` | recovery_none | 3 |
+| `MR-GGUF-0002` | `error.gguf.invalid_magic` | recovery_none | 3 |
+| `MR-GGUF-0003` | `error.gguf.unsupported_version` | recovery_unsupported | 4 |
+| `MR-GGUF-0004` | `error.gguf.metadata_count_too_large` | recovery_none | 3 |
+| `MR-GGUF-0005` | `error.gguf.tensor_count_too_large` | recovery_none | 3 |
+| `MR-GGUF-0006` | `error.gguf.invalid_string_length` | recovery_none | 3 |
+| `MR-GGUF-0007` | `error.gguf.invalid_utf8` | recovery_none | 3 |
+| `MR-GGUF-0008` | `error.gguf.unknown_value_type` | recovery_none | 3 |
+| `MR-GGUF-0009` | `error.gguf.invalid_array_element_type` | recovery_none | 3 |
+| `MR-GGUF-0010` | `error.gguf.array_too_large` | recovery_none | 3 |
+| `MR-GGUF-0011` | `error.gguf.empty_metadata_key` | recovery_none | 3 |
+| `MR-GGUF-0012` | `error.gguf.duplicate_metadata_key` | recovery_none | 3 |
+| `MR-GGUF-0013` | `error.gguf.empty_tensor_name` | recovery_none | 3 |
+| `MR-GGUF-0014` | `error.gguf.duplicate_tensor_name` | recovery_none | 3 |
+| `MR-GGUF-0015` | `error.gguf.invalid_tensor_rank` | recovery_none | 3 |
+| `MR-GGUF-0016` | `error.gguf.invalid_tensor_dimension` | recovery_none | 3 |
+| `MR-GGUF-0017` | `error.gguf.unknown_tensor_type` | recovery_none | 3 |
+| `MR-GGUF-0018` | `error.gguf.unsupported_tensor_type` | recovery_unsupported | 4 |
+| `MR-GGUF-0019` | `error.gguf.block_misalignment` | recovery_none | 3 |
+| `MR-GGUF-0020` | `error.gguf.invalid_alignment` | recovery_none | 3 |
+| `MR-GGUF-0021` | `error.gguf.tensor_offset_misaligned` | recovery_none | 3 |
+| `MR-GGUF-0022` | `error.gguf.tensor_out_of_bounds` | recovery_none | 3 |
+| `MR-GGUF-0023` | `error.gguf.tensor_overlap` | recovery_none | 3 |
+| `MR-GGUF-0024` | `error.gguf.arithmetic_overflow` | recovery_none | 3 |
+| `MR-GGUF-0025` | `error.gguf.trailing_data` | recovery_none | 3 |
+| `MR-GGUF-0026` | `error.gguf.missing_metadata_key` | recovery_none | 3 |
+| `MR-GGUF-0027` | `error.gguf.metadata_type_mismatch` | recovery_none | 3 |
+| `MR-GGUF-0028` | `error.gguf.metadata_out_of_range` | recovery_none | 3 |
+| `MR-GGUF-0029` | `error.gguf.file_changed` | recovery_none | 3 |
+
+## TOK
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-TOK-0001` | `error.tokenizer.missing_model` | recovery_none | 3 |
+| `MR-TOK-0002` | `error.tokenizer.unsupported_model` | recovery_unsupported | 4 |
+| `MR-TOK-0003` | `error.tokenizer.missing_tokens` | recovery_none | 3 |
+| `MR-TOK-0004` | `error.tokenizer.invalid_vocabulary` | recovery_none | 3 |
+| `MR-TOK-0005` | `error.tokenizer.vocabulary_too_large` | recovery_none | 3 |
+| `MR-TOK-0006` | `error.tokenizer.invalid_token_text` | recovery_none | 3 |
+| `MR-TOK-0007` | `error.tokenizer.invalid_token_id` | recovery_none | 3 |
+| `MR-TOK-0008` | `error.tokenizer.invalid_merges` | recovery_none | 3 |
+| `MR-TOK-0009` | `error.tokenizer.invalid_scores` | recovery_none | 3 |
+| `MR-TOK-0010` | `error.tokenizer.invalid_token_type` | recovery_none | 3 |
+| `MR-TOK-0011` | `error.tokenizer.input_too_long` | recovery_resource_limited | 3 |
+| `MR-TOK-0012` | `error.tokenizer.invalid_utf8` | recovery_none | 3 |
+| `MR-TOK-0013` | `error.tokenizer.buffer_too_small` | recovery_none | 3 |
+| `MR-TOK-0014` | `error.tokenizer.missing_byte_fallback` | recovery_unsupported | 4 |
+
+## TMPL
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-TMPL-0001` | `error.template.missing` | recovery_none | 3 |
+| `MR-TMPL-0002` | `error.template.unsupported_construct` | recovery_unsupported | 4 |
+| `MR-TMPL-0003` | `error.template.syntax_error` | recovery_none | 3 |
+| `MR-TMPL-0004` | `error.template.too_large` | recovery_none | 3 |
+| `MR-TMPL-0005` | `error.template.nesting_too_deep` | recovery_none | 3 |
+| `MR-TMPL-0006` | `error.template.unknown_variable` | recovery_none | 3 |
+| `MR-TMPL-0007` | `error.template.unknown_filter` | recovery_none | 3 |
+| `MR-TMPL-0008` | `error.template.output_too_large` | recovery_resource_limited | 3 |
+| `MR-TMPL-0009` | `error.template.iteration_limit` | recovery_none | 3 |
+| `MR-TMPL-0010` | `error.template.unbalanced_block` | recovery_none | 3 |
+| `MR-TMPL-0011` | `error.template.unsupported_role` | recovery_unsupported | 4 |
+
+## ARCH
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-ARCH-0001` | `error.architecture.missing_identifier` | recovery_none | 3 |
+| `MR-ARCH-0002` | `error.architecture.unsupported` | recovery_unsupported | 4 |
+| `MR-ARCH-0003` | `error.architecture.missing_metadata` | recovery_none | 3 |
+| `MR-ARCH-0004` | `error.architecture.invalid_metadata` | recovery_none | 3 |
+| `MR-ARCH-0005` | `error.architecture.invalid_dimensions` | recovery_none | 3 |
+| `MR-ARCH-0006` | `error.architecture.invalid_head_counts` | recovery_none | 3 |
+| `MR-ARCH-0007` | `error.architecture.invalid_rope` | recovery_none | 3 |
+| `MR-ARCH-0008` | `error.architecture.unsupported_rope_scaling` | recovery_unsupported | 4 |
+| `MR-ARCH-0009` | `error.architecture.unsupported_feature` | recovery_unsupported | 4 |
+| `MR-ARCH-0010` | `error.architecture.missing_tensor` | recovery_none | 3 |
+| `MR-ARCH-0011` | `error.architecture.invalid_tensor_shape` | recovery_none | 3 |
+| `MR-ARCH-0012` | `error.architecture.invalid_tensor_format` | recovery_none | 3 |
+| `MR-ARCH-0013` | `error.architecture.vocabulary_mismatch` | recovery_none | 3 |
+| `MR-ARCH-0014` | `error.architecture.context_too_large` | recovery_none | 3 |
+| `MR-ARCH-0015` | `error.architecture.layer_numbering_gap` | recovery_none | 3 |
+
+## TENSOR
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-TENSOR-0001` | `error.tensor.invalid_shape` | recovery_none | 3 |
+| `MR-TENSOR-0002` | `error.tensor.rank_too_high` | recovery_none | 3 |
+| `MR-TENSOR-0003` | `error.tensor.invalid_stride` | recovery_none | 3 |
+| `MR-TENSOR-0004` | `error.tensor.out_of_bounds` | recovery_none | 3 |
+| `MR-TENSOR-0005` | `error.tensor.format_unsupported` | recovery_unsupported | 4 |
+| `MR-TENSOR-0006` | `error.tensor.block_misaligned` | recovery_none | 3 |
+| `MR-TENSOR-0007` | `error.tensor.read_only` | recovery_none | 3 |
+| `MR-TENSOR-0008` | `error.tensor.shape_mismatch` | recovery_none | 3 |
+| `MR-TENSOR-0009` | `error.tensor.non_finite_value` | recovery_none | 3 |
+
+## BACKEND
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-BACKEND-0001` | `error.backend.unknown` | recovery_none | 8 |
+| `MR-BACKEND-0002` | `error.backend.unsupported_format` | recovery_unsupported | 4 |
+| `MR-BACKEND-0003` | `error.backend.unsupported_operation` | recovery_unsupported | 4 |
+| `MR-BACKEND-0004` | `error.backend.capability_missing` | recovery_unsupported | 4 |
+| `MR-BACKEND-0005` | `error.backend.worker_failed` | recovery_none | 8 |
+| `MR-BACKEND-0006` | `error.backend.queue_full` | recovery_resource_limited | 8 |
+| `MR-BACKEND-0007` | `error.backend.closed` | recovery_none | 8 |
+| `MR-BACKEND-0008` | `error.backend.invalid_worker_count` | recovery_none | 8 |
+
+## MEM
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-MEM-0001` | `error.memory.limit_exceeded` | recovery_resource_limited | 5 |
+| `MR-MEM-0002` | `error.memory.allocation_failed` | recovery_resource_limited | 5 |
+| `MR-MEM-0003` | `error.memory.plan_overflow` | recovery_resource_limited | 5 |
+| `MR-MEM-0004` | `error.memory.invalid_limit` | recovery_none | 5 |
+
+## LIFE
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-LIFE-0001` | `error.lifecycle.invalid_state` | recovery_terminal | 8 |
+| `MR-LIFE-0002` | `error.lifecycle.model_not_ready` | recovery_terminal | 8 |
+| `MR-LIFE-0003` | `error.lifecycle.session_active` | recovery_terminal | 8 |
+| `MR-LIFE-0004` | `error.lifecycle.session_closed` | recovery_terminal | 8 |
+| `MR-LIFE-0005` | `error.lifecycle.session_failed` | recovery_terminal | 8 |
+| `MR-LIFE-0006` | `error.lifecycle.already_closed` | recovery_terminal | 8 |
+| `MR-LIFE-0007` | `error.lifecycle.mapping_unavailable` | recovery_terminal | 8 |
+| `MR-LIFE-0008` | `error.lifecycle.mapping_required` | recovery_resource_limited | 5 |
+
+## GEN
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-GEN-0001` | `error.generation.prompt_too_long` | recovery_none | 2 |
+| `MR-GEN-0002` | `error.generation.context_exhausted` | recovery_resource_limited | 5 |
+| `MR-GEN-0003` | `error.generation.invalid_request` | recovery_none | 2 |
+| `MR-GEN-0004` | `error.generation.cancelled` | recovery_none | 7 |
+| `MR-GEN-0005` | `error.generation.output_closed` | recovery_none | 0 |
+| `MR-GEN-0006` | `error.generation.no_logits` | recovery_none | 8 |
+| `MR-GEN-0007` | `error.generation.batch_too_large` | recovery_none | 2 |
+| `MR-GEN-0008` | `error.generation.empty_prompt` | recovery_none | 2 |
+
+## SAMPLE
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-SAMPLE-0001` | `error.sampling.invalid_configuration` | recovery_none | 2 |
+| `MR-SAMPLE-0002` | `error.sampling.vocabulary_mismatch` | recovery_none | 8 |
+| `MR-SAMPLE-0003` | `error.sampling.non_finite_logit` | recovery_none | 8 |
+| `MR-SAMPLE-0004` | `error.sampling.no_candidates` | recovery_none | 8 |
+| `MR-SAMPLE-0005` | `error.sampling.invalid_distribution` | recovery_none | 8 |
+
+## CONV
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-CONV-0001` | `error.conversation.too_long` | recovery_resource_limited | 2 |
+| `MR-CONV-0002` | `error.conversation.invalid_role` | recovery_user_correctable | 2 |
+| `MR-CONV-0003` | `error.conversation.empty` | recovery_user_correctable | 2 |
+| `MR-CONV-0004` | `error.conversation.system_unsupported` | recovery_unsupported | 4 |
+
+## INTERNAL
+
+| Code | Message key | Recovery | Exit |
+| --- | --- | --- | --- |
+| `MR-INTERNAL-0001` | `error.internal.invariant_violated` | recovery_terminal | 8 |
+| `MR-INTERNAL-0002` | `error.internal.unexpected_exception` | recovery_terminal | 8 |
+| `MR-INTERNAL-0003` | `error.internal.not_implemented` | recovery_unsupported | 4 |
+| `MR-INTERNAL-0004` | `error.internal.localization_failed` | recovery_terminal | 8 |
+

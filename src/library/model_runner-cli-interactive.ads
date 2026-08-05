@@ -1,0 +1,49 @@
+with Model_Runner.CLI.Options;
+with Model_Runner.Llama;
+with Model_Runner.Presentation;
+
+--  Interactive conversation.
+--
+--  Interactive mode keeps a structured committed history and renders it
+--  through the model's own chat template on every turn. The history and the
+--  KV cache are kept in step by verifying, before each turn, that the freshly
+--  tokenized conversation is an exact prefix extension of what the cache
+--  already holds; when it is not, the session is reset and the whole
+--  conversation is re-evaluated. There is never a displayed history that
+--  differs from the model's context.
+--
+--  Commands. The command tokens are protocol and are never localized; their
+--  descriptions and responses are. An unknown command produces a localized
+--  diagnostic and the session continues.
+--
+--    /exit   /reset   /help   /settings   /stats   /context   /system TEXT
+--
+--  Input policy. Non-empty lines accumulate; a blank line submits. An empty
+--  submission is ignored. At end of file a pending non-empty prompt is
+--  submitted and then the session ends.
+--
+--  Cancellation. A cancelled assistant response is not committed to the
+--  structured history, the session is reset, and the prior committed
+--  conversation is re-evaluated on the next turn. Text that was already
+--  streamed stays visible.
+--
+--  Nothing is written to disk: the conversation is not persisted.
+--
+--  Task safety: the loop runs on the calling task.
+package Model_Runner.CLI.Interactive is
+
+   --  Hold a conversation until the user leaves or input ends.
+   --
+   --  @param Item Typed command supplying the sampling and stop settings.
+   --  @param Screen Console for prompts, diagnostics and statistics.
+   --  @param Prepared Prepared model.
+   --  @param Session Open session on that model.
+   --  @param Status Process exit status.
+   procedure Run
+     (Item     : Model_Runner.CLI.Options.Command;
+      Screen   : in out Model_Runner.Presentation.Console;
+      Prepared : in out Model_Runner.Llama.Model;
+      Session  : in out Model_Runner.Llama.Session;
+      Status   : out Natural);
+
+end Model_Runner.CLI.Interactive;

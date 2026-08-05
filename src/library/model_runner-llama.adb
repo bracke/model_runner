@@ -1,0 +1,1585 @@
+with Ada.Exceptions;
+with Ada.Unchecked_Deallocation;
+
+with Interfaces;
+
+with Model_Runner.Arithmetic;
+with Model_Runner.Kernels;
+with Model_Runner.Text;
+
+package body Model_Runner.Llama is
+
+   use type Interfaces.Unsigned_64;
+   use type Model_Runner.Arithmetic.Checked;
+   use type Model_Runner.Bytes.Byte_Count;
+   use type Model_Runner.Bytes.Byte_Array_Access;
+   use type Model_Runner.Numerics.Element_Count;
+   use type Model_Runner.Numerics.Real;
+   use type Model_Runner.Numerics.Wide_Real;
+   use type Model_Runner.Tensors.Real_Array_Access;
+
+   package A renames Model_Runner.Arithmetic;
+   package B renames Model_Runner.Bytes;
+   package C renames Model_Runner.Cancellation;
+   package Containers renames Model_Runner.GGUF.Containers;
+   package E renames Model_Runner.Errors;
+   package K renames Model_Runner.Kernels;
+   package Mem renames Model_Runner.Memory;
+   package N renames Model_Runner.Numerics;
+   package P renames Model_Runner.Progress;
+   package T renames Model_Runner.Tensors;
+   package Workers_CPU renames Model_Runner.Backend.CPU;
+
+   --  Bytes one cache element occupies. The V1 cache stores Real, which is the
+   --  correctness baseline; a half-precision cache would need its own
+   --  conformance evidence before it could be advertised.
+   Cache_Element_Bytes : constant := 4;
+
+   --  Metadata keys are built once, here, so that no other package spells a
+   --  tensor or metadata name.
+   function Layer_Key (Index : Natural; Suffix : String) return String
+   is ("blk." & Model_Runner.Text.Image (Long_Long_Integer (Index))
+       & "." & Suffix);
+
+   function Model_Key (Suffix : String) return String
+   is (Architecture_Name & "." & Suffix);
+
+   procedure Deallocate_Layers is
+     new Ada.Unchecked_Deallocation (Layer_Array, Layer_Array_Access);
+
+   procedure Deallocate_History is
+     new Ada.Unchecked_Deallocation (Token_History, Token_History_Access);
+
+   ---------------------------------------------------------------------------
+   --  Configuration
+   ---------------------------------------------------------------------------
+
+   --  Read and validate the architecture metadata.
+   procedure Read_Configuration
+     (Source   : Containers.Container;
+      Bounds   : Model_Runner.Limits.Model_Limits;
+      Settings : out Configuration;
+      Status   : out E.Error_Info)
+   is
+      Number : Long_Long_Integer;
+      Value  : N.Wide_Real;
+      Local  : E.Error_Info;
+
+      --  Read a required positive integer key.
+      procedure Required
+        (Key     : String;
+         Maximum : Long_Long_Integer;
+         Target  : out Natural) is
+      begin
+         Target := 0;
+         Containers.Get_Integer (Source, Key, 1, Maximum, Number, Status);
+         if E.Is_Ok (Status) then
+            Target := Natural (Number);
+         end if;
+      end Required;
+
+      --  Report an unsupported feature the file asked for.
+      procedure Reject_Feature (Feature : String) is
+      begin
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", Feature, E.Param_Identifier);
+      end Reject_Feature;
+
+   begin
+      Settings := (others => <>);
+
+      declare
+         Name : constant String :=
+           Containers.String_Value (Source, "general.architecture");
+      begin
+         if Name = "" then
+            Status := E.Make (E.Arch_Missing_Identifier);
+            return;
+         end if;
+
+         if Name /= Architecture_Name then
+            Status := E.Make (E.Arch_Unsupported);
+            E.Add_Text (Status, "architecture", Name, E.Param_Identifier);
+            E.Add_Text
+              (Status, "supported", Architecture_Name, E.Param_Identifier);
+            return;
+         end if;
+      end;
+
+      Required (Model_Key ("context_length"),
+                Long_Long_Integer (Bounds.Max_Context_Length),
+                Settings.Context_Length);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Required (Model_Key ("embedding_length"),
+                Long_Long_Integer (Bounds.Max_Embedding), Settings.Embedding);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Required (Model_Key ("block_count"),
+                Long_Long_Integer (Bounds.Max_Layers), Settings.Layers);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Required (Model_Key ("feed_forward_length"),
+                Long_Long_Integer (Bounds.Max_Embedding) * 64,
+                Settings.Feed_Forward);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Required (Model_Key ("attention.head_count"),
+                Long_Long_Integer (Bounds.Max_Heads), Settings.Heads);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  Key-value head count is optional; a model that omits it is
+      --  multi-head rather than grouped-query.
+      Containers.Get_Integer
+        (Source, Model_Key ("attention.head_count_kv"), 1,
+         Long_Long_Integer (Settings.Heads), Number, Local);
+      Settings.KV_Heads :=
+        (if E.Is_Ok (Local) then Natural (Number) else Settings.Heads);
+
+      Containers.Get_Float
+        (Source, Model_Key ("attention.layer_norm_rms_epsilon"),
+         0.0, 1.0, Value, Local);
+      Settings.Epsilon :=
+        (if E.Is_Ok (Local) then N.Real (Value) else 1.0E-5);
+
+      Containers.Get_Float
+        (Source, Model_Key ("rope.freq_base"), 1.0, 1.0E12, Value, Local);
+      Settings.Rope_Base := (if E.Is_Ok (Local) then Value else 10_000.0);
+
+      --  Rotary scaling. Only "none" and "linear" are implemented; anything
+      --  else changes the position mapping and would silently produce a
+      --  different model.
+      declare
+         Scaling : constant String :=
+           Containers.String_Value (Source, Model_Key ("rope.scaling.type"));
+      begin
+         if Scaling /= "" and then Scaling /= "none" and then Scaling /= "linear"
+         then
+            Status := E.Make (E.Arch_Unsupported_Rope_Scaling);
+            E.Add_Text (Status, "scaling", Scaling, E.Param_Identifier);
+            return;
+         end if;
+
+         Containers.Get_Float
+           (Source, Model_Key ("rope.scaling.factor"), 0.0, 1.0E6, Value, Local);
+         if E.Is_Ok (Local) and then Value > 0.0 then
+            Settings.Rope_Scale := 1.0 / Value;
+         end if;
+      end;
+
+      --  Features this profile does not implement. Presence of the key is
+      --  enough to reject: the model is not the one this crate can run.
+      if Containers.Has (Source, Model_Key ("expert_count"))
+        or else Containers.Has (Source, Model_Key ("expert_used_count"))
+      then
+         Reject_Feature ("mixture_of_experts");
+         return;
+      end if;
+
+      if Containers.Has (Source, Model_Key ("attention.sliding_window")) then
+         Reject_Feature ("sliding_window_attention");
+         return;
+      end if;
+
+      if Containers.Has (Source, Model_Key ("attention.value_length"))
+        and then Containers.Has (Source, Model_Key ("attention.key_length"))
+      then
+         --  Separate key and value widths are legal GGUF but are not part of
+         --  this profile, whose head size is derived from the embedding width.
+         declare
+            Key_Length, Value_Length : Long_Long_Integer;
+            First, Second : E.Error_Info;
+         begin
+            Containers.Get_Integer
+              (Source, Model_Key ("attention.key_length"), 1, 1_000_000,
+               Key_Length, First);
+            Containers.Get_Integer
+              (Source, Model_Key ("attention.value_length"), 1, 1_000_000,
+               Value_Length, Second);
+            if E.Is_Ok (First) and then E.Is_Ok (Second)
+              and then Key_Length /= Value_Length
+            then
+               Reject_Feature ("asymmetric_key_value_width");
+               return;
+            end if;
+         end;
+      end if;
+
+      --  Derived widths must divide exactly; a remainder would mean the file
+      --  describes a model this arithmetic cannot express.
+      if Settings.Embedding mod Settings.Heads /= 0 then
+         Status := E.Make (E.Arch_Invalid_Dimensions);
+         E.Add_Integer (Status, "embedding", Long_Long_Integer (Settings.Embedding));
+         E.Add_Integer (Status, "heads", Long_Long_Integer (Settings.Heads));
+         return;
+      end if;
+
+      if Settings.Heads mod Settings.KV_Heads /= 0 then
+         Status := E.Make (E.Arch_Invalid_Head_Counts);
+         E.Add_Integer (Status, "heads", Long_Long_Integer (Settings.Heads));
+         E.Add_Integer
+           (Status, "kv_heads", Long_Long_Integer (Settings.KV_Heads));
+         return;
+      end if;
+
+      Settings.Head_Size := Settings.Embedding / Settings.Heads;
+      Settings.Group_Size := Settings.Heads / Settings.KV_Heads;
+
+      Containers.Get_Integer
+        (Source, Model_Key ("rope.dimension_count"), 1,
+         Long_Long_Integer (Settings.Head_Size), Number, Local);
+      Settings.Rotary :=
+        (if E.Is_Ok (Local) then Natural (Number) else Settings.Head_Size);
+
+      if Settings.Rotary > Settings.Head_Size
+        or else Settings.Rotary mod 2 /= 0
+      then
+         Status := E.Make (E.Arch_Invalid_Rope);
+         E.Add_Integer (Status, "rotary", Long_Long_Integer (Settings.Rotary));
+         E.Add_Integer
+           (Status, "head_size", Long_Long_Integer (Settings.Head_Size));
+         return;
+      end if;
+
+      Status := E.Success;
+   end Read_Configuration;
+
+   ------------------
+   -- Read_Config --
+   ------------------
+
+   procedure Read_Config
+     (Source   : Containers.Container;
+      Bounds   : Model_Runner.Limits.Model_Limits :=
+        Model_Runner.Limits.Default_Model_Limits;
+      Settings : out Configuration;
+      Status   : out E.Error_Info) is
+   begin
+      Read_Configuration (Source, Bounds, Settings, Status);
+   end Read_Config;
+
+   ---------------------------------------------------------------------------
+   --  Tensor resolution
+   ---------------------------------------------------------------------------
+
+   --  Resolve one tensor by name and check its shape against the role it
+   --  plays. Every required tensor is resolved during preparation; no name
+   --  lookup happens during evaluation.
+   procedure Resolve
+     (Item     : in out Model;
+      Source   : Containers.Container;
+      Name     : String;
+      Rows     : Element_Count;
+      Columns  : Element_Count;
+      Result   : out T.View;
+      Status   : out E.Error_Info)
+   is
+      Index : constant Natural := Containers.Find_Tensor (Source, Name);
+   begin
+      Result := T.Empty_View;
+
+      if Index = 0 then
+         Status := E.Make (E.Arch_Missing_Tensor);
+         E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+         return;
+      end if;
+
+      if not Containers.Tensor_Is_Supported (Source, Index) then
+         Status := E.Make (E.Arch_Invalid_Tensor_Format);
+         E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+         E.Add_Text
+           (Status, "format",
+            Model_Runner.GGUF.Type_Name
+              (Containers.Tensor_Format (Source, Index)),
+            E.Param_Identifier);
+         return;
+      end if;
+
+      declare
+         Rank      : constant Positive := Containers.Tensor_Rank (Source, Index);
+         Contiguous : constant Element_Count :=
+           Element_Count (Containers.Tensor_Dimension (Source, Index, 1));
+         Remaining : Element_Count := 1;
+      begin
+         for Axis in 2 .. Rank loop
+            Remaining := Remaining
+              * Element_Count (Containers.Tensor_Dimension (Source, Index, Axis));
+         end loop;
+
+         if Contiguous /= Columns or else Remaining /= Rows then
+            Status := E.Make (E.Arch_Invalid_Tensor_Shape);
+            E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+            E.Add_Integer (Status, "columns", Long_Long_Integer (Contiguous));
+            E.Add_Integer (Status, "rows", Long_Long_Integer (Remaining));
+            E.Add_Integer
+              (Status, "expected_columns", Long_Long_Integer (Columns));
+            E.Add_Integer (Status, "expected_rows", Long_Long_Integer (Rows));
+            return;
+         end if;
+
+         T.Make
+           (Format  => Containers.Tensor_Format (Source, Index),
+            Rows    => Rows,
+            Columns => Columns,
+            Data    => Item.Arena,
+            Offset  =>
+              B.Byte_Count (Containers.Tensor_Offset (Source, Index))
+              - Item.Arena_Base,
+            Result  => Result,
+            Status  => Status);
+
+         if E.Is_Error (Status) then
+            E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+         end if;
+      end;
+   end Resolve;
+
+   --  Resolve a one-dimensional normalization weight and decode it once into a
+   --  plain vector. Norm weights are read on every layer of every token, and
+   --  they are tiny, so keeping them decoded costs little and removes a
+   --  dequantization from the inner loop.
+   procedure Resolve_Norm
+     (Item   : in out Model;
+      Source : Containers.Container;
+      Name   : String;
+      Width  : Element_Count;
+      Result : out T.Real_Array_Access;
+      Status : out E.Error_Info)
+   is
+      Weight : T.View;
+   begin
+      Result := null;
+      Resolve (Item, Source, Name, 1, Width, Weight, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      T.Allocate (Width, Result);
+      if Result = null then
+         Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+         return;
+      end if;
+
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Converted_Weights,
+         Interfaces.Unsigned_64 (Width) * 4);
+
+      T.Dequantize_Row (Weight, 0, Result.all, Status);
+      if E.Is_Error (Status) then
+         E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+      end if;
+   end Resolve_Norm;
+
+   -------------
+   -- Prepare --
+   -------------
+
+   procedure Prepare
+     (Item     : in out Model;
+      Source   : Containers.Container;
+      Bytes    : in out Model_Runner.Byte_Sources.Source'Class;
+      Bounds   : Model_Runner.Limits.Model_Limits :=
+        Model_Runner.Limits.Default_Model_Limits;
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null;
+      Observer : Model_Runner.Progress.Observer_Reference := null;
+      Status   : out E.Error_Info)
+   is
+      Ignored : E.Error_Info;
+
+      --  Abandon preparation, releasing every resource acquired so far.
+      procedure Fail (Reason : E.Error_Info) is
+      begin
+         Close (Item, Ignored);
+         Status := Reason;
+      end Fail;
+
+   begin
+      Close (Item, Ignored);
+      Status := E.Success;
+
+      if not Containers.Is_Valid (Source) then
+         Fail (E.Make (E.Lifecycle_Model_Not_Ready));
+         return;
+      end if;
+
+      Mem.Initialize (Item.Accounting, Bounds, Bounds.Max_Model_Bytes);
+
+      P.Publish (Observer, P.Load_Progress (P.Selecting_Architecture));
+      Read_Configuration (Source, Bounds, Item.Settings, Status);
+      if E.Is_Error (Status) then
+         Fail (Status);
+         return;
+      end if;
+
+      P.Publish (Observer, P.Load_Progress (P.Loading_Tokenizer));
+      Model_Runner.Tokenizer.Load (Item.Words, Source, Bounds, Status);
+      if E.Is_Error (Status) then
+         Fail (Status);
+         return;
+      end if;
+
+      Item.Settings.Vocabulary := Model_Runner.Tokenizer.Size (Item.Words);
+
+      --  Chat template. An embedded template is untrusted data: it is compiled
+      --  and validated here, before anything can be generated with it. A
+      --  template outside the supported subset leaves the model usable in raw
+      --  mode and records why conversation mode is unavailable.
+      P.Publish (Observer, P.Load_Progress (P.Compiling_Template));
+      declare
+         Source_Text : constant String :=
+           Containers.String_Value (Source, "tokenizer.chat_template");
+      begin
+         Item.Chat_Present := Source_Text /= "";
+         if Item.Chat_Present then
+            Model_Runner.Templates.Compile
+              (Item.Chat, Source_Text, Bounds, Item.Chat_Status);
+         else
+            Item.Chat_Status := E.Make (E.Template_Missing);
+         end if;
+      end;
+
+      P.Publish (Observer, P.Load_Progress (P.Planning_Memory));
+
+      --  Load the whole tensor data section into one arena. Every tensor view
+      --  then refers to a slice of it, so there is exactly one large
+      --  allocation for model weights and no second unquantized copy.
+      declare
+         Length : constant B.Byte_Count :=
+           B.Byte_Count (Containers.Tensor_Data_Bytes (Source));
+      begin
+         Mem.Check_Allocation
+           (Item.Accounting, Mem.Model_Weights,
+            Interfaces.Unsigned_64 (Length), Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+
+         B.Allocate (Length, Item.Arena);
+         if Item.Arena = null then
+            Fail (E.Make (E.Memory_Allocation_Failed));
+            return;
+         end if;
+
+         Mem.Record_Allocation
+           (Item.Accounting, Mem.Model_Weights,
+            Interfaces.Unsigned_64 (Length));
+         Item.Arena_Base := B.Byte_Count (Containers.Data_Offset (Source));
+
+         P.Publish (Observer, P.Load_Progress (P.Preparing_Tensors));
+         Bytes.Read (Item.Arena_Base, Item.Arena.all, Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+      end;
+
+      if C.Is_Cancelled (Cancel) then
+         Fail (E.Make (E.Generation_Cancelled));
+         return;
+      end if;
+
+      declare
+         Width  : constant Element_Count :=
+           Element_Count (Item.Settings.Embedding);
+         Vocab  : constant Element_Count :=
+           Element_Count (Item.Settings.Vocabulary);
+         Feed   : constant Element_Count :=
+           Element_Count (Item.Settings.Feed_Forward);
+         KV     : constant Element_Count :=
+           Element_Count (Item.Settings.KV_Heads * Item.Settings.Head_Size);
+      begin
+         Resolve
+           (Item, Source, "token_embd.weight", Vocab, Width,
+            Item.Embeddings, Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+
+         Resolve_Norm
+           (Item, Source, "output_norm.weight", Width, Item.Output_Norm, Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+
+         --  A model with no output projection ties the output to the embedding
+         --  table. The alias is explicit and immutable; nothing is copied.
+         if Containers.Find_Tensor (Source, "output.weight") = 0 then
+            Item.Settings.Tied_Output := True;
+            Item.Output := Item.Embeddings;
+         else
+            Resolve
+              (Item, Source, "output.weight", Vocab, Width,
+               Item.Output, Status);
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
+         end if;
+
+         Item.Layers := new Layer_Array (0 .. Item.Settings.Layers - 1);
+
+         for Index in Item.Layers.all'Range loop
+            if C.Is_Cancelled (Cancel) then
+               Fail (E.Make (E.Generation_Cancelled));
+               return;
+            end if;
+
+            declare
+               Current : Layer renames Item.Layers.all (Index);
+            begin
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_norm.weight"), Width,
+                  Current.Attention_Norm, Status);
+               exit when E.Is_Error (Status);
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_q.weight"),
+                  Width, Width, Current.Query, Status);
+               exit when E.Is_Error (Status);
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_k.weight"),
+                  KV, Width, Current.Key, Status);
+               exit when E.Is_Error (Status);
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_v.weight"),
+                  KV, Width, Current.Value, Status);
+               exit when E.Is_Error (Status);
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_output.weight"),
+                  Width, Width, Current.Attention_Out, Status);
+               exit when E.Is_Error (Status);
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "ffn_norm.weight"), Width,
+                  Current.Feed_Norm, Status);
+               exit when E.Is_Error (Status);
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
+                  Feed, Width, Current.Gate, Status);
+               exit when E.Is_Error (Status);
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                  Feed, Width, Current.Up, Status);
+               exit when E.Is_Error (Status);
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_down.weight"),
+                  Width, Feed, Current.Down, Status);
+               exit when E.Is_Error (Status);
+            end;
+         end loop;
+
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+      end;
+
+      P.Publish (Observer, P.Load_Progress (P.Finalizing_Model));
+      Item.Ready := True;
+      P.Publish (Observer, P.Load_Progress (P.Model_Ready));
+      Status := E.Success;
+   exception
+      when Occurrence : others =>
+         Close (Item, Ignored);
+         Status := E.Make (E.Internal_Invariant_Violated);
+         E.Add_Frame (Status, "llama.prepare");
+         E.Add_Frame
+           (Status, Ada.Exceptions.Exception_Name (Occurrence));
+   end Prepare;
+
+   -----------
+   -- Close --
+   -----------
+
+   procedure Close
+     (Item   : in out Model;
+      Status : out E.Error_Info) is
+   begin
+      if Item.Sessions > 0 then
+         Status := E.Make (E.Lifecycle_Session_Active);
+         E.Add_Integer (Status, "sessions", Long_Long_Integer (Item.Sessions));
+         return;
+      end if;
+
+      Item.Ready := False;
+
+      if Item.Layers /= null then
+         for Index in Item.Layers.all'Range loop
+            T.Free (Item.Layers.all (Index).Attention_Norm);
+            T.Free (Item.Layers.all (Index).Feed_Norm);
+         end loop;
+         Deallocate_Layers (Item.Layers);
+      end if;
+
+      T.Free (Item.Output_Norm);
+      B.Free (Item.Arena);
+      Item.Arena_Base := 0;
+      Item.Embeddings := T.Empty_View;
+      Item.Output := T.Empty_View;
+      Item.Settings := (others => <>);
+      Model_Runner.Tokenizer.Close (Item.Words);
+      Model_Runner.Templates.Close (Item.Chat);
+      Item.Chat_Present := False;
+      Item.Chat_Status := E.Success;
+      Status := E.Success;
+   exception
+      when others =>
+         Item.Ready := False;
+         Status := E.Success;
+   end Close;
+
+   --------------
+   -- Finalize --
+   --------------
+
+   overriding procedure Finalize (Item : in out Model) is
+      Ignored : E.Error_Info;
+   begin
+      Item.Sessions := 0;
+      Close (Item, Ignored);
+   end Finalize;
+
+   --------------
+   -- Is_Ready --
+   --------------
+
+   function Is_Ready (Item : Model) return Boolean is (Item.Ready);
+
+   ------------
+   -- Config --
+   ------------
+
+   function Config (Item : Model) return Configuration is (Item.Settings);
+
+   ----------------
+   -- Vocabulary --
+   ----------------
+
+   function Vocabulary
+     (Item : Model) return access constant Model_Runner.Tokenizer.Vocabulary
+   is (Item.Words'Unchecked_Access);
+
+   -------------------
+   -- Has_Template --
+   -------------------
+
+   function Has_Template (Item : Model) return Boolean is (Item.Chat_Present);
+
+   ---------------------
+   -- Template_Ready --
+   ---------------------
+
+   function Template_Ready (Item : Model) return Boolean
+   is (Item.Chat_Present and then Model_Runner.Templates.Is_Compiled (Item.Chat));
+
+   -------------------------
+   -- Template_Condition --
+   -------------------------
+
+   function Template_Condition (Item : Model) return E.Error_Info
+   is (Item.Chat_Status);
+
+   --------------
+   -- Template --
+   --------------
+
+   function Template
+     (Item : Model) return access constant Model_Runner.Templates.Compiled
+   is (Item.Chat'Unchecked_Access);
+
+   -------------
+   -- Account --
+   -------------
+
+   function Account (Item : Model) return Mem.Account is (Item.Accounting);
+
+   ---------------------------------------------------------------------------
+   --  Sessions
+   ---------------------------------------------------------------------------
+
+   ------------------
+   -- Plan_Session --
+   ------------------
+
+   procedure Plan_Session
+     (Item    : Model;
+      Context : Natural;
+      Plan    : out Mem.Session_Plan;
+      Status  : out E.Error_Info) is
+   begin
+      Plan_For (Item.Settings, Context, Plan, Status);
+   end Plan_Session;
+
+   ---------------
+   -- Plan_For --
+   ---------------
+
+   procedure Plan_For
+     (Settings : Configuration;
+      Context  : Natural;
+      Plan     : out Mem.Session_Plan;
+      Status   : out E.Error_Info)
+   is
+      Capacity : constant Natural :=
+        (if Context = 0 then Settings.Context_Length else Context);
+
+      --  layers * capacity * kv heads * head size * bytes * 2, entirely in
+      --  checked arithmetic so that an implausible request is reported as an
+      --  overflow rather than wrapping into a small allocation.
+      Cache : constant A.Checked :=
+        A.To_Checked (Interfaces.Unsigned_64 (Settings.Layers))
+        * A.To_Checked (Interfaces.Unsigned_64 (Capacity))
+        * A.To_Checked (Interfaces.Unsigned_64 (Settings.KV_Heads))
+        * A.To_Checked (Interfaces.Unsigned_64 (Settings.Head_Size))
+        * A.To_Checked (Interfaces.Unsigned_64'(Cache_Element_Bytes))
+        * A.To_Checked (Interfaces.Unsigned_64'(2));
+   begin
+      Plan := (others => <>);
+
+      if not A.Is_Valid (Cache) then
+         Status := E.Make (E.Memory_Plan_Overflow);
+         return;
+      end if;
+
+      Plan.KV_Cache_Bytes := A.Value (Cache);
+      Plan.Activation_Bytes :=
+        Interfaces.Unsigned_64 (Settings.Embedding) * 4 * 4;
+      Plan.Batch_Bytes :=
+        Interfaces.Unsigned_64 (Settings.Feed_Forward) * 4 * 2;
+      Plan.Logits_Bytes := Interfaces.Unsigned_64 (Settings.Vocabulary) * 4;
+      Plan.Sampling_Bytes := Plan.Logits_Bytes;
+      Plan.Token_History_Bytes := Interfaces.Unsigned_64 (Capacity) * 4;
+      Plan.Decoder_Bytes := 64;
+      Plan.Stop_Bytes := 4096;
+      Plan.Rendering_Bytes := 0;
+
+      Mem.Finalize_Session_Plan (Plan, Status);
+   end Plan_For;
+
+   ----------
+   -- Open --
+   ----------
+
+   procedure Open
+     (Item           : in out Session;
+      Source         : in out Model'Class;
+      Context        : Natural := 0;
+      Session_Bounds : Model_Runner.Limits.Session_Limits :=
+        Model_Runner.Limits.Default_Session_Limits;
+      Workers        : Workers_CPU.Pool_Reference := null;
+      Status         : out E.Error_Info)
+   is
+      Settings : Configuration;
+      Capacity : Natural;
+   begin
+      Close (Item);
+      Status := E.Success;
+
+      if not Source.Ready then
+         Status := E.Make (E.Lifecycle_Model_Not_Ready);
+         return;
+      end if;
+
+      if Source.Sessions > 0 then
+         --  V1 supports one active session per prepared model.
+         Status := E.Make (E.Lifecycle_Session_Active);
+         return;
+      end if;
+
+      Settings := Source.Settings;
+      Capacity := (if Context = 0 then Settings.Context_Length else Context);
+
+      if Capacity = 0
+        or else Capacity > Settings.Context_Length
+        or else Capacity > Session_Bounds.Max_Context
+      then
+         Status := E.Make (E.Arch_Context_Too_Large);
+         E.Add_Integer (Status, "requested", Long_Long_Integer (Capacity));
+         E.Add_Integer
+           (Status, "maximum", Long_Long_Integer (Settings.Context_Length));
+         return;
+      end if;
+
+      Plan_Session (Model (Source), Capacity, Item.Plan, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      if Session_Bounds.Max_Session_Bytes /= 0
+        and then Item.Plan.Total_Resident > Session_Bounds.Max_Session_Bytes
+      then
+         Status := E.Make (E.Memory_Limit_Exceeded);
+         E.Add_Text (Status, "category", "kv_cache", E.Param_Identifier);
+         E.Add_Integer
+           (Status, "requested",
+            Long_Long_Integer (Item.Plan.Total_Resident), E.Param_Bytes);
+         E.Add_Integer
+           (Status, "limit",
+            Long_Long_Integer (Session_Bounds.Max_Session_Bytes),
+            E.Param_Bytes);
+         return;
+      end if;
+
+      declare
+         Width : constant Element_Count :=
+           Element_Count (Settings.Embedding);
+         Feed  : constant Element_Count :=
+           Element_Count (Settings.Feed_Forward);
+         KV    : constant Element_Count :=
+           Element_Count (Settings.KV_Heads * Settings.Head_Size);
+         Cache : constant Element_Count :=
+           Element_Count (Settings.Layers) * Element_Count (Capacity) * KV;
+      begin
+         T.Allocate (Cache, Item.Keys);
+         T.Allocate (Cache, Item.Values);
+         T.Allocate (Width, Item.Activation);
+         T.Allocate (Width, Item.Normalized);
+         T.Allocate (Width, Item.Query);
+         T.Allocate (KV, Item.Key_Row);
+         T.Allocate (KV, Item.Value_Row);
+         T.Allocate (Width, Item.Attention);
+         T.Allocate (Element_Count (Capacity), Item.Scores);
+         T.Allocate (Feed, Item.Gate);
+         T.Allocate (Feed, Item.Up);
+         T.Allocate (Element_Count (Settings.Vocabulary), Item.Logit_Row);
+         Item.History := new Token_History (0 .. Capacity - 1);
+
+         if Item.Keys = null or else Item.Values = null
+           or else Item.Activation = null or else Item.Normalized = null
+           or else Item.Query = null or else Item.Key_Row = null
+           or else Item.Value_Row = null or else Item.Attention = null
+           or else Item.Scores = null or else Item.Gate = null
+           or else Item.Up = null or else Item.Logit_Row = null
+         then
+            Close (Item);
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+      end;
+
+      Item.Owner := Source'Unchecked_Access;
+      Item.Team := Workers;
+      Item.Context := Capacity;
+      Item.Committed := 0;
+      Item.Current := Ready;
+      Source.Sessions := Source.Sessions + 1;
+   exception
+      when others =>
+         Close (Item);
+         Status := E.Make (E.Memory_Allocation_Failed);
+   end Open;
+
+   -----------
+   -- Close --
+   -----------
+
+   procedure Close (Item : in out Session) is
+   begin
+      if Item.Owner /= null and then Item.Current /= Closed then
+         if Item.Owner.Sessions > 0 then
+            Item.Owner.Sessions := Item.Owner.Sessions - 1;
+         end if;
+      end if;
+
+      T.Free (Item.Keys);
+      T.Free (Item.Values);
+      T.Free (Item.Activation);
+      T.Free (Item.Normalized);
+      T.Free (Item.Query);
+      T.Free (Item.Key_Row);
+      T.Free (Item.Value_Row);
+      T.Free (Item.Attention);
+      T.Free (Item.Scores);
+      T.Free (Item.Gate);
+      T.Free (Item.Up);
+      T.Free (Item.Logit_Row);
+
+      if Item.History /= null then
+         Deallocate_History (Item.History);
+      end if;
+
+      Item.Owner := null;
+      Item.Team := null;
+      Item.Context := 0;
+      Item.Committed := 0;
+      Item.Current := Closed;
+   exception
+      when others =>
+         Item.Current := Closed;
+   end Close;
+
+   --------------
+   -- Finalize --
+   --------------
+
+   overriding procedure Finalize (Item : in out Session) is
+   begin
+      Close (Item);
+   end Finalize;
+
+   -----------
+   -- State --
+   -----------
+
+   function State (Item : Session) return Session_State is (Item.Current);
+
+   --------------
+   -- Position --
+   --------------
+
+   function Position (Item : Session) return Natural is (Item.Committed);
+
+   --------------
+   -- Capacity --
+   --------------
+
+   function Capacity (Item : Session) return Natural is (Item.Context);
+
+   -------------
+   -- Workers --
+   -------------
+
+   function Workers (Item : Session) return Workers_CPU.Pool_Reference
+   is (Item.Team);
+
+   ----------------------
+   -- Committed_Token --
+   ----------------------
+
+   function Committed_Token (Item : Session; Index : Natural) return Token_Id is
+   begin
+      if Item.History = null or else Index >= Item.Committed then
+         return Model_Runner.Tokenizer.No_Token;
+      else
+         return Item.History.all (Index);
+      end if;
+   end Committed_Token;
+
+   -----------
+   -- Reset --
+   -----------
+
+   procedure Reset (Item : in out Session) is
+   begin
+      --  Only the logical contents are invalidated. The cache and scratch
+      --  buffers stay allocated so that a reset costs nothing and the next
+      --  turn does not have to plan memory again.
+      Item.Committed := 0;
+      if Item.Current /= Closed then
+         Item.Current := Ready;
+      end if;
+   end Reset;
+
+   --------------
+   -- Evaluate --
+   --------------
+
+   procedure Evaluate
+     (Item   : in out Session;
+      Source : Model'Class;
+      Token  : Token_Id;
+      Logits : out Real_Array;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out E.Error_Info)
+   is
+      Settings  : constant Configuration := Source.Settings;
+      Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
+      Heads     : constant Element_Count := Element_Count (Settings.Heads);
+      KV_Heads  : constant Element_Count := Element_Count (Settings.KV_Heads);
+      KV_Width  : constant Element_Count := KV_Heads * Head_Size;
+      Reserved  : constant Element_Count := Element_Count (Item.Committed);
+      Scale     : constant Real :=
+        Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
+   begin
+      Logits := [others => 0.0];
+
+      if Item.Current = Closed or else Item.Current = Failed then
+         Status := E.Make (E.Lifecycle_Invalid_State);
+         E.Add_Text
+           (Status, "state",
+            Model_Runner.Text.To_Lower (Session_State'Image (Item.Current)),
+            E.Param_Identifier);
+         return;
+      end if;
+
+      if not Source.Ready then
+         Status := E.Make (E.Lifecycle_Model_Not_Ready);
+         return;
+      end if;
+
+      if not Model_Runner.Tokenizer.Is_Valid (Source.Words, Token) then
+         Status := E.Make (E.Tokenizer_Invalid_Token_Id);
+         E.Add_Integer (Status, "token", Long_Long_Integer (Token));
+         E.Add_Integer
+           (Status, "vocabulary", Long_Long_Integer (Settings.Vocabulary));
+         return;
+      end if;
+
+      if Item.Committed >= Item.Context then
+         Status := E.Make (E.Generation_Context_Exhausted);
+         E.Add_Integer
+           (Status, "capacity", Long_Long_Integer (Item.Context),
+            E.Param_Tokens);
+         return;
+      end if;
+
+      if Logits'Length /= Element_Count (Settings.Vocabulary) then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Integer (Status, "output", Long_Long_Integer (Logits'Length));
+         return;
+      end if;
+
+      --  Embedding lookup.
+      T.Dequantize_Row
+        (Source.Embeddings, Element_Count (Token), Item.Activation.all, Status);
+      if E.Is_Error (Status) then
+         Item.Current := Failed;
+         return;
+      end if;
+
+      for Index in Source.Layers.all'Range loop
+         if C.Is_Cancelled (Cancel) then
+            --  The reserved position was never committed, so the cache still
+            --  describes exactly the context that was valid before this call.
+            Status := E.Make (E.Generation_Cancelled);
+            return;
+         end if;
+
+         declare
+            Current : Layer renames Source.Layers.all (Index);
+            Base    : constant Element_Count :=
+              Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
+            Slot    : constant Element_Count := Base + Reserved * KV_Width;
+         begin
+            --  Attention block.
+            K.RMS_Norm
+              (Item.Activation.all, Current.Attention_Norm.all,
+               Settings.Epsilon, Item.Normalized.all);
+
+            Workers_CPU.Dispatch
+              (Item.Team, Current.Query, Item.Normalized, Item.Query, Status);
+            exit when E.Is_Error (Status);
+            Workers_CPU.Dispatch
+              (Item.Team, Current.Key, Item.Normalized, Item.Key_Row, Status);
+            exit when E.Is_Error (Status);
+            Workers_CPU.Dispatch
+              (Item.Team, Current.Value, Item.Normalized, Item.Value_Row,
+               Status);
+            exit when E.Is_Error (Status);
+
+            K.Apply_Rotary
+              (Item.Query.all, Heads, Head_Size,
+               Element_Count (Settings.Rotary), Item.Committed,
+               Settings.Rope_Base, Settings.Rope_Scale);
+            K.Apply_Rotary
+              (Item.Key_Row.all, KV_Heads, Head_Size,
+               Element_Count (Settings.Rotary), Item.Committed,
+               Settings.Rope_Base, Settings.Rope_Scale);
+
+            --  Write into the reserved slot. The slot is only readable as
+            --  context once Committed is advanced, at the end of this call.
+            for Offset in 0 .. KV_Width - 1 loop
+               Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
+               Item.Values.all (Slot + Offset) := Item.Value_Row.all (Offset);
+            end loop;
+
+            --  Causal attention over the committed positions and this one.
+            --  Grouped-query attention maps each query head to its key-value
+            --  head by division; no key or value head is ever duplicated.
+            for Head in 0 .. Heads - 1 loop
+               declare
+                  Group    : constant Element_Count :=
+                    Head / Element_Count (Settings.Group_Size);
+                  Query    : Real_Array renames Item.Query.all;
+                  Q_Origin : constant Element_Count := Head * Head_Size;
+                  Scores   : Real_Array renames Item.Scores.all;
+                  Usable   : Boolean;
+               begin
+                  for Step in 0 .. Reserved loop
+                     declare
+                        Origin : constant Element_Count :=
+                          Base + Step * KV_Width + Group * Head_Size;
+                        Sum    : N.Wide_Real := 0.0;
+                     begin
+                        for Component in 0 .. Head_Size - 1 loop
+                           Sum := Sum
+                             + N.Wide_Real (Query (Q_Origin + Component))
+                               * N.Wide_Real
+                                   (Item.Keys.all (Origin + Component));
+                        end loop;
+                        Scores (Step) := Real (Sum) * Scale;
+                     end;
+                  end loop;
+
+                  K.Softmax (Scores (0 .. Reserved), Usable);
+                  if not Usable then
+                     Item.Current := Failed;
+                     Status := E.Make (E.Tensor_Non_Finite_Value);
+                     E.Add_Integer (Status, "layer", Long_Long_Integer (Index));
+                     return;
+                  end if;
+
+                  for Component in 0 .. Head_Size - 1 loop
+                     declare
+                        Sum : N.Wide_Real := 0.0;
+                     begin
+                        for Step in 0 .. Reserved loop
+                           Sum := Sum
+                             + N.Wide_Real (Scores (Step))
+                               * N.Wide_Real
+                                   (Item.Values.all
+                                      (Base + Step * KV_Width
+                                       + Group * Head_Size + Component));
+                        end loop;
+                        Item.Attention.all (Q_Origin + Component) := Real (Sum);
+                     end;
+                  end loop;
+               end;
+            end loop;
+
+            Workers_CPU.Dispatch
+              (Item.Team, Current.Attention_Out, Item.Attention,
+               Item.Normalized, Status);
+            exit when E.Is_Error (Status);
+            K.Add (Item.Activation.all, Item.Normalized.all);
+
+            --  Feed-forward block.
+            K.RMS_Norm
+              (Item.Activation.all, Current.Feed_Norm.all,
+               Settings.Epsilon, Item.Normalized.all);
+
+            Workers_CPU.Dispatch
+              (Item.Team, Current.Gate, Item.Normalized, Item.Gate, Status);
+            exit when E.Is_Error (Status);
+            Workers_CPU.Dispatch
+              (Item.Team, Current.Up, Item.Normalized, Item.Up, Status);
+            exit when E.Is_Error (Status);
+
+            K.SiLU (Item.Gate.all);
+            K.Multiply (Item.Gate.all, Item.Up.all);
+
+            Workers_CPU.Dispatch
+              (Item.Team, Current.Down, Item.Gate, Item.Normalized, Status);
+            exit when E.Is_Error (Status);
+            K.Add (Item.Activation.all, Item.Normalized.all);
+         end;
+      end loop;
+
+      if E.Is_Error (Status) then
+         Item.Current := Failed;
+         return;
+      end if;
+
+      K.RMS_Norm
+        (Item.Activation.all, Source.Output_Norm.all, Settings.Epsilon,
+         Item.Normalized.all);
+
+      --  The output projection is the widest product of the token, so it is
+      --  the one that most benefits from the pool. It writes into a
+      --  session-owned row that is then copied into the caller's vector.
+      Workers_CPU.Dispatch
+        (Item.Team, Source.Output, Item.Normalized, Item.Logit_Row, Status);
+      if E.Is_Error (Status) then
+         Item.Current := Failed;
+         return;
+      end if;
+
+      Logits := Item.Logit_Row.all;
+
+      --  Commit: the position becomes readable context only now, after every
+      --  layer of this token has succeeded.
+      Item.History.all (Item.Committed) := Token;
+      Item.Committed := Item.Committed + 1;
+      Item.Current := Generating;
+      Status := E.Success;
+   exception
+      when others =>
+         Item.Current := Failed;
+         Status := E.Make (E.Internal_Invariant_Violated);
+         E.Add_Frame (Status, "llama.evaluate");
+   end Evaluate;
+
+   ---------------------
+   -- Evaluate_Batch --
+   ---------------------
+
+   procedure Evaluate_Batch
+     (Item   : in out Session;
+      Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array;
+      Logits : out Real_Array;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out E.Error_Info)
+   is
+      Settings  : constant Configuration := Source.Settings;
+      Width     : constant Element_Count := Element_Count (Settings.Embedding);
+      Feed      : constant Element_Count :=
+        Element_Count (Settings.Feed_Forward);
+      Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
+      Heads     : constant Element_Count := Element_Count (Settings.Heads);
+      KV_Heads  : constant Element_Count := Element_Count (Settings.KV_Heads);
+      KV_Width  : constant Element_Count := KV_Heads * Head_Size;
+      Wide      : constant Element_Count := Heads * Head_Size;
+      Reserved  : constant Element_Count := Element_Count (Item.Committed);
+      Count     : constant Element_Count := Element_Count (Tokens'Length);
+      Scale     : constant Real :=
+        Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
+
+      --  One batch's activations. Held for the call rather than the session
+      --  so that a session that never batches pays nothing for the option.
+      Acts   : T.Real_Array_Access := null;
+      Norm   : T.Real_Array_Access := null;
+      Query  : T.Real_Array_Access := null;
+      Keys   : T.Real_Array_Access := null;
+      Values : T.Real_Array_Access := null;
+      Attend : T.Real_Array_Access := null;
+      Gate   : T.Real_Array_Access := null;
+      Up     : T.Real_Array_Access := null;
+
+      procedure Release is
+      begin
+         T.Free (Acts);
+         T.Free (Norm);
+         T.Free (Query);
+         T.Free (Keys);
+         T.Free (Values);
+         T.Free (Attend);
+         T.Free (Gate);
+         T.Free (Up);
+      end Release;
+
+      --  Slice of a batch buffer belonging to one token of the batch.
+      function Slot
+        (Which : Element_Count; Stride : Element_Count) return Element_Count
+      is (Which * Stride);
+   begin
+      Logits := [others => 0.0];
+
+      if Item.Current = Closed or else Item.Current = Failed then
+         Status := E.Make (E.Lifecycle_Invalid_State);
+         E.Add_Text
+           (Status, "state",
+            Model_Runner.Text.To_Lower (Session_State'Image (Item.Current)),
+            E.Param_Identifier);
+         return;
+      end if;
+
+      if not Source.Ready then
+         Status := E.Make (E.Lifecycle_Model_Not_Ready);
+         return;
+      end if;
+
+      if Count = 0 or else Count > Max_Batch then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Integer (Status, "input", Long_Long_Integer (Count));
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Batch));
+         return;
+      end if;
+
+      for Token of Tokens loop
+         if not Model_Runner.Tokenizer.Is_Valid (Source.Words, Token) then
+            Status := E.Make (E.Tokenizer_Invalid_Token_Id);
+            E.Add_Integer (Status, "token", Long_Long_Integer (Token));
+            E.Add_Integer
+              (Status, "vocabulary", Long_Long_Integer (Settings.Vocabulary));
+            return;
+         end if;
+      end loop;
+
+      if Reserved + Count > Element_Count (Item.Context) then
+         Status := E.Make (E.Generation_Context_Exhausted);
+         E.Add_Integer
+           (Status, "capacity", Long_Long_Integer (Item.Context),
+            E.Param_Tokens);
+         return;
+      end if;
+
+      if Logits'Length /= Element_Count (Settings.Vocabulary) then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Integer (Status, "output", Long_Long_Integer (Logits'Length));
+         return;
+      end if;
+
+      T.Allocate (Count * Width, Acts);
+      T.Allocate (Count * Width, Norm);
+      T.Allocate (Count * Wide, Query);
+      T.Allocate (Count * KV_Width, Keys);
+      T.Allocate (Count * KV_Width, Values);
+      T.Allocate (Count * Wide, Attend);
+      T.Allocate (Count * Feed, Gate);
+      T.Allocate (Count * Feed, Up);
+
+      if Acts = null or else Norm = null or else Query = null
+        or else Keys = null or else Values = null or else Attend = null
+        or else Gate = null or else Up = null
+      then
+         Release;
+         Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Status, "category", "batch_activations", E.Param_Identifier);
+         return;
+      end if;
+
+      --  Embedding lookup for every token of the batch.
+      for Which in 0 .. Count - 1 loop
+         declare
+            Origin : constant Element_Count := Slot (Which, Width);
+         begin
+            T.Dequantize_Row
+              (Source.Embeddings,
+               Element_Count (Tokens (Tokens'First + Natural (Which))),
+               Acts.all (Origin .. Origin + Width - 1), Status);
+            if E.Is_Error (Status) then
+               Release;
+               Item.Current := Failed;
+               return;
+            end if;
+         end;
+      end loop;
+
+      for Index in Source.Layers.all'Range loop
+         if C.Is_Cancelled (Cancel) then
+            --  Nothing was committed, so the cache still describes exactly
+            --  the context that was valid before this call.
+            Release;
+            Status := E.Make (E.Generation_Cancelled);
+            return;
+         end if;
+
+         declare
+            Current : Layer renames Source.Layers.all (Index);
+            Base    : constant Element_Count :=
+              Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
+         begin
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Origin : constant Element_Count := Slot (Which, Width);
+               begin
+                  K.RMS_Norm
+                    (Acts.all (Origin .. Origin + Width - 1),
+                     Current.Attention_Norm.all, Settings.Epsilon,
+                     Norm.all (Origin .. Origin + Width - 1));
+               end;
+            end loop;
+
+            --  One pass over each weight for the whole batch.
+            Workers_CPU.Dispatch_Batch
+              (Item.Team, Current.Query, Norm, Count, Query, Status);
+            exit when E.Is_Error (Status);
+            Workers_CPU.Dispatch_Batch
+              (Item.Team, Current.Key, Norm, Count, Keys, Status);
+            exit when E.Is_Error (Status);
+            Workers_CPU.Dispatch_Batch
+              (Item.Team, Current.Value, Norm, Count, Values, Status);
+            exit when E.Is_Error (Status);
+
+            --  Rotate at each token's own position, then publish every key
+            --  and value before any attention reads them: token K of the
+            --  batch attends to the earlier tokens of the same batch.
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Q_At : constant Element_Count := Slot (Which, Wide);
+                  KV_At : constant Element_Count := Slot (Which, KV_Width);
+                  Place : constant Element_Count :=
+                    Base + (Reserved + Which) * KV_Width;
+               begin
+                  K.Apply_Rotary
+                    (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
+                     Element_Count (Settings.Rotary),
+                     Item.Committed + Natural (Which),
+                     Settings.Rope_Base, Settings.Rope_Scale);
+                  K.Apply_Rotary
+                    (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                     KV_Heads, Head_Size, Element_Count (Settings.Rotary),
+                     Item.Committed + Natural (Which),
+                     Settings.Rope_Base, Settings.Rope_Scale);
+
+                  for Offset in 0 .. KV_Width - 1 loop
+                     Item.Keys.all (Place + Offset) :=
+                       Keys.all (KV_At + Offset);
+                     Item.Values.all (Place + Offset) :=
+                       Values.all (KV_At + Offset);
+                  end loop;
+               end;
+            end loop;
+
+            for Which in 0 .. Count - 1 loop
+               declare
+                  --  Causal: this token sees the committed context and the
+                  --  batch tokens up to and including itself.
+                  Last_Step : constant Element_Count := Reserved + Which;
+                  Q_At      : constant Element_Count := Slot (Which, Wide);
+               begin
+                  for Head in 0 .. Heads - 1 loop
+                     declare
+                        Group    : constant Element_Count :=
+                          Head / Element_Count (Settings.Group_Size);
+                        Q_Origin : constant Element_Count :=
+                          Q_At + Head * Head_Size;
+                        Scores   : Real_Array renames Item.Scores.all;
+                        Usable   : Boolean;
+                     begin
+                        for Step in 0 .. Last_Step loop
+                           declare
+                              Origin : constant Element_Count :=
+                                Base + Step * KV_Width + Group * Head_Size;
+                              Sum    : N.Wide_Real := 0.0;
+                           begin
+                              for Component in 0 .. Head_Size - 1 loop
+                                 Sum := Sum
+                                   + N.Wide_Real
+                                       (Query.all (Q_Origin + Component))
+                                     * N.Wide_Real
+                                         (Item.Keys.all (Origin + Component));
+                              end loop;
+                              Scores (Step) := Real (Sum) * Scale;
+                           end;
+                        end loop;
+
+                        K.Softmax (Scores (0 .. Last_Step), Usable);
+                        if not Usable then
+                           Release;
+                           Item.Current := Failed;
+                           Status := E.Make (E.Tensor_Non_Finite_Value);
+                           E.Add_Integer
+                             (Status, "layer", Long_Long_Integer (Index));
+                           return;
+                        end if;
+
+                        for Component in 0 .. Head_Size - 1 loop
+                           declare
+                              Sum : N.Wide_Real := 0.0;
+                           begin
+                              for Step in 0 .. Last_Step loop
+                                 Sum := Sum
+                                   + N.Wide_Real (Scores (Step))
+                                     * N.Wide_Real
+                                         (Item.Values.all
+                                            (Base + Step * KV_Width
+                                             + Group * Head_Size + Component));
+                              end loop;
+                              Attend.all (Q_Origin + Component) := Real (Sum);
+                           end;
+                        end loop;
+                     end;
+                  end loop;
+               end;
+            end loop;
+
+            Workers_CPU.Dispatch_Batch
+              (Item.Team, Current.Attention_Out, Attend, Count, Norm, Status);
+            exit when E.Is_Error (Status);
+
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Origin : constant Element_Count := Slot (Which, Width);
+               begin
+                  K.Add
+                    (Acts.all (Origin .. Origin + Width - 1),
+                     Norm.all (Origin .. Origin + Width - 1));
+                  K.RMS_Norm
+                    (Acts.all (Origin .. Origin + Width - 1),
+                     Current.Feed_Norm.all, Settings.Epsilon,
+                     Norm.all (Origin .. Origin + Width - 1));
+               end;
+            end loop;
+
+            Workers_CPU.Dispatch_Batch
+              (Item.Team, Current.Gate, Norm, Count, Gate, Status);
+            exit when E.Is_Error (Status);
+            Workers_CPU.Dispatch_Batch
+              (Item.Team, Current.Up, Norm, Count, Up, Status);
+            exit when E.Is_Error (Status);
+
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Origin : constant Element_Count := Slot (Which, Feed);
+               begin
+                  K.SiLU (Gate.all (Origin .. Origin + Feed - 1));
+                  K.Multiply
+                    (Gate.all (Origin .. Origin + Feed - 1),
+                     Up.all (Origin .. Origin + Feed - 1));
+               end;
+            end loop;
+
+            Workers_CPU.Dispatch_Batch
+              (Item.Team, Current.Down, Gate, Count, Norm, Status);
+            exit when E.Is_Error (Status);
+
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Origin : constant Element_Count := Slot (Which, Width);
+               begin
+                  K.Add
+                    (Acts.all (Origin .. Origin + Width - 1),
+                     Norm.all (Origin .. Origin + Width - 1));
+               end;
+            end loop;
+         end;
+      end loop;
+
+      if E.Is_Error (Status) then
+         Release;
+         Item.Current := Failed;
+         return;
+      end if;
+
+      --  Only the last token's distribution is produced: the earlier tokens
+      --  of a prompt are consumed to build context, not to be sampled from.
+      declare
+         Origin : constant Element_Count := Slot (Count - 1, Width);
+      begin
+         K.RMS_Norm
+           (Acts.all (Origin .. Origin + Width - 1), Source.Output_Norm.all,
+            Settings.Epsilon, Item.Normalized.all);
+      end;
+
+      Workers_CPU.Dispatch
+        (Item.Team, Source.Output, Item.Normalized, Item.Logit_Row, Status);
+      if E.Is_Error (Status) then
+         Release;
+         Item.Current := Failed;
+         return;
+      end if;
+
+      Logits := Item.Logit_Row.all;
+
+      --  Commit every position of the batch, or none of them.
+      for Which in 0 .. Count - 1 loop
+         Item.History.all (Item.Committed + Natural (Which)) :=
+           Tokens (Tokens'First + Natural (Which));
+      end loop;
+      Item.Committed := Item.Committed + Natural (Count);
+      Item.Current := Generating;
+      Status := E.Success;
+      Release;
+   exception
+      when Occurrence : others =>
+         Release;
+         Item.Current := Failed;
+         Status := E.Make (E.Internal_Invariant_Violated);
+         E.Add_Frame (Status, "llama.evaluate_batch");
+         E.Add_Frame
+           (Status, Ada.Exceptions.Exception_Name (Occurrence));
+   end Evaluate_Batch;
+
+end Model_Runner.Llama;

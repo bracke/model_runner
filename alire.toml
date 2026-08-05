@@ -1,0 +1,37 @@
+name = "model_runner"
+description = "Local GGUF language-model execution engine and runner"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT"
+website = "https://github.com/bracke/model_runner"
+long-description = "model_runner loads a local GGUF model file, validates its container strictly, prepares a bounded Llama-compatible decoder-only execution plan, tokenizes prompts, evaluates the model on the CPU in Ada, maintains an explicit KV cache, samples output tokens, decodes them incrementally and streams the generated text. Inference is local only: no network access, no daemon, no delegation to an external model runtime."
+tags = ["gguf", "llm", "inference", "cli"]
+project-files = ["model_runner.gpr"]
+executables = ["model_runner"]
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+[[depends-on]]
+terminal_styles = "=0.1.0-dev"
+
+[[depends-on]]
+messages = "~0.1.0"
+
+[[pins]]
+terminal_styles = { path = "../terminal_styles" }
+
+[[pins]]
+messages = { path = "../messages" }
+
+# Profiles are not overridden here. A wildcard pinning every crate to the
+# development profile made `alr build --release` silently build dependencies
+# unoptimized, and building the tests crate reverted the root crate's profile
+# behind your back. Both are worth more than sharing one set of object files.
+
+[[actions]]
+type = "test"
+command = ["sh", "-c", "cd tests && alr -n build && ./bin/tests test"]

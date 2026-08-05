@@ -1,0 +1,205 @@
+with Ada.Command_Line;
+with Ada.Directories;
+with Ada.Environment_Variables;
+with Interfaces.C;
+with System.Multiprocessors;
+
+package body Model_Runner.Platform is
+
+   use type Interfaces.C.int;
+
+   function C_Isatty (Descriptor : Interfaces.C.int) return Interfaces.C.int
+   with Import, Convention => C, External_Name => "isatty";
+
+   -----------------
+   -- Is_Terminal --
+   -----------------
+
+   function Is_Terminal (Descriptor : Natural) return Boolean is
+   begin
+      return C_Isatty (Interfaces.C.int (Descriptor)) = 1;
+   exception
+      when others =>
+         return False;
+   end Is_Terminal;
+
+   ---------------------------
+   -- No_Color_Requested --
+   ---------------------------
+
+   function No_Color_Requested return Boolean
+   is (Environment_Exists ("NO_COLOR"));
+
+   -------------------------
+   -- Environment_Value --
+   -------------------------
+
+   function Environment_Value (Name : String) return String is
+   begin
+      if Ada.Environment_Variables.Exists (Name) then
+         return Ada.Environment_Variables.Value (Name);
+      else
+         return "";
+      end if;
+   exception
+      when others =>
+         return "";
+   end Environment_Value;
+
+   --------------------------
+   -- Environment_Exists --
+   --------------------------
+
+   function Environment_Exists (Name : String) return Boolean is
+   begin
+      return Ada.Environment_Variables.Exists (Name);
+   exception
+      when others =>
+         return False;
+   end Environment_Exists;
+
+   -----------------
+   -- Host_Locale --
+   -----------------
+
+   function Host_Locale return String is
+      All_Locales : constant String := Environment_Value ("LC_ALL");
+      Language    : constant String := Environment_Value ("LANG");
+   begin
+      if All_Locales /= "" then
+         return All_Locales;
+      else
+         return Language;
+      end if;
+   end Host_Locale;
+
+   ---------------------------
+   -- Executable_Directory --
+   ---------------------------
+
+   function Executable_Directory return String is
+   begin
+      --  /proc/self/exe resolves symbolic links and survives a PATH lookup,
+      --  which Ada.Command_Line.Command_Name does not. Fall back to the
+      --  command name when the procfs entry is unavailable.
+      if Ada.Directories.Exists ("/proc/self/exe") then
+         declare
+            Target : constant String :=
+              Ada.Directories.Full_Name ("/proc/self/exe");
+         begin
+            if Target /= "" then
+               return Ada.Directories.Containing_Directory (Target);
+            end if;
+         end;
+      end if;
+
+      declare
+         Command : constant String := Ada.Command_Line.Command_Name;
+      begin
+         if Command = "" then
+            return "";
+         else
+            return Ada.Directories.Containing_Directory
+              (Ada.Directories.Full_Name (Command));
+         end if;
+      end;
+   exception
+      when others =>
+         return "";
+   end Executable_Directory;
+
+   -------------------
+   -- Catalog_Path --
+   -------------------
+
+   function Catalog_Path return String is
+      Directory : constant String := Executable_Directory;
+
+      function Joined (Parts : String) return String
+      is (Parts);
+
+      function Existing (Path : String) return String is
+      begin
+         if Path /= "" and then Ada.Directories.Exists (Path) then
+            return Path;
+         else
+            return "";
+         end if;
+      end Existing;
+
+      Conventional : constant String := "resources/messages/catalog.txt";
+   begin
+      if Directory /= "" then
+         --  Installed layout: <prefix>/bin/model_runner alongside
+         --  <prefix>/share/model_runner/messages/catalog.txt.
+         declare
+            Installed : constant String :=
+              Existing
+                (Directory & "/../share/" & Model_Runner.Program_Name
+                 & "/messages/catalog.txt");
+         begin
+            if Installed /= "" then
+               return Installed;
+            end if;
+         end;
+
+         declare
+            Shared : constant String :=
+              Existing
+                (Directory & "/../share/" & Model_Runner.Program_Name
+                 & "/resources/messages/catalog.txt");
+         begin
+            if Shared /= "" then
+               return Shared;
+            end if;
+         end;
+
+         --  Development layout: bin/model_runner alongside resources/.
+         declare
+            Development : constant String :=
+              Existing (Directory & "/../" & Conventional);
+         begin
+            if Development /= "" then
+               return Development;
+            end if;
+         end;
+      end if;
+
+      declare
+         Local : constant String := Existing (Conventional);
+      begin
+         if Local /= "" then
+            return Local;
+         end if;
+      end;
+
+      declare
+         Above : constant String := Existing ("../" & Conventional);
+      begin
+         if Above /= "" then
+            return Above;
+         end if;
+      end;
+
+      return Joined (Conventional);
+   exception
+      when others =>
+         return Conventional;
+   end Catalog_Path;
+
+   ---------------------
+   -- Processor_Count --
+   ---------------------
+
+   function Processor_Count return Positive is
+      use type System.Multiprocessors.CPU_Range;
+      Count : constant System.Multiprocessors.CPU_Range :=
+        System.Multiprocessors.Number_Of_CPUs;
+   begin
+      return (if Count < 1 then 1 else Positive (Count));
+   exception
+      when others =>
+         return 1;
+   end Processor_Count;
+
+end Model_Runner.Platform;

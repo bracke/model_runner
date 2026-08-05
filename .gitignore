@@ -1,0 +1,13 @@
+# Build products
+/obj/
+/bin/
+/lib/
+/alire/
+/config/
+/tests/obj/
+/tests/bin/
+/tests/alire/
+/tests/config/
+
+# Generated fixtures
+/tests/fixtures/*.gguf
