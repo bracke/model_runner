@@ -346,9 +346,10 @@ Named in the specification, absent here:
   the compiler vectorizes them; nothing is written in assembly, in intrinsics,
   or in a foreign language. See below for what that does and does not buy.
 - **Repacking.** Weights are consumed in the layout the file stores them in.
-- **Tooling commands.** `tests` implements `test`, `check`, `conformance`,
-  `external-model`, `benchmark`, `docs`, `fuzz` and `fixtures`. `package` and
-  `release-check` are absent.
+- **A `package` command.** `tests` implements `test`, `check`, `conformance`,
+  `external-model`, `benchmark`, `docs`, `fuzz` and `fixtures`; the release
+  checklist is `tools/bin/check_all`, as in every sibling crate. Nothing
+  produces a distributable archive.
 - **`inspect --metadata`** lists keys, not typed values.
 
 ## Speed

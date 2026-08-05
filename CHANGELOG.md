@@ -171,7 +171,12 @@ wall and 16.0 s of processor time.
 
 ### Not yet implemented
 
-The `package` and `release-check` tooling commands.
+A `package` command. Nothing produces a distributable archive.
+
+The release checklist is implemented, as `tools/bin/check_all`, following the
+sibling crates: it drives the repository, dependency and layering checks, the
+test suite, the conformance run and a 2000-case fuzzing campaign, and fails on
+any non-empty stderr log in a build tree.
 
 Quantized weights are decoded into a buffer and then multiplied; the multiply
 is not fused into the decode, there is no repacking, and there is no
