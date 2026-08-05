@@ -61,4 +61,13 @@ package Model_Runner.Platform is
    --  @return Processor count, at least 1.
    function Processor_Count return Positive;
 
+   --  The host this build targets, as hostkit reports it.
+   --
+   --  Asked rather than inferred. The engine has one behaviour that differs
+   --  by host -- whether the model file can be memory mapped -- and a reader
+   --  told only "mapping unavailable" cannot tell a policy from a platform.
+   --
+   --  @return "linux", "macos", "windows", or "unsupported".
+   function Host_Name return String;
+
 end Model_Runner.Platform;

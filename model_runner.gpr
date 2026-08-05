@@ -1,7 +1,20 @@
 with "config/model_runner_config.gpr";
 
 project Model_Runner is
-   for Source_Dirs use ("src/library", "src/main", "config");
+   --  One body per host for the parts that exist only because operating
+   --  systems differ, selected the way hostkit selects its own. Everything
+   --  else is portable Ada and lives in src/library.
+   case Model_Runner_Config.Alire_Host_OS is
+      when "windows" =>
+         for Source_Dirs use
+           ("src/library", "src/main", "src/platform/windows", "config");
+      when "linux" | "macos" =>
+         for Source_Dirs use
+           ("src/library", "src/main", "src/platform/posix", "config");
+      when others =>
+         for Source_Dirs use
+           ("src/library", "src/main", "src/platform/unsupported", "config");
+   end case;
    for Object_Dir use "obj/" & Model_Runner_Config.Build_Profile;
    for Exec_Dir use "bin";
    for Main use ("model_runner_main.adb");

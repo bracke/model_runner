@@ -134,6 +134,22 @@ wall and 16.0 s of processor time.
   model file and no network. It was written because reading the code produced
   two confident wrong answers about where the time went.
 
+### Added
+
+- Windows memory mapping, over CreateFileMapping and MapViewOfFile. The
+  platform-specific bodies now sit one per host under `src/platform`, chosen by
+  the project file the way hostkit chooses its own, with a body for hosts
+  covered by neither that reports mapping unavailable rather than pretending.
+  Read-only throughout: the file is opened for reading, shared for reading and
+  mapped for reading, so the model cannot be modified through it.
+- `hostkit` is a dependency, for the things that exist only because operating
+  systems differ. `Platform.Host_Name` asks it which host this is, and
+  `Executable_Directory` asks it where the running program is rather than
+  reading `/proc/self/exe` directly -- that is Linux and not even macOS, so on
+  every other host the installed layout could not be found and the catalog
+  silently fell back. `Hostkit.Host.Executable_Path` was added upstream for
+  this.
+
 ### Fixed
 
 - `Backend.CPU.Partition` underflowed the unsigned element count when a worker

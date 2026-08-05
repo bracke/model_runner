@@ -84,10 +84,14 @@ package Model_Runner.Platform.Mapping is
 
 private
 
+   --  Handle is the file: a descriptor on POSIX, a HANDLE on Windows, which
+   --  is pointer-sized and so does not fit in Integer. Mapping is the file
+   --  mapping object Windows needs in addition; POSIX leaves it unset.
    type Region is limited record
       Address : System.Address := System.Null_Address;
       Size    : Model_Runner.Bytes.Byte_Count := 0;
-      Handle  : Integer := -1;
+      Handle  : Long_Long_Integer := -1;
+      Mapping : Long_Long_Integer := -1;
    end record;
 
 end Model_Runner.Platform.Mapping;

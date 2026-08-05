@@ -179,6 +179,13 @@ package body Checks is
       begin
          Scan_Production ("src/library");
          Scan_Production ("src/main");
+
+         --  One body per host, and each is production code held to the same
+         --  rules. Left out, a platform body could reach a forbidden layer or
+         --  drift in style and nothing would say so.
+         Scan_Production ("src/platform/posix");
+         Scan_Production ("src/platform/windows");
+         Scan_Production ("src/platform/unsupported");
       end;
 
       --  Layering: nothing below the presentation layer may reach the message
@@ -209,6 +216,7 @@ package body Checks is
             elsif Mentions (Relative, "with Ada.Text_IO")
               and then not T.Starts_With
                              (Name, "src/library/model_runner-platform")
+              and then not T.Starts_With (Name, "src/platform/")
             then
                Fail (Relative & " writes to a standard stream");
             end if;
@@ -217,6 +225,9 @@ package body Checks is
          procedure Scan_Lower is new For_Each_Source (Visit_Lower);
       begin
          Scan_Lower ("src/library");
+         Scan_Lower ("src/platform/posix");
+         Scan_Lower ("src/platform/windows");
+         Scan_Lower ("src/platform/unsupported");
       end;
 
       --  Style: the documented line-length budget.

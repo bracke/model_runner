@@ -21,6 +21,9 @@ terminal_styles = "=0.1.0-dev"
 [[depends-on]]
 messages = "~0.1.0"
 
+[[depends-on]]
+hostkit = "*"
+
 [[pins]]
 terminal_styles = { path = "../terminal_styles" }
 

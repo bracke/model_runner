@@ -113,7 +113,7 @@ package body Model_Runner.Platform.Mapping is
 
          Item.Address := Base_Address;
          Item.Size := File_Size;
-         Item.Handle := Integer (Handle);
+         Item.Handle := Long_Long_Integer (Handle);
          Available := True;
       end;
    exception

@@ -4,6 +4,10 @@ with Ada.Environment_Variables;
 with Interfaces.C;
 with System.Multiprocessors;
 
+with Hostkit.Host;
+
+with Model_Runner.Text;
+
 package body Model_Runner.Platform is
 
    use type Interfaces.C.int;
@@ -73,25 +77,35 @@ package body Model_Runner.Platform is
       end if;
    end Host_Locale;
 
+   ---------------
+   -- Host_Name --
+   ---------------
+
+   function Host_Name return String
+   is (Model_Runner.Text.To_Lower
+         (Hostkit.Host.Kind'Image (Hostkit.Host.Current)));
+
    ---------------------------
    -- Executable_Directory --
    ---------------------------
 
    function Executable_Directory return String is
    begin
-      --  /proc/self/exe resolves symbolic links and survives a PATH lookup,
-      --  which Ada.Command_Line.Command_Name does not. Fall back to the
-      --  command name when the procfs entry is unavailable.
-      if Ada.Directories.Exists ("/proc/self/exe") then
-         declare
-            Target : constant String :=
-              Ada.Directories.Full_Name ("/proc/self/exe");
-         begin
-            if Target /= "" then
-               return Ada.Directories.Containing_Directory (Target);
-            end if;
-         end;
-      end if;
+      --  Asked of hostkit, which knows where each host keeps the answer:
+      --  /proc/self/exe, _NSGetExecutablePath, GetModuleFileName. This used
+      --  to read procfs directly, which is Linux and not even macOS, so on
+      --  every other host it fell through to the command name and an
+      --  installed catalog beside the executable was never found.
+      declare
+         Target : constant String := Hostkit.Host.Executable_Path;
+      begin
+         if Target /= "" and then Ada.Directories.Exists (Target) then
+            return Ada.Directories.Containing_Directory (Target);
+         end if;
+      end;
+
+      --  Empty is hostkit declining to guess, not an error; the command name
+      --  is the honest fallback.
 
       declare
          Command : constant String := Ada.Command_Line.Command_Name;
