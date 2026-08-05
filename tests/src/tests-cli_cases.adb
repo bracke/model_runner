@@ -258,9 +258,12 @@ package body Tests.CLI_Cases is
 
       Assert (Opt.Preliminary_Locale (Source) = "da",
               "locale not found by the preliminary scan");
-      Assert (Opt.Preliminary_Color (Source, Found) = Opt.Color_Always
-              and then Found,
-              "colour not found by the preliminary scan");
+      declare
+         Mode : constant Opt.Color_Mode := Opt.Preliminary_Color (Source, Found);
+      begin
+         Assert (Mode = Opt.Color_Always and then Found,
+                 "colour not found by the preliminary scan");
+      end;
 
       declare
          Bare : Fixed_Arguments;
@@ -268,9 +271,14 @@ package body Tests.CLI_Cases is
          Add (Bare, "version");
          Assert (Opt.Preliminary_Locale (Bare) = "",
                  "a locale was invented");
-         Assert (not Opt.Preliminary_Color (Bare, Found)'Valid
-                 or else not Found,
-                 "a colour mode was invented");
+         --  Bound before the assertion: short-circuiting past Found would
+         --  leave the out parameter written but never read.
+         declare
+            Mode : constant Opt.Color_Mode := Opt.Preliminary_Color (Bare, Found);
+         begin
+            Assert (not Mode'Valid or else not Found,
+                    "a colour mode was invented");
+         end;
       end;
    end Preliminary_Scans;
 

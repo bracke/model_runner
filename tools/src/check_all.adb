@@ -4,6 +4,8 @@ with Ada.Exceptions;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
+with GNAT.OS_Lib;
+
 with Project_Tools.Processes;
 with Project_Tools.Release_Checks;
 with Project_Tools.Text;
@@ -38,7 +40,9 @@ procedure Check_All is
           ("verify Alire-selected GNAT 15 toolchain",
            Root,
            Alr,
-           [new String'("exec"), new String'("--"), new String'("gnatls"), new String'("--version")],
+           GNAT.OS_Lib.Argument_List'
+             [new String'("exec"), new String'("--"),
+              new String'("gnatls"), new String'("--version")],
            Output,
            Quiet => False);
 
@@ -80,7 +84,7 @@ begin
    --  boundaries, layering, and the documentation generated from the code.
    Project_Tools.Release_Checks.Run
      ("build the tests crate", Root & "/tests", Alr,
-      [1 => new String'("build")]);
+      GNAT.OS_Lib.Argument_List'[1 => new String'("build")]);
 
    Project_Tools.Release_Checks.Run
      ("repository, dependency and layering checks", Root & "/tests",
@@ -88,7 +92,7 @@ begin
 
    Project_Tools.Release_Checks.Run
      ("test suite", Root & "/tests", "./bin/tests",
-      [1 => new String'("test")]);
+      GNAT.OS_Lib.Argument_List'[1 => new String'("test")]);
 
    --  The engine against an independently written forward pass. This is what
    --  says the arithmetic is right; the reference comparison against another
@@ -102,7 +106,7 @@ begin
    --  exception and never a wrongly accepted file.
    Project_Tools.Release_Checks.Run
      ("container fuzzing", Root & "/tests", "./bin/tests",
-      [new String'("fuzz"), new String'("--seed"), new String'("1"),
+      GNAT.OS_Lib.Argument_List'[new String'("fuzz"), new String'("--seed"), new String'("1"),
        new String'("--cases"), new String'("2000")]);
 
    Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/tests/obj");

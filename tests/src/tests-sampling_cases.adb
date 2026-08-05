@@ -250,15 +250,15 @@ package body Tests.Sampling_Cases is
       declare
          pragma Suppress (Validity_Check);
       begin
-      Logits (2) := N.From_Bits (16#7FC0_0000#);
-      S.Sample (Sampler, Logits, Token, Status);
-      Assert (Status.Code = E.Sampling_Non_Finite_Logit,
-              "a NaN logit was accepted");
+         Logits (2) := N.From_Bits (16#7FC0_0000#);
+         S.Sample (Sampler, Logits, Token, Status);
+         Assert (Status.Code = E.Sampling_Non_Finite_Logit,
+                 "a NaN logit was accepted");
 
-      Logits (2) := N.From_Bits (16#7F80_0000#);
-      S.Sample (Sampler, Logits, Token, Status);
-      Assert (Status.Code = E.Sampling_Non_Finite_Logit,
-              "an infinite logit was accepted");
+         Logits (2) := N.From_Bits (16#7F80_0000#);
+         S.Sample (Sampler, Logits, Token, Status);
+         Assert (Status.Code = E.Sampling_Non_Finite_Logit,
+                 "an infinite logit was accepted");
       end;
 
       declare

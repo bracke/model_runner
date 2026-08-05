@@ -746,7 +746,6 @@ package body Tests.GGUF_Cases is
       end loop;
    end Batch_Width_Does_Not_Change_Result;
 
-
    --------------------
    -- Register_Tests --
    --------------------

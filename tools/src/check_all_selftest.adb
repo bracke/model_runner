@@ -3,6 +3,8 @@ with Ada.Directories;
 with Ada.Exceptions;
 with Ada.Text_IO;
 
+with GNAT.OS_Lib;
+
 with Project_Tools.Processes;
 
 procedure Check_All_Selftest is
@@ -37,7 +39,8 @@ begin
    Ada.Directories.Create_Directory (Bad_Root);
 
    Bad_Status := Project_Tools.Processes.Run_Status
-     ("check_all rejects invalid working directory", Bad_Root, Check_All, [], Quiet => True);
+     ("check_all rejects invalid working directory", Bad_Root, Check_All,
+      GNAT.OS_Lib.Argument_List'[], Quiet => True);
 
    if Bad_Status = 0 then
       Put_Line (Standard_Error, "check_all unexpectedly accepted an invalid working directory");
