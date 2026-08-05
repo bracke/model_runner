@@ -22,6 +22,17 @@ package body Raise_Interrupt is
    -- Request --
    -------------
 
+   -----------------
+   -- Can_Request --
+   -----------------
+
+   --  A POSIX signal is directed at one process, so this disturbs nothing.
+   function Can_Request return Boolean is (True);
+
+   -------------
+   -- Request --
+   -------------
+
    function Request return Boolean is (C_Kill (C_Getpid, SIGINT) = 0);
 
 end Raise_Interrupt;

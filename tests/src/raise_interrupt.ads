@@ -8,6 +8,17 @@
 --  Task safety: call from one task.
 package Raise_Interrupt is
 
+   --  Can this host raise an interrupt at this process alone?
+   --
+   --  False on Windows, and not for want of a mechanism: the engine handles
+   --  console control events, but a process may only send one to its whole
+   --  console group, which in a test runner includes the shell that started
+   --  it. Firing it wedged the runner. There is no per-process form, so the
+   --  delivery path is exercised by hand there rather than in CI.
+   --
+   --  @return True when Request can be used without disturbing anything else.
+   function Can_Request return Boolean;
+
    --  Ask the host to deliver an interrupt to this process.
    --
    --  @return True when the host accepted the request. False means the
