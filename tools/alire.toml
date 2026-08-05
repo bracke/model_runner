@@ -1,0 +1,24 @@
+name = "model_runner_check_all"
+description = "Release checklist alias for model_runner"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT"
+website = ""
+tags = ["tools", "checks"]
+
+executables = ["check_all", "check_all_selftest"]
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+[[depends-on]]
+project_tools = "*"
+
+[[pins]]
+project_tools = { path = "../../project_tools" }
+
+[build-profiles]
+"*" = "development"

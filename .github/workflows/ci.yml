@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-release-check:
+    name: Linux release checklist
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out model_runner
+        uses: actions/checkout@v7
+        with:
+          path: model_runner
+      - name: Check out sibling crates (transitive pin closure)
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
+        with:
+          root: model_runner
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v6
+        with:
+          toolchain: gnat_native=15.2.1 gprbuild
+
+      - name: Raise Alire solver timeout so slow runners get a complete solution
+        # Default solver.timeout is 5 s (+10 s grace); a large graph on a slow
+        # runner can time out and ship an INCOMPLETE solution, silently dropping
+        # transitive crates (then gprbuild fails with "<x>.gpr not found"). Give
+        # the solver room to return the complete solution it finds elsewhere.
+        shell: bash
+        run: alr settings --global --set solver.timeout 600
+
+      - name: Install GNATprove
+        # The aggregate checker runs gnatprove; it is a regular Alire crate, not a
+        # toolchain component, and apt has no reliable package (the old fallback dropped
+        # it silently, so gnatprove was then missing).
+        run: |
+          alr install gnatprove
+          echo "$HOME/.alire/bin" >> "$GITHUB_PATH"
+      - name: Build aggregate release checker
+        working-directory: model_runner/tools
+        run: alr --non-interactive build
+      - name: Self-test aggregate release checker
+        working-directory: model_runner
+        run: tools/bin/check_all_selftest
+      - name: Run aggregate release checker
+        working-directory: model_runner
+        run: tools/bin/check_all
+
+  # macOS and Windows verify the library and its AUnit suite build and run
+  # natively. model_runner is pure Ada -- it reads a model file and does
+  # arithmetic -- so no system libraries are needed; the GNATprove release
+  # checklist above stays Linux-only.
+  macos-build-check:
+    name: macOS native build check
+    # macos-latest is arm64; gnat_native=15.2.1 ships no aarch64-darwin binary.
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v7
+        with: { path: model_runner }
+      - name: Check out sibling crates (transitive pin closure)
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
+        with:
+          root: model_runner
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v6
+        with:
+          toolchain: gnat_native=15.2.1 gprbuild
+
+      - name: Raise Alire solver timeout so slow runners get a complete solution
+        # Default solver.timeout is 5 s (+10 s grace); a large graph on a slow
+        # runner can time out and ship an INCOMPLETE solution, silently dropping
+        # transitive crates (then gprbuild fails with "<x>.gpr not found"). Give
+        # the solver room to return the complete solution it finds elsewhere.
+        shell: bash
+        run: alr settings --global --set solver.timeout 600
+
+      - name: Build model_runner
+        working-directory: model_runner
+        run: alr --non-interactive build
+      - name: Build and run the test suite
+        working-directory: model_runner/tests
+        run: |
+          alr --non-interactive build
+          ./bin/tests test
+
+  windows-build-check:
+    name: Windows native build check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { path: model_runner }
+      - name: Check out sibling crates (transitive pin closure)
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
+        with:
+          root: model_runner
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v6
+        with:
+          toolchain: gnat_native=15.2.1 gprbuild
+
+      - name: Raise Alire solver timeout so slow runners get a complete solution
+        # Default solver.timeout is 5 s (+10 s grace); a large graph on a slow
+        # runner can time out and ship an INCOMPLETE solution, silently dropping
+        # transitive crates (then gprbuild fails with "<x>.gpr not found"). Give
+        # the solver room to return the complete solution it finds elsewhere.
+        shell: bash
+        run: alr settings --global --set solver.timeout 600
+
+      - name: Build model_runner
+        working-directory: model_runner
+        run: alr --non-interactive build
+      - name: Build and run the test suite
+        working-directory: model_runner/tests
+        shell: bash
+        run: |
+          alr --non-interactive build
+          ./bin/tests.exe test

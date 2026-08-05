@@ -1,0 +1,27 @@
+with "config/model_runner_check_all_config.gpr";
+project Model_Runner_Check_All is
+
+   for Source_Dirs use ("src", "config");
+   for Object_Dir use "obj/" & Model_Runner_Check_All_Config.Build_Profile;
+   for Create_Missing_Dirs use "True";
+   for Exec_Dir use "bin";
+   for Main use ("check_all.adb", "check_all_selftest.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use
+        Model_Runner_Check_All_Config.Ada_Compiler_Switches &
+          ("-gnat2022", "-gnatyM120", "-gnata", "-gnatW8", "-gnatwa");
+   end Compiler;
+
+
+   --  Bytes out as bytes in. Alire's generated switches carry -gnatW8 and the
+   --  binder takes its run-time encoding from the same place, which makes
+   --  Ada.Text_IO encode every byte above 127 a second time on the way out:
+   --  text that was already UTF-8 -- an accented path, an internationalized
+   --  domain name, a translated message -- came out doubled. -Wb is the
+   --  compiler default and leaves the bytes alone.
+   package Binder is
+      for Switches ("Ada") use ("-Es", "-Wb"); --  Symbolic traceback
+   end Binder;
+
+end Model_Runner_Check_All;

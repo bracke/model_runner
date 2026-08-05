@@ -11,3 +11,7 @@
 
 # Generated fixtures
 /tests/fixtures/*.gguf
+/tools/obj/
+/tools/bin/
+/tools/alire/
+/tools/config/
