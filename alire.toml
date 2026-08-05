@@ -27,10 +27,12 @@ terminal_styles = { path = "../terminal_styles" }
 [[pins]]
 messages = { path = "../messages" }
 
-# Profiles are not overridden here. A wildcard pinning every crate to the
-# development profile made `alr build --release` silently build dependencies
-# unoptimized, and building the tests crate reverted the root crate's profile
-# behind your back. Both are worth more than sharing one set of object files.
+# Build dependencies in the development profile (-Og) too, not the default
+# release (-O3). Keeping every root on the same profile lets them share object
+# files instead of forcing a rebuild whenever a different root is built.
+# Development is what you build during development; release is for a release.
+[build-profiles]
+"*" = "development"
 
 [[actions]]
 type = "test"

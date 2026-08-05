@@ -372,14 +372,23 @@ package body Model_Runner.Sampling is
       end if;
 
       --  2  non-finite logits
-      for Index in Logits'Range loop
-         if not N.Is_Finite (Logits (Index)) then
-            Status := E.Make (E.Sampling_Non_Finite_Logit);
+      --
+      --  Suppressed at the call site as well as inside Is_Finite: the check
+      --  fires when the argument is evaluated, before the predicate written
+      --  to answer the question ever runs. A logit that is not a number is a
+      --  diagnostic this loop reports, not a fault.
+      declare
+         pragma Suppress (Validity_Check);
+      begin
+         for Index in Logits'Range loop
+            if not N.Is_Finite (Logits (Index)) then
+               Status := E.Make (E.Sampling_Non_Finite_Logit);
             E.Add_Integer
-              (Status, "token", Long_Long_Integer (Index - Logits'First));
-            return;
-         end if;
-      end loop;
+                 (Status, "token", Long_Long_Integer (Index - Logits'First));
+               return;
+            end if;
+         end loop;
+      end;
 
       --  Greedy mode short-circuits the whole probabilistic pipeline and does
       --  not consume random state.

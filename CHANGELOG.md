@@ -68,15 +68,16 @@ All figures are from the release build, on a Ryzen 7 7840U, against
 TinyLlama-1.1B-Chat Q8_0. Generating twelve tokens with 14 threads takes 2.18 s
 wall and 16.0 s of processor time.
 
-- **The build was never optimized.** Both project files set
+- **No build profile reached the compiler.** Both project files set
   `Compiler.Default_Switches` without including the switches from the generated
-  configuration project, which silently discarded them: every profile compiled
-  at `-O0`, and `alr build --release` produced an unoptimized binary. Fixing it
-  took twelve tokens from 14.0 s to 2.18 s. Any measurement made before this
-  was comparing unoptimized builds against each other.
-- The wildcard `[build-profiles] "*" = "development"` is gone from both
-  crates. It made `alr build --release` build dependencies unoptimized, and
-  building the tests crate reverted the root crate's profile behind your back.
+  configuration project, which silently discards them: every profile compiled
+  at `-O0`, and `--release` changed nothing. Every sibling crate includes them;
+  model_runner was the one that did not. Fixing it took twelve tokens from
+  14.0 s to 2.18 s, and means any measurement taken before the fix compared
+  unoptimized builds against each other.
+- `[build-profiles] "*" = "development"` stays, as in every sibling: one
+  profile across every root so they share object files, and `-Og` with full
+  validity checks is what development should build. Release is for a release.
 - `tests.gpr` did not reference its own configuration project at all, and used
   one object directory for every profile, so objects built at one optimization
   level could be linked into a binary built at another. Both fixed.

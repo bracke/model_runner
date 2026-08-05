@@ -242,6 +242,14 @@ package body Tests.Sampling_Cases is
       S.Open (Sampler, S.Greedy_Configuration, Vocabulary, 1, Status);
       Assert (E.Is_Ok (Status), "sampler did not open");
 
+      --  This test manufactures the values a hostile model file could carry
+      --  and checks they are refused. Storing and passing them is the point,
+      --  so validity checking is suppressed here for the same reason the
+      --  engine suppresses it where it inspects them: the check fires on the
+      --  read, before anything can decide the value is unacceptable.
+      declare
+         pragma Suppress (Validity_Check);
+      begin
       Logits (2) := N.From_Bits (16#7FC0_0000#);
       S.Sample (Sampler, Logits, Token, Status);
       Assert (Status.Code = E.Sampling_Non_Finite_Logit,
@@ -251,6 +259,7 @@ package body Tests.Sampling_Cases is
       S.Sample (Sampler, Logits, Token, Status);
       Assert (Status.Code = E.Sampling_Non_Finite_Logit,
               "an infinite logit was accepted");
+      end;
 
       declare
          Wrong : constant N.Real_Array (0 .. 2) := [others => 0.0];

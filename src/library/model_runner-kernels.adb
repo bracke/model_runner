@@ -1,5 +1,14 @@
 package body Model_Runner.Kernels is
 
+   --  Every value here derives from weights a model file supplied, so a
+   --  not-a-number or an infinity is possible input, and this package guards
+   --  against it explicitly: RMS_Norm rejects a non-finite gain, Softmax a
+   --  non-finite term or total, and All_Finite exists for callers to ask.
+   --  Validity checking raises when such a value is read, which is before any
+   --  of those guards can run, so it would replace each diagnostic with an
+   --  exception. Bounds and range checking are untouched.
+   pragma Suppress (Validity_Check);
+
    use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.Numerics.Real;
    use type Model_Runner.Numerics.Wide_Real;

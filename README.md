@@ -179,9 +179,11 @@ until something makes them:
   suite does not need it -- it builds the same model in memory -- but the
   command-line examples above do.
 
-Build `--release` for anything you intend to measure. The default development
-profile is a debug build, and the difference is not small: twelve tokens on a
-1.1B model take 2.2 seconds optimized and around 14 unoptimized.
+Development is the default profile here and in every sibling crate, on
+purpose: `-Og` with the full validity checks, one profile across every root so
+they share object files. Release is for a release -- and for anything you
+intend to measure, because the difference is not small: twelve tokens on a 1.1B
+model take 2.2 seconds at `--release` and around 14 at the default.
 
 ```
 alr build --release                        # optimized, what to ship and measure
@@ -400,13 +402,13 @@ Row dot product, nanoseconds per element, release build:
 
 Three things got them there.
 
-**The build was never optimized.** Both project files set
-`Compiler.Default_Switches` without including the generated profile's switches,
-which silently discarded them: every profile compiled at `-O0`, and
-`alr build --release` produced an unoptimized binary. Fixing that alone took
-twelve tokens from 14.0 s to 2.18 s. Any measurement made before it — including
-every number quoted while this was being worked on — was comparing unoptimized
-builds against each other.
+**No profile reached the compiler.** Both project files set
+`Compiler.Default_Switches` without including the generated configuration
+project's switches, which silently discards them — so every profile compiled at
+`-O0`, and `--release` changed nothing. Every sibling crate gets this right;
+model_runner was the one that did not. Fixing it took twelve tokens from 14.0 s
+to 2.18 s, and it means any measurement taken before the fix was comparing
+unoptimized builds against each other.
 
 **Vectorization, from ordinary Ada.** Nothing is written in assembly, in
 intrinsics, or in a foreign language. What unlocked it was removing Ada's

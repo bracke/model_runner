@@ -26,8 +26,14 @@ project Model_Runner is
            "-gnatyM120");
    end Compiler;
 
+   --  Bytes out as bytes in. Alire's generated switches carry -gnatW8 and the
+   --  binder takes its run-time encoding from the same place, which makes
+   --  Ada.Text_IO encode every byte above 127 a second time on the way out:
+   --  text that was already UTF-8 -- a Danish label, a pseudo-locale bracket,
+   --  a token the model produced -- came out doubled. -Wb is the compiler
+   --  default and leaves the bytes alone.
    package Binder is
-      for Switches ("Ada") use ("-Es");
+      for Switches ("Ada") use ("-Es", "-Wb"); --  Symbolic traceback
    end Binder;
 
    package Install is

@@ -47,23 +47,42 @@ package body Model_Runner.Numerics is
    -- From_Bits --
    ---------------
 
-   function From_Bits (Item : Interfaces.Unsigned_32) return Real
-   is (To_Value (Item));
+   --  This is the boundary where arbitrary bytes from a model file become a
+   --  number, so a not-a-number or an infinity is an expected result, not a
+   --  fault: Is_Finite and Is_NaN exist to test for exactly that, and the
+   --  kernels reject non-finite values with a diagnostic. Validity checking
+   --  would instead raise here, turning a hostile file into an exception
+   --  before anything could report what was wrong with it.
+   function From_Bits (Item : Interfaces.Unsigned_32) return Real is
+      pragma Suppress (Validity_Check);
+   begin
+      return To_Value (Item);
+   end From_Bits;
 
    ---------------
    -- Is_Finite --
    ---------------
 
-   function Is_Finite (Item : Real) return Boolean
-   is ((To_Bits (Item) and Exponent_Mask) /= Exponent_Mask);
+   --  Asking whether a value is a number is not a use of it as one, but
+   --  validity checking cannot tell those apart and would raise here -- in
+   --  the very predicate written to answer the question. Every caller that
+   --  handles hostile input reaches a non-finite value through this.
+   function Is_Finite (Item : Real) return Boolean is
+      pragma Suppress (Validity_Check);
+   begin
+      return (To_Bits (Item) and Exponent_Mask) /= Exponent_Mask;
+   end Is_Finite;
 
    ---------------
    -- Is_Finite --
    ---------------
 
-   function Is_Finite (Item : Wide_Real) return Boolean
-   is ((Wide_To_Bits (Item) and 16#7FF0_0000_0000_0000#)
-       /= 16#7FF0_0000_0000_0000#);
+   function Is_Finite (Item : Wide_Real) return Boolean is
+      pragma Suppress (Validity_Check);
+   begin
+      return (Wide_To_Bits (Item) and 16#7FF0_0000_0000_0000#)
+        /= 16#7FF0_0000_0000_0000#;
+   end Is_Finite;
 
    ------------
    -- Is_NaN --
