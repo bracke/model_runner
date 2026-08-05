@@ -2,10 +2,11 @@ with AUnit.Assertions;
 
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Memory;
-with Interfaces.C;
 
 with Model_Runner.Cancellation;
 with Model_Runner.Platform.Signals;
+
+with Raise_Interrupt;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
@@ -454,21 +455,6 @@ package body Tests.Inference_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      use type Interfaces.C.int;
-
-      --  The signal has to be directed at the process, not at this thread.
-      --  The runtime blocks signals in ordinary tasks and delivers them
-      --  through a dedicated waiter, so a thread-directed raise would stay
-      --  pending on a thread that never waits for it.
-      function C_Getpid return Interfaces.C.int
-      with Import, Convention => C, External_Name => "getpid";
-
-      function C_Kill
-        (Process : Interfaces.C.int;
-         Signal  : Interfaces.C.int) return Interfaces.C.int
-      with Import, Convention => C, External_Name => "kill";
-
-      SIGINT : constant Interfaces.C.int := 2;
 
       Token     : aliased Model_Runner.Cancellation.Token;
       Installed : Boolean;
@@ -486,7 +472,10 @@ package body Tests.Inference_Cases is
       Assert (not Token.Is_Requested,
               "the token was already set before any interrupt");
 
-      Assert (C_Kill (C_Getpid, SIGINT) = 0,
+      --  Raised the way this host raises one; Raise_Interrupt owns that
+      --  difference. Every host this builds for can do it, so a refusal is a
+      --  failure rather than a reason to skip.
+      Assert (Raise_Interrupt.Request,
               "the interrupt could not be raised");
 
       --  The handler runs in its own context, so poll for a bounded time
