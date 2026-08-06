@@ -41,6 +41,19 @@ package Model_Runner.Presentation is
       Colour_Suppressed  : Boolean := False;
    end record;
 
+   --  Report whether an interactive session is possible on these
+   --  destinations.
+   --
+   --  Both standard input and standard output must be terminals. Without the
+   --  first there is nothing to read from and the session consumes a file as
+   --  though someone were typing it; without the second it draws prompts into
+   --  whatever the output was redirected to.
+   --
+   --  @param Item Capabilities of the destinations.
+   --  @return True when an interactive session can be held.
+   function Supports_Interaction (Item : Terminal_Capabilities) return Boolean
+   is (Item.Input_Is_Terminal and then Item.Output_Is_Terminal);
+
    --  Presentation state: the catalog, the styling policy and the destination
    --  capabilities.
    type Console is tagged limited private;

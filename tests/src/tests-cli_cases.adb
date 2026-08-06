@@ -8,6 +8,7 @@ with Model_Runner.CLI.Driver;
 with Model_Runner.CLI.Options;
 with Model_Runner.Cancellation;
 with Model_Runner.Errors;
+with Model_Runner.Presentation;
 with Model_Runner.Progress;
 with Model_Runner.Limits;
 with Model_Runner.GGUF.Containers.Reader;
@@ -818,6 +819,45 @@ package body Tests.CLI_Cases is
       end if;
    end Notify;
 
+   --  Interactive mode needs a terminal at both ends.
+   --
+   --  Chosen implicitly, when no prompt source is given, it was already
+   --  conditional on both being terminals. Asked for by name it was not
+   --  checked at all, so a redirected session drew prompts nobody saw and
+   --  read a file as though someone were typing it. The diagnostic for that
+   --  existed from the start with nothing producing it.
+   --
+   --  The decision is tested here rather than through the driver on purpose.
+   --  Running the driver with --interactive would consult the real descriptors
+   --  of whatever ran the suite: on a terminal it would enter the session and
+   --  wait for input, and a test that hangs on a developer's machine while
+   --  passing everywhere else is worse than no test.
+   procedure Interaction_Needs_Both_Terminals
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Pres renames Model_Runner.Presentation;
+
+      --  Report what the decision is for one combination.
+      function Possible (Input, Output : Boolean) return Boolean is
+      begin
+         return Pres.Supports_Interaction
+           ((Input_Is_Terminal  => Input,
+             Output_Is_Terminal => Output,
+             Error_Is_Terminal  => True,
+             Colour_Suppressed  => False));
+      end Possible;
+   begin
+      Assert (Possible (Input => True, Output => True),
+              "a session with terminals at both ends was refused");
+      Assert (not Possible (Input => False, Output => True),
+              "a session reading a file was allowed");
+      Assert (not Possible (Input => True, Output => False),
+              "a session writing into a redirection was allowed");
+      Assert (not Possible (Input => False, Output => False),
+              "a session with neither end on a terminal was allowed");
+   end Interaction_Needs_Both_Terminals;
+
    --  A cancelled generation stops, in prefill and in the decode loop alike.
    --
    --  Generation checks for cancellation twice, between prefill batches and
@@ -1442,6 +1482,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Retained_Text_Matches'Access,
          "retained text matches what was streamed");
+      Register_Routine
+        (T, Interaction_Needs_Both_Terminals'Access,
+         "interactive mode needs a terminal at both ends");
       Register_Routine
         (T, Cancelled_Generation_Stops'Access,
          "a cancelled generation stops in prefill and in the decode loop");

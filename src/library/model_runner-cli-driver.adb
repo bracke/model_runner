@@ -116,12 +116,32 @@ package body Model_Runner.CLI.Driver is
       if Item.Kind = Opt.Command_Run
         and then Item.Prompt_Kind = Opt.Prompt_Unset
       then
-         if Capabilities.Input_Is_Terminal and then Capabilities.Output_Is_Terminal
-         then
+         if Pres.Supports_Interaction (Capabilities) then
             Item.Prompt_Kind := Opt.Prompt_Interactive;
          else
             Item.Prompt_Kind := Opt.Prompt_Standard_Input;
          end if;
+      end if;
+
+      --  Interactive mode asked for by name needs the same terminals it would
+      --  have been chosen for. Chosen implicitly it was already conditional on
+      --  them; asked for explicitly it was not checked at all, so a redirected
+      --  session drew prompts nobody saw and read a file as though someone
+      --  were typing it.
+      if Item.Kind = Opt.Command_Run
+        and then Item.Prompt_Kind = Opt.Prompt_Interactive
+        and then not Pres.Supports_Interaction (Capabilities)
+      then
+         declare
+            Condition : constant E.Error_Info :=
+              E.Make (E.CLI_Interactive_Unavailable);
+         begin
+            Pres.Report (Screen, Condition);
+            Opt.Release (Item);
+            Loc.Close (Catalog);
+            Status := E.Exit_Status (Condition);
+            return;
+         end;
       end if;
 
       Model_Runner.CLI.Execute.Dispatch (Item, Screen, Catalog, Status);

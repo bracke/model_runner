@@ -263,6 +263,15 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- `--interactive` no longer starts a session without a terminal to hold it.
+  Interactive mode chosen implicitly, when no prompt source was given, was
+  already conditional on standard input and standard output both being
+  terminals; asked for by name it was not checked at all, so a redirected
+  session drew prompts nobody saw and consumed a file as though someone were
+  typing it. It now reports `MR-CLI-0019`, which was declared and catalogued
+  from the start with nothing producing it.
+
+
 - An option that takes no value accepted one and dropped it. `--verbose=5`,
   `--raw=yes` and eleven others parsed as though the value had not been
   written, so a mistake in a command line was silently ignored rather than
