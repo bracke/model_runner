@@ -7,6 +7,14 @@ with Model_Runner.Quantization;
 
 package body Model_Runner.Tensors is
 
+   --  Weights come from a model file and may be infinities or not-a-numbers,
+   --  so the kernels here can produce one. That is data, not a fault: callers
+   --  test with Kernels.All_Finite and report it. Validity checking raises on
+   --  the value before any of them can look, so it is suppressed for the same
+   --  reason it is in Numerics and the sampler. Bounds and range checking are
+   --  untouched.
+   pragma Suppress (Validity_Check);
+
    use type Element_Count;
 
    --  How many elements a row kernel decodes before consuming them. Large

@@ -125,8 +125,13 @@ wall and 16.0 s of processor time.
   longer wait on the previous addition to retire. They are combined in a fixed
   order, so results stay reproducible.
 - `Decode_Block` no longer zeroes its whole 256-element buffer on every call.
-- Row dot per element, release build: Q8_0 0.39 ns, Q4_0 0.59 ns, Q4_K 0.77 ns,
-  F32 1.26 ns.
+- Row dot per element, release build: Q4_0 0.92 ns, Q8_0 1.06 ns, F32 1.61 ns,
+  Q4_K 6.68 ns. These replace lower figures published earlier, which were
+  measured on tensors filled with arbitrary bytes: read as half precision those
+  are frequently denormal, infinite or not-a-number, which no real model
+  contains. The benchmark now forces every block scale to a normal exponent,
+  and the corrected numbers agree with the end-to-end timing where the earlier
+  ones did not.
 
 ### Added
 
@@ -170,6 +175,13 @@ wall and 16.0 s of processor time.
   this.
 
 ### Fixed
+
+- `Numerics.To_Real` and the tensor kernels raised on a not-a-number instead of
+  producing one. Half precision has infinities and not-a-numbers, a model file
+  may carry either as a block scale, and reporting that is what `Is_Finite` and
+  `All_Finite` are for -- but validity checking fires on the value before any
+  caller can look at it. Suppressed where such a value is inspected, as in the
+  sampler; bounds and range checking are untouched.
 
 - `Backend.CPU.Partition` underflowed the unsigned element count when a worker
   had no rows, which the partition-coverage test found.

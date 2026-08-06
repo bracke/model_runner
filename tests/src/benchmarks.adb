@@ -36,6 +36,52 @@ package body Benchmarks is
       end loop;
    end Fill;
 
+   --  Force every half-precision scale in a span of blocks to a modest normal
+   --  exponent.
+   --
+   --  Random bytes read as half precision are frequently denormal, infinite
+   --  or not-a-number. Arithmetic on denormals is slow on this hardware, so
+   --  leaving them in measures a case no real model contains and reports the
+   --  kernels as slower than they are.
+   procedure Tame_Scales
+     (Data   : in out B.Byte_Array;
+      Format : G.Tensor_Type;
+      Blocks : B.Byte_Count)
+   is
+      Width : constant B.Byte_Count := B.Byte_Count (G.Block_Bytes (Format));
+   begin
+      case Format is
+         when G.Type_F16 =>
+            for Block in 0 .. Blocks - 1 loop
+               Data (Data'First + Block * Width + 1) := 16#30#;
+            end loop;
+
+         when G.Type_F32 =>
+            for Block in 0 .. Blocks - 1 loop
+               Data (Data'First + Block * Width + 3) := 16#3E#;
+            end loop;
+
+         when G.Type_Q4_0 | G.Type_Q8_0 =>
+            for Block in 0 .. Blocks - 1 loop
+               Data (Data'First + Block * Width + 1) := 16#30#;
+            end loop;
+
+         when G.Type_Q4_K | G.Type_Q5_K =>
+            for Block in 0 .. Blocks - 1 loop
+               Data (Data'First + Block * Width + 1) := 16#30#;
+               Data (Data'First + Block * Width + 3) := 16#30#;
+            end loop;
+
+         when G.Type_Q6_K =>
+            for Block in 0 .. Blocks - 1 loop
+               Data (Data'First + Block * Width + 209) := 16#30#;
+            end loop;
+
+         when others =>
+            null;
+      end case;
+   end Tame_Scales;
+
    --  Report one measurement.
    procedure Report
      (Name     : String;
@@ -100,6 +146,10 @@ package body Benchmarks is
          end if;
 
          Fill (Data.all);
+         Tame_Scales
+           (Data.all, Format,
+            B.Byte_Count (Rows) * B.Byte_Count (Columns)
+            / B.Byte_Count (G.Block_Elements (Format)));
 
          T.Make (Format, Rows, Columns, Data, 0, Item, Status);
          if E.Is_Error (Status) then
@@ -164,6 +214,7 @@ package body Benchmarks is
             return;
          end if;
          Fill (Data.all);
+         Tame_Scales (Data.all, Format, Count);
 
          Started := Ada.Real_Time.Clock;
          loop

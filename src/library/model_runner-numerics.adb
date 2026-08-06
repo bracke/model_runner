@@ -96,7 +96,13 @@ package body Model_Runner.Numerics is
    -- To_Real --
    -------------
 
+   --  Half precision has infinities and not-a-numbers, and a model file may
+   --  carry either as a block scale. Producing one is this function's job --
+   --  Is_Finite exists so callers can ask -- but validity checking raises on
+   --  the result before any caller can look at it, turning a hostile file into
+   --  an exception instead of a diagnostic. Same reason as From_Bits below.
    function To_Real (Item : Half) return Real is
+      pragma Suppress (Validity_Check);
       Raw       : constant Interfaces.Unsigned_16 :=
         Interfaces.Unsigned_16 (Item);
       Sign      : constant Interfaces.Unsigned_32 :=

@@ -392,10 +392,25 @@ Row dot product, nanoseconds per element, release build:
 
 | | |
 |---|---|
-| Q8_0 | 0.39 |
-| Q4_0 | 0.59 |
-| Q4_K | 0.77 |
-| F32 | 1.26 |
+| Q4_0 | 0.92 |
+| Q8_0 | 1.06 |
+| F32 | 1.61 |
+| Q4_K | 6.68 |
+
+Those figures replace lower ones published earlier, which were wrong. The
+benchmark filled its tensors with arbitrary bytes, and bytes read as half
+precision are frequently denormal, infinite or not-a-number -- values no real
+model contains. It now forces every block scale to a modest normal exponent.
+The corrected numbers agree with the end-to-end measurement, which implies
+about 1.65 ns per element once attention, normalization and thread hand-off
+are counted; the earlier ones never did, and that disagreement should have
+been noticed sooner.
+
+Q4_K is the outlier and the obvious next thing to look at: it decodes a block
+at a time through the reference decoder, where Q4_0 and Q8_0 are unpacked
+inline.
+
+Three things got them there.
 
 Three things got them there.
 
