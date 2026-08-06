@@ -416,12 +416,18 @@ package body Tests.Inference_Cases is
       --  to check it; everything earlier must stop. Asserting only that some
       --  request landed would pass with a single surviving observation point.
       --
-      --  What this does and does not pin down, measured rather than assumed:
-      --  removing the check inside the tensor loop fails this test, and so
-      --  does disabling observation everywhere. Removing any one of the other
-      --  three checks in the llama profile does not, because a fixture with
-      --  two layers and twenty-one tensors passes through them too quickly to
-      --  land a request in between. Those three are covered by nothing here.
+      --  What this pins down, measured one check at a time rather than
+      --  assumed. Removing both cancellation checks in preparation fails it:
+      --  nine of eleven becomes four. Removing either one alone does not,
+      --  because the other catches the request at the next stage, so this
+      --  test holds the pair rather than either member.
+      --
+      --  The check inside the evaluation layer loop belongs to the test below
+      --  and not to this one. The second evaluation check is held by neither,
+      --  and the parser's own checks are not distinguished here either: with
+      --  them disabled the preparation checks still stop nine of the eleven.
+      --  Worth writing down, because a test that stops a load looks from the
+      --  outside as though it must cover every point that could stop one.
       Assert (Stopped >= Stages - 2,
               "only" & Natural'Image (Stopped) & " of"
               & Natural'Image (Stages)
