@@ -125,8 +125,18 @@ wall and 16.0 s of processor time.
   longer wait on the previous addition to retire. They are combined in a fixed
   order, so results stay reproducible.
 - `Decode_Block` no longer zeroes its whole 256-element buffer on every call.
-- Row dot per element, release build: Q4_0 0.92 ns, Q8_0 1.06 ns, F32 1.61 ns,
-  Q4_K 6.68 ns. These replace lower figures published earlier, which were
+- The k-quant decoders were six times slower per element than the formats
+  unpacked inline. A sub-block's scale and offset are now formed once rather
+  than once per element -- they were four multiplies and four conversions per
+  element that never changed within the sub-block -- packed bytes are read
+  directly instead of through a call, and the per-element checks are suppressed
+  after the block is bounds-checked at entry. Q4_K went from 6.68 ns to 1.12 ns
+  per element; Q5_K and Q6_K have the same three changes.
+- The k-quant path also decoded into a scratch block and copied 256 elements
+  out of it. It decodes into the destination now, though measurement showed
+  the copy was not what made it slow.
+- Row dot per element, release build: Q4_0 0.92 ns, Q8_0 1.04 ns, Q4_K 1.12 ns,
+  F32 1.61 ns. These replace lower figures published earlier, which were
   measured on tensors filled with arbitrary bytes: read as half precision those
   are frequently denormal, infinite or not-a-number, which no real model
   contains. The benchmark now forces every block scale to a normal exponent,

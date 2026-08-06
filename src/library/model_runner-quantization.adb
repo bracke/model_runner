@@ -79,11 +79,13 @@ package body Model_Runner.Quantization is
    end Sub_Block_Scale;
 
    --  Decode exactly one block; defined below.
+   --  Decodes into any slice of at least Block_Elements, so a caller with a
+   --  destination already in hand need not copy through a scratch block.
    procedure Decode_One
      (Format : G.Tensor_Type;
       Data   : B.Byte_Array;
       Offset : B.Byte_Count;
-      Target : out Block_Buffer;
+      Target : out Real_Array;
       Ok     : out Boolean);
 
    -------------------
@@ -273,14 +275,17 @@ package body Model_Runner.Quantization is
                pragma Suppress (Range_Check);
                pragma Suppress (Overflow_Check);
 
-               Buffer : Block_Buffer;
-               Slot   : Element_Count := Target'First;
-               Step   : B.Byte_Count := Offset;
+               Slot : Element_Count := Target'First;
+               Step : B.Byte_Count := Offset;
             begin
                for Block in 1 .. Count loop
-                  Decode_One (Format, Data, Step, Buffer, Ok);
+                  --  Straight into the destination. This used to decode into
+                  --  a scratch block and copy 256 elements out of it, which
+                  --  was the whole of the difference between this path and
+                  --  the formats unpacked inline.
+                  Decode_One
+                    (Format, Data, Step, Target (Slot .. Slot + Per - 1), Ok);
                   exit when not Ok;
-                  Target (Slot .. Slot + Per - 1) := Buffer (0 .. Per - 1);
                   Slot := Slot + Per;
                   Step := Step + Width;
                end loop;
@@ -585,7 +590,7 @@ package body Model_Runner.Quantization is
      (Format : G.Tensor_Type;
       Data   : B.Byte_Array;
       Offset : B.Byte_Count;
-      Target : out Block_Buffer;
+      Target : out Real_Array;
       Ok     : out Boolean)
    is
       Width : constant B.Byte_Count := B.Byte_Count (G.Block_Bytes (Format));
@@ -614,12 +619,12 @@ package body Model_Runner.Quantization is
             declare
                Present : Boolean;
             begin
-               Target (0) := B.Get_F32 (Data, Offset, Present);
+               Target (Target'First + 0) := B.Get_F32 (Data, Offset, Present);
                Ok := Present;
             end;
 
          when G.Type_F16 =>
-            Target (0) := Scale (Data, Offset);
+            Target (Target'First + 0) := Scale (Data, Offset);
             Ok := True;
 
          when G.Type_Q4_0 =>
@@ -634,9 +639,9 @@ package body Model_Runner.Quantization is
                      Packed : constant Interfaces.Unsigned_8 :=
                        Raw (Data, Offset + 2 + B.Byte_Count (J));
                   begin
-                     Target (Element_Count (J)) :=
+                     Target (Target'First + Element_Count (J)) :=
                        D * Real (Integer (Packed and 16#0F#) - 8);
-                     Target (Element_Count (J + 16)) :=
+                     Target (Target'First + Element_Count (J + 16)) :=
                        D * Real (Integer (Interfaces.Shift_Right (Packed, 4)) - 8);
                   end;
                end loop;
@@ -648,7 +653,7 @@ package body Model_Runner.Quantization is
                D : constant Real := Scale (Data, Offset);
             begin
                for J in 0 .. 31 loop
-                  Target (Element_Count (J)) :=
+                  Target (Target'First + Element_Count (J)) :=
                     D * Real (Signed (Data, Offset + 2 + B.Byte_Count (J)));
                end loop;
                Ok := True;
@@ -656,6 +661,13 @@ package body Model_Runner.Quantization is
 
          when G.Type_Q4_K =>
             declare
+               --  The block was bounds-checked at entry, so every index below
+               --  is inside it. The checks cost the vectorizer this loop, and
+               --  unpacking is the larger half of a k-quant row's cost.
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
                D       : constant Real := Scale (Data, Offset);
                Minimum : constant Real := Scale (Data, Offset + 2);
                Scales  : constant B.Byte_Count := Offset + 4;
@@ -675,21 +687,39 @@ package body Model_Runner.Quantization is
                      Sub_Block_Scale (Data, Scales, Sub, Factor1, Min1);
                      Sub_Block_Scale (Data, Scales, Sub + 1, Factor2, Min2);
 
-                     for L in 0 .. 31 loop
-                        declare
-                           Packed : constant Interfaces.Unsigned_8 :=
-                             Raw (Data, Base + B.Byte_Count (L));
-                        begin
-                           Target (Target_Index + Element_Count (L)) :=
-                             D * Real (Factor1)
-                               * Real (Integer (Packed and 16#0F#))
-                             - Minimum * Real (Min1);
-                           Target (Target_Index + 32 + Element_Count (L)) :=
-                             D * Real (Factor2)
-                               * Real (Integer (Interfaces.Shift_Right (Packed, 4)))
-                             - Minimum * Real (Min2);
-                        end;
-                     end loop;
+                     --  A sub-block's scale and offset are the same for all
+                     --  thirty-two of its elements, so they are formed once
+                     --  here rather than in the loop. They were four
+                     --  multiplies and four conversions per element.
+                     declare
+                        Scale_1  : constant Real := D * Real (Factor1);
+                        Scale_2  : constant Real := D * Real (Factor2);
+                        Offset_1 : constant Real := Minimum * Real (Min1);
+                        Offset_2 : constant Real := Minimum * Real (Min2);
+                     begin
+                        for L in 0 .. 31 loop
+                           declare
+                              --  Indexed directly rather than through Raw:
+                              --  one read instead of a call per element.
+                              Packed : constant Interfaces.Unsigned_8 :=
+                                Data (Data'First + Base + B.Byte_Count (L));
+                           begin
+                              Target
+                                (Target'First + Target_Index
+                                 + Element_Count (L)) :=
+                                Scale_1 * Real (Integer (Packed and 16#0F#))
+                                - Offset_1;
+                              Target
+                                (Target'First + Target_Index + 32
+                                 + Element_Count (L)) :=
+                                Scale_2
+                                  * Real (Integer
+                                            (Interfaces.Shift_Right
+                                               (Packed, 4)))
+                                - Offset_2;
+                           end;
+                        end loop;
+                     end;
 
                      Target_Index := Target_Index + 64;
                      Sub := Sub + 2;
@@ -700,6 +730,12 @@ package body Model_Runner.Quantization is
 
          when G.Type_Q5_K =>
             declare
+               --  As in Q4_K: the block was bounds-checked at entry, and
+               --  the per-element checks cost the vectorizer this loop.
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
                D       : constant Real := Scale (Data, Offset);
                Minimum : constant Real := Scale (Data, Offset + 2);
                Scales  : constant B.Byte_Count := Offset + 4;
@@ -719,6 +755,15 @@ package body Model_Runner.Quantization is
                      Sub_Block_Scale (Data, Scales, Sub, Factor1, Min1);
                      Sub_Block_Scale (Data, Scales, Sub + 1, Factor2, Min2);
 
+                     --  Formed once per sub-block rather than once per
+                     --  element, as in Q4_K.
+                     declare
+                        Scale_1  : constant Real := D * Real (Factor1);
+                        Scale_2  : constant Real := D * Real (Factor2);
+                        Offset_1 : constant Real := Minimum * Real (Min1);
+                        Offset_2 : constant Real := Minimum * Real (Min2);
+                     begin
+
                      for L in 0 .. 31 loop
                         declare
                            Packed : constant Interfaces.Unsigned_8 :=
@@ -732,14 +777,17 @@ package body Model_Runner.Quantization is
                              Integer (Interfaces.Shift_Right (Packed, 4))
                              + (if (Fifth and Mask_High) /= 0 then 16 else 0);
                         begin
-                           Target (Target_Index + Element_Count (L)) :=
-                             D * Real (Factor1) * Real (Low)
-                             - Minimum * Real (Min1);
-                           Target (Target_Index + 32 + Element_Count (L)) :=
-                             D * Real (Factor2) * Real (Upper)
-                             - Minimum * Real (Min2);
+                           Target
+                             (Target'First + Target_Index
+                              + Element_Count (L)) :=
+                             Scale_1 * Real (Low) - Offset_1;
+                           Target
+                             (Target'First + Target_Index + 32
+                              + Element_Count (L)) :=
+                             Scale_2 * Real (Upper) - Offset_2;
                         end;
                      end loop;
+                     end;
 
                      Target_Index := Target_Index + 64;
                      Sub := Sub + 2;
@@ -752,6 +800,12 @@ package body Model_Runner.Quantization is
 
          when G.Type_Q6_K =>
             declare
+               --  As in Q4_K: the block was bounds-checked at entry, and
+               --  the per-element checks cost the vectorizer this loop.
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
                Low_Base  : constant B.Byte_Count := Offset;
                High_Base : constant B.Byte_Count := Offset + 128;
                Scale_Base : constant B.Byte_Count := Offset + 192;
@@ -800,19 +854,19 @@ package body Model_Runner.Quantization is
                                      (Interfaces.Shift_Right (Bits, 6) and 3)
                              - 32;
                         begin
-                           Target (Out_Half + Element_Count (L)) :=
+                           Target (Target'First + Out_Half + Element_Count (L)) :=
                              D * Real (Signed (Data, Scale_Half
                                                + B.Byte_Count (Sub)))
                                * Real (Q1);
-                           Target (Out_Half + 32 + Element_Count (L)) :=
+                           Target (Target'First + Out_Half + 32 + Element_Count (L)) :=
                              D * Real (Signed (Data, Scale_Half
                                                + B.Byte_Count (Sub + 2)))
                                * Real (Q2);
-                           Target (Out_Half + 64 + Element_Count (L)) :=
+                           Target (Target'First + Out_Half + 64 + Element_Count (L)) :=
                              D * Real (Signed (Data, Scale_Half
                                                + B.Byte_Count (Sub + 4)))
                                * Real (Q3);
-                           Target (Out_Half + 96 + Element_Count (L)) :=
+                           Target (Target'First + Out_Half + 96 + Element_Count (L)) :=
                              D * Real (Signed (Data, Scale_Half
                                                + B.Byte_Count (Sub + 6)))
                                * Real (Q4);

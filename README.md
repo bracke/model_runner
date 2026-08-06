@@ -393,9 +393,9 @@ Row dot product, nanoseconds per element, release build:
 | | |
 |---|---|
 | Q4_0 | 0.92 |
-| Q8_0 | 1.06 |
+| Q8_0 | 1.04 |
+| Q4_K | 1.12 |
 | F32 | 1.61 |
-| Q4_K | 6.68 |
 
 Those figures replace lower ones published earlier, which were wrong. The
 benchmark filled its tensors with arbitrary bytes, and bytes read as half
@@ -406,9 +406,11 @@ about 1.65 ns per element once attention, normalization and thread hand-off
 are counted; the earlier ones never did, and that disagreement should have
 been noticed sooner.
 
-Q4_K is the outlier and the obvious next thing to look at: it decodes a block
-at a time through the reference decoder, where Q4_0 and Q8_0 are unpacked
-inline.
+Q4_K was six times slower than that until its decoder was given the same
+treatment as the others: a sub-block's scale and offset formed once instead of
+once per element, packed bytes read directly instead of through a call, and the
+per-element checks suppressed after the block is bounds-checked at entry. The
+same three changes apply to Q5_K and Q6_K. It went from 6.68 ns to 1.12.
 
 Three things got them there.
 
