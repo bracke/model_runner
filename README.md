@@ -212,9 +212,11 @@ Every test is deterministic, offline, and needs no downloaded model:
   fused dot product agreeing with the reference decoder for every format, the
   number of vectors in one kernel call changing none of them, and nothing a
   model file says -- metadata value, metadata key or tensor name -- reaching
-  the terminal unescaped, and a hostile vocabulary, whose special-token
+  the terminal unescaped, a hostile vocabulary, whose special-token
   identifiers name tokens that do not exist, being unable to make the
-  tokenizer reach outside itself.
+  tokenizer reach outside itself, and the structural refusals -- an unnamed
+  metadata key or tensor, an alignment that is not a power of two, a string
+  past the length limit -- each reporting the code that names it.
 - **Inference** — preparation, finite logits, run-to-run determinism,
   cancellation leaving the cache uncommitted, a cancellation asked for while
   the model is still loading stopping the load, context exhaustion and reset,

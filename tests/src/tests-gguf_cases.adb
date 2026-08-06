@@ -1399,6 +1399,114 @@ package body Tests.GGUF_Cases is
               "a sound optional key changed the outcome");
    end Wrong_Architecture_Metadata_Is_Refused;
 
+   --  Structural refusals a mutation campaign reaches only by chance.
+   --
+   --  A sweep that disabled each refusal in the reader one at a time found
+   --  these producing no test failure, and none of their codes appeared in any
+   --  test. The container fuzzer does reach some of them, but it asserts only
+   --  that the outcome was controlled, never which refusal fired, so a
+   --  refusal that started reporting the wrong thing would still look fine.
+   procedure Structural_Refusals_Report_Themselves
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  Build a container from a builder already primed with the fault and
+      --  report the code the reader gives it.
+      function Outcome (Builder : in out Fixtures.Builder) return E.Error_Code is
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Status : E.Error_Info;
+         Result : E.Error_Code;
+      begin
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Status);
+         Result := Status.Code;
+         Containers.Close (Item);
+         B.Free (Image);
+         return Result;
+      end Outcome;
+
+      --  A container that is sound apart from what the caller adds.
+      procedure Sound (Builder : in out Fixtures.Builder) is
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+      end Sound;
+
+      Builder : Fixtures.Builder;
+   begin
+      --  A key with no name. Nothing can ever ask for it, and a file carrying
+      --  one is malformed rather than merely odd.
+      Sound (Builder);
+      Fixtures.Add_String (Builder, "", "value");
+      Assert (Outcome (Builder) = E.GGUF_Empty_Metadata_Key,
+              "a metadata key with no name was accepted");
+
+      --  A tensor with no name, which the architecture profile could never
+      --  resolve.
+      Sound (Builder);
+      Fixtures.Add_Tensor
+        (Builder, "", [4], G.Type_F32,
+         Fixtures.Encode_F32 (Fixtures.Sequence (4, 1)));
+      Assert (Outcome (Builder) = E.GGUF_Empty_Tensor_Name,
+              "a tensor with no name was accepted");
+
+      --  An alignment that is not a power of two. The data section is placed
+      --  by it, so a bad one puts every tensor somewhere else.
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "general.alignment", 3);
+      Assert (Outcome (Builder) = E.GGUF_Invalid_Alignment,
+              "an alignment that is not a power of two was accepted");
+
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "general.alignment", 0);
+      Assert (Outcome (Builder) = E.GGUF_Invalid_Alignment,
+              "an alignment of zero was accepted");
+
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "general.alignment", 131_072);
+      Assert (Outcome (Builder) = E.GGUF_Invalid_Alignment,
+              "an alignment past the accepted maximum was accepted");
+
+      --  A power of two inside the range is still accepted, so the check
+      --  cannot be satisfied by refusing every alignment.
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "general.alignment", 64);
+      Assert (Outcome (Builder) = E.No_Error,
+              "a sound alignment was refused");
+
+      --  A string past the limit. The reader reads a length from the file
+      --  before it has the bytes to back it, so this is the bound that stands
+      --  between a declared length and an allocation.
+      --  A string past the limit. Reached by tightening the limit rather
+      --  than by building a sixteen-megabyte fixture: the reader takes a
+      --  length from the file before it has the bytes to back it, and what
+      --  matters is that the bound is applied, not how large it is.
+      declare
+         Tight : Model_Runner.Limits.Model_Limits :=
+           Model_Runner.Limits.Default_Model_Limits;
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Status : E.Error_Info;
+      begin
+         Tight.Max_String_Bytes := 32;
+
+         Sound (Builder);
+         Fixtures.Add_String
+           (Builder, "general.name", [1 .. 40 => 'x']);
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Status, Tight);
+
+         Assert (Status.Code = E.GGUF_Invalid_String_Length,
+                 "a string past the length limit was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+
+   end Structural_Refusals_Report_Themselves;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -1453,6 +1561,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Structural_Refusals_Report_Themselves'Access,
+         "structural refusals report the code that names them");
       Register_Routine
         (T, Wrong_Architecture_Metadata_Is_Refused'Access,
          "architecture metadata that is present and wrong stops preparation");
