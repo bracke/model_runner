@@ -774,6 +774,82 @@ package body Tests.CLI_Cases is
       return AUnit.Format ("command line and generation");
    end Name;
 
+   --  The end token ends the run, and nothing of it reaches the output.
+   --
+   --  This is how a real model finishes a reply, and it was the one completion
+   --  reason with no test: the other seven are reached by a stop token, a stop
+   --  string, the token limit, a full context, cancellation, a closed output
+   --  and an internal failure, and every one of those has a case.
+   --
+   --  Which token these weights produce first is not something to hard-code,
+   --  so the vocabulary's end token is varied instead. Exactly one value can
+   --  stop the run before it has produced anything -- the token the model
+   --  reaches for first -- and that is the case worth checking, because it is
+   --  the one where a mistake would show as text that should never have been
+   --  emitted.
+   procedure End_Of_Sequence_Ends_Run
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Ended     : Natural := 0;
+      Immediate : Natural := 0;
+   begin
+      for Token in 0 .. Tiny_Model.Vocabulary - 1 loop
+         declare
+            Image : B.Byte_Array_Access;
+         begin
+            Tiny_Model.Build (Image, End_Token => Token);
+
+            declare
+               Held    : aliased constant B.Byte_Array := Image.all;
+               Under   : Harness (Held'Access);
+               Session : L.Session;
+               Stop    : Model_Runner.Stops.Set;
+               Sink    : aliased Capture_Sink;
+               Request : Gen.Request;
+               Outcome : Gen.Result;
+               Status  : E.Error_Info;
+            begin
+               Start (Under);
+               L.Open (Session, Under.Ready, Status => Status);
+               Model_Runner.Stops.Open (Stop);
+
+               Request.Max_Tokens := 4;
+               Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+
+               Gen.Generate
+                 (Under.Ready, Session, "ab", Request, Stop,
+                  Sink'Unchecked_Access, null, null, null, null,
+                  Outcome => Outcome);
+
+               if Outcome.Reason = Gen.End_Of_Sequence then
+                  Ended := Ended + 1;
+
+                  if Outcome.Generated_Tokens = 0 then
+                     Immediate := Immediate + 1;
+                     Assert (Captured (Sink) = "",
+                             "the end token reached the output: "
+                             & Captured (Sink));
+                  end if;
+               end if;
+
+               Gen.Release (Outcome);
+               Model_Runner.Stops.Close (Stop);
+               L.Close (Session);
+            end;
+
+            B.Free (Image);
+         end;
+      end loop;
+
+      Assert (Ended > 0,
+              "no end token ended a run, so the path was never taken");
+      Assert (Immediate = 1,
+              "expected exactly one token to stop the run before it produced"
+              & " anything, found" & Natural'Image (Immediate));
+   end End_Of_Sequence_Ends_Run;
+
    --  A seed is unsigned, everywhere it is parsed, stored and shown.
    --
    --  The program generates a seed across the whole 64-bit range and then
@@ -1216,6 +1292,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Retained_Text_Matches'Access,
          "retained text matches what was streamed");
+      Register_Routine
+        (T, End_Of_Sequence_Ends_Run'Access,
+         "the end token ends the run and reaches no output");
       Register_Routine
         (T, Seeds_Cover_The_Unsigned_Range'Access,
          "a seed covers the unsigned range in parsing, storage and display");

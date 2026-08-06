@@ -228,7 +228,8 @@ Every test is deterministic, offline, and needs no downloaded model:
   end-of-options, pre-parse scans, reproducible generation, stop strings across
   token boundaries with no leak, stop tokens producing no text, closed output
   as a normal end, context budget checked before evaluation, retained text
-  matching what was streamed, the reference comparison accepting a match while
+  matching what was streamed, the end token ending a run without any of it
+  reaching the output, the reference comparison accepting a match while
   rejecting a mismatch and a recording with no stated origin, a prompt read
   from standard input bounded and refused plainly rather than truncated, the
   diagnostics never quoting the prompt or the system message, and a seed

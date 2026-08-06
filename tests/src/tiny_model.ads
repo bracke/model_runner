@@ -56,8 +56,12 @@ package Tiny_Model is
    --  @param Result Newly allocated file bytes; the caller frees them.
    --  @param Format Format for the weight matrices. Q8_0 also widens the
    --    model, because the narrow one cannot hold a quantized row.
+   --  @param End_Token Identifier the vocabulary declares as its end token.
+   --    Varying it is how a test reaches the end-of-sequence path without
+   --    depending on which token these weights happen to produce.
    procedure Build
-     (Result : out Model_Runner.Bytes.Byte_Array_Access;
-      Format : Weight_Format := Float32);
+     (Result    : out Model_Runner.Bytes.Byte_Array_Access;
+      Format    : Weight_Format := Float32;
+      End_Token : Natural := 2);
 
 end Tiny_Model;

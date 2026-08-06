@@ -23,8 +23,9 @@ package body Tiny_Model is
    -----------
 
    procedure Build
-     (Result : out Model_Runner.Bytes.Byte_Array_Access;
-      Format : Weight_Format := Float32)
+     (Result    : out Model_Runner.Bytes.Byte_Array_Access;
+      Format    : Weight_Format := Float32;
+      End_Token : Natural := 2)
    is
       Quantized : constant Boolean := Format = Q8_0;
 
@@ -178,7 +179,9 @@ package body Tiny_Model is
 
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.bos_token_id", 1);
-      Fixtures.Add_U32 (Builder, "tokenizer.ggml.eos_token_id", 2);
+      Fixtures.Add_U32
+        (Builder, "tokenizer.ggml.eos_token_id",
+         Interfaces.Unsigned_32 (End_Token));
       Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_bos_token", True);
       Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
 
