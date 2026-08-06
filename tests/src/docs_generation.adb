@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Reserved_Codes;
 with Ada.Text_IO;
 
 with Model_Runner.Errors;
@@ -44,6 +45,13 @@ package body Docs_Generation is
       Line ("A code is stable: the ordinal is the literal's position within its");
       Line ("domain group, so codes are appended, never reordered or removed.");
       Line ("");
+      Line ("A code marked reserved is declared and carries a message, and");
+      Line ("nothing in the program raises it. Some are superseded by a more");
+      Line ("precise diagnostic -- a closed session names the state it is in");
+      Line ("rather than reporting that it is closed -- and some describe a");
+      Line ("condition that cannot arise. They are listed because a published");
+      Line ("ordinal is never reused, not because they might appear.");
+      Line ("");
 
       for Code in E.Error_Code loop
          if Code /= E.No_Error then
@@ -52,8 +60,8 @@ package body Docs_Generation is
                Line ("");
                Line ("## " & E.Domain_Token (Current));
                Line ("");
-               Line ("| Code | Message key | Recovery | Exit |");
-               Line ("| --- | --- | --- | --- |");
+               Line ("| Code | Message key | Recovery | Exit | State |");
+               Line ("| --- | --- | --- | --- | --- |");
             end if;
 
             Line
@@ -64,7 +72,10 @@ package body Docs_Generation is
                & " | "
                & T.Image
                    (Long_Long_Integer
-                      (E.Exit_Status (E.Make (Code)))) & " |");
+                      (E.Exit_Status (E.Make (Code))))
+               & " | "
+               & (if Reserved_Codes.Is_Reserved (Code)
+                  then "reserved" else "raised") & " |");
          end if;
       end loop;
 

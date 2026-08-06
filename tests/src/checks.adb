@@ -4,6 +4,7 @@ with Ada.Text_IO;
 with Project_Tools.Files;
 
 with Docs_Generation;
+with Reserved_Codes;
 
 with Model_Runner;
 with Model_Runner.Errors;
@@ -347,46 +348,6 @@ package body Checks is
       --  --backend to be invalid, no merge table in a SentencePiece
       --  vocabulary, and Conversation.Role is an enumeration.
       declare
-         type Name_Access is access constant String;
-         Reserved : constant array (Positive range <>) of Name_Access :=
-           [
-           new String'("Arch_Invalid_Metadata"),
-           new String'("Arch_Layer_Numbering_Gap"),
-           new String'("Arch_Missing_Metadata"),
-           new String'("Arch_Vocabulary_Mismatch"),
-           new String'("Backend_Capability_Missing"),
-           new String'("Backend_Invalid_Worker_Count"),
-           new String'("Backend_Queue_Full"),
-           new String'("Backend_Unknown"),
-           new String'("Backend_Unsupported_Format"),
-           new String'("Backend_Unsupported_Operation"),
-           new String'("CLI_Invalid_Backend"),
-           new String'("CLI_Invalid_Locale"),
-           new String'("CLI_Invalid_Mapping_Mode"),
-           new String'("Conversation_Invalid_Role"),
-           new String'("Conversation_System_Unsupported"),
-           new String'("GGUF_File_Changed"),
-           new String'("GGUF_Unsupported_Tensor_Type"),
-           new String'("Generation_Batch_Too_Large"),
-           new String'("Generation_No_Logits"),
-           new String'("Generation_Output_Closed"),
-           new String'("IO_Output_Closed"),
-           new String'("IO_Seek_Failed"),
-           new String'("IO_Write_Failed"),
-           new String'("Internal_Localization_Failed"),
-           new String'("Internal_Not_Implemented"),
-           new String'("Lifecycle_Already_Closed"),
-           new String'("Lifecycle_Mapping_Unavailable"),
-           new String'("Lifecycle_Session_Closed"),
-           new String'("Lifecycle_Session_Failed"),
-           new String'("Memory_Invalid_Limit"),
-           new String'("Template_Unsupported_Role"),
-           new String'("Tensor_Invalid_Stride"),
-           new String'("Tensor_Rank_Too_High"),
-           new String'("Tensor_Read_Only"),
-           new String'("Tokenizer_Invalid_Merges"),
-           new String'("Tokenizer_Missing_Byte_Fallback")];
-
          Produced : array (E.Error_Code) of Boolean := [others => False];
 
          --  The literal as written in a call, matched without regard to
@@ -434,16 +395,6 @@ package body Checks is
 
          procedure Scan is new For_Each_Source (Note_Codes);
 
-         --  Report whether a code is on the reserved list.
-         function Is_Reserved (Code : E.Error_Code) return Boolean is
-         begin
-            for Item of Reserved loop
-               if T.To_Lower (Item.all) = T.To_Lower (Ada_Name (Code)) then
-                  return True;
-               end if;
-            end loop;
-            return False;
-         end Is_Reserved;
       begin
          Scan ("src/library");
          Scan ("src/platform");
@@ -452,11 +403,11 @@ package body Checks is
             if Code /= E.No_Error then
                Result.Performed := Result.Performed + 1;
 
-               if Produced (Code) and then Is_Reserved (Code) then
+               if Produced (Code) and then Reserved_Codes.Is_Reserved (Code) then
                   Fail
                     (Ada_Name (Code)
                      & " is produced now; take it off the reserved list");
-               elsif not Produced (Code) and then not Is_Reserved (Code) then
+               elsif not Produced (Code) and then not Reserved_Codes.Is_Reserved (Code) then
                   Fail
                     (Ada_Name (Code)
                      & " is declared and produced nowhere; either produce it"

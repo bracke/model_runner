@@ -93,6 +93,9 @@ feature · `5` resource failure · `6` input or output failure · `7` cancelled 
 
 Every diagnostic carries a stable public code such as `MR-GGUF-0023`, derived
 mechanically from the error enumeration so a code and its message cannot drift.
+`docs/error-codes.md` marks each code raised or reserved: a published ordinal is
+never reused, so codes that nothing raises stay listed, and saying which is which
+keeps the reference from promising diagnostics the program cannot emit.
 
 ## Implemented
 

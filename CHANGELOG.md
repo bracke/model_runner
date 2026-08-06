@@ -223,6 +223,13 @@ wall and 16.0 s of processor time.
 
 ### Changed
 
+- `docs/error-codes.md` marks every code raised or reserved. Thirty-six of the
+  148 are declared, carry a message in every locale and are raised nowhere;
+  read as a reference the document promised diagnostics the program cannot
+  emit. The list lives in one place, the repository checks verify it against
+  the sources, and the document renders it, so the three cannot disagree.
+
+
 - `tests fuzz` now drives the whole load path rather than stopping at the
   parser: a mutated container goes through the parser, the tokenizer, the
   chat-template compiler and model preparation. The campaign's own contract
