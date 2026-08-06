@@ -31,7 +31,7 @@ Keep a Changelog and the project uses semantic versioning.
 - Llama-compatible architecture validation, tensor resolution and preparation.
 - Transactional KV cache, session state machine and single-token forward pass.
 - Memory accounting and overflow-safe model and session plans.
-- AUnit suites: 12 GGUF container tests and 7 inference tests, all offline.
+- AUnit suites for the GGUF container and for inference, all offline.
 
 - Sampling pipeline: greedy, temperature, top-k, top-p, minimum-p, repetition
   penalty, forbidden-token masks, and a session-local xoshiro256++ generator.
@@ -51,13 +51,13 @@ Keep a Changelog and the project uses semantic versioning.
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.
-- 84 deterministic offline tests and a `tests fixtures` command.
+- A deterministic offline test suite and a `tests fixtures` command.
 
 - CPU backend with an Ada worker pool: protected coordinator, reusable worker
   tasks, deterministic partitioning, bounded queue, failure propagation and
   clean shutdown, selected with `--threads`.
 - `tests fuzz`, a reproducible GGUF mutation campaign.
-- `tests check`, 500 repository, dependency-boundary and layering checks.
+- `tests check`: repository, dependency-boundary and layering checks.
 - `tests docs`, generating `docs/error-codes.md` from the error registry.
 - Interrupt-driven cancellation: SIGINT requests a clean cancellation instead of
   terminating the process mid-token.

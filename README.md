@@ -188,8 +188,8 @@ model take 2.2 seconds at `--release` and around 14 at the default.
 ```
 alr build --release                        # optimized, what to ship and measure
 alr build                                  # debug: -Og, all validity checks
-cd tests && ./bin/tests test               # 67 tests
-cd tests && ./bin/tests check              # 484 repository and layering checks
+cd tests && ./bin/tests test               # the whole suite
+cd tests && ./bin/tests check              # repository and layering checks
 cd tests && ./bin/tests conformance        # engine vs independent reference
 cd tests && ./bin/tests benchmark          # row kernels, synthetic, no model
 cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
@@ -199,39 +199,53 @@ cd tests && ./bin/tests package .. .       # write model_runner-<version>.tar
 cd tests && ./bin/tests external-model --model /path/to/your.gguf [--expect FILE]
 ```
 
-All 67 tests are deterministic, offline, and need no downloaded model:
+Every test is deterministic, offline, and needs no downloaded model:
 
-- **GGUF (15)** — truncation at *every* byte offset of a valid file, corrupt
+- **GGUF** — truncation at *every* byte offset of a valid file, corrupt
   magic, unsupported versions, excessive counts, duplicate metadata keys,
   duplicate tensor names, invalid UTF-8, quantization block misalignment,
   out-of-bounds tensor ranges, trailing-data policy, typed accessors, a
   450-case mutation corpus that must produce only controlled outcomes, the
-  fused dot product agreeing with the reference decoder for every format, and
-  the number of vectors in one kernel call changing none of them.
-- **Inference (10)** — preparation, finite logits, run-to-run determinism,
+  fused dot product agreeing with the reference decoder for every format, the
+  number of vectors in one kernel call changing none of them, and nothing a
+  model file says -- metadata value, metadata key or tensor name -- reaching
+  the terminal unescaped.
+- **Inference** — preparation, finite logits, run-to-run determinism,
   cancellation leaving the cache uncommitted, context exhaustion and reset,
   out-of-range token rejection, tokenizer round trip, an interrupt reaching the
   cancellation token through a real signal, agreement with the independent
   reference implementation, and a batch producing the same bits as the same
   tokens evaluated one at a time, down to the cache it leaves behind.
-- **Sampling, stops, templates (13)** — greedy maximum and tie-breaking, greedy
+- **Sampling, stops and templates** — greedy maximum and tie-breaking, greedy
   entropy independence, fixed-seed reproducibility, top-k, min-p, repetition
   penalty, NaN and infinity rejection, stop-string earliest-then-longest
   matching, stop bounds, exact template rendering, branches and whitespace
   control, rejection of unsupported constructs, and automatic seeding varying
   between runs without falling back to the fixed seed.
-- **CLI and generation (11)** — command parsing, fifteen distinct usage errors,
+- **CLI and generation** — command parsing, fifteen distinct usage errors,
   end-of-options, pre-parse scans, reproducible generation, stop strings across
   token boundaries with no leak, stop tokens producing no text, closed output
   as a normal end, context budget checked before evaluation, retained text
-  matching what was streamed, and the reference comparison accepting a match
-  while rejecting a mismatch and a recording with no stated origin.
-- **Catalog (11)** — every diagnostic code resolves, every enumeration-derived
+  matching what was streamed, the reference comparison accepting a match while
+  rejecting a mismatch and a recording with no stated origin, a prompt read
+  from standard input bounded and refused plainly rather than truncated, the
+  diagnostics never quoting the prompt or the system message, and a seed
+  covering the whole unsigned range in parsing, storage and display.
+- **Catalog** — every diagnostic code resolves, every enumeration-derived
   key resolves, every interface key exists, protocol tokens untranslated,
   emergency path, locale fallback, escaped parameters, the pseudo-locale
   differing everywhere while keeping every placeholder, a partial second locale
   translating and inheriting per key, and POSIX host-locale normalization.
-- **CPU backend (7)** — the partition covers every row exactly once for every
+- **Chat template** — an ordinary template compiling and rendering, every
+  documented compile-time refusal reported by its own code rather than merely
+  as an error, and all five bounds driven to their edge and one past it: size,
+  instruction count, nesting depth, output size and iterations.
+- **Memory accounting and clocks** — an allocation past the budget refused
+  before it is attempted, mapped bytes not counted as allocated, a plan that
+  cannot be represented refused rather than wrapped, a clock that goes
+  backwards yielding no elapsed time, and a file mapping reading back what is
+  in it while refusing a read past the end.
+- **CPU backend** — the partition covers every row exactly once for every
   worker count, a parallel product equals the serial one **exactly**, more
   workers than rows still produces a complete result, a closed pool rejects
   work, one pool serves many jobs, a pool that is never used still terminates,
@@ -305,7 +319,7 @@ external-model: ok, architecture llama, 21 tensors, prompt 3 tokens,
 
 ### Repository checks
 
-`tests check` performs 484 checks in Ada: crate structure and declared
+`tests check` performs its checks in Ada: crate structure and declared
 dependencies, the version in `alire.toml` against `Model_Runner.Version`,
 absence of scripting-language build files, that production code never reaches
 AUnit or `project_tools`, that nothing below the presentation layer reaches the
