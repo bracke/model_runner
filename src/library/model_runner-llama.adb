@@ -9,6 +9,8 @@ with Model_Runner.Text;
 
 package body Model_Runner.Llama is
 
+   use type Model_Runner.Errors.Error_Code;
+
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Arithmetic.Checked;
    use type Model_Runner.Bytes.Byte_Count;
@@ -78,6 +80,18 @@ package body Model_Runner.Llama is
          end if;
       end Required;
 
+      --  Report whether a key was present and could not be used.
+      --
+      --  An optional key that is absent is not an error: the model does not
+      --  say, and the profile falls back to its default. A key that is there
+      --  and is the wrong type, or names a value outside the accepted range,
+      --  is the file being wrong about the model it describes. Falling back
+      --  then would build a model of a different shape than the file states
+      --  and say nothing about it.
+      function Present_And_Wrong (Item : E.Error_Info) return Boolean
+      is (E.Is_Error (Item)
+          and then Item.Code /= E.GGUF_Missing_Metadata_Key);
+
       --  Report an unsupported feature the file asked for.
       procedure Reject_Feature (Feature : String) is
       begin
@@ -143,17 +157,29 @@ package body Model_Runner.Llama is
       Containers.Get_Integer
         (Source, Model_Key ("attention.head_count_kv"), 1,
          Long_Long_Integer (Settings.Heads), Number, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
       Settings.KV_Heads :=
         (if E.Is_Ok (Local) then Natural (Number) else Settings.Heads);
 
       Containers.Get_Float
         (Source, Model_Key ("attention.layer_norm_rms_epsilon"),
          0.0, 1.0, Value, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
       Settings.Epsilon :=
         (if E.Is_Ok (Local) then N.Real (Value) else 1.0E-5);
 
       Containers.Get_Float
         (Source, Model_Key ("rope.freq_base"), 1.0, 1.0E12, Value, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
       Settings.Rope_Base := (if E.Is_Ok (Local) then Value else 10_000.0);
 
       --  Rotary scaling. Only "none" and "linear" are implemented; anything
@@ -172,6 +198,10 @@ package body Model_Runner.Llama is
 
          Containers.Get_Float
            (Source, Model_Key ("rope.scaling.factor"), 0.0, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
          if E.Is_Ok (Local) and then Value > 0.0 then
             Settings.Rope_Scale := 1.0 / Value;
          end if;
@@ -206,6 +236,18 @@ package body Model_Runner.Llama is
             Containers.Get_Integer
               (Source, Model_Key ("attention.value_length"), 1, 1_000_000,
                Value_Length, Second);
+            --  Both keys are known to be present here, so an unreadable one
+            --  is the file being wrong. Skipping the comparison would let a
+            --  mistyped width past the very check that exists to catch it.
+            if Present_And_Wrong (First) then
+               Status := First;
+               return;
+            end if;
+            if Present_And_Wrong (Second) then
+               Status := Second;
+               return;
+            end if;
+
             if E.Is_Ok (First) and then E.Is_Ok (Second)
               and then Key_Length /= Value_Length
             then
@@ -238,6 +280,10 @@ package body Model_Runner.Llama is
       Containers.Get_Integer
         (Source, Model_Key ("rope.dimension_count"), 1,
          Long_Long_Integer (Settings.Head_Size), Number, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
       Settings.Rotary :=
         (if E.Is_Ok (Local) then Natural (Number) else Settings.Head_Size);
 

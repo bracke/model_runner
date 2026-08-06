@@ -223,6 +223,17 @@ wall and 16.0 s of processor time.
 
 ### Changed
 
+- Architecture metadata that is present and wrong now stops preparation
+  instead of falling back to a default. `attention.head_count_kv`,
+  `rope.dimension_count`, `rope.freq_base`, `rope.scaling.factor`,
+  `attention.layer_norm_rms_epsilon` and the key and value widths are all
+  optional, and an absent one still takes the default -- not every model states
+  its rotary width. One that is present and names a value the profile cannot
+  use built a model of a different shape than the file described and said
+  nothing about it. The key and value widths mattered most: an unreadable one
+  skipped the asymmetric-width comparison, which is the check that exists to
+  catch exactly that file.
+
 - A tokenizer special-token identifier that is present but names no token now
   refuses the model instead of being ignored, as does a present-but-mistyped
   `add_bos_token` or `add_eos_token`. A missing key still leaves the identifier

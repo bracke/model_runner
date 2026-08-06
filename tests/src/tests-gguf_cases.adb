@@ -11,6 +11,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Quantization;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
+with Model_Runner.Llama;
 
 with Fixtures;
 with Fuzzing;
@@ -1242,6 +1243,118 @@ package body Tests.GGUF_Cases is
       Vocab.Close (Words);
    end Hostile_Vocabulary_Stays_Inside_Itself;
 
+   --  Architecture metadata that is present and wrong stops preparation.
+   --
+   --  Every one of these keys is optional, so an absent one falls back to a
+   --  default and that is right: not every model states its rotary width or
+   --  its epsilon. A key that is there and names a value the profile cannot
+   --  use is a different thing. Falling back then builds a model of a
+   --  different shape than the file describes and says nothing about it,
+   --  which is the same trade the tokenizer used to make.
+   procedure Wrong_Architecture_Metadata_Is_Refused
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  A container carrying a valid llama configuration and nothing else.
+      --  Preparation gets past the configuration and then fails for want of
+      --  tensors, which is what makes this a usable probe: the interesting
+      --  question is only ever which diagnostic comes back.
+      procedure Write_Configuration (Builder : in out Fixtures.Builder) is
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_U32 (Builder, "llama.context_length", 16);
+         Fixtures.Add_U32 (Builder, "llama.embedding_length", 8);
+         Fixtures.Add_U32 (Builder, "llama.block_count", 2);
+         Fixtures.Add_U32 (Builder, "llama.feed_forward_length", 12);
+         Fixtures.Add_U32 (Builder, "llama.attention.head_count", 2);
+      end Write_Configuration;
+
+      --  Prepare a built container and report the diagnostic.
+      function Outcome_Of (Builder : in out Fixtures.Builder) return E.Error_Code
+      is
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+         Result : E.Error_Code;
+         Prepared : Model_Runner.Llama.Model;
+      begin
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse),
+                 "the fixture container did not parse: "
+                 & E.Error_Code'Image (Parse.Code));
+
+         declare
+            Copy   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Copy'Access);
+         begin
+            Model_Runner.Llama.Prepare
+              (Prepared, Item, Source, Status => Status);
+            Result := Status.Code;
+         end;
+
+         Model_Runner.Llama.Close (Prepared, Status);
+         Containers.Close (Item);
+         B.Free (Image);
+         return Result;
+      end Outcome_Of;
+
+      Builder : Fixtures.Builder;
+
+      --  The diagnostic for a sound configuration, whatever it is. Anything
+      --  that stops preparation earlier must differ from it, or the test would
+      --  pass on a file that was never looked at.
+      Sound : E.Error_Code;
+   begin
+      Write_Configuration (Builder);
+      Sound := Outcome_Of (Builder);
+      Assert (Sound /= E.No_Error,
+              "a container with no tensors prepared successfully");
+
+      --  Out of range: more key-value heads than heads, a rotary width wider
+      --  than the head size, an epsilon outside the accepted interval, and a
+      --  rotary base below it.
+      Write_Configuration (Builder);
+      Fixtures.Add_U32 (Builder, "llama.attention.head_count_kv", 99);
+      Assert (Outcome_Of (Builder) = E.GGUF_Metadata_Out_Of_Range,
+              "an impossible key-value head count was accepted");
+
+      Write_Configuration (Builder);
+      Fixtures.Add_U32 (Builder, "llama.rope.dimension_count", 4096);
+      Assert (Outcome_Of (Builder) = E.GGUF_Metadata_Out_Of_Range,
+              "a rotary width wider than the head size was accepted");
+
+      Write_Configuration (Builder);
+      Fixtures.Add_F32
+        (Builder, "llama.attention.layer_norm_rms_epsilon", 7.0);
+      Assert (Outcome_Of (Builder) = E.GGUF_Metadata_Out_Of_Range,
+              "an epsilon outside the accepted interval was accepted");
+
+      Write_Configuration (Builder);
+      Fixtures.Add_F32 (Builder, "llama.rope.freq_base", 0.0);
+      Assert (Outcome_Of (Builder) = E.GGUF_Metadata_Out_Of_Range,
+              "a rotary base below the accepted interval was accepted");
+
+      --  Wrong type: the profile reads this as a number and the file wrote a
+      --  string, so the file is wrong about itself.
+      Write_Configuration (Builder);
+      Fixtures.Add_String (Builder, "llama.rope.dimension_count", "many");
+      Assert (Outcome_Of (Builder) = E.GGUF_Metadata_Type_Mismatch,
+              "a rotary width written as a string was accepted");
+
+      --  Absent stays absent: a configuration that states none of these
+      --  optional keys still gets as far as one that states them soundly.
+      Write_Configuration (Builder);
+      Fixtures.Add_U32 (Builder, "llama.attention.head_count_kv", 1);
+      Fixtures.Add_U32 (Builder, "llama.rope.dimension_count", 4);
+      Assert (Outcome_Of (Builder) = Sound,
+              "a sound optional key changed the outcome");
+   end Wrong_Architecture_Metadata_Is_Refused;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -1296,6 +1409,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Wrong_Architecture_Metadata_Is_Refused'Access,
+         "architecture metadata that is present and wrong stops preparation");
       Register_Routine
         (T, Hostile_Vocabulary_Stays_Inside_Itself'Access,
          "a hostile vocabulary cannot make the tokenizer reach outside itself");
