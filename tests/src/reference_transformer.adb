@@ -120,7 +120,6 @@ package body Reference_Transformer is
       return Scale * Long_Float (Quant);
    end Decode_Q8_0;
 
-
    --  Read a metadata integer, or a default.
    function Metadata
      (Source  : Containers.Container;

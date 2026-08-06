@@ -196,7 +196,6 @@ package body Tests.Accounting_Cases is
               "no units produced a non-zero rate");
    end Rate_Over_No_Time_Is_Zero;
 
-
    --  A mapped file reads back exactly what is in it, and refuses the rest.
    --
    --  The mapping had no test. It was rewritten recently into one body per

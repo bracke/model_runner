@@ -9,6 +9,7 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization;
+with Model_Runner.Text;
 
 with Fixtures;
 with Fuzzing;
@@ -963,6 +964,130 @@ package body Tests.GGUF_Cases is
       end loop;
    end Batch_Width_Does_Not_Change_Result;
 
+   --  Nothing a model file says can steer the terminal.
+   --
+   --  Metadata values, metadata keys and tensor names are all attacker
+   --  supplied. Written raw to a terminal, an escape sequence in any of them
+   --  can clear the screen, retitle the window or hide what follows -- so a
+   --  file could make `inspect` misreport itself. The escaping is the only
+   --  thing standing between the file and the terminal, and it had no test.
+   procedure Hostile_Text_Cannot_Reach_The_Terminal
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Text renames Model_Runner.Text;
+
+      ESC : constant Character := Character'Val (16#1B#);
+      BEL : constant Character := Character'Val (16#07#);
+      DEL : constant Character := Character'Val (16#7F#);
+
+      --  A screen clear, a bell, a delete, and a character outside ASCII that
+      --  must survive: escaping must not break legitimate UTF-8 text.
+      Hostile : constant String :=
+        "safe" & ESC & "[2J" & BEL & DEL & "end"
+        & Character'Val (16#C3#) & Character'Val (16#B8#);
+
+      --  True when Item carries a byte that a terminal would act on.
+      function Is_Clean (Item : String) return Boolean is
+      begin
+         for Char of Item loop
+            if Character'Pos (Char) < 16#20#
+              or else Character'Pos (Char) = 16#7F#
+            then
+               return False;
+            end if;
+         end loop;
+         return True;
+      end Is_Clean;
+
+      --  Report whether Needle occurs in Haystack.
+      function Contains (Haystack, Needle : String) return Boolean is
+      begin
+         if Needle'Length > Haystack'Length then
+            return False;
+         end if;
+         for Start in Haystack'First .. Haystack'Last - Needle'Length + 1 loop
+            if Haystack (Start .. Start + Needle'Length - 1) = Needle then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Contains;
+
+      Builder : Fixtures.Builder;
+      Image   : B.Byte_Array_Access;
+      Item    : Containers.Container;
+      Status  : E.Error_Info;
+      Seen    : Boolean := False;
+   begin
+      --  The escaper itself, on the boundaries that matter.
+      Assert (Is_Clean (Text.Escape_Controls (Hostile)),
+              "escaping left a control character behind");
+      Assert (Contains (Text.Escape_Controls (Hostile), "\x1B"),
+              "the escape character was not rendered as an escape");
+      Assert (Contains (Text.Escape_Controls (Hostile), "\x7F"),
+              "delete was not rendered as an escape");
+      Assert
+        (Contains
+           (Text.Escape_Controls (Hostile),
+            Character'Val (16#C3#) & Character'Val (16#B8#)),
+         "escaping altered bytes outside ASCII and would break UTF-8");
+      Assert (Text.Has_Controls (Hostile), "a control character was not seen");
+      Assert (not Text.Has_Controls ("plain text"),
+              "clean text was reported as carrying controls");
+      Assert (not Text.Has_Controls (""),
+              "empty text was said to carry controls");
+
+      --  And now through a file, which is where a defect would actually live:
+      --  the escaping is applied at the call sites, not by the reader.
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_String (Builder, "general.name", Hostile);
+      Fixtures.Add_String (Builder, "general." & ESC & "[2Jkey", "value");
+      Fixtures.Add_U32 (Builder, "llama.block_count", 1);
+      Fixtures.Add_Tensor
+        (Builder, "out" & ESC & "[2J.weight", [4], G.Type_F32,
+         Fixtures.Encode_F32 (Fixtures.Sequence (4, 1)));
+      Fixtures.Build (Builder, Image);
+
+      Parse_Image (Image.all, Item, Status);
+
+      --  A reader is free to reject this outright. What it must not do is
+      --  accept it and then render it raw.
+      if not E.Is_Error (Status) then
+         for Index in 1 .. Containers.Metadata_Count (Item) loop
+            Assert
+              (Is_Clean (Containers.Value_Image (Item, Index)),
+               "a metadata value reached the terminal unescaped");
+            Assert
+              (Is_Clean
+                 (Text.Escape_Controls
+                    (Containers.Metadata_Key (Item, Index))),
+               "a metadata key reached the terminal unescaped");
+
+            if Containers.Metadata_Key (Item, Index) = "general.name" then
+               Seen := True;
+               Assert
+                 (Contains (Containers.Value_Image (Item, Index), "\x1B"),
+                  "the hostile value was dropped rather than escaped");
+            end if;
+         end loop;
+
+         Assert (Seen, "the hostile value was not among the metadata");
+
+         for Index in 1 .. Containers.Tensor_Count (Item) loop
+            Assert
+              (Is_Clean
+                 (Text.Escape_Controls
+                    (Containers.Tensor_Name (Item, Index))),
+               "a tensor name reached the terminal unescaped");
+         end loop;
+      end if;
+
+      Containers.Close (Item);
+      B.Free (Image);
+   end Hostile_Text_Cannot_Reach_The_Terminal;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -1017,6 +1142,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Hostile_Text_Cannot_Reach_The_Terminal'Access,
+         "nothing a model file says can steer the terminal");
       Register_Routine
         (T, Batch_Width_Does_Not_Change_Result'Access,
          "the number of vectors in a call does not change any of them");
