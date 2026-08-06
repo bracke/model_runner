@@ -68,6 +68,20 @@ package body Model_Runner.Text is
    -- Image --
    -----------
 
+   function Image (Value : Interfaces.Unsigned_64) return String is
+      Raw : constant String := Interfaces.Unsigned_64'Image (Value);
+   begin
+      if Raw'Length > 0 and then Raw (Raw'First) = ' ' then
+         return Raw (Raw'First + 1 .. Raw'Last);
+      else
+         return Raw;
+      end if;
+   end Image;
+
+   -----------
+   -- Image --
+   -----------
+
    function Image (Value : Long_Long_Integer) return String is
       Raw : constant String := Long_Long_Integer'Image (Value);
    begin

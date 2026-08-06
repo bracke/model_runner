@@ -114,7 +114,7 @@ package body Model_Runner.CLI.Interactive is
          if Item.Has_Seed then
             Pres.Put_Field
               (Screen, "cli.interactive.setting.seed",
-               T.Image (Long_Long_Integer (Item.Seed)));
+               T.Image (Item.Seed));
          end if;
       end Show_Settings;
 

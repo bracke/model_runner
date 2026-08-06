@@ -6,6 +6,8 @@
 --  unbounded allocation through a diagnostic path.
 --
 --  Task safety: all operations are pure functions on their arguments.
+with Interfaces;
+
 package Model_Runner.Text is
    pragma Pure;
 
@@ -86,6 +88,16 @@ package Model_Runner.Text is
    --  @param Value Value to format.
    --  @return Decimal text, with a leading minus sign when negative.
    function Image (Value : Long_Long_Integer) return String;
+
+   --  Return the decimal image of an unsigned 64-bit value.
+   --
+   --  A seed occupies the whole 64-bit range, so converting one to a signed
+   --  type to format it raises on every value above Long_Long_Integer'Last --
+   --  about half of them.
+   --
+   --  @param Value Value to format.
+   --  @return Decimal text.
+   function Image (Value : Interfaces.Unsigned_64) return String;
 
    --  Return a fixed-point image with the requested number of decimals.
    --

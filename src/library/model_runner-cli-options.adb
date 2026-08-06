@@ -119,6 +119,61 @@ package body Model_Runner.CLI.Options is
       Ok := True;
    end To_Number;
 
+   --  Parse an unsigned decimal number covering the whole 64-bit range.
+   --
+   --  A seed is an unsigned 64-bit value and the program generates one across
+   --  that whole range. Parsing it into a signed type rejected every seed
+   --  above Long_Long_Integer'Last, so a run whose seed came out of the upper
+   --  half could not be reproduced with --seed -- which is the one thing the
+   --  option is for.
+   procedure To_Unsigned
+     (Text  : String;
+      Value : out Interfaces.Unsigned_64;
+      Ok    : out Boolean)
+   is
+      Limit  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64'Last;
+      Result : Interfaces.Unsigned_64 := 0;
+      Digit  : Interfaces.Unsigned_64;
+      First  : Natural := Text'First;
+   begin
+      Value := 0;
+      Ok := False;
+
+      if Text'Length = 0 then
+         return;
+      end if;
+
+      if Text (First) = '+' then
+         First := First + 1;
+      end if;
+
+      if First > Text'Last then
+         return;
+      end if;
+
+      for Index in First .. Text'Last loop
+         if Text (Index) not in '0' .. '9' then
+            return;
+         end if;
+
+         Digit :=
+           Interfaces.Unsigned_64
+             (Character'Pos (Text (Index)) - Character'Pos ('0'));
+
+         --  Checked before multiplying rather than after: the type wraps
+         --  silently, so an overflowed value would look like a valid seed.
+         if Result > (Limit - Digit) / 10 then
+            return;
+         end if;
+
+         Result := Result * 10 + Digit;
+      end loop;
+
+      Value := Result;
+      Ok := True;
+   end To_Unsigned;
+
    --  Parse a decimal number. Deliberately not locale-aware: an option value
    --  is protocol, not presentation.
    procedure To_Real
@@ -649,7 +704,7 @@ package body Model_Runner.CLI.Options is
 
                   elsif Name = "--seed" then
                      declare
-                        Number : Long_Long_Integer;
+                        Number : Interfaces.Unsigned_64;
                         Parsed : Boolean;
                      begin
                         Mark (Flag_Seed, Name, Good);
@@ -661,13 +716,13 @@ package body Model_Runner.CLI.Options is
                         if not Good then
                            return;
                         end if;
-                        To_Number (Held.all, Number, Parsed);
-                        if not Parsed or else Number < 0 then
+                        To_Unsigned (Held.all, Number, Parsed);
+                        if not Parsed then
                            Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
                            Free_Text (Held);
                            return;
                         end if;
-                        Result.Seed := Interfaces.Unsigned_64 (Number);
+                        Result.Seed := Number;
                         Result.Has_Seed := True;
                         Free_Text (Held);
                      end;

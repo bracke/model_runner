@@ -1020,6 +1020,17 @@ package body Model_Runner.CLI.Execute is
          begin
             Run_With (Team'Unchecked_Access);
             Workers_CPU.Close (Team);
+         exception
+            --  The workers are told to stop before the exception leaves this
+            --  block. Without this they are still waiting for work when the
+            --  block is left, and leaving waits for them to terminate: the
+            --  program stops responding instead of reporting what went wrong.
+            --  That is not hypothetical -- an unsigned seed converted to a
+            --  signed type raised here, and a verbose run with more than one
+            --  worker hung rather than saying anything.
+            when others =>
+               Workers_CPU.Close (Team);
+               raise;
          end;
       end if;
    end Do_Run;

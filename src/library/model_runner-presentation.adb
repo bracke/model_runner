@@ -366,7 +366,7 @@ package body Model_Runner.Presentation is
         (Item, "statistics.context_position",
          T.Image (Long_Long_Integer (Outcome.Final_Position)));
       Put_Field
-        (Item, "statistics.seed", T.Image (Long_Long_Integer (Outcome.Seed)));
+        (Item, "statistics.seed", T.Image (Outcome.Seed));
       Put_Field (Item, "statistics.prefill_duration", Seconds (Outcome.Prefill_Ns));
       Put_Field (Item, "statistics.decode_duration", Seconds (Outcome.Decode_Ns));
       Put_Field (Item, "statistics.prefill_rate", Rate (Outcome.Prefill_Rate));

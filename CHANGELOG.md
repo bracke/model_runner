@@ -224,6 +224,24 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- A verbose run with more than one worker hung, about two runs in three. The
+  seed is an unsigned 64-bit value and the whole range is generated, but the
+  statistics converted it to a signed type to print it, which raises for every
+  seed above `Long_Long_Integer'Last`. With one worker the run ended as an
+  internal failure; with several, the exception left the block holding the
+  worker pool before the workers had been told to stop, and leaving that block
+  waits for them to terminate, so the program stopped responding instead of
+  reporting anything. Measured at thirteen hangs in twenty runs before the fix
+  and none in twenty-five after.
+
+  Three things were wrong and all three are fixed: the seed is formatted
+  through a new unsigned image, the pool is closed before an exception leaves
+  its block so a failure is reported rather than hung, and `--seed` now parses
+  the whole unsigned range. That last one was its own defect: a run whose seed
+  came from the upper half of the range could not be reproduced, which is what
+  the option is for. Interactive mode's `/settings` had the same conversion.
+
+
 - A prompt read from standard input was read without a bound. Input that was
   one very long line was placed on the stack in a single piece, and the
   resulting `Storage_Error` was reported as `MR-IO-0002`, a failure to read;

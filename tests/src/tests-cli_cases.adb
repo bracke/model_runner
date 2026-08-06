@@ -47,6 +47,20 @@ package body Tests.CLI_Cases is
    package Containers renames Model_Runner.GGUF.Containers;
    package T renames Model_Runner.Text;
 
+   --  Report whether Needle occurs in Haystack.
+   function Contains (Haystack, Needle : String) return Boolean is
+   begin
+      if Needle'Length > Haystack'Length then
+         return False;
+      end if;
+      for Start in Haystack'First .. Haystack'Last - Needle'Length + 1 loop
+         if Haystack (Start .. Start + Needle'Length - 1) = Needle then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Contains;
+
    ---------------------------------------------------------------------------
    --  Test doubles
    ---------------------------------------------------------------------------
@@ -760,6 +774,256 @@ package body Tests.CLI_Cases is
       return AUnit.Format ("command line and generation");
    end Name;
 
+   --  A seed is unsigned, everywhere it is parsed, stored and shown.
+   --
+   --  The program generates a seed across the whole 64-bit range and then
+   --  converted it to a signed type to print it, which raises for every value
+   --  above Long_Long_Integer'Last -- about half of all runs. With one worker
+   --  that ended the run as an internal failure; with more, the exception left
+   --  the block holding the worker pool before the workers were told to stop,
+   --  and leaving that block waits for them, so the program hung instead of
+   --  reporting anything. Thirteen of twenty verbose runs hung.
+   --
+   --  The same conversion rejected any --seed above that bound, so a run whose
+   --  seed came from the upper half could not be reproduced, which is what the
+   --  option exists for.
+   procedure Seeds_Cover_The_Unsigned_Range
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Largest : constant String := "18446744073709551615";
+      Model   : constant String := "obj/seed-test-model.gguf";
+      Errors  : constant String := "obj/seed-test-errors.txt";
+
+      --  A seed the option cannot represent is refused, not wrapped.
+      procedure Refuse (Value : String) is
+         Source : Fixed_Arguments;
+         Item   : Opt.Command;
+         Status : E.Error_Info;
+      begin
+         Add (Source, "run");
+         Add (Source, "model.gguf");
+         Add (Source, "--seed");
+         Add (Source, Value);
+         Opt.Parse (Source, Item, Status);
+         Assert (E.Is_Error (Status),
+                 "a seed outside the range was accepted: " & Value);
+         Opt.Release (Item);
+      end Refuse;
+   begin
+      --  Formatting does not go through a signed type.
+      Assert (T.Image (Interfaces.Unsigned_64'Last) = Largest,
+              "the largest seed did not format: "
+              & T.Image (Interfaces.Unsigned_64'Last));
+      Assert (T.Image (Interfaces.Unsigned_64'(0)) = "0",
+              "zero did not format");
+
+      --  Parsing accepts the whole range and refuses what is outside it.
+      declare
+         Source : Fixed_Arguments;
+         Item   : Opt.Command;
+         Status : E.Error_Info;
+      begin
+         Add (Source, "run");
+         Add (Source, "model.gguf");
+         Add (Source, "--seed");
+         Add (Source, Largest);
+         Opt.Parse (Source, Item, Status);
+         Assert (E.Is_Ok (Status),
+                 "the largest seed was rejected: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Item.Has_Seed and then Item.Seed = Interfaces.Unsigned_64'Last,
+                 "the largest seed did not survive parsing");
+         Opt.Release (Item);
+      end;
+
+      Refuse ("18446744073709551616");
+      Refuse ("-1");
+      Refuse ("99999999999999999999999");
+      Refuse ("twelve");
+
+      --  And a whole run with such a seed reports it rather than failing on
+      --  it. One worker on purpose: if this regresses with several, the run
+      --  does not fail, it stops responding, and a test that hangs tells
+      --  nobody anything.
+      declare
+         use Ada.Text_IO;
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+         Status : Natural;
+         Found  : Boolean := False;
+      begin
+         Tiny_Model.Write (Model);
+
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         Add (Source, "--threads");
+         Add (Source, "1");
+         Add (Source, "--seed");
+         Add (Source, Largest);
+         Add (Source, "--verbose");
+
+         Create (Handle, Out_File, Errors);
+         Set_Error (Handle);
+         Model_Runner.CLI.Driver.Run (Source, Status);
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Assert (Status = 0,
+                 "a run with the largest seed failed with status"
+                 & Natural'Image (Status));
+
+         Open (Handle, In_File, Errors);
+         while not End_Of_File (Handle) loop
+            declare
+               Line : String (1 .. 300);
+               Last : Natural;
+            begin
+               Get_Line (Handle, Line, Last);
+               if Contains (Line (1 .. Last), Largest) then
+                  Found := True;
+               end if;
+            end;
+         end loop;
+         Close (Handle);
+
+         Assert (Found, "the statistics did not report the seed");
+
+         Ada.Directories.Delete_File (Model);
+         Ada.Directories.Delete_File (Errors);
+      end;
+   end Seeds_Cover_The_Unsigned_Range;
+
+   --  What the reader typed does not appear in the diagnostics.
+   --
+   --  The program states that it does not log prompts, system messages,
+   --  generated text or conversation history, and does not persist a
+   --  conversation. That is a privacy guarantee rather than a preference, and
+   --  nothing checked it. The obvious way to break it is a diagnostic that
+   --  quotes the input it is complaining about, which is exactly what a
+   --  helpful error message wants to do.
+   procedure Prompts_Are_Not_Logged
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model  : constant String := "obj/privacy-test-model.gguf";
+      Errors : constant String := "obj/privacy-test-errors.txt";
+
+      --  Nothing that could occur in a message, a template or a token.
+      Prompt : constant String := "zqxjvwk";
+      System : constant String := "hgfdplm";
+
+      --  Run the program and return everything it wrote to standard error.
+      function Diagnostics (Source : in out Fixed_Arguments) return String is
+         Handle : File_Type;
+         Status : Natural;
+         Room   : String (1 .. 16_384);
+         Used   : Natural := 0;
+      begin
+         Create (Handle, Out_File, Errors);
+         Set_Error (Handle);
+
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               null;
+         end;
+
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Open (Handle, In_File, Errors);
+         while not End_Of_File (Handle) and then Used < Room'Length - 200 loop
+            declare
+               Line : String (1 .. 200);
+               Last : Natural;
+            begin
+               Get_Line (Handle, Line, Last);
+               Room (Used + 1 .. Used + Last) := Line (1 .. Last);
+               Used := Used + Last + 1;
+               Room (Used) := ' ';
+            end;
+         end loop;
+         Close (Handle);
+
+         return Room (1 .. Used);
+      end Diagnostics;
+   begin
+      Tiny_Model.Write (Model);
+
+      --  A run that succeeds, at the loudest setting the program offers.
+      --  Verbose is where a prompt would leak if anywhere.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, Prompt);
+         Add (Source, "--max-tokens");
+         Add (Source, "3");
+         Add (Source, "--verbose");
+
+         declare
+            Text : constant String := Diagnostics (Source);
+         begin
+            --  The capture works and the run said something, so an empty
+            --  string cannot be what passes this test.
+            Assert (Contains (Text, "generating") or else Contains (Text, "model"),
+                    "no diagnostics were captured, so the check is vacuous: "
+                    & Text);
+            Assert (not Contains (Text, Prompt),
+                    "the prompt appeared in the diagnostics: " & Text);
+         end;
+      end;
+
+      --  A run that fails. The failure is about the prompt's size, which is
+      --  the diagnostic most likely to quote it.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--prompt");
+         Add (Source, Prompt);
+         Add (Source, "--system");
+         Add (Source, System);
+         Add (Source, "--verbose");
+
+         declare
+            Text : constant String := Diagnostics (Source);
+         begin
+            Assert (Text'Length > 0, "the failing run said nothing at all");
+            Assert (not Contains (Text, Prompt),
+                    "the prompt appeared in a failure diagnostic: " & Text);
+            Assert (not Contains (Text, System),
+                    "the system message appeared in a failure diagnostic: "
+                    & Text);
+         end;
+      end;
+
+      --  Nothing was written beside the model either: a conversation is not
+      --  persisted, and a run leaves no file behind that the reader did not
+      --  ask for.
+      Assert (not Ada.Directories.Exists ("obj/history"),
+              "a run left a history file behind");
+      Assert (not Ada.Directories.Exists (Model & ".session"),
+              "a run left a session file beside the model");
+
+      Ada.Directories.Delete_File (Model);
+      Ada.Directories.Delete_File (Errors);
+   end Prompts_Are_Not_Logged;
+
    --  A prompt taken from standard input is bounded, and what it refuses it
    --  says plainly.
    --
@@ -847,20 +1111,6 @@ package body Tests.CLI_Cases is
 
          return Model_Runner.Text.To_String (Result);
       end Diagnostics_For;
-
-      --  Report whether Needle occurs in Haystack.
-      function Contains (Haystack, Needle : String) return Boolean is
-      begin
-         if Needle'Length > Haystack'Length then
-            return False;
-         end if;
-         for Start in Haystack'First .. Haystack'Last - Needle'Length + 1 loop
-            if Haystack (Start .. Start + Needle'Length - 1) = Needle then
-               return True;
-            end if;
-         end loop;
-         return False;
-      end Contains;
 
       Status : Natural;
    begin
@@ -966,6 +1216,12 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Retained_Text_Matches'Access,
          "retained text matches what was streamed");
+      Register_Routine
+        (T, Seeds_Cover_The_Unsigned_Range'Access,
+         "a seed covers the unsigned range in parsing, storage and display");
+      Register_Routine
+        (T, Prompts_Are_Not_Logged'Access,
+         "what the reader typed does not appear in the diagnostics");
       Register_Routine
         (T, Standard_Input_Prompt_Is_Bounded'Access,
          "a prompt from standard input is bounded and refused plainly");
