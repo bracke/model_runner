@@ -263,6 +263,17 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- Three more diagnostics that were declared and never produced now are. A
+  tokenizer score or token-type table that is present but does not match the
+  vocabulary is refused rather than silently dropped -- scores decide which
+  merge wins, so a short table tokenized the same text differently and said
+  nothing. A chat template using a filter is reported as using a filter
+  instead of as an unsupported expression. And a `MODEL_RUNNER_COLOR` set to
+  something the program has no name for is refused, as `--color=bogus` always
+  was: the same value should not be an error on the command line and ignored
+  in the environment.
+
+
 - `--interactive` no longer starts a session without a terminal to hold it.
   Interactive mode chosen implicitly, when no prompt source was given, was
   already conditional on standard input and standard output both being

@@ -252,15 +252,47 @@ package body Model_Runner.Tokenizer is
       declare
          Probe : Natural;
       begin
+         --  A table that is absent is not an error: a vocabulary without
+         --  scores merges left to right, and one without token types has no
+         --  added tokens. A table that is there and does not match the
+         --  vocabulary is another matter. Scores decide which merge wins, so
+         --  quietly dropping a short table tokenizes the same text
+         --  differently and says nothing.
          Containers.Get_Array_Length
            (Source, "tokenizer.ggml.scores",
             Model_Runner.GGUF.Value_Float32, Probe, Scratch);
-         Has_Scores := E.Is_Ok (Scratch) and then Probe = Count;
+         if E.Is_Ok (Scratch) then
+            if Probe /= Count then
+               Status := E.Make (E.Tokenizer_Invalid_Scores);
+               E.Add_Integer (Status, "size", Long_Long_Integer (Probe));
+               E.Add_Integer (Status, "expected", Long_Long_Integer (Count));
+               return;
+            end if;
+            Has_Scores := True;
+         elsif Scratch.Code /= E.GGUF_Missing_Metadata_Key then
+            Status := E.Make (E.Tokenizer_Invalid_Scores);
+            return;
+         else
+            Has_Scores := False;
+         end if;
 
          Containers.Get_Array_Length
            (Source, "tokenizer.ggml.token_type",
             Model_Runner.GGUF.Value_Int32, Probe, Scratch);
-         Has_Types := E.Is_Ok (Scratch) and then Probe = Count;
+         if E.Is_Ok (Scratch) then
+            if Probe /= Count then
+               Status := E.Make (E.Tokenizer_Invalid_Token_Type);
+               E.Add_Integer (Status, "size", Long_Long_Integer (Probe));
+               E.Add_Integer (Status, "expected", Long_Long_Integer (Count));
+               return;
+            end if;
+            Has_Types := True;
+         elsif Scratch.Code /= E.GGUF_Missing_Metadata_Key then
+            Status := E.Make (E.Tokenizer_Invalid_Token_Type);
+            return;
+         else
+            Has_Types := False;
+         end if;
       end;
 
       --  Two passes: size the pool exactly, then fill it. This avoids a

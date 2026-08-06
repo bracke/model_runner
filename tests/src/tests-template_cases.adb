@@ -188,6 +188,16 @@ package body Tests.Template_Cases is
               = E.Template_Unsupported_Construct,
               "an import was accepted");
 
+      --  A filter has a diagnostic of its own: a reader can act on "this
+      --  template uses a filter" where "unsupported expression" leaves them
+      --  looking for the expression.
+      Assert (Compile_Status ("{{ message.content | trim }}")
+              = E.Template_Unknown_Filter,
+              "a filter was not reported as one");
+      Assert (Compile_Status ("{{ bos_token | upper }}")
+              = E.Template_Unknown_Filter,
+              "a filter on a token was not reported as one");
+
       --  Names the engine does not know are refused, not rendered empty.
       Assert (Compile_Status ("{{ nonsense }}") = E.Template_Unknown_Variable,
               "an unknown variable was accepted");

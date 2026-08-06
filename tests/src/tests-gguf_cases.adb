@@ -1173,6 +1173,50 @@ package body Tests.GGUF_Cases is
       Refuses_Absent_Token ("tokenizer.ggml.eos_token_id");
       Refuses_Absent_Token ("tokenizer.ggml.unknown_token_id");
 
+      --  A score or token-type table that is there but does not match the
+      --  vocabulary is refused. Scores decide which merge wins, so dropping a
+      --  short table quietly tokenizes the same text differently.
+      Write_Tokens (Builder);
+      Fixtures.Begin_Array
+        (Builder, "tokenizer.ggml.scores", G.Value_Float32, 3);
+      for Index in 1 .. 3 loop
+         Fixtures.Float_Element (Builder, 0.0);
+      end loop;
+      Fixtures.End_Array (Builder);
+      Load_Built (Builder, Words, Status);
+      Assert (Status.Code = E.Tokenizer_Invalid_Scores,
+              "a score table of the wrong length was accepted: "
+              & E.Error_Code'Image (Status.Code));
+      Vocab.Close (Words);
+
+      Write_Tokens (Builder);
+      Fixtures.Begin_Array
+        (Builder, "tokenizer.ggml.token_type", G.Value_Int32, 2);
+      for Index in 1 .. 2 loop
+         Fixtures.Int32_Element (Builder, 1);
+      end loop;
+      Fixtures.End_Array (Builder);
+      Load_Built (Builder, Words, Status);
+      Assert (Status.Code = E.Tokenizer_Invalid_Token_Type,
+              "a token-type table of the wrong length was accepted: "
+              & E.Error_Code'Image (Status.Code));
+      Vocab.Close (Words);
+
+      --  Tables of the right length are still accepted, so the check cannot
+      --  be satisfied by refusing every table.
+      Write_Tokens (Builder);
+      Fixtures.Begin_Array
+        (Builder, "tokenizer.ggml.scores", G.Value_Float32, 5);
+      for Index in 1 .. 5 loop
+         Fixtures.Float_Element (Builder, 0.0);
+      end loop;
+      Fixtures.End_Array (Builder);
+      Load_Built (Builder, Words, Status);
+      Assert (E.Is_Ok (Status),
+              "a score table matching the vocabulary was refused: "
+              & E.Error_Code'Image (Status.Code));
+      Vocab.Close (Words);
+
       --  A flag that is present but not a boolean is refused for the same
       --  reason: the file is wrong about itself.
       Write_Tokens (Builder);

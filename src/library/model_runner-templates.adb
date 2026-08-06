@@ -748,7 +748,18 @@ package body Model_Runner.Templates is
                            return;
                         end if;
                         if Skip_Spaces (Text_Slice, From) <= Text_Slice'Last then
-                           Fail (E.Template_Unsupported_Construct, "expression");
+                           --  A pipe here is a filter, and saying so is worth
+                           --  a code of its own: a reader can act on "this
+                           --  template uses a filter" where "unsupported
+                           --  expression" leaves them looking for the
+                           --  expression.
+                           if Text_Slice (Skip_Spaces (Text_Slice, From)) = '|'
+                           then
+                              Fail (E.Template_Unknown_Filter, "output");
+                           else
+                              Fail
+                                (E.Template_Unsupported_Construct, "expression");
+                           end if;
                            return;
                         end if;
 

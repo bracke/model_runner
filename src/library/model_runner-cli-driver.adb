@@ -42,6 +42,21 @@ package body Model_Runner.CLI.Driver is
          Error_Is_Terminal  => Model_Runner.Platform.Is_Terminal (2),
          Colour_Suppressed  => Model_Runner.Platform.No_Color_Requested);
 
+      --  Report whether the environment asked for a styling this program does
+      --  not have a name for.
+      --
+      --  An unset variable is not an answer and the automatic policy applies.
+      --  A variable set to something else is the same mistake as writing
+      --  --color=bogus, which is refused, and it was accepted here only
+      --  because nothing looked: the value fell through to the automatic
+      --  policy and the reader was left believing it had been applied.
+      function Environment_Colour_Is_Usable return Boolean is
+         Value : constant String :=
+           Model_Runner.Platform.Environment_Value (Color_Variable);
+      begin
+         return Value = "" or else Value = "always" or else Value = "never";
+      end Environment_Colour_Is_Usable;
+
       --  Styling, resolved from the same narrow scan as the locale so that a
       --  usage error is reported in the requested style.
       function Early_Color return Opt.Color_Mode is
@@ -73,6 +88,25 @@ package body Model_Runner.CLI.Driver is
 
       Pres.Open (Screen, Catalog'Unchecked_Access, Early_Color, Capabilities,
                  Opt.Normal);
+
+      if not Environment_Colour_Is_Usable then
+         declare
+            Condition : E.Error_Info :=
+              E.Make (E.CLI_Invalid_Environment_Value);
+         begin
+            E.Add_Text
+              (Condition, "option", Color_Variable, E.Param_Identifier);
+            E.Add_Text
+              (Condition, "value",
+               Model_Runner.Text.Escape_Controls
+                 (Model_Runner.Platform.Environment_Value (Color_Variable)),
+               E.Param_Text);
+            Pres.Report (Screen, Condition);
+            Loc.Close (Catalog);
+            Status := E.Exit_Status (Condition);
+            return;
+         end;
+      end if;
 
       Opt.Parse (Source, Item, Parsed);
 

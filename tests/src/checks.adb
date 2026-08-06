@@ -330,6 +330,142 @@ package body Checks is
       Check (Docs_Generation.Error_Reference_Is_Current (Root),
              "docs/error-codes.md is stale; run 'tests docs'");
 
+      --  Which diagnostics the program can actually emit.
+      --
+      --  A code that is declared, catalogued in every locale and printed in
+      --  docs/error-codes.md, but produced nowhere, reads to anyone using that
+      --  reference as a diagnostic they might see. Thirty-one of them were.
+      --  Six turned out to be real gaps and are now produced; the rest are
+      --  kept deliberately and listed here, so that the next one to appear has
+      --  to be accounted for rather than joining them quietly.
+      --
+      --  They fall into two kinds. Superseded: a more precise diagnostic is
+      --  raised instead -- a closed session reports Lifecycle_Invalid_State
+      --  and names the state, a vocabulary that does not match its embedding
+      --  reports the tensor shape, an out-of-range --threads reports the
+      --  option. Unreachable: the condition cannot arise -- there is no
+      --  --backend to be invalid, no merge table in a SentencePiece
+      --  vocabulary, and Conversation.Role is an enumeration.
+      declare
+         type Name_Access is access constant String;
+         Reserved : constant array (Positive range <>) of Name_Access :=
+           [
+           new String'("Arch_Invalid_Metadata"),
+           new String'("Arch_Layer_Numbering_Gap"),
+           new String'("Arch_Missing_Metadata"),
+           new String'("Arch_Vocabulary_Mismatch"),
+           new String'("Backend_Capability_Missing"),
+           new String'("Backend_Invalid_Worker_Count"),
+           new String'("Backend_Queue_Full"),
+           new String'("Backend_Unknown"),
+           new String'("Backend_Unsupported_Format"),
+           new String'("Backend_Unsupported_Operation"),
+           new String'("CLI_Invalid_Backend"),
+           new String'("CLI_Invalid_Locale"),
+           new String'("CLI_Invalid_Mapping_Mode"),
+           new String'("Conversation_Invalid_Role"),
+           new String'("Conversation_System_Unsupported"),
+           new String'("GGUF_File_Changed"),
+           new String'("GGUF_Unsupported_Tensor_Type"),
+           new String'("Generation_Batch_Too_Large"),
+           new String'("Generation_No_Logits"),
+           new String'("Generation_Output_Closed"),
+           new String'("IO_Output_Closed"),
+           new String'("IO_Seek_Failed"),
+           new String'("IO_Write_Failed"),
+           new String'("Internal_Localization_Failed"),
+           new String'("Internal_Not_Implemented"),
+           new String'("Lifecycle_Already_Closed"),
+           new String'("Lifecycle_Mapping_Unavailable"),
+           new String'("Lifecycle_Session_Closed"),
+           new String'("Lifecycle_Session_Failed"),
+           new String'("Memory_Invalid_Limit"),
+           new String'("Template_Unsupported_Role"),
+           new String'("Tensor_Invalid_Stride"),
+           new String'("Tensor_Rank_Too_High"),
+           new String'("Tensor_Read_Only"),
+           new String'("Tokenizer_Invalid_Merges"),
+           new String'("Tokenizer_Missing_Byte_Fallback")];
+
+         Produced : array (E.Error_Code) of Boolean := [others => False];
+
+         --  The literal as written in a call, matched without regard to
+         --  case: 'Image gives CLI_INVALID_LOCALE where the body says
+         --  CLI_Invalid_Locale, and deriving one from the other means
+         --  guessing which parts are acronyms.
+         function Ada_Name (Code : E.Error_Code) return String
+         is (E.Error_Code'Image (Code));
+
+         --  Report whether Text contains Token.
+         function Holds (Text, Token : String) return Boolean is
+         begin
+            if Text'Length < Token'Length then
+               return False;
+            end if;
+            for Index in Text'First .. Text'Last - Token'Length + 1 loop
+               if Text (Index .. Index + Token'Length - 1) = Token then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Holds;
+
+         procedure Note_Codes (Relative : String) is
+            Text : constant String := Contents (Relative);
+         begin
+            --  Bodies only, and not the registry itself: errors.adb names
+            --  every code in its severity and recovery tables, so counting a
+            --  mention there would call all of them produced.
+            if Relative'Length > 4
+              and then Relative (Relative'Last - 3 .. Relative'Last) = ".adb"
+              and then not T.Ends_With (Relative, "model_runner-errors.adb")
+            then
+               for Code in E.Error_Code loop
+                  if not Produced (Code)
+                    and then Holds
+                               (T.To_Lower (Text),
+                                T.To_Lower (Ada_Name (Code)))
+                  then
+                     Produced (Code) := True;
+                  end if;
+               end loop;
+            end if;
+         end Note_Codes;
+
+         procedure Scan is new For_Each_Source (Note_Codes);
+
+         --  Report whether a code is on the reserved list.
+         function Is_Reserved (Code : E.Error_Code) return Boolean is
+         begin
+            for Item of Reserved loop
+               if T.To_Lower (Item.all) = T.To_Lower (Ada_Name (Code)) then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Is_Reserved;
+      begin
+         Scan ("src/library");
+         Scan ("src/platform");
+
+         for Code in E.Error_Code loop
+            if Code /= E.No_Error then
+               Result.Performed := Result.Performed + 1;
+
+               if Produced (Code) and then Is_Reserved (Code) then
+                  Fail
+                    (Ada_Name (Code)
+                     & " is produced now; take it off the reserved list");
+               elsif not Produced (Code) and then not Is_Reserved (Code) then
+                  Fail
+                    (Ada_Name (Code)
+                     & " is declared and produced nowhere; either produce it"
+                     & " or put it on the reserved list with a reason");
+               end if;
+            end if;
+         end loop;
+      end;
+
       --  A count written into prose drifts the moment a code is added, and it
       --  did: the documents claimed 147 codes for some time after there were
       --  148. The number is cheap to derive, so it is checked rather than
