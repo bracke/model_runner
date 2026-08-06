@@ -44,7 +44,7 @@ Memory
   session at this context 5880
 
 $ model_runner run tiny-model.gguf --raw --prompt "ab" --seed 42 --temperature 0 --max-tokens 6
-bcaaaa
+ bcaaaa
 ```
 
 ## Commands
@@ -115,12 +115,12 @@ mechanically from the error enumeration so a code and its message cannot drift.
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback |
 | CLI | `run`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system`, blank-line submission, no history written to disk |
-| Localization | Every application-authored string through `messages`; 147 diagnostic codes each with a catalog entry; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 148 diagnostic codes each with a catalog entry; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position |
 | Presentation | `terminal_styles` in the presentation layer only; per-destination automatic styling; severity always carried by a word as well as a colour; generated text never styled |
 | CPU backend | Ada worker pool: a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown. `--threads` selects the count; the result is bit-identical whatever it is |
 | Tooling | `tests test`, `tests check`, `tests conformance`, `tests external-model`, `tests docs`, `tests fuzz`, `tests fixtures` — all Ada, all in the tests crate |
-| Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. The engine agrees with it to within 4e-7 absolute |
+| Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. The engine agrees with it to within 1.3e-6 absolute on the fixture, against tolerances of 1e-4 absolute and 1e-3 relative |
 
 ## Building and testing
 

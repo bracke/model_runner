@@ -47,17 +47,17 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 147 diagnostic
+- Localization through `messages`, with a catalog entry for all 148 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.
-- 49 deterministic offline tests and a `tests fixtures` command.
+- 84 deterministic offline tests and a `tests fixtures` command.
 
 - CPU backend with an Ada worker pool: protected coordinator, reusable worker
   tasks, deterministic partitioning, bounded queue, failure propagation and
   clean shutdown, selected with `--threads`.
 - `tests fuzz`, a reproducible GGUF mutation campaign.
-- `tests check`, 467 repository, dependency-boundary and layering checks.
+- `tests check`, 500 repository, dependency-boundary and layering checks.
 - `tests docs`, generating `docs/error-codes.md` from the error registry.
 - Interrupt-driven cancellation: SIGINT requests a clean cancellation instead of
   terminating the process mid-token.

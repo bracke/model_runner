@@ -330,6 +330,83 @@ package body Checks is
       Check (Docs_Generation.Error_Reference_Is_Current (Root),
              "docs/error-codes.md is stale; run 'tests docs'");
 
+      --  A count written into prose drifts the moment a code is added, and it
+      --  did: the documents claimed 147 codes for some time after there were
+      --  148. The number is cheap to derive, so it is checked rather than
+      --  trusted.
+      declare
+         Total : Natural := 0;
+
+         --  The number written immediately before Phrase, or zero when the
+         --  phrase does not appear. A line may be wrapped between the number
+         --  and the phrase, so the gap is any run of white space.
+         function Stated (Text : String; Phrase : String) return Natural is
+            Last : Natural;
+            Stop : Natural;
+            Value : Natural := 0;
+            Scale : Natural := 1;
+         begin
+            if Phrase'Length > Text'Length then
+               return 0;
+            end if;
+
+            for Start in Text'First .. Text'Last - Phrase'Length + 1 loop
+               if Text (Start .. Start + Phrase'Length - 1) = Phrase then
+                  Last := Start - 1;
+                  while Last >= Text'First
+                    and then (Text (Last) = ' '
+                              or else Text (Last) = ASCII.LF
+                              or else Text (Last) = ASCII.CR)
+                  loop
+                     Last := Last - 1;
+                  end loop;
+
+                  Stop := Last;
+                  while Stop >= Text'First
+                    and then Text (Stop) in '0' .. '9'
+                  loop
+                     Stop := Stop - 1;
+                  end loop;
+
+                  if Stop < Last then
+                     for Index in reverse Stop + 1 .. Last loop
+                        Value :=
+                          Value
+                          + Scale
+                            * (Character'Pos (Text (Index))
+                               - Character'Pos ('0'));
+                        Scale := Scale * 10;
+                     end loop;
+                     return Value;
+                  end if;
+               end if;
+            end loop;
+
+            return 0;
+         end Stated;
+
+         --  Report a document whose stated count is not the real one.
+         procedure Agrees (Relative : String; Phrase : String) is
+            Said : constant Natural := Stated (Contents (Relative), Phrase);
+         begin
+            Result.Performed := Result.Performed + 1;
+            if Said /= Total then
+               Fail
+                 (Relative & " says" & Natural'Image (Said) & " "
+                  & Phrase & " but there are" & Natural'Image (Total));
+            end if;
+         end Agrees;
+      begin
+         for Code in E.Error_Code loop
+            if Code /= E.No_Error then
+               Total := Total + 1;
+            end if;
+         end loop;
+
+         Agrees ("README.md", "diagnostic codes");
+         Agrees ("CHANGELOG.md", "diagnostic");
+      end;
+
       Ada.Text_IO.Put_Line
         (Ada.Text_IO.Standard_Error,
          "  checks" & Natural'Image (Result.Performed)
