@@ -422,6 +422,23 @@ package body Model_Runner.CLI.Options is
          end if;
       end Mark;
 
+      --  Refuse a value on an option that does not take one.
+      --
+      --  "--verbose=5" is a mistake, not a request: the value was dropped and
+      --  the reader left believing it had been applied. The diagnostic for it
+      --  has existed from the start with nothing producing it.
+      procedure No_Value
+        (Name          : String;
+         Value_Present : Boolean;
+         Value         : String;
+         Ok            : out Boolean) is
+      begin
+         Ok := not Value_Present;
+         if not Ok then
+            Fail (E.CLI_Unexpected_Option_Value, Name, Value);
+         end if;
+      end No_Value;
+
       --  Read the value of an option, whether it was given as --name=value or
       --  as two arguments.
       procedure Take_Value
@@ -565,9 +582,19 @@ package body Model_Runner.CLI.Options is
                   Good : Boolean;
                begin
                   if Name = "--help" then
+                  No_Value (Name, Value_Present,
+                            Argument (Value_First .. Argument'Last), Good);
+                  if not Good then
+                     return;
+                  end if;
                      Result.Kind := Command_Help;
 
                   elsif Name = "--version" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Result.Kind := Command_Version;
 
                   elsif Name = "--prompt" then
@@ -598,6 +625,11 @@ package body Model_Runner.CLI.Options is
                      Result.Prompt_Kind := Prompt_File;
 
                   elsif Name = "--interactive" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      if Result.Prompt_Kind not in Prompt_Unset | Prompt_Interactive
                      then
                         Fail (E.CLI_Conflicting_Prompt_Sources, Name);
@@ -606,6 +638,11 @@ package body Model_Runner.CLI.Options is
                      Result.Prompt_Kind := Prompt_Interactive;
 
                   elsif Name = "--raw" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Result.Raw := True;
 
                   elsif Name = "--system" then
@@ -793,6 +830,11 @@ package body Model_Runner.CLI.Options is
                      end;
 
                   elsif Name = "--mmap" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Mark (Flag_Mapping, Name, Good);
                      if not Good then
                         return;
@@ -800,6 +842,11 @@ package body Model_Runner.CLI.Options is
                      Result.Mapping := Files.Mapping_Required;
 
                   elsif Name = "--no-mmap" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Mark (Flag_Mapping, Name, Good);
                      if not Good then
                         return;
@@ -807,6 +854,11 @@ package body Model_Runner.CLI.Options is
                      Result.Mapping := Files.Mapping_Disabled;
 
                   elsif Name = "--quiet" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Mark (Flag_Verbosity, Name, Good);
                      if not Good then
                         return;
@@ -814,6 +866,11 @@ package body Model_Runner.CLI.Options is
                      Result.Level := Quiet;
 
                   elsif Name = "--verbose" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Mark (Flag_Verbosity, Name, Good);
                      if not Good then
                         return;
@@ -821,6 +878,11 @@ package body Model_Runner.CLI.Options is
                      Result.Level := Verbose;
 
                   elsif Name = "--show-stats" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Mark (Flag_Stats, Name, Good);
                      if not Good then
                         return;
@@ -829,6 +891,11 @@ package body Model_Runner.CLI.Options is
                      Result.Stats_Set := True;
 
                   elsif Name = "--no-stats" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Mark (Flag_Stats, Name, Good);
                      if not Good then
                         return;
@@ -866,12 +933,27 @@ package body Model_Runner.CLI.Options is
                      Free_Text (Held);
 
                   elsif Name = "--metadata" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Result.Show_Metadata := True;
 
                   elsif Name = "--tensors" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Result.Show_Tensors := True;
 
                   elsif Name = "--validate" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Result.Validate_Only := True;
 
                   else

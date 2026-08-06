@@ -263,6 +263,13 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- An option that takes no value accepted one and dropped it. `--verbose=5`,
+  `--raw=yes` and eleven others parsed as though the value had not been
+  written, so a mistake in a command line was silently ignored rather than
+  reported. All thirteen now refuse, under `MR-CLI-0005`, which was declared
+  and catalogued from the start with nothing producing it.
+
+
 - A verbose run printed its last progress line twice: the last token produced
   and the end of generation carried identical wording, so the reader saw a
   stutter rather than two things happening. The completion line now says so.

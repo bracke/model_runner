@@ -227,6 +227,21 @@ package body Tests.CLI_Cases is
       Expect (E.CLI_Invalid_Option_Value, "run m.gguf --max-tokens abc");
       Expect (E.CLI_Option_Out_Of_Range, "run m.gguf --max-tokens 0");
       Expect (E.CLI_Repeated_Option, "run m.gguf --seed 1 --seed 2");
+
+      --  A value on an option that does not take one. Dropping it silently
+      --  left the reader believing it had been applied, and the diagnostic
+      --  for it existed from the start without anything producing it.
+      Expect (E.CLI_Unexpected_Option_Value, "run m.gguf --verbose=5");
+      Expect (E.CLI_Unexpected_Option_Value, "run m.gguf --raw=yes");
+      Expect (E.CLI_Unexpected_Option_Value, "run m.gguf --interactive=1");
+      Expect (E.CLI_Unexpected_Option_Value, "inspect m.gguf --metadata=all");
+      Expect (E.CLI_Unexpected_Option_Value, "run m.gguf --mmap=");
+
+      --  The bare forms stay accepted, so the check cannot be satisfied by
+      --  refusing the flags outright.
+      Expect (E.No_Error, "run m.gguf --prompt hi --verbose --raw");
+      Expect (E.No_Error, "inspect m.gguf --metadata --tensors");
+      Expect (E.No_Error, "run m.gguf --prompt=hi --max-tokens=2");
       Expect (E.CLI_Conflicting_Prompt_Sources,
               "run m.gguf --prompt a --prompt-file b");
       Expect (E.CLI_Conflicting_System_Sources,
