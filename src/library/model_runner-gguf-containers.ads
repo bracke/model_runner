@@ -292,6 +292,23 @@ package Model_Runner.GGUF.Containers is
    --
    --  @param Item Container to inspect.
    --  @return Descriptor count.
+--  Render one metadata value for display.
+   --
+   --  The type word, then the value. Everything here came out of a model file
+   --  and is escaped; a long string is shortened on a code-point boundary and
+   --  says so, and an array is described rather than dumped -- a tokenizer
+   --  vocabulary is an array of tens of thousands of strings and printing it
+   --  is never what a reader asked for.
+   --
+   --  @param Item Container to inspect.
+   --  @param Index Metadata entry, one based.
+   --  @param Width Largest number of bytes of value text to show.
+   --  @return Display text; the type word alone when the value cannot be read.
+   function Value_Image
+     (Item  : Container;
+      Index : Positive;
+      Width : Natural := 120) return String;
+
    function Tensor_Count (Item : Container) return Natural;
 
    --  Position of a tensor by name.

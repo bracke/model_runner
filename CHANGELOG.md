@@ -136,6 +136,12 @@ wall and 16.0 s of processor time.
 
 ### Added
 
+- `inspect --metadata` shows each entry's type and value, not just its key.
+  Strings are escaped and shortened on a code-point boundary, with an explicit
+  mark, so a prefix is never mistaken for the whole and no invalid UTF-8
+  reaches the terminal. Arrays are described rather than dumped: a tokenizer
+  vocabulary is a metadata array of tens of thousands of strings, and nobody
+  asking to see the metadata asked for that.
 - Windows memory mapping, over CreateFileMapping and MapViewOfFile. The
   platform-specific bodies now sit one per host under `src/platform`, chosen by
   the project file the way hostkit chooses its own, with a body for hosts

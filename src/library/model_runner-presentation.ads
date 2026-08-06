@@ -109,6 +109,20 @@ package Model_Runner.Presentation is
       Key   : String;
       Value : String);
 
+   --  Write a labelled value whose label is data rather than a message.
+   --
+   --  A metadata key comes from the model file, so unlike Put_Field's label it
+   --  is not localized and is untrusted: escape it as you would any other
+   --  text a file supplied.
+   --
+   --  @param Item Console to write through.
+   --  @param Label Label text, already escaped.
+   --  @param Value Value text, already escaped.
+   procedure Put_Data_Field
+     (Item  : in out Console;
+      Label : String;
+      Value : String);
+
    --  Report a structured condition on standard error.
    --
    --  Emits the severity word, the public diagnostic code and the localized

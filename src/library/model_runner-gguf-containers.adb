@@ -1,4 +1,5 @@
 with Model_Runner.Text;
+with Model_Runner.UTF8;
 
 package body Model_Runner.GGUF.Containers is
 
@@ -794,5 +795,132 @@ package body Model_Runner.GGUF.Containers is
    function Tensor_Is_Supported
      (Item : Container; Index : Positive) return Boolean
    is (Is_Supported (Tensor_Format (Item, Index)));
+
+   --  Render one metadata value for display.
+   --
+   --  Everything here came out of a model file, so it is escaped and bounded.
+   --  An array is described rather than dumped: a tokenizer's vocabulary is a
+   --  metadata array of tens of thousands of strings, and printing it is never
+   --  what the reader asked for.
+   function Value_Image
+     (Item  : Container;
+      Index : Positive;
+      Width : Natural := 120) return String
+   is
+      Key : constant String := Metadata_Key (Item, Index);
+      Kind : constant Value_Type := Metadata_Kind (Item, Index);
+      Max_Shown : constant Natural := Width;
+
+      --  "VALUE_STRING" reads as "string": the enumeration prefix is an Ada
+      --  detail, not something a reader of a model file needs to see.
+      function Type_Word (Kind_Of : Value_Type) return String is
+         Name : constant String := Value_Type'Image (Kind_Of);
+      begin
+         return Model_Runner.Text.To_Lower (Name (Name'First + 6 .. Name'Last));
+      end Type_Word;
+
+      Status : Model_Runner.Errors.Error_Info;
+   begin
+      case Kind is
+         when Value_String =>
+            declare
+               --  Read generously and shorten for display. Max_Length is the
+               --  largest value accepted, not a truncation point: asking for
+               --  the display width would reject a chat template outright and
+               --  show nothing where the interesting part is the opening.
+               Room : constant := 8192;
+               Text : String (1 .. Room);
+               Last : Natural;
+            begin
+               Get_String (Item, Key, Room, Text, Last, Status);
+
+               if Model_Runner.Errors.Is_Error (Status) then
+                  --  Longer than this will read, or not a string after all.
+                  --  Saying which is better than an empty column.
+                  return Type_Word (Kind) & "  <"
+                    & Model_Runner.Text.To_Lower (Model_Runner.Errors.Error_Code'Image (Status.Code)) & ">";
+               end if;
+
+               declare
+                  Shown : constant String :=
+                    Model_Runner.Text.Escape_Controls (Text (1 .. Last));
+               begin
+                  if Shown'Length <= Max_Shown then
+                     return Type_Word (Kind) & "  " & Shown;
+                  end if;
+
+                  --  Cut on a code-point boundary: splitting a sequence would
+                  --  put invalid UTF-8 on the terminal. A shortened value says
+                  --  so, so a prefix is never mistaken for the whole.
+                  declare
+                     Head : constant String :=
+                       Shown (Shown'First .. Shown'First + Max_Shown - 1);
+                     Safe : constant Natural :=
+                       Model_Runner.UTF8.Safe_Prefix_Length (Head);
+                  begin
+                     return Type_Word (Kind) & "  "
+                       & Head (Head'First .. Head'First + Safe - 1) & " ...";
+                  end;
+               end;
+            end;
+
+         when Value_Bool =>
+            declare
+               Value : Boolean;
+            begin
+               Get_Boolean (Item, Key, Value, Status);
+               if Model_Runner.Errors.Is_Error (Status) then
+                  return Type_Word (Kind);
+               end if;
+               return Type_Word (Kind) & "  "
+                 & (if Value then "true" else "false");
+            end;
+
+         when Value_Float32 | Value_Float64 =>
+            declare
+               Value : Model_Runner.Numerics.Wide_Real;
+            begin
+               --  The whole representable range: this is displaying what the
+               --  file says, not validating it against an expectation.
+               Get_Float
+                 (Item, Key,
+                  Model_Runner.Numerics.Wide_Real'First,
+                  Model_Runner.Numerics.Wide_Real'Last, Value, Status);
+               if Model_Runner.Errors.Is_Error (Status) then
+                  return Type_Word (Kind);
+               end if;
+               return Type_Word (Kind) & "  "
+                 & Model_Runner.Text.Image (Long_Float (Value), 6);
+            end;
+
+         when Value_Array =>
+            --  Described, never dumped.
+            return Type_Word (Kind) & " of "
+              & Type_Word (Metadata_Element_Kind (Item, Index))
+              & ", "
+              & Model_Runner.Text.Image
+                  (Long_Long_Integer
+                     (Metadata_Length (Item, Index)))
+              & " items";
+
+         when others =>
+            --  Every remaining kind is an integer of some width.
+            declare
+               Value : Long_Long_Integer;
+            begin
+               Get_Integer
+                 (Item, Key, Long_Long_Integer'First,
+                  Long_Long_Integer'Last, Value, Status);
+               if Model_Runner.Errors.Is_Error (Status) then
+                  return Type_Word (Kind);
+               end if;
+               return Type_Word (Kind) & "  " & Model_Runner.Text.Image (Value);
+            end;
+      end case;
+   exception
+      when others =>
+         return Type_Word (Kind);
+   end Value_Image;
+
 
 end Model_Runner.GGUF.Containers;

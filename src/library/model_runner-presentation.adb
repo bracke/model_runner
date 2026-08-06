@@ -166,6 +166,33 @@ package body Model_Runner.Presentation is
          & Value);
    end Put_Field;
 
+   ---------------------
+   -- Put_Data_Field --
+   ---------------------
+
+   procedure Put_Data_Field
+     (Item  : in out Console;
+      Label : String;
+      Value : String)
+   is
+      --  Padded like Put_Field, in code points rather than bytes, so a key
+      --  with a non-ASCII character does not break the column.
+      Width : constant Natural := Model_Runner.UTF8.Code_Point_Count (Label);
+      Shown : constant Natural := (if Width = 0 then Label'Length else Width);
+      Padding : constant Natural := (if Shown >= 40 then 1 else 40 - Shown);
+   begin
+      Error_Line
+        (Item,
+         "  "
+         & (if Styles_Diagnostics (Item)
+            then Terminal_Styles.Decorate
+                   (Label, Terminal_Styles.Role_Muted,
+                    Item.Capabilities.Error_Is_Terminal)
+            else Label)
+         & String'(1 .. Padding => ' ')
+         & Value);
+   end Put_Data_Field;
+
    ----------------
    -- Put_Note --
    ----------------

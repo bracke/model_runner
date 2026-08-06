@@ -350,7 +350,6 @@ Named in the specification, absent here:
   `external-model`, `benchmark`, `docs`, `fuzz` and `fixtures`; the release
   checklist is `tools/bin/check_all`, as in every sibling crate. Nothing
   produces a distributable archive.
-- **`inspect --metadata`** lists keys, not typed values.
 
 ## Speed
 

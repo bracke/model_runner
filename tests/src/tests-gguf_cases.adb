@@ -656,6 +656,96 @@ package body Tests.GGUF_Cases is
               "the set of fused formats changed without this test noticing");
    end Fused_Dot_Matches_Decoder;
 
+   --  Metadata is shown with its type and value, and an array is described
+   --  rather than dumped.
+   --
+   --  The dumping matters most: a tokenizer vocabulary is a metadata array of
+   --  tens of thousands of strings, and a reader asking what is in a file did
+   --  not ask for all of them on the terminal.
+   procedure Metadata_Values_Are_Typed_And_Bounded
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      function Contains (Item : String; Part : String) return Boolean is
+      begin
+         if Part'Length = 0 or else Part'Length > Item'Length then
+            return Part'Length = 0;
+         end if;
+         for Start in Item'First .. Item'Last - Part'Length + 1 loop
+            if Item (Start .. Start + Part'Length - 1) = Part then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Contains;
+
+      Image  : B.Byte_Array_Access;
+      Parsed : Containers.Container;
+      Status : E.Error_Info;
+
+      Saw_String  : Boolean := False;
+      Saw_Integer : Boolean := False;
+      Saw_Array   : Boolean := False;
+   begin
+      Build_Valid (Image);
+      Parse_Image (Image.all, Parsed, Status);
+      Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+      for Index in 1 .. Containers.Metadata_Count (Parsed) loop
+         declare
+            Key   : constant String := Containers.Metadata_Key (Parsed, Index);
+            Shown : constant String := Containers.Value_Image (Parsed, Index);
+         begin
+            --  Every entry says what it is.
+            Assert (Shown'Length > 0, "no value image for " & Key);
+
+            if Containers.Metadata_Kind (Parsed, Index)
+                 = Model_Runner.GGUF.Value_String
+            then
+               Saw_String := True;
+               Assert (Contains (Shown, "string"),
+                       "a string was not named as one: " & Shown);
+
+            elsif Containers.Metadata_Kind (Parsed, Index)
+                    = Model_Runner.GGUF.Value_Array
+            then
+               Saw_Array := True;
+               --  Described, not dumped: the count is there, the elements
+               --  are not.
+               Assert (Contains (Shown, "array"),
+                       "an array was not named as one: " & Shown);
+               Assert (Contains (Shown, "items"),
+                       "an array did not report its length: " & Shown);
+
+               --  The point of the check: no element content. The fixture's
+               --  string array begins with "<unk>", so its presence would
+               --  mean the elements had been written out. A length bound
+               --  alone was too loose to catch that.
+               Assert (not Contains (Shown, "<unk>"),
+                       "an array was dumped rather than described: " & Shown);
+               Assert (Shown'Length < 48,
+                       "an array image grew beyond a description: " & Shown);
+
+            elsif Containers.Metadata_Kind (Parsed, Index)
+                    in Model_Runner.GGUF.Value_UInt32
+                     | Model_Runner.GGUF.Value_Int32
+                     | Model_Runner.GGUF.Value_UInt64
+            then
+               Saw_Integer := True;
+               Assert (Contains (Shown, "int"),
+                       "an integer was not named as one: " & Shown);
+            end if;
+         end;
+      end loop;
+
+      Assert (Saw_String and then Saw_Integer and then Saw_Array,
+              "the fixture no longer covers a string, an integer and an array");
+
+      Containers.Close (Parsed);
+      B.Free (Image);
+   end Metadata_Values_Are_Typed_And_Bounded;
+
    --  One vector or many must give the same bits, for every format.
    --
    --  The kernel takes a different route when several vectors share a span,
@@ -791,6 +881,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Mutation_Corpus_Is_Controlled'Access,
          "a mutation campaign produces only controlled outcomes");
+      Register_Routine
+        (T, Metadata_Values_Are_Typed_And_Bounded'Access,
+         "metadata is shown with its type and value, arrays described not dumped");
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");

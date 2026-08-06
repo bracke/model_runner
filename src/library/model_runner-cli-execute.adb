@@ -613,10 +613,15 @@ package body Model_Runner.CLI.Execute is
       if Item.Show_Metadata then
          Pres.Put_Heading (Screen, "cli.inspect.heading.metadata");
          for Index in 1 .. Containers.Metadata_Count (Container) loop
-            Pres.Put_Field
-              (Screen,
-               "cli.inspect.label.name",
-               T.Escape_Controls (Containers.Metadata_Key (Container, Index)));
+            declare
+               Key : constant String :=
+                 Containers.Metadata_Key (Container, Index);
+            begin
+               Pres.Put_Data_Field
+                 (Screen,
+                  T.Escape_Controls (Key),
+                  Containers.Value_Image (Container, Index));
+            end;
          end loop;
       end if;
 
