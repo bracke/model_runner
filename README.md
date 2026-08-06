@@ -216,7 +216,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   identifiers name tokens that do not exist, being unable to make the
   tokenizer reach outside itself, and the structural refusals -- an unnamed
   metadata key or tensor, an alignment that is not a power of two, a string
-  past the length limit -- each reporting the code that names it.
+  past the length limit -- each reporting the code that names it, and the
+  tokenizer's own refusals doing the same: no tokenizer model, a model this
+  engine does not implement, no token list, input that is not UTF-8, and a
+  buffer too small for the tokens.
 - **Inference** — preparation, finite logits, run-to-run determinism,
   cancellation leaving the cache uncommitted, a cancellation asked for while
   the model is still loading stopping the load, context exhaustion and reset,

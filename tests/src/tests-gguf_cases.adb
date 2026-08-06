@@ -1507,6 +1507,143 @@ package body Tests.GGUF_Cases is
 
    end Structural_Refusals_Report_Themselves;
 
+   --  Every refusal the tokenizer can give, reported by name.
+   --
+   --  The vocabulary is the largest attacker-controlled structure in a model
+   --  file, and eight of its refusals were named by no test. Asserting only
+   --  that loading failed would pass on a loader that refused everything for
+   --  the wrong reason, which is what these codes exist to distinguish.
+   procedure Tokenizer_Refusals_Report_Themselves
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+
+      --  Load a built container and report the code.
+      function Loading (Builder : in out Fixtures.Builder) return E.Error_Code is
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+         Result : E.Error_Code;
+      begin
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse),
+                 "the fixture container did not parse: "
+                 & E.Error_Code'Image (Parse.Code));
+
+         Vocab.Load (Words, Item, Status => Status);
+         Result := Status.Code;
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+         return Result;
+      end Loading;
+
+      --  A container with an architecture and nothing else.
+      procedure Bare (Builder : in out Fixtures.Builder) is
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+      end Bare;
+
+      --  Three usable tokens.
+      procedure With_Tokens (Builder : in out Fixtures.Builder) is
+      begin
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, 3);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "a");
+         Fixtures.String_Element (Builder, "b");
+         Fixtures.End_Array (Builder);
+      end With_Tokens;
+
+      Builder : Fixtures.Builder;
+   begin
+      --  No tokenizer at all. A file may legitimately carry no tokenizer, but
+      --  this engine cannot generate without one and says which is missing.
+      Bare (Builder);
+      With_Tokens (Builder);
+      Assert (Loading (Builder) = E.Tokenizer_Missing_Model,
+              "a file with no tokenizer model was accepted");
+
+      --  A tokenizer this engine does not implement. Named rather than
+      --  treated as absent: the difference is whether the reader looks for a
+      --  missing key or a different program.
+      Bare (Builder);
+      Fixtures.Add_String (Builder, "tokenizer.ggml.model", "bpe");
+      With_Tokens (Builder);
+      Assert (Loading (Builder) = E.Tokenizer_Unsupported_Model,
+              "an unsupported tokenizer model was accepted");
+
+      --  A model that declares a tokenizer and no tokens.
+      Bare (Builder);
+      Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+      Assert (Loading (Builder) = E.Tokenizer_Missing_Tokens,
+              "a tokenizer with no token list was accepted");
+
+      --  Everything sound, so the refusals above cannot come from a loader
+      --  that refuses whatever it is given.
+      Bare (Builder);
+      Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+      With_Tokens (Builder);
+      Assert (Loading (Builder) = E.No_Error,
+              "a sound vocabulary was refused");
+
+      --  Encoding, against that same sound vocabulary.
+      declare
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+         Tokens : Vocab.Token_Array (1 .. 32);
+         Last   : Natural;
+      begin
+         Bare (Builder);
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+         With_Tokens (Builder);
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status), "the sound vocabulary did not load");
+
+         --  Text that is not UTF-8 is refused before it is tokenized, so no
+         --  byte of it reaches the merge loop.
+         Vocab.Encode
+           (Words, "ab" & Character'Val (16#FF#) & Character'Val (16#FE#),
+            False, False, Tokens, Last, Status);
+         Assert (Status.Code = E.Tokenizer_Invalid_UTF8,
+                 "input that is not UTF-8 was encoded: "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  A buffer too small for the result is reported rather than
+         --  overrun or quietly truncated.
+         declare
+            Cramped : Vocab.Token_Array (1 .. 1);
+         begin
+            Vocab.Encode
+              (Words, "abababab", False, False, Cramped, Last, Status);
+            Assert (Status.Code = E.Tokenizer_Buffer_Too_Small,
+                    "a buffer too small for the tokens was accepted: "
+                    & E.Error_Code'Image (Status.Code));
+         end;
+
+         --  And a sound encode still works.
+         Vocab.Encode (Words, "ab", False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "a sound encode failed: " & E.Error_Code'Image (Status.Code));
+         Assert (Last > 0, "a sound encode produced no tokens");
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+   end Tokenizer_Refusals_Report_Themselves;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -1561,6 +1698,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Tokenizer_Refusals_Report_Themselves'Access,
+         "every tokenizer refusal reports the code that names it");
       Register_Routine
         (T, Structural_Refusals_Report_Themselves'Access,
          "structural refusals report the code that names them");
