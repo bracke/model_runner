@@ -19,6 +19,7 @@ with Conformance;
 with External_Model;
 with Docs_Generation;
 with Benchmarks;
+with Packaging;
 with Fuzzing;
 with Tiny_Model;
 
@@ -233,6 +234,26 @@ begin
       --  Measure the kernels. Not part of the mandatory suite: it reports
       --  numbers rather than passing or failing.
       Benchmarks.Run;
+
+   elsif Command = "package" then
+      --  Assemble the distributable archive. Nothing is built here and
+      --  nothing is fetched; the executable must already exist.
+      declare
+         Root : constant String :=
+           (if Ada.Command_Line.Argument_Count >= 2
+            then Ada.Command_Line.Argument (2)
+            else "..");
+         Into : constant String :=
+           (if Ada.Command_Line.Argument_Count >= 3
+            then Ada.Command_Line.Argument (3)
+            else ".");
+         Written : Boolean;
+      begin
+         Packaging.Run (Root, Into, Written);
+         if not Written then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
 
    elsif Command = "fixtures" then
       --  Write the synthetic models the acceptance scenarios use. Nothing is

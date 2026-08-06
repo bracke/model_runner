@@ -113,8 +113,8 @@ asymmetric key and value widths, and rotary scaling other than `none` and
 
 ## Not implemented
 
-A `package` command; nothing produces a distributable archive. The release
-checklist is implemented as `tools/bin/check_all`.
+Nothing remains from the specification's tooling list: the release checklist is
+`tools/bin/check_all` and the archive is `tests package`.
 
 The multiply is folded into the decode for Q4_0, where it measured faster.
 Q8_0, F32, F16 and the k-quant formats decode a span and then multiply, because

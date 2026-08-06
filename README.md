@@ -195,6 +195,7 @@ cd tests && ./bin/tests benchmark          # row kernels, synthetic, no model
 cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
 cd tests && ./bin/tests fuzz --seed 1 --cases 2000
 cd tests && ./bin/tests fixtures           # write tests/fixtures/tiny-model.gguf
+cd tests && ./bin/tests package .. .       # write model_runner-<version>.tar
 cd tests && ./bin/tests external-model --model /path/to/your.gguf [--expect FILE]
 ```
 
@@ -346,10 +347,6 @@ Named in the specification, absent here:
   the compiler vectorizes them; nothing is written in assembly, in intrinsics,
   or in a foreign language. See below for what that does and does not buy.
 - **Repacking.** Weights are consumed in the layout the file stores them in.
-- **A `package` command.** `tests` implements `test`, `check`, `conformance`,
-  `external-model`, `benchmark`, `docs`, `fuzz` and `fixtures`; the release
-  checklist is `tools/bin/check_all`, as in every sibling crate. Nothing
-  produces a distributable archive.
 
 ## Speed
 

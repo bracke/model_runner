@@ -30,6 +30,9 @@ project_tools = { path = "../../project_tools" }
 [[depends-on]]
 hostkit = "*"
 
+[[depends-on]]
+tarlib = "*"
+
 [[pins]]
 terminal_styles = { path = "../../terminal_styles" }
 
@@ -63,6 +66,9 @@ zlib = { path = "../../zlib" }
 # interpreter, so awklib and its regexp dependency are in this graph too.
 # Named here for the same reason as the crates above: Alire honours pins only
 # in the root crate, and a run that found them anyway was relying on a cache.
+[[pins]]
+tarlib = { path = "../../tarlib" }
+
 [[pins]]
 awklib = { path = "../../awklib" }
 

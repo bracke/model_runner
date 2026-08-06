@@ -136,6 +136,19 @@ wall and 16.0 s of processor time.
 
 ### Added
 
+- `tests package` assembles the distributable archive: the executable, the
+  message catalog it looks for beside itself, and the documents that say what
+  the program is and what it does not do. The layout inside is the layout
+  `alr install` writes, so unpacking it over a prefix gives a working
+  installation -- verified by unpacking and running it from the filesystem
+  root, where it resolves its catalog and renders Danish.
+- The archive sets the executable's mode rather than taking tarlib's default,
+  which is 0644 for every regular file. An archive whose program unpacks
+  without the execute bit is not a distribution, and that failure would appear
+  on someone else's machine rather than here.
+- It refuses rather than guesses: every input is checked before anything is
+  written, so a missing file names itself and leaves no half-made archive.
+  Nothing is built and nothing is fetched.
 - `inspect --metadata` shows each entry's type and value, not just its key.
   Strings are escaped and shortened on a code-point boundary, with an explicit
   mark, so a prefix is never mistaken for the whole and no invalid UTF-8
@@ -192,8 +205,6 @@ wall and 16.0 s of processor time.
   input is now rejected on its code point count before anything is allocated.
 
 ### Not yet implemented
-
-A `package` command. Nothing produces a distributable archive.
 
 The release checklist is implemented, as `tools/bin/check_all`, following the
 sibling crates: it drives the repository, dependency and layering checks, the
