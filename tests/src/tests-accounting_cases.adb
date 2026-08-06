@@ -6,6 +6,11 @@ with Model_Runner.Clocks;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
 with Model_Runner.Memory;
+with Model_Runner.Bytes;
+with Model_Runner.Platform.Mapping;
+
+with Ada.Directories;
+with Ada.Streams.Stream_IO;
 
 package body Tests.Accounting_Cases is
 
@@ -191,6 +196,104 @@ package body Tests.Accounting_Cases is
               "no units produced a non-zero rate");
    end Rate_Over_No_Time_Is_Zero;
 
+
+   --  A mapped file reads back exactly what is in it, and refuses the rest.
+   --
+   --  The mapping had no test. It was rewritten recently into one body per
+   --  host, and Copy is the only place in the engine that turns a file offset
+   --  and a length into a read: if its bounds are wrong, a model file can walk
+   --  off the end of its own mapping.
+   procedure Mapping_Reads_And_Refuses
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package B renames Model_Runner.Bytes;
+      package Map renames Model_Runner.Platform.Mapping;
+      use type B.Byte;
+      use type B.Byte_Count;
+
+      Path : constant String := "obj/mapping-test.bin";
+
+      Content : constant B.Byte_Array (1 .. 64) :=
+        [for Index in 1 .. 64 => B.Byte ((Integer (Index) * 7) mod 256)];
+
+      Region    : Map.Region;
+      Available : Boolean;
+      Target    : B.Byte_Array (1 .. 16) := [others => 0];
+      Ok        : Boolean;
+   begin
+      declare
+         use Ada.Streams.Stream_IO;
+         Output : File_Type;
+      begin
+         Create (Output, Out_File, Path);
+         for Byte of Content loop
+            Ada.Streams.Stream_Element'Write
+              (Stream (Output), Ada.Streams.Stream_Element (Byte));
+         end loop;
+         Close (Output);
+      end;
+
+      if not Map.Is_Supported then
+         --  A host with no mapping says so and Open never succeeds. That is a
+         --  statement about the host, not a skipped test.
+         Map.Open (Region, Path, Available);
+         Assert (not Available,
+                 "a host without mapping reported a mapping anyway");
+         Ada.Directories.Delete_File (Path);
+         return;
+      end if;
+
+      Map.Open (Region, Path, Available);
+      Assert (Available, "a readable file was not mapped");
+      Assert (Map.Is_Open (Region), "the region is not open after mapping");
+      Assert (Map.Length (Region) = 64,
+              "the mapping length is wrong:"
+              & B.Byte_Count'Image (Map.Length (Region)));
+
+      --  What is read is what was written.
+      Map.Copy (Region, 0, Target, Ok);
+      Assert (Ok, "a read inside the mapping failed");
+      for Index in Target'Range loop
+         Assert (Target (Index) = Content (Index),
+                 "byte" & Integer'Image (Integer (Index))
+                 & " read back wrongly");
+      end loop;
+
+      --  And from an offset.
+      Map.Copy (Region, 48, Target, Ok);
+      Assert (Ok, "a read at an offset failed");
+      Assert (Target (1) = Content (49), "the offset read the wrong byte");
+
+      --  The last byte exactly, and then one past it.
+      Map.Copy (Region, 64 - B.Byte_Count (Target'Length), Target, Ok);
+      Assert (Ok, "a read ending exactly at the end was refused");
+
+      Map.Copy (Region, 64 - B.Byte_Count (Target'Length) + 1, Target, Ok);
+      Assert (not Ok, "a read running past the end was allowed");
+      Assert (Target (1) = 0, "a refused read left data behind");
+
+      Map.Copy (Region, 1_000_000, Target, Ok);
+      Assert (not Ok, "a read far past the end was allowed");
+
+      --  Close is idempotent and leaves nothing open.
+      Map.Close (Region);
+      Assert (not Map.Is_Open (Region), "the region is open after closing");
+      Map.Close (Region);
+      Assert (not Map.Is_Open (Region), "closing twice reopened the region");
+
+      Map.Copy (Region, 0, Target, Ok);
+      Assert (not Ok, "a closed region served a read");
+
+      --  Nothing to map.
+      Map.Open (Region, "obj/no-such-file-xyzzy", Available);
+      Assert (not Available, "a missing file was mapped");
+      Map.Open (Region, "obj", Available);
+      Assert (not Available, "a directory was mapped");
+
+      Ada.Directories.Delete_File (Path);
+   end Mapping_Reads_And_Refuses;
+
    ----------
    -- Name --
    ----------
@@ -226,6 +329,9 @@ package body Tests.Accounting_Cases is
       Register_Routine
         (T, Backwards_Clock_Yields_No_Duration'Access,
          "a clock that goes backwards yields no elapsed time");
+      Register_Routine
+        (T, Mapping_Reads_And_Refuses'Access,
+         "a mapping reads back what is in the file and refuses the rest");
       Register_Routine
         (T, Rate_Over_No_Time_Is_Zero'Access,
          "a rate over no elapsed time is zero rather than infinite");
