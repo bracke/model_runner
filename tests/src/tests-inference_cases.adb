@@ -4,6 +4,8 @@ with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Memory;
 
 with Model_Runner.Cancellation;
+with Model_Runner.Limits;
+with Model_Runner.Progress;
 with Model_Runner.Platform.Signals;
 
 with Raise_Interrupt;
@@ -18,6 +20,8 @@ with Conformance;
 with Tiny_Model;
 
 package body Tests.Inference_Cases is
+
+   use type Model_Runner.Cancellation.Token_Reference;
 
    use AUnit.Assertions;
    use type Model_Runner.Errors.Error_Code;
@@ -280,6 +284,152 @@ package body Tests.Inference_Cases is
    end Evaluation_Is_Deterministic;
 
    --  A cancelled token commits nothing: the context is exactly what it was.
+   --  An observer that asks for cancellation once it has seen enough stages.
+   --
+   --  Loading reports its progress stage by stage, and the cancellation points
+   --  sit between those stages. Asking from inside the observer is therefore
+   --  the way to arrive at a point in the middle of a load without reaching
+   --  into anything private.
+   type Cancel_After is limited new Model_Runner.Progress.Observer with record
+      Flag  : Model_Runner.Cancellation.Token_Reference := null;
+      After : Natural := 1;
+      Seen  : Natural := 0;
+   end record;
+
+   overriding procedure Notify
+     (Self : in out Cancel_After;
+      Item : Model_Runner.Progress.Event);
+
+   overriding procedure Notify
+     (Self : in out Cancel_After;
+      Item : Model_Runner.Progress.Event)
+   is
+      pragma Unreferenced (Item);
+   begin
+      Self.Seen := Self.Seen + 1;
+      if Self.Seen = Self.After and then Self.Flag /= null then
+         Self.Flag.all.Request;
+      end if;
+   end Notify;
+
+   --  Cancellation is honoured while a model is loading, not only once it is
+   --  generating.
+   --
+   --  The engine says it observes cancellation between parser sections,
+   --  tensors and layers as well as between tokens. Only the token one was
+   --  tested. The others matter more for a large model: loading is where the
+   --  seconds are, and it is where an impatient reader presses Ctrl-C.
+   procedure Cancellation_Stops_A_Load
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image   : B.Byte_Array_Access;
+      Stopped : Natural := 0;
+      Stages  : Natural := 0;
+   begin
+      Tiny_Model.Build (Image);
+
+      --  How many stages a whole load reports, so the sweep below covers
+      --  every one of them rather than a guessed number.
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Counter : aliased Cancel_After := (Flag => null, After => 0, Seen => 0);
+         Item    : Containers.Container;
+         Model   : L.Model;
+         Status  : E.Error_Info;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Model_Runner.Limits.Default_Model_Limits,
+            null, Counter'Unchecked_Access, Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         L.Prepare
+           (Model, Item, Source,
+            Observer => Counter'Unchecked_Access, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not prepare");
+
+         Stages := Counter.Seen;
+         L.Close (Model, Status);
+         Containers.Close (Item);
+      end;
+
+      Assert (Stages > 1,
+              "loading reported" & Natural'Image (Stages)
+              & " stages, too few to cancel between");
+
+      --  Ask at each stage in turn. Every request must either stop the load
+      --  or arrive after it finished; what must never happen is a load that
+      --  was asked to stop and carried on to a usable model.
+      for Point in 1 .. Stages loop
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Flag   : aliased Model_Runner.Cancellation.Token;
+            Asking : aliased Cancel_After :=
+              (Flag => Flag'Unchecked_Access, After => Point, Seen => 0);
+            Item   : Containers.Container;
+            Model  : L.Model;
+            Status : E.Error_Info;
+            Parsed : E.Error_Info;
+         begin
+            Model_Runner.GGUF.Containers.Reader.Parse
+              (Item, Source, Model_Runner.Limits.Default_Model_Limits,
+               Flag'Unchecked_Access, Asking'Unchecked_Access, Parsed);
+
+            if Parsed.Code = E.Generation_Cancelled then
+               Stopped := Stopped + 1;
+            else
+               Assert (E.Is_Ok (Parsed),
+                       "parsing failed for a reason other than cancellation: "
+                       & E.Error_Code'Image (Parsed.Code));
+
+               L.Prepare
+                 (Model, Item, Source,
+                  Cancel   => Flag'Unchecked_Access,
+                  Observer => Asking'Unchecked_Access,
+                  Status   => Status);
+
+               if Status.Code = E.Generation_Cancelled then
+                  Stopped := Stopped + 1;
+               else
+                  Assert (E.Is_Ok (Status),
+                          "preparation failed for a reason other than"
+                          & " cancellation: "
+                          & E.Error_Code'Image (Status.Code));
+               end if;
+
+               L.Close (Model, Status);
+            end if;
+
+            Containers.Close (Item);
+         end;
+      end loop;
+
+      --  Asking during the load has to stop it at least sometimes; if no
+      --  request ever landed, the observation points are not being reached.
+      --  Nine of the eleven stages stop the load. The last two are past the
+      --  final observation point, so a request arriving there has nothing left
+      --  to check it; everything earlier must stop. Asserting only that some
+      --  request landed would pass with a single surviving observation point.
+      --
+      --  What this does and does not pin down, measured rather than assumed:
+      --  removing the check inside the tensor loop fails this test, and so
+      --  does disabling observation everywhere. Removing any one of the other
+      --  three checks in the llama profile does not, because a fixture with
+      --  two layers and twenty-one tensors passes through them too quickly to
+      --  land a request in between. Those three are covered by nothing here.
+      Assert (Stopped >= Stages - 2,
+              "only" & Natural'Image (Stopped) & " of"
+              & Natural'Image (Stages)
+              & " requests made during a load stopped it");
+
+      B.Free (Image);
+   end Cancellation_Stops_A_Load;
+
    procedure Cancellation_Does_Not_Commit
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -561,6 +711,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Evaluation_Is_Deterministic'Access,
          "the same token sequence produces identical logits");
+      Register_Routine
+        (T, Cancellation_Stops_A_Load'Access,
+         "cancellation is honoured while a model is loading");
       Register_Routine
         (T, Cancellation_Does_Not_Commit'Access,
          "a cancelled token leaves the committed context unchanged");

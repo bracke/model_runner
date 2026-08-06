@@ -213,7 +213,8 @@ Every test is deterministic, offline, and needs no downloaded model:
   identifiers name tokens that do not exist, being unable to make the
   tokenizer reach outside itself.
 - **Inference** — preparation, finite logits, run-to-run determinism,
-  cancellation leaving the cache uncommitted, context exhaustion and reset,
+  cancellation leaving the cache uncommitted, a cancellation asked for while
+  the model is still loading stopping the load, context exhaustion and reset,
   out-of-range token rejection, tokenizer round trip, an interrupt reaching the
   cancellation token through a real signal, agreement with the independent
   reference implementation, and a batch producing the same bits as the same
