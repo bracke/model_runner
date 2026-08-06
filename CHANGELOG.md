@@ -192,6 +192,19 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- The quantized decoders had no test of the values they produce. Every other
+  check compared them against themselves -- the fused kernel against the
+  decoder it mirrors, one batch width against another -- and for the k-quant
+  formats the fused path is the decoder, so that check said nothing at all
+  about them. Conformance runs on an F32 model. Three of these decoders had
+  just been rewritten. Golden vectors now check each format against
+  expectations derived by hand from its documented layout; planting a wrong
+  bias in Q6_K or Q4_0 fails them.
+- Four formats had two implementations, and only one was reachable. An error
+  injected into the unused copy of Q4_0 changed nothing and no test noticed.
+  Decode_Block is now Decode_Blocks with a count of one, so there is a single
+  implementation per format, as the package always claimed.
+
 - `Numerics.To_Real` and the tensor kernels raised on a not-a-number instead of
   producing one. Half precision has infinities and not-a-numbers, a model file
   may carry either as a block scale, and reporting that is what `Is_Finite` and

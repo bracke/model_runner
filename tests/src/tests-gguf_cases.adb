@@ -656,6 +656,133 @@ package body Tests.GGUF_Cases is
               "the set of fused formats changed without this test noticing");
    end Fused_Dot_Matches_Decoder;
 
+   --  Decoded values, against expectations worked out from the layout.
+   --
+   --  Every other check on these decoders compares them with themselves: the
+   --  fused kernel against the decoder it is meant to match, one batch width
+   --  against another. For the k-quant formats the fused path *is* the
+   --  decoder, so that check says nothing at all about them, and conformance
+   --  runs on an F32 model. Three of these decoders were rewritten with no
+   --  independent test of what they produce.
+   --
+   --  These blocks are built byte by byte and the expected values derived by
+   --  hand from the documented layouts, choosing scales of one and offsets of
+   --  zero so the arithmetic stays checkable by eye. A sign, a bias or a
+   --  scale in the wrong place fails here.
+   procedure Decoders_Produce_The_Documented_Values
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  Half precision 1.0 is 16#3C00#, little-endian.
+      One_Low  : constant B.Byte := 16#00#;
+      One_High : constant B.Byte := 16#3C#;
+
+      Decoded : N.Real_Array (0 .. 255);
+      Ok      : Boolean;
+
+      procedure Check
+        (Format   : Model_Runner.GGUF.Tensor_Type;
+         Bytes    : B.Byte_Array;
+         At_Index : N.Element_Count;
+         Expected : N.Real)
+      is
+         Data : B.Byte_Array_Access;
+      begin
+         B.Allocate (Bytes'Length, Data);
+         Data.all := Bytes;
+
+         Q.Decode_Blocks (Format, Data.all, 0, 1, Decoded, Ok);
+         Assert (Ok, "decode failed for "
+                 & Model_Runner.GGUF.Type_Name (Format));
+         Assert
+           (Decoded (At_Index) = Expected,
+            Model_Runner.GGUF.Type_Name (Format) & " element"
+            & N.Element_Count'Image (At_Index) & " decoded as"
+            & N.Real'Image (Decoded (At_Index)) & ", expected"
+            & N.Real'Image (Expected));
+
+         B.Free (Data);
+      end Check;
+   begin
+      --  Q8_0: one scale, then thirty-two signed bytes. Value is scale times
+      --  the byte, so with a scale of one the value is the byte itself.
+      declare
+         Block : B.Byte_Array (0 .. 33) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;
+         Block (2) := 7;        --  element 0
+         Block (3) := 16#FF#;   --  element 1, minus one
+         Block (33) := 100;     --  element 31
+         Check (Model_Runner.GGUF.Type_Q8_0, Block, 0, 7.0);
+         Check (Model_Runner.GGUF.Type_Q8_0, Block, 1, -1.0);
+         Check (Model_Runner.GGUF.Type_Q8_0, Block, 31, 100.0);
+      end;
+
+      --  Q4_0: sixteen bytes of two nibbles, both biased by eight. The low
+      --  nibble of byte j is element j and the high nibble element j + 16.
+      declare
+         Block : B.Byte_Array (0 .. 17) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;
+         Block (2) := 16#F1#;   --  low 1, high 15
+         Check (Model_Runner.GGUF.Type_Q4_0, Block, 0, 1.0 - 8.0);
+         Check (Model_Runner.GGUF.Type_Q4_0, Block, 16, 15.0 - 8.0);
+      end;
+
+      --  Q4_K: value is d times the sub-block scale times the nibble, less
+      --  dmin times the sub-block minimum. With d one, dmin zero, and the
+      --  first four sub-block scales one, the value is the nibble.
+      declare
+         Block : B.Byte_Array (0 .. 143) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;      --  d = 1
+         Block (2) := 0;
+         Block (3) := 0;             --  dmin = 0
+         Block (4) := 1;             --  sub-block 0 scale
+         Block (5) := 1;             --  sub-block 1 scale
+         Block (16) := 16#32#;       --  low nibble 2, high nibble 3
+         Check (Model_Runner.GGUF.Type_Q4_K, Block, 0, 2.0);
+         Check (Model_Runner.GGUF.Type_Q4_K, Block, 32, 3.0);
+      end;
+
+      --  Q5_K: as Q4_K, with a fifth bit held apart. With that bit clear the
+      --  value is the nibble again; with it set the nibble gains sixteen.
+      declare
+         Block : B.Byte_Array (0 .. 175) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;
+         Block (4) := 1;             --  sub-block 0 scale
+         Block (5) := 1;             --  sub-block 1 scale
+         Block (16) := 16#01#;       --  the fifth bits: element 0 set
+         Block (48) := 16#32#;       --  quants: low 2, high 3
+         Check (Model_Runner.GGUF.Type_Q5_K, Block, 0, 2.0 + 16.0);
+         Check (Model_Runner.GGUF.Type_Q5_K, Block, 1, 0.0);
+      end;
+
+      --  Q6_K: six bits per element, biased by thirty-two, scaled by a
+      --  signed sub-block scale. With every scale one and every quant zero,
+      --  each value is the bias alone.
+      declare
+         Block : B.Byte_Array (0 .. 209) := [others => 0];
+      begin
+         for Index in 192 .. 207 loop
+            Block (B.Byte_Count (Index)) := 1;
+         end loop;
+         Block (208) := One_Low;
+         Block (209) := One_High;
+         Check (Model_Runner.GGUF.Type_Q6_K, Block, 0, -32.0);
+
+         --  Two high bits of one lift the first element by sixteen.
+         Block (128) := 16#01#;
+         Check (Model_Runner.GGUF.Type_Q6_K, Block, 0, -16.0);
+      end;
+   end Decoders_Produce_The_Documented_Values;
+
    --  Metadata is shown with its type and value, and an array is described
    --  rather than dumped.
    --
@@ -884,6 +1011,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Metadata_Values_Are_Typed_And_Bounded'Access,
          "metadata is shown with its type and value, arrays described not dumped");
+      Register_Routine
+        (T, Decoders_Produce_The_Documented_Values'Access,
+         "each decoder produces the values its layout documents");
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");

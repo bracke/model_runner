@@ -100,9 +100,25 @@ package body Model_Runner.Quantization is
       Data   : B.Byte_Array;
       Offset : B.Byte_Count;
       Target : out Block_Buffer;
-      Ok     : out Boolean) is
+      Ok     : out Boolean)
+   is
+      Per : constant Element_Count :=
+        Element_Count (G.Block_Elements (Format));
    begin
-      Decode_One (Format, Data, Offset, Target, Ok);
+      --  A span of one. Routing through the same code is what keeps a format
+      --  from having two implementations, one of them untested: it did, and
+      --  an error injected into the unused copy went unnoticed.
+      if Per = 0 or else Per > Target'Length then
+         Target := [others => 0.0];
+         Ok := False;
+         return;
+      end if;
+
+      Decode_Blocks (Format, Data, Offset, 1, Target (0 .. Per - 1), Ok);
+
+      if not Ok then
+         Target := [others => 0.0];
+      end if;
    end Decode_Block;
 
    --------------------
@@ -617,51 +633,11 @@ package body Model_Runner.Quantization is
          return;
       end if;
 
+      --  Only the k-quant formats reach here: Decode_Blocks unpacks the
+      --  others inline and delegates the rest to this. A second copy of the
+      --  simple layouts lived here and nothing called it, so nothing tested
+      --  it either.
       case Format is
-         when G.Type_F32 =>
-            declare
-               Present : Boolean;
-            begin
-               Target (Target'First + 0) := B.Get_F32 (Data, Offset, Present);
-               Ok := Present;
-            end;
-
-         when G.Type_F16 =>
-            Target (Target'First + 0) := Scale (Data, Offset);
-            Ok := True;
-
-         when G.Type_Q4_0 =>
-            --  One scale, then sixteen bytes each holding two nibbles. The low
-            --  nibble of byte j is element j and the high nibble is element
-            --  j + 16; both are biased by eight.
-            declare
-               D : constant Real := Scale (Data, Offset);
-            begin
-               for J in 0 .. 15 loop
-                  declare
-                     Packed : constant Interfaces.Unsigned_8 :=
-                       Raw (Data, Offset + 2 + B.Byte_Count (J));
-                  begin
-                     Target (Target'First + Element_Count (J)) :=
-                       D * Real (Integer (Packed and 16#0F#) - 8);
-                     Target (Target'First + Element_Count (J + 16)) :=
-                       D * Real (Integer (Interfaces.Shift_Right (Packed, 4)) - 8);
-                  end;
-               end loop;
-               Ok := True;
-            end;
-
-         when G.Type_Q8_0 =>
-            declare
-               D : constant Real := Scale (Data, Offset);
-            begin
-               for J in 0 .. 31 loop
-                  Target (Target'First + Element_Count (J)) :=
-                    D * Real (Signed (Data, Offset + 2 + B.Byte_Count (J)));
-               end loop;
-               Ok := True;
-            end;
-
          when G.Type_Q4_K =>
             declare
                --  The block was bounds-checked at entry, so every index below

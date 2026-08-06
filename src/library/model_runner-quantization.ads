@@ -5,7 +5,14 @@ with Model_Runner.Numerics;
 --  Reference decoders for the supported quantized block formats.
 --
 --  Every format has one decoder here, written from the block layout and
---  nothing else, and the golden vectors check it.
+--  nothing else. Decode_Blocks unpacks the four simple layouts inline and
+--  delegates the k-quants to a per-block routine; Decode_Block is that same
+--  code with a count of one. It has not always been so: four formats had a
+--  second copy that nothing called, so nothing tested it, and an error
+--  planted in one went unnoticed.
+--
+--  Golden vectors check what the decoders produce, against expectations
+--  derived by hand from the layouts above rather than from the code.
 --
 --  Accumulate_Dot reads two of those layouts a second time, to multiply
 --  without decoding first. That is a deliberate exception to one-reader-per
