@@ -57,8 +57,17 @@ package Model_Runner.Tokenizer is
    --
    --  @param Item Vocabulary to fill in; closed first.
    --  @param Source Validated container.
+   --  A key that is absent and a key that is wrong are not the same. Not every
+   --  model declares every special token, so a missing identifier leaves it
+   --  unset. An identifier that is present but names no token, or a flag that
+   --  is present but is not a boolean, stops the load: ignoring it would
+   --  tokenize as though the file had said nothing, and change the prompt the
+   --  model sees without saying so. Minus one is accepted and means the model
+   --  has no such token, which is how files without one write it.
+   --
    --  @param Bounds Limits applied to the vocabulary size and token lengths.
-   --  @param Status Success or a Tokenizer diagnostic.
+   --  @param Status Success, a Tokenizer diagnostic, or the container's own
+   --    diagnostic for a metadata key that is present and wrong.
    procedure Load
      (Item   : in out Vocabulary;
       Source : Model_Runner.GGUF.Containers.Container;

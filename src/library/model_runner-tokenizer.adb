@@ -7,6 +7,8 @@ with Model_Runner.UTF8;
 
 package body Model_Runner.Tokenizer is
 
+   use type Model_Runner.Errors.Error_Code;
+
    package E renames Model_Runner.Errors;
    package Containers renames Model_Runner.GGUF.Containers;
 
@@ -348,29 +350,63 @@ package body Model_Runner.Tokenizer is
          end;
       end loop;
 
-      --  Special tokens. A missing key leaves the identifier unset rather than
-      --  failing: not every model declares every special token.
-      Containers.Get_Integer
-        (Source, "tokenizer.ggml.bos_token_id", 0,
-         Long_Long_Integer (Count - 1), Number, Scratch);
-      if E.Is_Ok (Scratch) then
-         Item.Beginning := Token_Id (Number);
-      end if;
+      --  Special tokens.
+      --
+      --  A missing key leaves the identifier unset: not every model declares
+      --  every special token. A key that is present but names no token is a
+      --  different thing and is refused. Treating the two alike meant a file
+      --  declaring token 999999 tokenized as though it had declared nothing,
+      --  which changes the prompt the model sees without saying so.
+      --
+      --  Minus one is accepted and means the model has no such token. Files
+      --  that carry the key without having the token write it that way, and
+      --  it is already this vocabulary's No_Token.
+      declare
+         --  Read one identifier. Failed is set when the load cannot continue.
+         procedure Special
+           (Key    : String;
+            Target : in out Token_Id;
+            Failed : out Boolean)
+         is
+            Local : E.Error_Info;
+            Value : Long_Long_Integer;
+         begin
+            Failed := False;
 
-      Containers.Get_Integer
-        (Source, "tokenizer.ggml.eos_token_id", 0,
-         Long_Long_Integer (Count - 1), Number, Scratch);
-      if E.Is_Ok (Scratch) then
-         Item.Ending := Token_Id (Number);
-      end if;
+            Containers.Get_Integer
+              (Source, Key, Long_Long_Integer (No_Token),
+               Long_Long_Integer (Count - 1), Value, Local);
 
-      Containers.Get_Integer
-        (Source, "tokenizer.ggml.unknown_token_id", 0,
-         Long_Long_Integer (Count - 1), Number, Scratch);
-      if E.Is_Ok (Scratch) then
-         Item.Unknown := Token_Id (Number);
-      end if;
+            if E.Is_Ok (Local) then
+               Target := Token_Id (Value);
+            elsif Local.Code /= E.GGUF_Missing_Metadata_Key then
+               --  Reported as the container saw it: the diagnostic already
+               --  names the key and whether it was the type or the value.
+               Status := Local;
+               Failed := True;
+            end if;
+         end Special;
 
+         Refused : Boolean;
+      begin
+         Special ("tokenizer.ggml.bos_token_id", Item.Beginning, Refused);
+         if Refused then
+            return;
+         end if;
+
+         Special ("tokenizer.ggml.eos_token_id", Item.Ending, Refused);
+         if Refused then
+            return;
+         end if;
+
+         Special ("tokenizer.ggml.unknown_token_id", Item.Unknown, Refused);
+         if Refused then
+            return;
+         end if;
+      end;
+
+      --  The same rule for the flags: absent means the model does not say,
+      --  present but not a boolean means the file is wrong about itself.
       declare
          Flag : Boolean;
       begin
@@ -378,12 +414,18 @@ package body Model_Runner.Tokenizer is
            (Source, "tokenizer.ggml.add_bos_token", Flag, Scratch);
          if E.Is_Ok (Scratch) then
             Item.Add_Beginning := Flag;
+         elsif Scratch.Code /= E.GGUF_Missing_Metadata_Key then
+            Status := Scratch;
+            return;
          end if;
 
          Containers.Get_Boolean
            (Source, "tokenizer.ggml.add_eos_token", Flag, Scratch);
          if E.Is_Ok (Scratch) then
             Item.Add_End := Flag;
+         elsif Scratch.Code /= E.GGUF_Missing_Metadata_Key then
+            Status := Scratch;
+            return;
          end if;
       end;
 

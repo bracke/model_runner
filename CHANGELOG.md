@@ -221,6 +221,18 @@ wall and 16.0 s of processor time.
   quantized row is a whole number of thirty-two element blocks and the narrow
   model cannot hold one.
 
+### Changed
+
+- A tokenizer special-token identifier that is present but names no token now
+  refuses the model instead of being ignored, as does a present-but-mistyped
+  `add_bos_token` or `add_eos_token`. A missing key still leaves the identifier
+  unset, because not every model declares every special token, and `-1` is
+  accepted as an explicit absence. Previously all three cases were treated
+  alike, so a file declaring token 999999 tokenized as though it had declared
+  nothing: the prompt the model saw changed and nothing said so. The container
+  accessors have always separated missing from mistyped from out-of-range; the
+  tokenizer was discarding that distinction.
+
 ### Fixed
 
 - A verbose run with more than one worker hung, about two runs in three. The
