@@ -422,12 +422,12 @@ package body Tests.Inference_Cases is
       --  because the other catches the request at the next stage, so this
       --  test holds the pair rather than either member.
       --
-      --  The check inside the evaluation layer loop belongs to the test below
-      --  and not to this one. The second evaluation check is held by neither,
-      --  and the parser's own checks are not distinguished here either: with
-      --  them disabled the preparation checks still stop nine of the eleven.
-      --  Worth writing down, because a test that stops a load looks from the
-      --  outside as though it must cover every point that could stop one.
+      --  The checks inside the two evaluation loops, and the parser's own,
+      --  belong to the standing-request test above rather than to this one:
+      --  with the parser's disabled, the preparation checks here still stop
+      --  nine of the eleven. Worth writing down, because a test that stops a
+      --  load looks from the outside as though it must cover every point that
+      --  could stop one.
       Assert (Stopped >= Stages - 2,
               "only" & Natural'Image (Stopped) & " of"
               & Natural'Image (Stages)
@@ -435,6 +435,101 @@ package body Tests.Inference_Cases is
 
       B.Free (Image);
    end Cancellation_Stops_A_Load;
+
+   --  A request that is already standing stops the parser and the batched
+   --  forward pass, and leaves the cache where it was.
+   --
+   --  These are the two observation points no test held. The batched pass is
+   --  the one that matters in use: prefill is the long part of answering a
+   --  large prompt, so it is where an interrupt actually lands, and a request
+   --  arriving between its layers has to leave the cache describing exactly
+   --  the context that was valid before the call.
+   --
+   --  Asking before the call rather than during it is deliberate. A request
+   --  raised from another task would land somewhere unpredictable in a model
+   --  this small, and the point being checked is that the observation happens
+   --  at all, not when.
+   procedure Standing_Cancellation_Stops_Each_Stage
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      --  The parser.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Flag   : aliased Model_Runner.Cancellation.Token;
+         Item   : Containers.Container;
+         Status : E.Error_Info;
+      begin
+         Flag.Request;
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Model_Runner.Limits.Default_Model_Limits,
+            Flag'Unchecked_Access, null, Status);
+
+         Assert (Status.Code = E.Generation_Cancelled,
+                 "a standing request did not stop the parser: "
+                 & E.Error_Code'Image (Status.Code));
+         Containers.Close (Item);
+      end;
+
+      --  The batched forward pass, and the single-token one beside it.
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Under   : Harness (Held'Access);
+         Live    : L.Session;
+         Flag    : aliased Model_Runner.Cancellation.Token;
+         Status  : E.Error_Info;
+         Logits  : Logit_Vector;
+         Before  : Natural;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open");
+
+         --  Evaluate something first, so the cache holds a position that a
+         --  cancelled call could damage.
+         L.Evaluate
+           (Live, Under.Ready,
+            Model_Runner.Tokenizer.Token_Id (1), Logits, Status => Status);
+         Assert (E.Is_Ok (Status), "the first token did not evaluate");
+         Before := L.Position (Live);
+         Assert (Before > 0, "nothing was committed to cancel against");
+
+         Flag.Request;
+
+         L.Evaluate_Batch
+           (Live, Under.Ready,
+            [Model_Runner.Tokenizer.Token_Id (2),
+             Model_Runner.Tokenizer.Token_Id (3)],
+            Logits, Flag'Unchecked_Access, Status);
+         Assert (Status.Code = E.Generation_Cancelled,
+                 "a standing request did not stop the batched pass: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = Before,
+                 "a cancelled batch moved the cache from"
+                 & Natural'Image (Before)
+                 & " to" & Natural'Image (L.Position (Live)));
+
+         L.Evaluate
+           (Live, Under.Ready, Model_Runner.Tokenizer.Token_Id (2),
+            Logits, Flag'Unchecked_Access, Status);
+         Assert (Status.Code = E.Generation_Cancelled,
+                 "a standing request did not stop the single-token pass: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = Before,
+                 "a cancelled token moved the cache");
+
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end Standing_Cancellation_Stops_Each_Stage;
 
    procedure Cancellation_Does_Not_Commit
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -717,6 +812,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Evaluation_Is_Deterministic'Access,
          "the same token sequence produces identical logits");
+      Register_Routine
+        (T, Standing_Cancellation_Stops_Each_Stage'Access,
+         "a standing request stops the parser and the batched pass");
       Register_Routine
         (T, Cancellation_Stops_A_Load'Access,
          "cancellation is honoured while a model is loading");

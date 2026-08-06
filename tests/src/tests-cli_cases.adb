@@ -6,7 +6,9 @@ with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
 with Model_Runner.CLI.Options;
+with Model_Runner.Cancellation;
 with Model_Runner.Errors;
+with Model_Runner.Progress;
 with Model_Runner.Limits;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
@@ -774,6 +776,139 @@ package body Tests.CLI_Cases is
       return AUnit.Format ("command line and generation");
    end Name;
 
+   --  An observer that asks for cancellation when a chosen stage is reported.
+   type Cancel_On_Stage is limited new Model_Runner.Progress.Observer with record
+      Flag  : Model_Runner.Cancellation.Token_Reference := null;
+      Stage : Model_Runner.Progress.Generation_Stage :=
+        Model_Runner.Progress.Token_Produced;
+   end record;
+
+   overriding procedure Notify
+     (Self : in out Cancel_On_Stage;
+      Item : Model_Runner.Progress.Event);
+
+   overriding procedure Notify
+     (Self : in out Cancel_On_Stage;
+      Item : Model_Runner.Progress.Event)
+   is
+      use type Model_Runner.Progress.Event_Kind;
+      use type Model_Runner.Progress.Generation_Stage;
+      use type Model_Runner.Cancellation.Token_Reference;
+   begin
+      if Self.Flag /= null
+        and then Item.Kind = Model_Runner.Progress.Generation_Event
+        and then Item.Generation = Self.Stage
+      then
+         Self.Flag.all.Request;
+      end if;
+   end Notify;
+
+   --  A cancelled generation stops, in prefill and in the decode loop alike.
+   --
+   --  Generation checks for cancellation twice, between prefill batches and
+   --  between produced tokens, and this test does not hold either of them:
+   --  measured by disabling each in turn, nothing fails, because the forward
+   --  pass below observes the same request and returns the same code. They
+   --  stop the work a batch or a token earlier, which no test of the outcome
+   --  can see.
+   --
+   --  What it does hold is the behaviour a reader depends on: a run asked to
+   --  stop reports that it stopped, one asked before it began produces
+   --  nothing and leaves the cache at zero, and one asked while decoding
+   --  stops short of its allowance.
+   procedure Cancelled_Generation_Stops
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      --  Standing before the run starts: nothing is produced at all.
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Under   : Harness (Held'Access);
+         Session : L.Session;
+         Stop    : Model_Runner.Stops.Set;
+         Sink    : aliased Capture_Sink;
+         Flag    : aliased Model_Runner.Cancellation.Token;
+         Request : Gen.Request;
+         Outcome : Gen.Result;
+         Status  : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Session, Under.Ready, Status => Status);
+         Model_Runner.Stops.Open (Stop);
+
+         Request.Max_Tokens := 4;
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+         Flag.Request;
+
+         Gen.Generate
+           (Under.Ready, Session, "ab", Request, Stop,
+            Sink'Unchecked_Access, null, null, null,
+            Flag'Unchecked_Access, Outcome => Outcome);
+
+         Assert (Outcome.Reason = Gen.Cancelled,
+                 "a standing request did not cancel the run: "
+                 & Gen.Completion_Reason'Image (Outcome.Reason));
+         Assert (Outcome.Generated_Tokens = 0,
+                 "a run cancelled before it began produced"
+                 & Natural'Image (Outcome.Generated_Tokens) & " tokens");
+         Assert (Captured (Sink) = "",
+                 "a run cancelled before it began wrote: " & Captured (Sink));
+         Assert (L.Position (Session) = 0,
+                 "a run cancelled before it began moved the cache to"
+                 & Natural'Image (L.Position (Session)));
+
+         Gen.Release (Outcome);
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Session);
+      end;
+
+      --  Asked for once the first token has been produced, which is inside
+      --  the decode loop rather than before it.
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Under   : Harness (Held'Access);
+         Session : L.Session;
+         Stop    : Model_Runner.Stops.Set;
+         Sink    : aliased Capture_Sink;
+         Flag    : aliased Model_Runner.Cancellation.Token;
+         Asking  : aliased Cancel_On_Stage :=
+           (Flag  => Flag'Unchecked_Access,
+            Stage => Model_Runner.Progress.Token_Produced);
+         Request : Gen.Request;
+         Outcome : Gen.Result;
+         Status  : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Session, Under.Ready, Status => Status);
+         Model_Runner.Stops.Open (Stop);
+
+         Request.Max_Tokens := 8;
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+
+         Gen.Generate
+           (Under.Ready, Session, "ab", Request, Stop,
+            Sink'Unchecked_Access, Asking'Unchecked_Access, null, null,
+            Flag'Unchecked_Access, Outcome => Outcome);
+
+         Assert (Outcome.Reason = Gen.Cancelled,
+                 "a request made during decoding did not cancel the run: "
+                 & Gen.Completion_Reason'Image (Outcome.Reason));
+         Assert (Outcome.Generated_Tokens < Request.Max_Tokens,
+                 "a cancelled run produced its whole allowance");
+
+         Gen.Release (Outcome);
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Session);
+      end;
+
+      B.Free (Image);
+   end Cancelled_Generation_Stops;
+
    --  The end token ends the run, and nothing of it reaches the output.
    --
    --  This is how a real model finishes a reply, and it was the one completion
@@ -1292,6 +1427,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Retained_Text_Matches'Access,
          "retained text matches what was streamed");
+      Register_Routine
+        (T, Cancelled_Generation_Stops'Access,
+         "a cancelled generation stops in prefill and in the decode loop");
       Register_Routine
         (T, End_Of_Sequence_Ends_Run'Access,
          "the end token ends the run and reaches no output");
