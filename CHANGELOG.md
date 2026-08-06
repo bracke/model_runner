@@ -216,6 +216,27 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- A prompt read from standard input was read without a bound. Input that was
+  one very long line was placed on the stack in a single piece, and the
+  resulting `Storage_Error` was reported as `MR-IO-0002`, a failure to read;
+  the same volume of text as short lines ended as `MR-INTERNAL-0002`, an
+  internal failure. Neither said that the prompt was simply too large. The
+  reader now fills a bounded buffer, refuses input past the limit rather than
+  shortening it silently, and reports the new `MR-IO-0009`. Standard input is
+  the one prompt source whose size is not known in advance, and it was the one
+  that did not check.
+
+- Diagnostics about standard input rendered as bare message keys, such as
+  `<error.io.read_failed>`, telling the reader nothing. The messages are
+  written for files and ask for a path, standard input has none, and a message
+  whose argument is missing falls back to naming itself. Those diagnostics now
+  pass the localized name for standard input and read as sentences.
+
+- Prompt reading and diagnostics now use the current input and current error
+  files rather than the standard ones. They are the same files unless a
+  program redirects them, which this one does not, so behaviour is unchanged;
+  it is what allows a test to supply input and read back the diagnostic.
+
 - `Finalize_Plan` said it summed a plan's components. It does not, and should
   not: file-backed bytes are excluded because a mapped model lives in the
   operating system's pages, and a safety margin is added on top. Writing the

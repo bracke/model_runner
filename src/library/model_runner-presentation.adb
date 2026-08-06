@@ -80,7 +80,7 @@ package body Model_Runner.Presentation is
    procedure Close_Progress (Item : in out Console) is
    begin
       if Item.Progress_Open then
-         Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
+         Ada.Text_IO.New_Line (Ada.Text_IO.Current_Error);
          Item.Progress_Open := False;
       end if;
    end Close_Progress;
@@ -114,7 +114,7 @@ package body Model_Runner.Presentation is
    procedure Error_Line (Item : in out Console; Text : String) is
    begin
       Close_Progress (Item);
-      Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Text);
+      Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Text);
    exception
       when Ada.IO_Exceptions.Device_Error | Ada.IO_Exceptions.Use_Error =>
          null;
@@ -219,8 +219,8 @@ package body Model_Runner.Presentation is
    procedure Put_Prompt (Item : in out Console; Key : String) is
    begin
       Close_Progress (Item);
-      Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, Message (Item, Key) & ' ');
-      Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+      Ada.Text_IO.Put (Ada.Text_IO.Current_Error, Message (Item, Key) & ' ');
+      Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
    exception
       when others =>
          null;
@@ -470,7 +470,7 @@ package body Model_Runner.Presentation is
                Loc.Named ("total", T.Image (Long_Long_Integer (Item.Total)))]);
       begin
          Close_Progress (Owner);
-         Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Line);
+         Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Line);
       end;
    exception
       --  An observer must never fail the work it is observing.

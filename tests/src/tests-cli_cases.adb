@@ -4,8 +4,10 @@ with Interfaces;
 
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
+with Model_Runner.CLI.Driver;
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
+with Model_Runner.Limits;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Llama;
@@ -758,6 +760,175 @@ package body Tests.CLI_Cases is
       return AUnit.Format ("command line and generation");
    end Name;
 
+   --  A prompt taken from standard input is bounded, and what it refuses it
+   --  says plainly.
+   --
+   --  This is the only prompt source with no size known in advance, and it was
+   --  the one that read without a bound: input of one very long line was put on
+   --  the stack and the Storage_Error that followed was reported as a failure
+   --  to read, while input of many short lines produced an internal error.
+   --  Neither told the reader that the prompt was simply too big.
+   procedure Standard_Input_Prompt_Is_Bounded
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model  : constant String := "obj/stdin-test-model.gguf";
+      Input  : constant String := "obj/stdin-test-input.txt";
+      Errors : constant String := "obj/stdin-test-errors.txt";
+
+      Limit : constant Natural :=
+        Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes;
+
+      --  Run the program over Content on standard input and return what it
+      --  wrote to standard error. The exit status comes back in Status.
+      function Diagnostics_For
+        (Content : String;
+         Repeat  : Natural;
+         Status  : out Natural) return String
+      is
+         Handle : File_Type;
+         Result : Model_Runner.Text.Bounded;
+      begin
+         Create (Handle, Out_File, Input);
+         for Index in 1 .. Repeat loop
+            Put (Handle, Content);
+         end loop;
+         Close (Handle);
+
+         declare
+            Source     : Fixed_Arguments;
+            In_File_Id : File_Type;
+            Err_File   : File_Type;
+         begin
+            Add (Source, "run");
+            Add (Source, Model);
+            Add (Source, "--max-tokens");
+            Add (Source, "1");
+
+            Open (In_File_Id, In_File, Input);
+            Create (Err_File, Out_File, Errors);
+
+            --  Both are restored below. The program reads the current input
+            --  and writes the current error, so a test can supply them.
+            Set_Input (In_File_Id);
+            Set_Error (Err_File);
+
+            begin
+               Model_Runner.CLI.Driver.Run (Source, Status);
+            exception
+               when others =>
+                  Status := 8;
+            end;
+
+            Set_Input (Standard_Input);
+            Set_Error (Standard_Error);
+            Close (In_File_Id);
+            Close (Err_File);
+         end;
+
+         --  Only the first line is wanted, and only its beginning.
+         declare
+            Handle_In : File_Type;
+         begin
+            Open (Handle_In, In_File, Errors);
+            if not End_Of_File (Handle_In) then
+               declare
+                  Room : String (1 .. 400);
+                  Last : Natural;
+               begin
+                  Get_Line (Handle_In, Room, Last);
+                  Result := Model_Runner.Text.To_Bounded (Room (1 .. Last));
+               end;
+            end if;
+            Close (Handle_In);
+         end;
+
+         return Model_Runner.Text.To_String (Result);
+      end Diagnostics_For;
+
+      --  Report whether Needle occurs in Haystack.
+      function Contains (Haystack, Needle : String) return Boolean is
+      begin
+         if Needle'Length > Haystack'Length then
+            return False;
+         end if;
+         for Start in Haystack'First .. Haystack'Last - Needle'Length + 1 loop
+            if Haystack (Start .. Start + Needle'Length - 1) = Needle then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Contains;
+
+      Status : Natural;
+   begin
+      Tiny_Model.Write (Model);
+
+      --  One line longer than the limit. This is the shape that used to be
+      --  put on the stack in one piece.
+      declare
+         Line : constant String (1 .. 1024) := [others => 'a'];
+         Text : constant String :=
+           Diagnostics_For (Line, Limit / Line'Length + 1, Status);
+      begin
+         Assert (Status = 6,
+                 "one over-long line gave exit status" & Natural'Image (Status)
+                 & " rather than an input failure");
+         Assert (Contains (Text, "MR-IO-0009"),
+                 "an over-long line was not reported as too large: " & Text);
+         Assert (not Contains (Text, "<error."),
+                 "the diagnostic rendered as a bare message key: " & Text);
+      end;
+
+      --  The same amount of text as many short lines, which used to end as an
+      --  internal error.
+      declare
+         Line : constant String := "abcdefghijklmno" & ASCII.LF;
+         Text : constant String :=
+           Diagnostics_For (Line, Limit / Line'Length + 1, Status);
+      begin
+         Assert (Status = 6,
+                 "many short lines gave exit status" & Natural'Image (Status)
+                 & " rather than an input failure");
+         Assert (Contains (Text, "MR-IO-0009"),
+                 "short lines over the limit were not reported as too large: "
+                 & Text);
+      end;
+
+      --  Input that is not UTF-8 is refused, and the message says so rather
+      --  than naming a key: standard input has no path, and the message for
+      --  this condition asks for one.
+      declare
+         Text : constant String :=
+           Diagnostics_For
+             ("hello " & Character'Val (16#FF#) & Character'Val (16#FE#),
+              1, Status);
+      begin
+         Assert (Status = 6,
+                 "invalid UTF-8 gave exit status" & Natural'Image (Status));
+         Assert (Contains (Text, "MR-IO-0006"),
+                 "invalid UTF-8 was not reported as such: " & Text);
+         Assert (not Contains (Text, "<error."),
+                 "the diagnostic rendered as a bare message key: " & Text);
+      end;
+
+      --  And a prompt within the limit is read rather than refused. The tiny
+      --  model's context is far too small to answer it, which is a different
+      --  complaint and proves the prompt got through.
+      declare
+         Text : constant String := Diagnostics_For ("hello", 1, Status);
+      begin
+         Assert (Status /= 6,
+                 "an acceptable prompt was refused as input failure: " & Text);
+      end;
+
+      Ada.Directories.Delete_File (Model);
+      Ada.Directories.Delete_File (Input);
+      Ada.Directories.Delete_File (Errors);
+   end Standard_Input_Prompt_Is_Bounded;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -795,6 +966,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Retained_Text_Matches'Access,
          "retained text matches what was streamed");
+      Register_Routine
+        (T, Standard_Input_Prompt_Is_Bounded'Access,
+         "a prompt from standard input is bounded and refused plainly");
       Register_Routine
         (T, Reference_Comparison_Works'Access,
          "the reference comparison accepts a match and rejects a mismatch");

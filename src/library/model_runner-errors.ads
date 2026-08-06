@@ -97,6 +97,7 @@ package Model_Runner.Errors is
       IO_Invalid_UTF8,
       IO_Output_Closed,
       IO_Seek_Failed,
+      IO_Input_Too_Large,
 
       --  GGUF container.
       GGUF_Truncated,

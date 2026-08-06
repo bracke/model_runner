@@ -170,52 +170,92 @@ package body Model_Runner.CLI.Execute is
          E.Add_Text (Status, "path", Path, E.Param_Path);
    end Read_File;
 
-   --  Read standard input to end of file.
+   --  Read standard input to end of file, subject to a size limit.
+   --
+   --  Name is what the diagnostics call this source. Every message here is
+   --  written for a file and asks for a path; standard input has none, and a
+   --  message whose argument is missing renders as its own key, so the reader
+   --  is told nothing at all. Passing the localized name for standard input
+   --  gives "cannot read standard input" rather than a bare identifier.
    procedure Read_Standard_Input
-     (Limit  : Natural;
+     (Name   : String;
+      Limit  : Natural;
       Result : out Opt.Text_Access;
       Status : out E.Error_Info)
    is
       use Ada.Text_IO;
-      Buffer : Opt.Text_Access := new String (1 .. Limit);
+
+      --  One byte past the limit, so that input which is exactly at the limit
+      --  is accepted and anything beyond it is seen rather than truncated.
+      Buffer : Opt.Text_Access := new String (1 .. Limit + 1);
       Filled : Natural := 0;
    begin
       Status := E.Success;
       Result := null;
 
-      while not End_Of_File (Standard_Input) loop
+      while not End_Of_File (Current_Input) loop
          declare
-            Line : constant String := Get_Line (Standard_Input);
+            Last : Natural;
          begin
-            exit when Filled + Line'Length + 1 > Buffer.all'Length;
-            if Line'Length > 0 then
-               Buffer.all (Filled + 1 .. Filled + Line'Length) := Line;
-               Filled := Filled + Line'Length;
-            end if;
-            if not End_Of_File (Standard_Input) then
-               Filled := Filled + 1;
-               Buffer.all (Filled) := ASCII.LF;
+            exit when Filled >= Buffer.all'Length;
+
+            --  The procedure form reads into the buffer. The function form
+            --  returns the line as a String, so input that is one very long
+            --  line puts the whole of it on the stack, and the Storage_Error
+            --  that follows is reported as a failure to read -- which is not
+            --  what went wrong. Read_File avoids this for the same reason.
+            Get_Line
+              (Current_Input,
+               Buffer.all (Filled + 1 .. Buffer.all'Length), Last);
+
+            --  Last short of the end means the separator was reached rather
+            --  than the buffer filling, so the line genuinely ended here.
+            if Last < Buffer.all'Length and then not End_Of_File (Current_Input)
+            then
+               Buffer.all (Last + 1) := ASCII.LF;
+               Filled := Last + 1;
+            else
+               Filled := Last;
             end if;
          end;
       end loop;
 
-      declare
-         Content : constant String := Buffer.all (1 .. Filled);
-      begin
-         if not Model_Runner.UTF8.Is_Valid (Content) then
-            Free_Text (Buffer);
-            Status := E.Make (E.IO_Invalid_UTF8);
-            return;
-         end if;
-         Result := new String'(Content);
-      end;
+      --  Over the limit is refused, not shortened. Answering a prompt the
+      --  reader did not finish writing is worse than declining to answer.
+      if Filled > Limit then
+         Free_Text (Buffer);
+         Status := E.Make (E.IO_Input_Too_Large);
+         E.Add_Text (Status, "path", Name, E.Param_Path);
+         E.Add_Integer
+           (Status, "limit", Long_Long_Integer (Limit), E.Param_Bytes);
+         return;
+      end if;
 
+      --  Validated in place and copied once. Binding the content to a local
+      --  constant first would put a second copy of it on the stack.
+      if not Model_Runner.UTF8.Is_Valid (Buffer.all (1 .. Filled)) then
+         Free_Text (Buffer);
+         Status := E.Make (E.IO_Invalid_UTF8);
+         E.Add_Text (Status, "path", Name, E.Param_Path);
+         return;
+      end if;
+
+      Result := new String'(Buffer.all (1 .. Filled));
       Free_Text (Buffer);
    exception
+      when Storage_Error =>
+         --  As in Read_File: running out of room is not a read failure, and
+         --  saying so sends the reader to inspect input that is perfectly fine.
+         Free_Text (Buffer);
+         Free_Text (Result);
+         Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Status, "category", "prompt_input", E.Param_Identifier);
+         E.Add_Text (Status, "path", Name, E.Param_Path);
       when others =>
          Free_Text (Buffer);
          Free_Text (Result);
          Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", Name, E.Param_Path);
    end Read_Standard_Input;
 
    --  Build the model limits a command asks for.
@@ -768,7 +808,8 @@ package body Model_Runner.CLI.Execute is
 
          when others =>
             Read_Standard_Input
-              (Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes,
+              (Pres.Message_Value (Screen, "cli.label.standard_input"),
+               Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes,
                Prompt, Condition);
             if E.Is_Error (Condition) then
                Fail (Condition);

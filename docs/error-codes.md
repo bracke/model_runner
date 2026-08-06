@@ -44,6 +44,7 @@ domain group, so codes are appended, never reordered or removed.
 | `MR-IO-0006` | `error.io.invalid_utf8` | recovery_user_correctable | 6 |
 | `MR-IO-0007` | `error.io.output_closed` | recovery_user_correctable | 6 |
 | `MR-IO-0008` | `error.io.seek_failed` | recovery_user_correctable | 6 |
+| `MR-IO-0009` | `error.io.input_too_large` | recovery_user_correctable | 6 |
 
 ## GGUF
 
