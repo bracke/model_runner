@@ -256,8 +256,8 @@ Every test is deterministic, offline, and needs no downloaded model:
 ### Locales
 
 `en` is complete. `da` is a partial translation of the command surface and the
-common diagnostics — 210 of 332 keys — and every other key falls back to
-English per key, so nothing reaches the emergency form. `qps` is a pseudo-locale
+common diagnostics, and every other key falls back to English per key, so
+nothing reaches the emergency form. `qps` is a pseudo-locale
 generated from the English entries: every letter outside a `{placeholder}` or a
 protocol token is accented and the message is bracketed, so an untranslated
 string, a lost placeholder or a truncated line is visible at a glance.
@@ -274,12 +274,12 @@ $ model_runner --locale qps run x.gguf --bogus
 
 `tests fuzz` mutates the synthetic container — truncation at an arbitrary
 offset, single-bit flips, 64-bit and 32-bit field overwrites, and byte-run
-splices — and accepts only four outcomes: parsed, structurally rejected,
-rejected against a resource limit, or cancelled. An escaped exception or an
-invalid container accepted into a usable state is a failure. Each case is
-derived from the seed and the case number alone, so a failure replays exactly.
-10,000 cases across five seeds currently produce no escapes and no invalid
-acceptances.
+splices — and feeds it to the whole load path: the parser, the tokenizer, the
+chat-template compiler and model preparation. Only four outcomes are accepted:
+loaded, structurally rejected, rejected against a resource limit, or cancelled.
+An escaped exception or an invalid container accepted into a usable state is a
+failure. Each case is derived from the seed and the case number alone, so a
+failure replays exactly.
 
 ### Conformance
 

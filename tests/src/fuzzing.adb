@@ -1,9 +1,12 @@
+with Ada.Real_Time;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
 with Model_Runner.Tokenizer;
+with Model_Runner.Llama;
+with Model_Runner.Templates;
 
 with Tiny_Model;
 
@@ -202,6 +205,38 @@ package body Fuzzing is
                   Model_Runner.Tokenizer.Close (Words);
                end;
 
+               --  A chat template is compiled from text the file supplies,
+               --  and it is the most program-like thing a model carries: it
+               --  has loops and conditionals and its own bounds. Compiling it
+               --  was outside the campaign, so nothing here was ever driven
+               --  by a mutated template.
+               declare
+                  Template : Model_Runner.Templates.Compiled;
+                  Outcome  : E.Error_Info;
+                  Text     : constant String :=
+                    Containers.String_Value (Item, "tokenizer.chat_template");
+               begin
+                  if Text /= "" then
+                     Model_Runner.Templates.Compile
+                       (Template, Text, Bounds, Outcome);
+                  end if;
+                  Model_Runner.Templates.Close (Template);
+               end;
+
+               --  And preparation, which is the gate the campaign's own
+               --  contract names: an invalid model must not reach an
+               --  executable state. Until now nothing checked that the gate
+               --  was ever reached, only that the container parsed.
+               declare
+                  Prepared : Model_Runner.Llama.Model;
+                  Outcome  : E.Error_Info;
+                  Closing  : E.Error_Info;
+               begin
+                  Model_Runner.Llama.Prepare
+                    (Prepared, Item, Source, Bounds, null, null, Outcome);
+                  Model_Runner.Llama.Close (Prepared, Closing);
+               end;
+
             elsif Status.Code in E.Memory_Limit_Exceeded
                                | E.Memory_Allocation_Failed
                                | E.Tokenizer_Vocabulary_Too_Large
@@ -241,24 +276,43 @@ package body Fuzzing is
       Result.Cases := Cases;
 
       for Index in 1 .. Cases loop
-         case Run_Case (Seed, Index) is
-            when Accepted =>
-               Result.Accepted := Result.Accepted + 1;
-            when Rejected =>
-               Result.Rejected := Result.Rejected + 1;
-            when Resource_Limited =>
-               Result.Bounded := Result.Bounded + 1;
-            when Escaped_Exception =>
-               Result.Escaped := Result.Escaped + 1;
+         declare
+            use type Ada.Real_Time.Time;
+            Started : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+            What    : constant Outcome := Run_Case (Seed, Index);
+            Spent   : constant Duration :=
+              Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
+         begin
+            if Spent > Case_Time_Limit then
+               Result.Slow := Result.Slow + 1;
                if Result.First_Bad = 0 then
                   Result.First_Bad := Index;
                end if;
-            when Accepted_But_Invalid =>
-               Result.Invalid := Result.Invalid + 1;
-               if Result.First_Bad = 0 then
-                  Result.First_Bad := Index;
-               end if;
-         end case;
+            end if;
+
+            case What is
+               when Accepted =>
+                  Result.Accepted := Result.Accepted + 1;
+               when Rejected =>
+                  Result.Rejected := Result.Rejected + 1;
+               when Resource_Limited =>
+                  Result.Bounded := Result.Bounded + 1;
+               when Escaped_Exception =>
+                  Result.Escaped := Result.Escaped + 1;
+                  if Result.First_Bad = 0 then
+                     Result.First_Bad := Index;
+                  end if;
+               when Accepted_But_Invalid =>
+                  Result.Invalid := Result.Invalid + 1;
+                  if Result.First_Bad = 0 then
+                     Result.First_Bad := Index;
+                  end if;
+               when Took_Too_Long =>
+                  --  Run_Case never returns this: a case is timed here, around
+                  --  the call, because the stage that overran cannot time itself.
+                  null;
+            end case;
+         end;
       end loop;
    end Run;
 

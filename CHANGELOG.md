@@ -223,6 +223,23 @@ wall and 16.0 s of processor time.
 
 ### Changed
 
+- `tests fuzz` now drives the whole load path rather than stopping at the
+  parser: a mutated container goes through the parser, the tokenizer, the
+  chat-template compiler and model preparation. The campaign's own contract
+  names an invalid model reaching an executable state as a failure, and
+  preparation is the gate that decides it, so the campaign stopped short of the
+  thing it said it checked. The template compiler had never been driven by a
+  mutated template at all, which is the most program-like thing a model file
+  carries. A case now costs about ten times what it did; the case count is the
+  knob.
+
+- A fuzz case that runs past five seconds is reported and fails the run. The
+  contract already said a wall-clock bound caught a loop that failed to
+  terminate, and there was no clock anywhere in the fuzzer. A stage that never
+  returns at all still cannot be interrupted from the single task a run uses,
+  and the contract now says so instead of claiming otherwise.
+
+
 - Architecture metadata that is present and wrong now stops preparation
   instead of falling back to a default. `attention.head_count_kv`,
   `rope.dimension_count`, `rope.freq_base`, `rope.scaling.factor`,

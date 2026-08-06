@@ -83,7 +83,8 @@ begin
             & ", rejected" & Natural'Image (Result.Rejected)
             & ", bounded" & Natural'Image (Result.Bounded)
             & ", escaped" & Natural'Image (Result.Escaped)
-            & ", invalid" & Natural'Image (Result.Invalid));
+            & ", invalid" & Natural'Image (Result.Invalid)
+            & ", slow" & Natural'Image (Result.Slow));
 
          if not Fuzzing.Is_Clean (Result) then
             Ada.Text_IO.Put_Line
