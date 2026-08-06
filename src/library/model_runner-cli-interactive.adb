@@ -341,7 +341,18 @@ package body Model_Runner.CLI.Interactive is
          exit Read_Loop when Ada.Text_IO.End_Of_File (Ada.Text_IO.Standard_Input);
 
          declare
-            Line : constant String := Ada.Text_IO.Get_Line;
+            --  The function form returns the line as a String, which for an
+            --  unbounded line would put all of it on the stack; the prompt
+            --  file and standard input are both read into a fixed buffer for
+            --  that reason. Here the source is a terminal -- interactive mode
+            --  requires one on standard input and refuses to start otherwise
+            --  -- and a terminal in canonical mode delivers at most a line
+            --  discipline's worth at a time, measured at about four kilobytes
+            --  against this program. That is far below Max_Turn_Bytes, so the
+            --  length check below is what bounds a turn. Should interactive
+            --  mode ever accept input that is not a terminal, this has to be
+            --  read into a buffer like the others.
+            Line : constant String := Ada.Text_IO.Get_Line (Ada.Text_IO.Standard_Input);
          begin
             if Pending_Used = 0 and then Handle_Command (T.Trim (Line)) then
                null;
