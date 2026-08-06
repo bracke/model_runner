@@ -55,8 +55,14 @@ package Model_Runner.Templates is
    --  Largest number of terms in one output expression or comparison side.
    Max_Terms : constant := 32;
 
-   --  Largest number of loop iterations one render may perform, across all
+   --  Largest number of instruction steps one render may perform, across all
    --  loops. Bounds rendering time independently of the message count.
+   --
+   --  This is a termination condition, not a margin. The message loop nested
+   --  inside itself does not finish on its own: raising this bound to two
+   --  thousand million during testing produced two thousand million steps and
+   --  a render still in progress. A template arriving in a model file is not
+   --  trusted to terminate, so rendering stops counting rather than waiting.
    Max_Iterations : constant := 100_000;
 
    --  A compiled template. Release with Close, which is idempotent.

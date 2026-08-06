@@ -5,6 +5,7 @@ with Tests.GGUF_Cases;
 with Tests.Inference_Cases;
 with Tests.Accounting_Cases;
 with Tests.Sampling_Cases;
+with Tests.Template_Cases;
 
 package body Tests.Suite is
 
@@ -17,6 +18,7 @@ package body Tests.Suite is
    CLI_Case       : aliased Tests.CLI_Cases.Case_Type;
    Catalog_Case   : aliased Tests.Catalog_Cases.Case_Type;
    Backend_Case   : aliased Tests.Backend_Cases.Case_Type;
+   Template_Case  : aliased Tests.Template_Cases.Case_Type;
 
    -----------
    -- Suite --
@@ -31,6 +33,7 @@ package body Tests.Suite is
       AUnit.Test_Suites.Add_Test (Result'Access, Catalog_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Backend_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Accounting_Case'Access);
+      AUnit.Test_Suites.Add_Test (Result'Access, Template_Case'Access);
       return Result'Access;
    end Suite;
 

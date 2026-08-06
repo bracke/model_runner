@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Tests for the chat template engine's bounds: template size, instruction
+  count, nesting depth at and past the documented limit, output size at and
+  past the buffer, and the iteration bound. The engine already refused
+  malformed and unsupported templates, and a test covered that; what none
+  covered was the five numeric bounds, and the refusal codes were checked
+  only for being errors rather than for being the documented ones.
+
+
 - Checked 64-bit arithmetic with overflow propagation.
 - UTF-8 validation and boundary-safe incremental prefix length.
 - Structured errors: 14 domains, stable `MR-DOMAIN-NNNN` codes derived
