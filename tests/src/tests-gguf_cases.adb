@@ -10,6 +10,7 @@ with Model_Runner.Limits;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization;
 with Model_Runner.Text;
+with Model_Runner.Tokenizer;
 
 with Fixtures;
 with Fuzzing;
@@ -1088,6 +1089,115 @@ package body Tests.GGUF_Cases is
       B.Free (Image);
    end Hostile_Text_Cannot_Reach_The_Terminal;
 
+   --  A hostile vocabulary cannot make the tokenizer reach outside itself.
+   --
+   --  The vocabulary is attacker supplied: the token strings, the scores, the
+   --  token types and the special-token identifiers all come from the file.
+   --  The identifiers are the dangerous ones, because they are used as indices
+   --  into the vocabulary; a file that names token 999999 in a vocabulary of
+   --  five must not be believed.
+   procedure Hostile_Vocabulary_Stays_Inside_Itself
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+      use type Vocab.Token_Id;
+      use type Vocab.Model_Kind;
+
+      ESC : constant Character := Character'Val (16#1B#);
+
+      Builder : Fixtures.Builder;
+      Image   : B.Byte_Array_Access;
+      Item    : Containers.Container;
+      Words   : Vocab.Vocabulary;
+      Status  : E.Error_Info;
+   begin
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+
+      --  Five tokens, one of them empty, one carrying a terminal escape and
+      --  one shaped like a byte-fallback token that names no byte.
+      Fixtures.Begin_Array
+        (Builder, "tokenizer.ggml.tokens", G.Value_String, 5);
+      Fixtures.String_Element (Builder, "<unk>");
+      Fixtures.String_Element (Builder, "");
+      Fixtures.String_Element (Builder, "a" & ESC & "[2J");
+      Fixtures.String_Element (Builder, "<0xZZ>");
+      Fixtures.String_Element (Builder, "b");
+      Fixtures.End_Array (Builder);
+
+      --  Every special identifier is far outside the vocabulary.
+      Fixtures.Add_U32 (Builder, "tokenizer.ggml.bos_token_id", 999_999);
+      Fixtures.Add_U32 (Builder, "tokenizer.ggml.eos_token_id", 999_999);
+      Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 999_999);
+
+      Fixtures.Build (Builder, Image);
+      Parse_Image (Image.all, Item, Status);
+      Assert (E.Is_Ok (Status),
+              "the fixture container did not parse: "
+              & E.Error_Code'Image (Status.Code));
+
+      Vocab.Load (Words, Item, Status => Status);
+
+      --  Loading may refuse this file. What it must not do is accept it and
+      --  then believe the identifiers.
+      if E.Is_Ok (Status) then
+         Assert (Vocab.Kind (Words) = Vocab.Kind_SentencePiece,
+                 "the vocabulary loaded as the wrong model");
+         Assert (Vocab.Size (Words) = 5,
+                 "the vocabulary is not the size the file declared:"
+                 & Natural'Image (Vocab.Size (Words)));
+
+         --  An identifier outside the vocabulary is not adopted. Whatever the
+         --  loader kept, asking about it must be answerable without reaching
+         --  past the end.
+         for Special of Vocab.Token_Array'
+           [Vocab.Beginning_Token (Words),
+            Vocab.End_Token (Words),
+            Vocab.Unknown_Token (Words)]
+         loop
+            Assert (Special = Vocab.No_Token
+                    or else Vocab.Is_Valid (Words, Special),
+                    "an out-of-range special identifier was adopted:"
+                    & Vocab.Token_Id'Image (Special));
+         end loop;
+
+         --  Reading outside the vocabulary is answered, not attempted.
+         for Token of Vocab.Token_Array'
+           [-1, 5, 999_999, Vocab.Token_Id'Last]
+         loop
+            Assert (not Vocab.Is_Valid (Words, Token),
+                    "a token outside the vocabulary was called valid:"
+                    & Vocab.Token_Id'Image (Token));
+            Assert (Vocab.Token_Text (Words, Token) = "",
+                    "a token outside the vocabulary produced text");
+         end loop;
+
+         --  Encoding arbitrary text never produces an identifier the rest of
+         --  the engine would then use as an index.
+         declare
+            Tokens : Vocab.Token_Array (1 .. 64);
+            Last   : Natural;
+            Outcome : E.Error_Info;
+         begin
+            Vocab.Encode
+              (Words, "ab" & ESC & " zz", True, True, Tokens, Last, Outcome);
+            if E.Is_Ok (Outcome) then
+               for Index in 1 .. Last loop
+                  Assert (Vocab.Is_Valid (Words, Tokens (Index)),
+                          "encoding produced a token outside the vocabulary:"
+                          & Vocab.Token_Id'Image (Tokens (Index)));
+               end loop;
+            end if;
+         end;
+      end if;
+
+      Vocab.Close (Words);
+      Containers.Close (Item);
+      B.Free (Image);
+   end Hostile_Vocabulary_Stays_Inside_Itself;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -1142,6 +1252,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Hostile_Vocabulary_Stays_Inside_Itself'Access,
+         "a hostile vocabulary cannot make the tokenizer reach outside itself");
       Register_Routine
         (T, Hostile_Text_Cannot_Reach_The_Terminal'Access,
          "nothing a model file says can steer the terminal");
