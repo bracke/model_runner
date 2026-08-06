@@ -59,6 +59,16 @@ hostkit = { path = "../../hostkit" }
 [[pins]]
 zlib = { path = "../../zlib" }
 
+# i18n's CLDR tooling parses upstream data through an in-process AWK
+# interpreter, so awklib and its regexp dependency are in this graph too.
+# Named here for the same reason as the crates above: Alire honours pins only
+# in the root crate, and a run that found them anyway was relying on a cache.
+[[pins]]
+awklib = { path = "../../awklib" }
+
+[[pins]]
+regexp = { path = "../../regexp" }
+
 # Build dependencies in the development profile (-Og) too, not the default
 # release (-O3). Keeping every root on the same profile lets them share object
 # files instead of forcing a rebuild whenever a different root is built.
