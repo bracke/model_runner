@@ -152,7 +152,13 @@ package Model_Runner.Memory is
    --  Fraction of the computed total added as a safety margin, in percent.
    Safety_Margin_Percent : constant := 5;
 
-   --  Sum a model plan's components and set Total_Resident.
+   --  Total what a model will actually hold in memory, and set Total_Resident.
+   --
+   --  File_Backed_Bytes is deliberately not part of the total. A mapped model
+   --  lives in the operating system's pages, and counting it as resident would
+   --  report a run as needing a gigabyte it never asks the heap for. What is
+   --  counted is what this program allocates, plus Safety_Margin_Percent of
+   --  it, which is written back into Safety_Margin.
    --
    --  @param Item Plan whose components are already filled in.
    --  @param Status Success, or Memory_Plan_Overflow.
@@ -160,7 +166,10 @@ package Model_Runner.Memory is
      (Item   : in out Plan;
       Status : out Model_Runner.Errors.Error_Info);
 
-   --  Sum a session plan's components and set Total_Resident.
+   --  Total what a session will hold in memory, and set Total_Resident.
+   --
+   --  As with Finalize_Plan: what this program allocates, plus
+   --  Safety_Margin_Percent of it.
    --
    --  @param Item Plan whose components are already filled in.
    --  @param Status Success, or Memory_Plan_Overflow.

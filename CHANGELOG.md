@@ -192,6 +192,14 @@ wall and 16.0 s of processor time.
 
 ### Added
 
+- Memory accounting and the monotonic clock had no tests at all. Seven now
+  cover them: an allocation past the budget refused before any allocator runs,
+  totals following allocation and release, a peak that does not fall when
+  memory is freed and reallocated, mapped bytes counted apart from allocated
+  ones, a plan that cannot be represented refused rather than wrapped, a plan
+  totalling what will actually be resident, a clock that goes backwards
+  yielding no duration, and a rate over no elapsed time reading zero rather
+  than infinite.
 - `tests conformance` runs on quantized weights as well as binary32: eight
   sequences and 128 logits rather than four and 64. Nothing offline had
   compared quantized inference against an independent implementation before;
@@ -207,6 +215,12 @@ wall and 16.0 s of processor time.
   model cannot hold one.
 
 ### Fixed
+
+- `Finalize_Plan` said it summed a plan's components. It does not, and should
+  not: file-backed bytes are excluded because a mapped model lives in the
+  operating system's pages, and a safety margin is added on top. Writing the
+  test against the documented behaviour is what surfaced the difference; the
+  specification now describes what the code does and why.
 
 - The quantized decoders had no test of the values they produce. Every other
   check compared them against themselves -- the fused kernel against the
