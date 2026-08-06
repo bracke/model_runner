@@ -138,15 +138,23 @@ package body Conformance is
 
    begin
       Result := (others => <>);
-      Tiny_Model.Build (Image);
 
-      Compare (Sequence'(1 => 4));
-      Compare (Sequence'(4, 5));
-      Compare (Sequence'(1, 4, 5, 6, 7));
-      Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8));
+      --  Both weight formats. The quantized one matters more: until it was
+      --  added, nothing offline compared quantized inference against an
+      --  independent implementation, and the only check on it was two tokens
+      --  recorded from another runtime against a model that is not committed.
+      for Format in Tiny_Model.Weight_Format loop
+         Tiny_Model.Build (Image, Format);
 
-      B.Free (Image);
-      Result.Ran := Result.Sequences = 4;
+         Compare (Sequence'(1 => 4));
+         Compare (Sequence'(4, 5));
+         Compare (Sequence'(1, 4, 5, 6, 7));
+         Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8));
+
+         B.Free (Image);
+      end loop;
+
+      Result.Ran := Result.Sequences = 8;
    end Run;
 
 end Conformance;

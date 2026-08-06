@@ -68,6 +68,59 @@ package body Reference_Transformer is
       end;
    end Decode_Float;
 
+   --  Decode one Q8_0 element, independently of the engine.
+   --
+   --  The layout says: thirty-two elements to a block of thirty-four bytes,
+   --  a half-precision scale first, then one signed byte each. This works the
+   --  half out arithmetically from its sign, exponent and mantissa rather than
+   --  reusing the engine's conversion, so a fault in that conversion cannot
+   --  hide by being made twice.
+   function Decode_Q8_0
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 32);
+      Within : constant Natural := Index mod 32;
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 34;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Raw_Half : constant Natural :=
+        Byte_At (At_Block) + 256 * Byte_At (At_Block + 1);
+
+      Sign     : constant Long_Float :=
+        (if Raw_Half >= 16#8000# then -1.0 else 1.0);
+      Exponent : constant Integer := (Raw_Half / 1024) mod 32;
+      Mantissa : constant Integer := Raw_Half mod 1024;
+
+      Scale : Long_Float;
+
+      Quant : constant Integer :=
+        (if Byte_At (At_Block + 2 + Interfaces.Unsigned_64 (Within)) < 128
+         then Byte_At (At_Block + 2 + Interfaces.Unsigned_64 (Within))
+         else Byte_At (At_Block + 2 + Interfaces.Unsigned_64 (Within)) - 256);
+   begin
+      if Exponent = 0 then
+         --  Subnormal, or zero when the mantissa is zero too.
+         Scale := Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+      elsif Exponent = 31 then
+         --  Infinity or not-a-number; a fixture never contains one, and
+         --  answering zero keeps this from inventing a value.
+         Scale := 0.0;
+      else
+         Scale :=
+           Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+           * (2.0 ** (Exponent - 15));
+      end if;
+
+      return Scale * Long_Float (Quant);
+   end Decode_Q8_0;
+
+
    --  Read a metadata integer, or a default.
    function Metadata
      (Source  : Containers.Container;
@@ -108,7 +161,8 @@ package body Reference_Transformer is
 
          if Index = 0
            or else Containers.Tensor_Format (Source, Index)
-                   /= Model_Runner.GGUF.Type_F32
+                   not in Model_Runner.GGUF.Type_F32
+                        | Model_Runner.GGUF.Type_Q8_0
          then
             return null;
          end if;
@@ -130,11 +184,23 @@ package body Reference_Transformer is
 
             for Row in 0 .. Rows - 1 loop
                for Column in 0 .. Columns - 1 loop
-                  Result (Row, Column) :=
-                    Decode_Float
-                      (Image,
-                       Offset
-                       + Interfaces.Unsigned_64 (Row * Columns + Column) * 4);
+                  if Containers.Tensor_Format (Source, Index)
+                       = Model_Runner.GGUF.Type_Q8_0
+                  then
+                     Result (Row, Column) :=
+                       Decode_Q8_0
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 34
+                            * Interfaces.Unsigned_64 (Columns / 32),
+                          Column);
+                  else
+                     Result (Row, Column) :=
+                       Decode_Float
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row * Columns + Column) * 4);
+                  end if;
                end loop;
             end loop;
 

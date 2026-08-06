@@ -190,6 +190,22 @@ wall and 16.0 s of processor time.
   silently fell back. `Hostkit.Host.Executable_Path` was added upstream for
   this.
 
+### Added
+
+- `tests conformance` runs on quantized weights as well as binary32: eight
+  sequences and 128 logits rather than four and 64. Nothing offline had
+  compared quantized inference against an independent implementation before;
+  the only check on it was two tokens recorded from another runtime, against a
+  model that is not committed. `Reference_Transformer` gained its own Q8_0
+  decoder, working the half-precision scale out from its sign, exponent and
+  mantissa rather than reusing the engine's conversion, so a fault there cannot
+  hide by being made twice. Shifting the engine's Q8_0 decode by one element
+  puts 64 logits outside tolerance.
+- `Fixtures.Encode_Q8_0` quantizes to blocks the way the format's producers do,
+  and the fixture widens to thirty-two and sixty-four when quantized, because a
+  quantized row is a whole number of thirty-two element blocks and the narrow
+  model cannot hold one.
+
 ### Fixed
 
 - The quantized decoders had no test of the values they produce. Every other

@@ -148,6 +148,17 @@ package Fixtures is
    --  @return Little-endian bytes.
    function Encode_F32 (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Quantize values to Q8_0 blocks.
+   --
+   --  Thirty-two elements to a block: one half-precision scale, then the
+   --  values divided by it and rounded to signed bytes. The scale is the
+   --  largest magnitude in the block over 127, which is what the format's
+   --  producers use, so a fixture built here is shaped like a real one.
+   --
+   --  @param Values Values to quantize; the length must be a multiple of 32.
+   --  @return Encoded block bytes.
+   function Encode_Q8_0 (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode binary16 values.
    --
    --  @param Values Values to encode.

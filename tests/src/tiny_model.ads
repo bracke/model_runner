@@ -35,6 +35,29 @@ package Tiny_Model is
    --  Build the model file.
    --
    --  @param Result Newly allocated file bytes; the caller frees them.
-   procedure Build (Result : out Model_Runner.Bytes.Byte_Array_Access);
+   --  Which format the weight matrices use. The norms and the small vectors
+   --  stay binary32 in both, as they do in a real quantized model.
+   type Weight_Format is (Float32, Q8_0);
+
+   --  Build the fixture.
+   --
+   --  @param Result Newly allocated file bytes; the caller frees them.
+   --  @param Format Format for the weight matrices.
+   --  A quantized row is a whole number of thirty-two element blocks, so a
+   --  model whose widths are eight and twelve cannot be quantized at all.
+   --  These are the widths the quantized fixture uses instead; everything
+   --  else about it is the same.
+   Wide_Embedding    : constant := 32;
+   Wide_Feed_Forward : constant := 64;
+   Wide_Head_Size    : constant := 16;
+
+   --  Build the fixture.
+   --
+   --  @param Result Newly allocated file bytes; the caller frees them.
+   --  @param Format Format for the weight matrices. Q8_0 also widens the
+   --    model, because the narrow one cannot hold a quantized row.
+   procedure Build
+     (Result : out Model_Runner.Bytes.Byte_Array_Access;
+      Format : Weight_Format := Float32);
 
 end Tiny_Model;

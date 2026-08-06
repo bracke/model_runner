@@ -347,4 +347,49 @@ package body Fixtures is
       return Result;
    end Sequence;
 
+   ------------------
+   -- Encode_Q8_0 --
+   ------------------
+
+   function Encode_Q8_0 (Values : N.Real_Array) return B.Byte_Array is
+      Blocks : constant N.Element_Count := Values'Length / 32;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 34 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 32;
+            Largest : N.Real := 0.0;
+            Scale   : N.Real;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 34;
+         begin
+            for Index in 0 .. 31 loop
+               Largest :=
+                 N.Real'Max (Largest, abs Values (First + N.Element_Count (Index)));
+            end loop;
+
+            Scale := (if Largest = 0.0 then 1.0 else Largest / 127.0);
+
+            Result (At_Byte .. At_Byte + 1) := Encode_F16 ([1 => Scale]);
+
+            for Index in 0 .. 31 loop
+               declare
+                  Quantized : constant Integer :=
+                    Integer (N.Real'Rounding
+                               (Values (First + N.Element_Count (Index))
+                                / Scale));
+                  Clamped : constant Integer :=
+                    Integer'Max (-127, Integer'Min (127, Quantized));
+               begin
+                  Result (At_Byte + 2 + B.Byte_Count (Index)) :=
+                    B.Byte (if Clamped < 0 then Clamped + 256 else Clamped);
+               end;
+            end loop;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Q8_0;
+
 end Fixtures;

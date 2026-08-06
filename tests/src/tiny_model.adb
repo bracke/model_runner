@@ -22,7 +22,20 @@ package body Tiny_Model is
    -- Build --
    -----------
 
-   procedure Build (Result : out Model_Runner.Bytes.Byte_Array_Access) is
+   procedure Build
+     (Result : out Model_Runner.Bytes.Byte_Array_Access;
+      Format : Weight_Format := Float32)
+   is
+      Quantized : constant Boolean := Format = Q8_0;
+
+      --  The quantized fixture is wider because a Q8_0 row must be a whole
+      --  number of thirty-two element blocks. Everything else matches.
+      Embedding : constant Natural :=
+        (if Quantized then Wide_Embedding else Tiny_Model.Embedding);
+      Feed_Forward : constant Natural :=
+        (if Quantized then Wide_Feed_Forward else Tiny_Model.Feed_Forward);
+      Head_Size : constant Natural :=
+        (if Quantized then Wide_Head_Size else Tiny_Model.Head_Size);
       Builder : Fixtures.Builder;
       Seed    : Interfaces.Unsigned_64 := 12_345;
 
@@ -43,16 +56,30 @@ package body Tiny_Model is
          for Extent of Dimensions loop
             Total := Total * N.Element_Count (Extent);
          end loop;
-         Fixtures.Add_Tensor
-           (Builder, Name, Dimensions, G.Type_F32,
-            Fixtures.Encode_F32 (Next (Total)));
+         declare
+            Values : constant N.Real_Array := Next (Total);
+         begin
+            --  A quantized model keeps its matrices quantized and its norms
+            --  in binary32; the fixture follows that, so the quantized path
+            --  is exercised the way a real file exercises it.
+            if Format = Q8_0 and then Total mod 32 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q8_0,
+                  Fixtures.Encode_Q8_0 (Values));
+            else
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_F32,
+                  Fixtures.Encode_F32 (Values));
+            end if;
+         end;
       end Weight;
 
       --  Append a normalization weight, which is kept near one so that the
       --  normalized activations stay in a comfortable range.
       procedure Norm (Name : String) is
-         Values : N.Real_Array (0 .. Embedding - 1);
-         Drawn  : constant N.Real_Array := Next (Embedding);
+         Values : N.Real_Array (0 .. N.Element_Count (Embedding) - 1);
+         Drawn  : constant N.Real_Array :=
+           Next (N.Element_Count (Embedding));
       begin
          for Index in Values'Range loop
             Values (Index) := 1.0 + Drawn (Index) * 0.25;
@@ -74,14 +101,17 @@ package body Tiny_Model is
       Fixtures.Add_String (Builder, "general.architecture", "llama");
       Fixtures.Add_String (Builder, "general.name", "tiny");
       Fixtures.Add_U32 (Builder, "llama.context_length", Context);
-      Fixtures.Add_U32 (Builder, "llama.embedding_length", Embedding);
+      Fixtures.Add_U32
+        (Builder, "llama.embedding_length", Interfaces.Unsigned_32 (Embedding));
       Fixtures.Add_U32 (Builder, "llama.block_count", Layers);
-      Fixtures.Add_U32 (Builder, "llama.feed_forward_length", Feed_Forward);
+      Fixtures.Add_U32
+        (Builder, "llama.feed_forward_length", Interfaces.Unsigned_32 (Feed_Forward));
       Fixtures.Add_U32 (Builder, "llama.attention.head_count", Heads);
       Fixtures.Add_U32 (Builder, "llama.attention.head_count_kv", KV_Heads);
       Fixtures.Add_F32
         (Builder, "llama.attention.layer_norm_rms_epsilon", 1.0E-5);
-      Fixtures.Add_U32 (Builder, "llama.rope.dimension_count", Head_Size);
+      Fixtures.Add_U32
+        (Builder, "llama.rope.dimension_count", Interfaces.Unsigned_32 (Head_Size));
       Fixtures.Add_F32 (Builder, "llama.rope.freq_base", 10_000.0);
 
       Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
@@ -152,27 +182,27 @@ package body Tiny_Model is
       Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_bos_token", True);
       Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
 
-      Weight ("token_embd.weight", [Embedding, Vocabulary]);
+      Weight ("token_embd.weight", [G.U64 (Embedding), Vocabulary]);
 
       for Index in 0 .. Layers - 1 loop
          Norm (Layer_Name (Index, "attn_norm.weight"));
-         Weight (Layer_Name (Index, "attn_q.weight"), [Embedding, Embedding]);
+         Weight (Layer_Name (Index, "attn_q.weight"), [G.U64 (Embedding), G.U64 (Embedding)]);
          Weight (Layer_Name (Index, "attn_k.weight"),
-                 [Embedding, KV_Heads * Head_Size]);
+                 [G.U64 (Embedding), G.U64 (KV_Heads * Head_Size)]);
          Weight (Layer_Name (Index, "attn_v.weight"),
-                 [Embedding, KV_Heads * Head_Size]);
+                 [G.U64 (Embedding), G.U64 (KV_Heads * Head_Size)]);
          Weight (Layer_Name (Index, "attn_output.weight"),
-                 [Embedding, Embedding]);
+                 [G.U64 (Embedding), G.U64 (Embedding)]);
          Norm (Layer_Name (Index, "ffn_norm.weight"));
          Weight (Layer_Name (Index, "ffn_gate.weight"),
-                 [Embedding, Feed_Forward]);
-         Weight (Layer_Name (Index, "ffn_up.weight"), [Embedding, Feed_Forward]);
+                 [G.U64 (Embedding), G.U64 (Feed_Forward)]);
+         Weight (Layer_Name (Index, "ffn_up.weight"), [G.U64 (Embedding), G.U64 (Feed_Forward)]);
          Weight (Layer_Name (Index, "ffn_down.weight"),
-                 [Feed_Forward, Embedding]);
+                 [G.U64 (Feed_Forward), G.U64 (Embedding)]);
       end loop;
 
       Norm ("output_norm.weight");
-      Weight ("output.weight", [Embedding, Vocabulary]);
+      Weight ("output.weight", [G.U64 (Embedding), Vocabulary]);
 
       Fixtures.Build (Builder, Result);
    end Build;
