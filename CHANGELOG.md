@@ -135,8 +135,14 @@ wall and 16.0 s of processor time.
 - The k-quant path also decoded into a scratch block and copied 256 elements
   out of it. It decodes into the destination now, though measurement showed
   the copy was not what made it slow.
-- Row dot per element, release build: Q4_0 0.92 ns, Q8_0 1.04 ns, Q4_K 1.12 ns,
-  F32 1.61 ns. These replace lower figures published earlier, which were
+- Q6_K formed its four sub-block scales for every element rather than once per
+  half, and Signed read each byte three times to decide its sign. Both fixed:
+  Q6_K went from 2.24 ns to 1.37 ns per element, and every caller of Signed
+  gained from the second.
+- Row dot per element, release build, every supported format: Q4_0 0.91 ns,
+  Q8_0 1.02, Q4_K 1.11, Q5_K 1.35, Q6_K 1.37, F32 1.59, F16 1.79. The
+  benchmark now measures all seven rather than four, which is how the k-quant
+  gap was found in the first place. These replace lower figures published earlier, which were
   measured on tensors filled with arbitrary bytes: read as half precision those
   are frequently denormal, infinite or not-a-number, which no real model
   contains. The benchmark now forces every block scale to a normal exponent,

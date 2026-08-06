@@ -388,14 +388,15 @@ share of a much smaller total.
 
 ### Kernels
 
-Row dot product, nanoseconds per element, release build:
+Row dot product, nanoseconds per element, release build, every format the
+engine supports:
 
-| | |
-|---|---|
-| Q4_0 | 0.92 |
-| Q8_0 | 1.04 |
-| Q4_K | 1.12 |
-| F32 | 1.61 |
+| | | | |
+|---|---|---|---|
+| Q4_0 | 0.91 | Q5_K | 1.35 |
+| Q8_0 | 1.02 | Q6_K | 1.37 |
+| Q4_K | 1.11 | F32 | 1.59 |
+| | | F16 | 1.79 |
 
 Those figures replace lower ones published earlier, which were wrong. The
 benchmark filled its tensors with arbitrary bytes, and bytes read as half
@@ -406,11 +407,14 @@ about 1.65 ns per element once attention, normalization and thread hand-off
 are counted; the earlier ones never did, and that disagreement should have
 been noticed sooner.
 
-Q4_K was six times slower than that until its decoder was given the same
-treatment as the others: a sub-block's scale and offset formed once instead of
-once per element, packed bytes read directly instead of through a call, and the
-per-element checks suppressed after the block is bounds-checked at entry. The
-same three changes apply to Q5_K and Q6_K. It went from 6.68 ns to 1.12.
+The k-quant formats used to sit between five and seven times slower than this,
+which mattered because they are what most real models use. Three things fixed
+that, in the order they mattered: a sub-block's scale and offset formed once
+instead of once per element; the per-element checks suppressed after the block
+is bounds-checked at entry; and packed bytes read directly rather than through
+a call that read each one three times to decide its sign.
+
+Three things got them there.
 
 Three things got them there.
 

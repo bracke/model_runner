@@ -248,6 +248,9 @@ package body Benchmarks is
       Measure ("q8_0 Row_Dot", G.Type_Q8_0, True);
       Measure ("q4_0 Row_Dot", G.Type_Q4_0, True);
       Measure ("q4_k Row_Dot", G.Type_Q4_K, True);
+      Measure ("q5_k Row_Dot", G.Type_Q5_K, True);
+      Measure ("q6_k Row_Dot", G.Type_Q6_K, True);
+      Measure ("f16  Row_Dot", G.Type_F16, True);
       Measure ("f32  Row_Dot", G.Type_F32, True);
       IO.New_Line;
 
@@ -259,6 +262,8 @@ package body Benchmarks is
       IO.Put_Line ("block decode alone");
       Measure_Decode ("q8_0 Decode_Block", G.Type_Q8_0);
       Measure_Decode ("q4_k Decode_Block", G.Type_Q4_K);
+      Measure_Decode ("q5_k Decode_Block", G.Type_Q5_K);
+      Measure_Decode ("q6_k Decode_Block", G.Type_Q6_K);
       Measure_Decode ("f32  Decode_Block", G.Type_F32);
    end Run;
 

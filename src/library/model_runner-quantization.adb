@@ -30,12 +30,15 @@ package body Model_Runner.Quantization is
    is (Interfaces.Unsigned_8 (Data (Data'First + Offset)));
 
    --  Read a signed byte of a block.
+   --  One read, not three: deciding the sign used to re-read the byte.
    function Signed
      (Data   : B.Byte_Array;
       Offset : B.Byte_Count) return Integer
-   is (if Raw (Data, Offset) < 128
-       then Integer (Raw (Data, Offset))
-       else Integer (Raw (Data, Offset)) - 256);
+   is
+      Value : constant Interfaces.Unsigned_8 := Raw (Data, Offset);
+   begin
+      return (if Value < 128 then Integer (Value) else Integer (Value) - 256);
+   end Signed;
 
    --  Read a half-precision scale.
    function Scale
@@ -767,9 +770,9 @@ package body Model_Runner.Quantization is
                      for L in 0 .. 31 loop
                         declare
                            Packed : constant Interfaces.Unsigned_8 :=
-                             Raw (Data, Base + B.Byte_Count (L));
+                             Data (Data'First + Base + B.Byte_Count (L));
                            Fifth  : constant Interfaces.Unsigned_8 :=
-                             Raw (Data, High + B.Byte_Count (L));
+                             Data (Data'First + High + B.Byte_Count (L));
                            Low    : constant Integer :=
                              Integer (Packed and 16#0F#)
                              + (if (Fifth and Mask_Low) /= 0 then 16 else 0);
@@ -825,16 +828,33 @@ package body Model_Runner.Quantization is
                      Out_Half   : constant Element_Count :=
                        Element_Count (Half) * 128;
                   begin
-                     for L in 0 .. 31 loop
+                     --  The four scales depend only on which half of the
+                     --  thirty-two positions L is in, so the loop is split
+                     --  and they are formed twice rather than 128 times.
+                     for Sub in 0 .. 1 loop
+                      declare
+                        Scale_1 : constant Real :=
+                          D * Real (Signed (Data, Scale_Half
+                                            + B.Byte_Count (Sub)));
+                        Scale_2 : constant Real :=
+                          D * Real (Signed (Data, Scale_Half
+                                            + B.Byte_Count (Sub + 2)));
+                        Scale_3 : constant Real :=
+                          D * Real (Signed (Data, Scale_Half
+                                            + B.Byte_Count (Sub + 4)));
+                        Scale_4 : constant Real :=
+                          D * Real (Signed (Data, Scale_Half
+                                            + B.Byte_Count (Sub + 6)));
+                      begin
+                       for L in Sub * 16 .. Sub * 16 + 15 loop
                         declare
                            Position : constant B.Byte_Count := B.Byte_Count (L);
-                           Sub      : constant Natural := L / 16;
                            Low_A    : constant Interfaces.Unsigned_8 :=
-                             Raw (Data, Low_Half + Position);
+                             Data (Data'First + Low_Half + Position);
                            Low_B    : constant Interfaces.Unsigned_8 :=
-                             Raw (Data, Low_Half + Position + 32);
+                             Data (Data'First + Low_Half + Position + 32);
                            Bits     : constant Interfaces.Unsigned_8 :=
-                             Raw (Data, High_Half + Position);
+                             Data (Data'First + High_Half + Position);
                            Q1 : constant Integer :=
                              Integer (Low_A and 16#0F#)
                              + 16 * Integer (Bits and 3) - 32;
@@ -854,23 +874,21 @@ package body Model_Runner.Quantization is
                                      (Interfaces.Shift_Right (Bits, 6) and 3)
                              - 32;
                         begin
-                           Target (Target'First + Out_Half + Element_Count (L)) :=
-                             D * Real (Signed (Data, Scale_Half
-                                               + B.Byte_Count (Sub)))
-                               * Real (Q1);
-                           Target (Target'First + Out_Half + 32 + Element_Count (L)) :=
-                             D * Real (Signed (Data, Scale_Half
-                                               + B.Byte_Count (Sub + 2)))
-                               * Real (Q2);
-                           Target (Target'First + Out_Half + 64 + Element_Count (L)) :=
-                             D * Real (Signed (Data, Scale_Half
-                                               + B.Byte_Count (Sub + 4)))
-                               * Real (Q3);
-                           Target (Target'First + Out_Half + 96 + Element_Count (L)) :=
-                             D * Real (Signed (Data, Scale_Half
-                                               + B.Byte_Count (Sub + 6)))
-                               * Real (Q4);
+                           Target
+                             (Target'First + Out_Half + Element_Count (L)) :=
+                             Scale_1 * Real (Q1);
+                           Target
+                             (Target'First + Out_Half + 32
+                              + Element_Count (L)) := Scale_2 * Real (Q2);
+                           Target
+                             (Target'First + Out_Half + 64
+                              + Element_Count (L)) := Scale_3 * Real (Q3);
+                           Target
+                             (Target'First + Out_Half + 96
+                              + Element_Count (L)) := Scale_4 * Real (Q4);
                         end;
+                       end loop;
+                      end;
                      end loop;
                   end;
                end loop;
