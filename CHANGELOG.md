@@ -263,6 +263,11 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- A verbose run printed its last progress line twice: the last token produced
+  and the end of generation carried identical wording, so the reader saw a
+  stutter rather than two things happening. The completion line now says so.
+
+
 - A verbose run with more than one worker hung, about two runs in three. The
   seed is an unsigned 64-bit value and the whole range is generated, but the
   statistics converted it to a signed type to print it, which raises for every

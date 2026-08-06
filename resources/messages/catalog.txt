@@ -159,7 +159,7 @@ en.progress.generation.prefill_started = evaluating prompt
 en.progress.generation.prefill_progress = evaluating prompt {completed} of {total}
 en.progress.generation.generation_started = generating
 en.progress.generation.token_produced = generated {completed} tokens
-en.progress.generation.generation_completed = generated {completed} tokens
+en.progress.generation.generation_completed = generation complete, {completed} tokens
 
 en.statistics.heading = Statistics
 en.statistics.prompt_tokens = prompt tokens
@@ -723,7 +723,7 @@ qps.progress.generation.prefill_started = ⟦éváĺúáŧíñg pŕómpŧ⟧
 qps.progress.generation.prefill_progress = ⟦éváĺúáŧíñg pŕómpŧ {completed} óf {total}⟧
 qps.progress.generation.generation_started = ⟦géñéŕáŧíñg⟧
 qps.progress.generation.token_produced = ⟦géñéŕáŧéð {completed} ŧókéñß⟧
-qps.progress.generation.generation_completed = ⟦géñéŕáŧéð {completed} ŧókéñß⟧
+qps.progress.generation.generation_completed = ⟦géñéŕáŧíóñ çómpĺéŧé, {completed} ŧókéñß⟧
 qps.statistics.heading = ⟦Šŧáŧíßŧíçß⟧
 qps.statistics.prompt_tokens = ⟦pŕómpŧ ŧókéñß⟧
 qps.statistics.generated_tokens = ⟦géñéŕáŧéð ŧókéñß⟧

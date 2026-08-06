@@ -490,6 +490,75 @@ package body Tests.Catalog_Cases is
       return AUnit.Format ("message catalog");
    end Name;
 
+   --  No two progress stages say the same thing.
+   --
+   --  Progress lines print one after another, so two stages with the same text
+   --  read as one line repeated rather than as two things happening. That is
+   --  what "generated 4 tokens" printed twice was: the last token and the end
+   --  of generation carried identical wording, and the reader saw a stutter.
+   --
+   --  Only the progress family is checked. Elsewhere two keys saying the same
+   --  thing is ordinary -- the same option is described under two commands,
+   --  the same label serves the interactive settings and the statistics -- and
+   --  those never appear side by side.
+   procedure Progress_Stages_Read_Distinctly
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package P renames Model_Runner.Progress;
+
+      Catalog : Loc.Catalog;
+
+      Count : constant Natural :=
+        P.Load_Stage'Pos (P.Load_Stage'Last) + 1
+        + P.Generation_Stage'Pos (P.Generation_Stage'Last) + 1;
+
+      Seen  : array (1 .. Count) of Model_Runner.Text.Bounded :=
+        [others => Model_Runner.Text.Empty];
+      Names : array (1 .. Count) of Model_Runner.Text.Bounded :=
+        [others => Model_Runner.Text.Empty];
+      Used  : Natural := 0;
+
+      --  Render one stage and check it against everything rendered so far.
+      procedure Take (Key : String) is
+         --  The arguments a progress line may carry. Both are supplied so a
+         --  message that uses either still renders.
+         Line : constant String :=
+           Loc.Text
+             (Catalog, Key,
+              [Loc.Named ("completed", "7"), Loc.Named ("total", "9")]);
+      begin
+         Assert (Line /= "<" & Key & ">",
+                 "progress stage " & Key & " has no message");
+
+         for Index in 1 .. Used loop
+            Assert (Model_Runner.Text.To_String (Seen (Index)) /= Line,
+                    "progress stages "
+                    & Model_Runner.Text.To_String (Names (Index))
+                    & " and " & Key & " both read " & Line);
+         end loop;
+
+         Used := Used + 1;
+         Seen (Used) := Model_Runner.Text.To_Bounded (Line);
+         Names (Used) := Model_Runner.Text.To_Bounded (Key);
+      end Take;
+   begin
+      Open (Catalog);
+
+      for Stage in P.Load_Stage loop
+         Take ("progress.loading."
+               & Model_Runner.Text.To_Lower (P.Load_Stage'Image (Stage)));
+      end loop;
+
+      for Stage in P.Generation_Stage loop
+         Take ("progress.generation."
+               & Model_Runner.Text.To_Lower (P.Generation_Stage'Image (Stage)));
+      end loop;
+
+      Assert (Used = Count, "not every progress stage was checked");
+      Loc.Close (Catalog);
+   end Progress_Stages_Read_Distinctly;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -497,6 +566,9 @@ package body Tests.Catalog_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Progress_Stages_Read_Distinctly'Access,
+         "no two progress stages say the same thing");
       Register_Routine
         (T, Catalog_Loads'Access, "the repository catalog loads and resolves");
       Register_Routine
