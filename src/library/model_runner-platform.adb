@@ -70,11 +70,26 @@ package body Model_Runner.Platform is
       All_Locales : constant String := Environment_Value ("LC_ALL");
       Language    : constant String := Environment_Value ("LANG");
    begin
+      --  The environment first, because a variable somebody set is a
+      --  statement about what they want, and on POSIX it is the only answer
+      --  there is.
       if All_Locales /= "" then
          return All_Locales;
-      else
+      elsif Language /= "" then
          return Language;
       end if;
+
+      --  Then the host itself. Windows keeps a user locale and answers it;
+      --  POSIX has no such call and hostkit says so with an empty string,
+      --  meaning "ask the environment" rather than "no locale" -- which is
+      --  what was just done. Reading only LC_ALL and LANG meant this crate
+      --  never found a Windows user's locale at all: neither is set there, so
+      --  it fell through to the default and their own language was never
+      --  looked for.
+      return Hostkit.Host.Native_Locale;
+   exception
+      when others =>
+         return "";
    end Host_Locale;
 
    ---------------

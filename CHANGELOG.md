@@ -296,6 +296,13 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- The host locale is asked of `hostkit` when the environment does not answer.
+  Reading only `LC_ALL` and `LANG` is a POSIX convention: neither is set on
+  Windows, so a Windows user's own locale was never looked for and the program
+  always fell through to English. The environment still wins where it is set,
+  because a variable somebody set is a statement about what they want.
+
+
 - Sampling raised instead of reporting when the transformations it applies
   overflowed. The logits are checked for being finite when they arrive, but a
   large finite logit divided by a small temperature, or multiplied by a
