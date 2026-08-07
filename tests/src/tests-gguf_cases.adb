@@ -1570,6 +1570,72 @@ package body Tests.GGUF_Cases is
       Assert (not Text.Has_Controls (""),
               "empty text was said to carry controls");
 
+      --  Every byte, and every pair of bytes, rather than the ones somebody
+      --  thought to write down. Two bytes is enough to reach the cases a
+      --  single one cannot: a control after a byte that is escaped, and a
+      --  control after a byte that is not.
+      declare
+         Pairs   : Natural := 0;
+         Escapes : Natural := 0;
+
+         --  The rule as the specification states it, written out here so
+         --  that the check is against the rule and not against the code.
+         function Controlled (Item : String) return Boolean is
+           (for some Char of Item =>
+              Character'Pos (Char) < 16#20#
+                or else Character'Pos (Char) = 16#7F#);
+      begin
+         for Left in 0 .. 255 loop
+            for Right in 0 .. 255 loop
+               declare
+                  Pair : constant String :=
+                    Character'Val (Left) & Character'Val (Right);
+                  Safe : constant String := Text.Escape_Controls (Pair);
+               begin
+                  Pairs := Pairs + 1;
+
+                  --  Nothing a terminal would act on survives.
+                  if not Is_Clean (Safe) then
+                     Assert (False,
+                             "escaping left a control character behind for"
+                             & Integer'Image (Left) & Integer'Image (Right));
+                  end if;
+
+                  --  And the report of whether there was one agrees with
+                  --  reading the bytes.
+                  if Text.Has_Controls (Pair) /= Controlled (Pair) then
+                     Assert (False,
+                             "Has_Controls disagrees with the rule for"
+                             & Integer'Image (Left) & Integer'Image (Right));
+                  end if;
+
+                  --  A pair with nothing to escape must come back as it
+                  --  went in, so escaping cannot be passing by mangling
+                  --  everything.
+                  if not Controlled (Pair) then
+                     if Safe /= Pair then
+                        Assert (False,
+                                "escaping altered text that had no control"
+                                & Integer'Image (Left) & Integer'Image (Right));
+                     end if;
+                  else
+                     Escapes := Escapes + 1;
+                  end if;
+               end;
+            end loop;
+         end loop;
+
+         Assert (Pairs = 65_536, "not every pair of bytes was tried");
+
+         --  Two bytes, each of which may be one of 33 controls: 33 * 256
+         --  pairs where the first is a control, plus 223 * 33 where only the
+         --  second is.
+         Assert (Escapes = 33 * 256 + 223 * 33,
+                 "the number of pairs needing an escape is"
+                 & Natural'Image (Escapes) & ", which is not what the rule "
+                 & "counts");
+      end;
+
       --  And now through a file, which is where a defect would actually live:
       --  the escaping is applied at the call sites, not by the reader.
       Fixtures.Reset (Builder);
