@@ -2,7 +2,7 @@ with Ada.Directories;
 with Ada.Environment_Variables;
 with System.Multiprocessors;
 
-with Hostkit.FS;
+with Hostkit.Fs;
 with Hostkit.Host;
 
 with Model_Runner.Text;
@@ -114,7 +114,7 @@ package body Model_Runner.Platform is
       --
       --  Empty is hostkit declining to guess rather than an error; the caller
       --  falls back to looking beside the working directory.
-      return Hostkit.FS.Own_Executable_Directory;
+      return Hostkit.Fs.Own_Executable_Directory;
    exception
       when others =>
          return "";
@@ -127,7 +127,7 @@ package body Model_Runner.Platform is
       --  Concatenating one here worked on the hosts it was tried on and was
       --  still this crate deciding what a path looks like.
       function Under (Base : String; Part : String) return String
-        renames Hostkit.FS.Join;
+        renames Hostkit.Fs.Join;
 
       function Existing (Path : String) return String is
       begin

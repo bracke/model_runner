@@ -12,6 +12,7 @@ with Tarlib.Errors;
 with Tarlib.Files;
 with Tarlib.Readers;
 with Model_Runner;
+with Hostkit.Fs;
 with Model_Runner.Memory;
 with Model_Runner.Text;
 with Model_Runner.Bytes;
@@ -488,7 +489,7 @@ package body Tests.Accounting_Cases is
 
       --  Write a file with some content, making its directory first.
       procedure Put_File (Relative : String; Content : String) is
-         Full : constant String := Root & "/" & Relative;
+         Full : constant String := Hostkit.Fs.Join (Root, Relative);
          Cut  : Natural := 0;
          Handle : Ada.Text_IO.File_Type;
       begin
@@ -557,7 +558,7 @@ package body Tests.Accounting_Cases is
       Prefix : constant String :=
         Model_Runner.Program_Name & "-" & Model_Runner.Version;
       Archive : constant String :=
-        Into & "/" & Prefix & ".tar";
+        Hostkit.Fs.Join (Into, Prefix & ".tar");
 
       Written : Boolean;
       Found   : Boolean;

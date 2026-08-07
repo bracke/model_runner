@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Hostkit.Fs;
 with Reserved_Codes;
 with Ada.Text_IO;
 
@@ -87,7 +88,7 @@ package body Docs_Generation is
    -----------------------------
 
    procedure Write_Error_Reference (Root : String; Written : out Boolean) is
-      Path   : constant String := Root & "/" & Relative;
+      Path   : constant String := Hostkit.Fs.Join (Root, Relative);
       Handle : Ada.Text_IO.File_Type;
    begin
       Written := False;
@@ -110,7 +111,7 @@ package body Docs_Generation is
    ----------------------------------
 
    function Error_Reference_Is_Current (Root : String) return Boolean is
-      Path     : constant String := Root & "/" & Relative;
+      Path     : constant String := Hostkit.Fs.Join (Root, Relative);
       Expected : constant String := Rendered;
       Handle   : Ada.Text_IO.File_Type;
       Buffer   : String (1 .. Expected'Length + 16);

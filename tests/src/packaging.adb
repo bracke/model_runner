@@ -2,6 +2,8 @@ with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
 
+with Hostkit.Fs;
+
 with Tarlib;
 with Tarlib.Entries;
 with Tarlib.Errors;
@@ -102,6 +104,10 @@ package body Packaging is
          Executable : Boolean;
       end record;
 
+      --  The names below are paths inside the archive, not on disk. USTAR
+      --  writes them with a forward slash on every host, so these stay as
+      --  they are: joining them the host's way would produce an archive that
+      --  unpacks wrongly everywhere except where it was made.
       Executable  : aliased constant String := "bin/" & Model_Runner.Program_Name;
       Executable_At : aliased constant String :=
         Prefix & "/bin/" & Model_Runner.Program_Name;
@@ -140,7 +146,7 @@ package body Packaging is
          declare
             --  Joined rather than composed: these are relative paths with
             --  separators in them, and Compose takes a simple name.
-            Full : constant String := Root & "/" & Entry_Item.From.all;
+            Full : constant String := Hostkit.Fs.Join (Root, Entry_Item.From.all);
          begin
             if not Ada.Directories.Exists (Full) then
                IO.Put_Line
@@ -169,7 +175,7 @@ package body Packaging is
 
       for Entry_Item of Contents loop
          declare
-            Full : constant String := Root & "/" & Entry_Item.From.all;
+            Full : constant String := Hostkit.Fs.Join (Root, Entry_Item.From.all);
             Ok   : Boolean;
          begin
             Add_File

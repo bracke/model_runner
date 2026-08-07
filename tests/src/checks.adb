@@ -1,6 +1,8 @@
 with Ada.Directories;
 with Ada.Text_IO;
 
+with Hostkit.Fs;
+
 with Project_Tools.Files;
 
 with Docs_Generation;
@@ -41,7 +43,8 @@ package body Checks is
          end if;
       end Check;
 
-      function Path (Parts : String) return String is (Root & "/" & Parts);
+      function Path (Parts : String) return String
+      is (Hostkit.Fs.Join (Root, Parts));
 
       --  Read a file, or an empty string when it is not there.
       function Contents (Relative : String) return String is
@@ -87,7 +90,7 @@ package body Checks is
 
          while Dirs.More_Entries (Search) loop
             Dirs.Get_Next_Entry (Search, Item);
-            Visit (Directory & "/" & Dirs.Simple_Name (Item));
+            Visit (Hostkit.Fs.Join (Directory, Dirs.Simple_Name (Item)));
          end loop;
 
          Dirs.End_Search (Search);
