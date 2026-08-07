@@ -218,9 +218,14 @@ package body Checks is
          procedure Visit_Offline (Relative : String) is
             Text : constant String := T.To_Lower (Contents (Relative));
 
+            --  This file names every token it forbids, so it cannot be held
+            --  to them. It is the one file where they mean the opposite.
+            Defines_The_Rule : constant Boolean :=
+              Holds (T.To_Lower (Relative), "checks.adb");
+
             procedure Reject_Reach (Token : String) is
             begin
-               if Holds (Text, Token) then
+               if not Defines_The_Rule and then Holds (Text, Token) then
                   Fail (Relative & " reaches beyond this machine: " & Token);
                end if;
             end Reject_Reach;
@@ -254,6 +259,12 @@ package body Checks is
          Scan_Offline ("src/platform/posix");
          Scan_Offline ("src/platform/windows");
          Scan_Offline ("src/platform/unsupported");
+
+         --  And the tests, because a mandatory test that reached a network
+         --  would make the suite untrustworthy in exactly the way the
+         --  program is not: it would pass or fail on somebody else's
+         --  machine being up.
+         Scan_Offline ("tests/src");
       end;
 
       --  Layering: nothing below the presentation layer may reach the message
@@ -559,6 +570,70 @@ package body Checks is
 
          Agrees ("README.md", "diagnostic codes");
          Agrees ("CHANGELOG.md", "diagnostic");
+      end;
+
+      --  Nothing large is committed here.
+      --
+      --  No mandatory test may need a large model, and no model may be
+      --  redistributed from this repository. Both hold today because the
+      --  fixtures are generated and tiny, and both would stop holding the
+      --  moment somebody committed a real one to make a test easier. The
+      --  largest thing here is a test source; a small real model is a
+      --  hundred times that.
+      declare
+         use type Dirs.File_Kind;
+         use type Dirs.File_Size;
+
+         Limit : constant Dirs.File_Size := 1_048_576;
+
+         procedure Weigh (Directory : String);
+
+         procedure Weigh (Directory : String) is
+            Search : Dirs.Search_Type;
+            Item   : Dirs.Directory_Entry_Type;
+         begin
+            if not Files.Directory_Exists (Path (Directory)) then
+               return;
+            end if;
+
+            Dirs.Start_Search (Search, Path (Directory), "");
+
+            while Dirs.More_Entries (Search) loop
+               Dirs.Get_Next_Entry (Search, Item);
+
+               declare
+                  Simple : constant String := Dirs.Simple_Name (Item);
+                  Child  : constant String :=
+                    Hostkit.Fs.Join (Directory, Simple);
+               begin
+                  if Simple = "." or else Simple = ".." then
+                     null;
+
+                  elsif Dirs.Kind (Item) = Dirs.Directory then
+                     --  What a build or a checkout leaves is not committed.
+                     if Simple /= ".git"
+                       and then Simple /= "obj"
+                       and then Simple /= "bin"
+                       and then Simple /= "alire"
+                     then
+                        Weigh (Child);
+                     end if;
+
+                  elsif Dirs.Kind (Item) = Dirs.Ordinary_File then
+                     Result.Performed := Result.Performed + 1;
+
+                     if Dirs.Size (Item) > Limit then
+                        Fail
+                          (Child & " is larger than this repository accepts");
+                     end if;
+                  end if;
+               end;
+            end loop;
+
+            Dirs.End_Search (Search);
+         end Weigh;
+      begin
+         Weigh (".");
       end;
 
       --  Reading a model must not lead to reading anything else.

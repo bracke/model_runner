@@ -7,6 +7,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Release checks that the test sources reach no network either, and that
+  nothing in the repository is large enough to be a model.
+
 - A release check that no unit interpreting a model's contents can reach a
   file, a stream, a directory, the environment or the command line.
 
