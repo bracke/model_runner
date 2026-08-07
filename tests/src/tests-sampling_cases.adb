@@ -102,6 +102,12 @@ package body Tests.Sampling_Cases is
          4 => 0.2, 5 => 0.6, 6 => 0.3, 7 => 0.8];
       Runs   : array (1 .. 2, 1 .. 24) of Vocab.Token_Id :=
         [others => [others => 0]];
+
+      --  Recorded from this build, and identical on any host that runs the
+      --  same arithmetic on the same seed.
+      Expected : constant array (1 .. 24) of Vocab.Token_Id :=
+        [1, 1, 6, 3, 4, 7, 5, 2, 7, 1, 1, 3, 1, 3, 1, 6, 6, 1, 0, 4, 1, 3,
+         0, 2];
    begin
       for Attempt in 1 .. 2 loop
          declare
@@ -123,6 +129,24 @@ package body Tests.Sampling_Cases is
       end loop;
 
       for Step in 1 .. 24 loop
+         --  The same run twice says the generator is deterministic within a
+         --  build. What it cannot say is that the stream is the same
+         --  elsewhere, and the specification claims exactly that: xoshiro256++
+         --  was chosen because it "produces the same stream on every host".
+         --  So the tokens are written down. This suite runs on Linux, macOS
+         --  and Windows, and a host that disagreed would say so here.
+         --
+         --  The pipeline order decides which token a stream position becomes,
+         --  and the specification says changing that order changes the answer
+         --  for a given seed. So this fails for two different reasons: the
+         --  generator drifting, or the pipeline being reordered. Both are
+         --  changes to a published behaviour and both should be deliberate.
+         Assert (Runs (1, Step) = Expected (Step),
+                 "step" & Natural'Image (Step) & " produced token"
+                 & Vocab.Token_Id'Image (Runs (1, Step))
+                 & " where this build has always produced"
+                 & Vocab.Token_Id'Image (Expected (Step)));
+
          Assert (Runs (1, Step) = Runs (2, Step),
                  "fixed seed did not reproduce step" & Integer'Image (Step));
       end loop;

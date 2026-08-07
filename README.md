@@ -255,7 +255,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   cancellation token through a real signal, agreement with the independent
   reference implementation, and a batch producing the same bits as the same
   tokens evaluated one at a time, down to the cache it leaves behind.
-- **Sampling, stops, kernels and templates** — the stop-string matcher
+- **Sampling, stops, kernels and templates** — a fixed seed producing a token
+  sequence written down rather than only compared with itself, so the claim
+  that the generator produces the same stream on every host is checked on
+  every host the suite runs on; the stop-string matcher
   compared against the rule written out the slow way, over two thousand
   generated sets and buffers, so a disagreement is a fault in one of them
   rather than a restatement of the other; two thousand generated
