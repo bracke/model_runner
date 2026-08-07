@@ -219,7 +219,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   past the length limit -- each reporting the code that names it, and the
   tokenizer's own refusals doing the same: no tokenizer model, a model this
   engine does not implement, no token list, input that is not UTF-8, and a
-  buffer too small for the tokens.
+  buffer too small for the tokens. The architecture profile likewise: a file
+  naming no architecture or another one, widths that do not divide, an odd
+  rotary width, an unsupported rotary scaling, a mixture-of-experts or
+  sliding-window model, and an embedding tensor of the wrong shape.
 - **Inference** — preparation, finite logits, run-to-run determinism,
   cancellation leaving the cache uncommitted, a cancellation asked for while
   the model is still loading stopping the load, context exhaustion and reset,

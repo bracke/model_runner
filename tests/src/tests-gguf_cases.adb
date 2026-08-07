@@ -1644,6 +1644,148 @@ package body Tests.GGUF_Cases is
       end;
    end Tokenizer_Refusals_Report_Themselves;
 
+   --  Every architecture refusal, reported by name.
+   --
+   --  A model file describes a shape, and this profile runs one shape. Eleven
+   --  refusals say which way a file falls outside it, and none of them was
+   --  named by a test. Distinguishing them is the point: "unsupported
+   --  architecture" sends the reader to find another program, "invalid
+   --  dimensions" says this file is inconsistent with itself.
+   procedure Architecture_Refusals_Report_Themselves
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  Prepare a built container and report the diagnostic. A container
+      --  with no tensors gets past the configuration and stops for want of
+      --  them, so anything reported before that came from the configuration.
+      function Outcome (Builder : in out Fixtures.Builder) return E.Error_Code
+      is
+         Image    : B.Byte_Array_Access;
+         Item     : Containers.Container;
+         Parse    : E.Error_Info;
+         Status   : E.Error_Info;
+         Result   : E.Error_Code;
+         Prepared : Model_Runner.Llama.Model;
+      begin
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse),
+                 "the fixture container did not parse: "
+                 & E.Error_Code'Image (Parse.Code));
+
+         declare
+            Copy   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Copy'Access);
+         begin
+            Model_Runner.Llama.Prepare
+              (Prepared, Item, Source, Status => Status);
+            Result := Status.Code;
+         end;
+
+         Model_Runner.Llama.Close (Prepared, Status);
+         Containers.Close (Item);
+         B.Free (Image);
+         return Result;
+      end Outcome;
+
+      --  A configuration this profile accepts, apart from what is added.
+      --
+      --  The widths are parameters rather than keys to be written over: a key
+      --  written twice makes the container itself invalid, and the reader
+      --  refuses it before the profile ever sees the shape.
+      procedure Sound
+        (Builder   : in out Fixtures.Builder;
+         Embedding : Interfaces.Unsigned_32 := 8;
+         Heads     : Interfaces.Unsigned_32 := 2) is
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_U32 (Builder, "llama.context_length", 16);
+         Fixtures.Add_U32 (Builder, "llama.embedding_length", Embedding);
+         Fixtures.Add_U32 (Builder, "llama.block_count", 2);
+         Fixtures.Add_U32 (Builder, "llama.feed_forward_length", 12);
+         Fixtures.Add_U32 (Builder, "llama.attention.head_count", Heads);
+
+         --  A tokenizer too, because preparation loads one before it looks
+         --  for tensors: without it every case here would stop at the
+         --  tokenizer and none would reach the shape being tested.
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, 3);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "a");
+         Fixtures.String_Element (Builder, "b");
+         Fixtures.End_Array (Builder);
+      end Sound;
+
+      Builder : Fixtures.Builder;
+   begin
+      --  Nothing says what the file is.
+      Fixtures.Reset (Builder);
+      Fixtures.Add_U32 (Builder, "llama.block_count", 2);
+      Assert (Outcome (Builder) = E.Arch_Missing_Identifier,
+              "a file naming no architecture was accepted");
+
+      --  It says what it is, and it is not this.
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "mamba");
+      Assert (Outcome (Builder) = E.Arch_Unsupported,
+              "an architecture this profile does not run was accepted");
+
+      --  A width that does not divide into heads. The head size is derived
+      --  from it, so a remainder means the file describes a model this
+      --  arithmetic cannot express.
+      Sound (Builder, Embedding => 9);
+      Assert (Outcome (Builder) = E.Arch_Invalid_Dimensions,
+              "an embedding width that does not divide into heads was accepted");
+
+      --  Heads that do not divide into key-value heads.
+      Sound (Builder, Embedding => 12, Heads => 3);
+      Fixtures.Add_U32 (Builder, "llama.attention.head_count_kv", 2);
+      Assert (Outcome (Builder) = E.Arch_Invalid_Head_Counts,
+              "head counts that do not divide were accepted");
+
+      --  A rotary width that is not even. Rotary encoding works on pairs.
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.rope.dimension_count", 3);
+      Assert (Outcome (Builder) = E.Arch_Invalid_Rope,
+              "an odd rotary width was accepted");
+
+      --  A rotary scaling that changes the position mapping.
+      Sound (Builder);
+      Fixtures.Add_String (Builder, "llama.rope.scaling.type", "yarn");
+      Assert (Outcome (Builder) = E.Arch_Unsupported_Rope_Scaling,
+              "an unsupported rotary scaling was accepted");
+
+      --  Features that make it a different model. The key being there is
+      --  enough: its value would only say how different.
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
+      Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
+              "a mixture-of-experts model was accepted");
+
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.attention.sliding_window", 4096);
+      Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
+              "a sliding-window model was accepted");
+
+      --  A sound configuration reaches the tensors and stops for want of
+      --  them, which is what makes every refusal above a configuration one.
+      Sound (Builder);
+      Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
+              "a sound configuration did not reach the tensors");
+
+      --  A tensor that is there and the wrong shape.
+      Sound (Builder);
+      Fixtures.Add_Tensor
+        (Builder, "token_embd.weight", [4], G.Type_F32,
+         Fixtures.Encode_F32 (Fixtures.Sequence (4, 1)));
+      Assert (Outcome (Builder) = E.Arch_Invalid_Tensor_Shape,
+              "an embedding tensor of the wrong shape was accepted");
+   end Architecture_Refusals_Report_Themselves;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -1698,6 +1840,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Architecture_Refusals_Report_Themselves'Access,
+         "every architecture refusal reports the code that names it");
       Register_Routine
         (T, Tokenizer_Refusals_Report_Themselves'Access,
          "every tokenizer refusal reports the code that names it");
