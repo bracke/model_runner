@@ -244,7 +244,32 @@ package body Tests.CLI_Cases is
       --  refusing the flags outright.
       Expect (E.No_Error, "run m.gguf --prompt hi --verbose --raw");
       Expect (E.No_Error, "inspect m.gguf --metadata --tensors");
+      Expect (E.No_Error, "run m.gguf --prompt hi --quiet --mmap");
+      Expect (E.No_Error, "run m.gguf --prompt hi --no-mmap --show-stats");
+      Expect (E.No_Error, "run m.gguf --prompt hi --no-stats");
+      Expect (E.No_Error, "inspect m.gguf --validate");
+
+      --  And every option that does take a value still accepts it joined by
+      --  an equals sign. Deciding which options take one is what the refusal
+      --  above rests on, and getting a single option on the wrong side of
+      --  that would refuse something that has always worked.
       Expect (E.No_Error, "run m.gguf --prompt=hi --max-tokens=2");
+      Expect (E.No_Error, "run m.gguf --prompt hi --context-size=16");
+      Expect (E.No_Error, "run m.gguf --prompt hi --batch-size=4");
+      Expect (E.No_Error, "run m.gguf --prompt hi --threads=1");
+      Expect (E.No_Error, "run m.gguf --prompt hi --temperature=0");
+      Expect (E.No_Error, "run m.gguf --prompt hi --top-k=1");
+      Expect (E.No_Error, "run m.gguf --prompt hi --top-p=1.0");
+      Expect (E.No_Error, "run m.gguf --prompt hi --min-p=0.0");
+      Expect (E.No_Error, "run m.gguf --prompt hi --repeat-penalty=1.0");
+      Expect (E.No_Error, "run m.gguf --prompt hi --repeat-window=8");
+      Expect (E.No_Error, "run m.gguf --prompt hi --seed=3");
+      Expect (E.No_Error, "run m.gguf --prompt hi --color=never");
+      Expect (E.No_Error, "run m.gguf --prompt hi --locale=en");
+      Expect (E.No_Error, "run m.gguf --prompt hi --stop=zz");
+      Expect (E.No_Error, "run m.gguf --prompt hi --stop-token=5");
+      Expect (E.No_Error, "run m.gguf --prompt hi --memory-limit=1073741824");
+      Expect (E.No_Error, "run m.gguf --prompt-file p.txt --system=hi");
       Expect (E.CLI_Conflicting_Prompt_Sources,
               "run m.gguf --prompt a --prompt-file b");
       Expect (E.CLI_Conflicting_System_Sources,
