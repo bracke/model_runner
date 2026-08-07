@@ -3,6 +3,7 @@ with AUnit.Assertions;
 with Interfaces;
 
 with Model_Runner.Backend.CPU;
+with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
@@ -973,6 +974,89 @@ package body Tests.CLI_Cases is
    --  The matching recording here is produced from this engine, so it is a
    --  test of the mechanism and not evidence about the engine. Cross-runtime
    --  evidence needs a recording from a different implementation, which is
+   --  A mapped read and an ordinary read return the same bytes.
+   --
+   --  Mapping is how the weights are reached when the host allows it, and it
+   --  is a different path from first byte to last: one hands back memory the
+   --  kernel arranged, the other copies through a stream. They are supposed
+   --  to be indistinguishable, and nothing compared them. A model read one
+   --  way and generated from the other would differ in whatever the two
+   --  paths disagree about, which is exactly the kind of thing that never
+   --  shows up on the machine where it was written.
+   procedure Mapping_Reads_The_Same_Bytes
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Sources renames Model_Runner.Byte_Sources.Files;
+      use type B.Byte;
+      use type B.Byte_Count;
+      use type B.Byte_Array;
+
+      Path : constant String := "obj/mapping-model.gguf";
+   begin
+      Tiny_Model.Write (Path);
+
+      declare
+         Extent : constant B.Byte_Count :=
+           B.Byte_Count (Ada.Directories.Size (Path));
+
+         Mapped : B.Byte_Array (1 .. Extent) := [others => 0];
+         Plain  : B.Byte_Array (1 .. Extent) := [others => 0];
+
+         Source : Sources.File_Source;
+         Status : E.Error_Info;
+         Host_Maps : Boolean := False;
+      begin
+         Assert (Extent > 0, "the fixture model is empty");
+
+         --  Required, so that a host which cannot map says so rather than
+         --  quietly falling back and leaving this comparing one path with
+         --  itself.
+         Sources.Open (Source, Path, Sources.Mapping_Required, 0, Status);
+
+         if Status.Code = E.Lifecycle_Mapping_Required then
+            --  No mapping on this host. There is nothing to compare, and
+            --  saying so is better than passing as though there were.
+            Host_Maps := False;
+         else
+            Assert (E.Is_Ok (Status),
+                    "a required mapping failed for another reason: "
+                    & E.Error_Code'Image (Status.Code));
+            Assert (Sources.Is_Mapped (Source),
+                    "a required mapping reported itself unmapped");
+            Host_Maps := True;
+
+            Sources.Read (Source, 0, Mapped, Status);
+            Assert (E.Is_Ok (Status), "the mapped read failed");
+         end if;
+
+         Sources.Close (Source);
+
+         Sources.Open (Source, Path, Sources.Mapping_Disabled, 0, Status);
+         Assert (E.Is_Ok (Status), "the unmapped open failed");
+         Assert (not Sources.Is_Mapped (Source),
+                 "a disabled mapping mapped anyway");
+
+         Sources.Read (Source, 0, Plain, Status);
+         Assert (E.Is_Ok (Status), "the unmapped read failed");
+         Sources.Close (Source);
+
+         --  The bytes of a model are what everything else is built from, so
+         --  comparing them is comparing every tensor at once.
+         if Host_Maps then
+            Assert (Mapped = Plain,
+                    "the mapped bytes differ from the bytes read");
+         end if;
+
+         --  And the unmapped path really did read the file rather than
+         --  returning the zeros it was initialised with.
+         Assert ((for some Value of Plain => Value /= 0),
+                 "the unmapped read returned nothing");
+      end;
+
+      Ada.Directories.Delete_File (Path);
+   end Mapping_Reads_The_Same_Bytes;
+
    --  The model file is never written to.
    --
    --  This is stated in the README and was held by nothing. It is not a
@@ -2561,6 +2645,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Standard_Input_Prompt_Is_Bounded'Access,
          "a prompt from standard input is bounded and refused plainly");
+      Register_Routine
+        (T, Mapping_Reads_The_Same_Bytes'Access,
+         "a mapped read and an ordinary read return the same bytes");
       Register_Routine
         (T, Model_File_Is_Never_Modified'Access,
          "the model file is never written to");
