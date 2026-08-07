@@ -323,6 +323,15 @@ package body Tests.Template_Cases is
    --  and a fault here would be a file taking the process down. And a render
    --  that fails must report writing nothing, because the caller emits Last
    --  bytes and would otherwise emit whatever the buffer held.
+   --
+   --  This is most of the suite's running time and it is worth knowing why
+   --  before shortening it. Of two thousand generated templates, about
+   --  fifteen hundred compile, roughly eight hundred and fifty render, and
+   --  some six hundred and eighty run away and are stopped -- nested loops
+   --  over a conversation, which is what a hostile template would be. The
+   --  time is the iteration bound doing its work six hundred and eighty
+   --  times over. Fewer cases, or shallower nesting, would buy the seconds
+   --  back by no longer generating the templates this exists to survive.
    procedure Any_Template_Is_Answered
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
