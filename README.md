@@ -229,7 +229,9 @@ Every test is deterministic, offline, and needs no downloaded model:
   dimension -- three answers a reader could give as one. What a caller can be
   wrong about is checked the same way: a request for no tokens or no batch, a
   prompt longer than the context, a message with no content, and generating
-  from a model that was never prepared. Refusals that cannot be built into a
+  from a model that was never prepared, a conversation past its bound, a model
+  released while a session still holds it, and a sampler with every token
+  forbidden. Refusals that cannot be built into a
   container are edited into one: an undefined value, array-element or tensor
   type, an array of arrays, a tensor off its alignment, and two tensors over
   the same bytes. The builder records where it wrote each field and the test

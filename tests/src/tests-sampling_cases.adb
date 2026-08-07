@@ -528,6 +528,50 @@ package body Tests.Sampling_Cases is
       return AUnit.Format ("sampling, stops and templates");
    end Name;
 
+   --  A sampler with nothing left to choose says so.
+   --
+   --  Every token can be forbidden, and then there is no answer to give. The
+   --  refusal exists and nothing named it; without a test, a sampler that
+   --  returned a forbidden token instead would look the same from outside.
+   procedure Sampling_Without_Candidates
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Width  : constant := 8;
+      Item   : S.Sampler;
+      Status : E.Error_Info;
+      Logits : N.Real_Array (0 .. Width - 1) := [others => 0.0];
+      Token  : S.Token_Id;
+   begin
+      S.Open
+        (Item, S.Greedy_Configuration, Width, 1, Status);
+      Assert (E.Is_Ok (Status), "the sampler did not open");
+
+      --  With one token left, that is the one chosen however small its logit.
+      for Index in 1 .. Width - 1 loop
+         S.Forbid (Item, S.Token_Id (Index));
+      end loop;
+      Logits (0) := -100.0;
+
+      S.Sample (Item, Logits, Token, Status);
+      Assert (E.Is_Ok (Status),
+              "a sampler with one candidate refused: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Token = 0,
+              "the only permitted token was not chosen:"
+              & S.Token_Id'Image (Token));
+
+      --  With none left there is no answer, and saying so is the answer.
+      S.Forbid (Item, 0);
+      S.Sample (Item, Logits, Token, Status);
+      Assert (Status.Code = E.Sampling_No_Candidates,
+              "a sampler with every token forbidden chose one anyway: "
+              & E.Error_Code'Image (Status.Code));
+
+      S.Close (Item);
+   end Sampling_Without_Candidates;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -535,6 +579,9 @@ package body Tests.Sampling_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Sampling_Without_Candidates'Access,
+         "a sampler with nothing left to choose says so");
       Register_Routine
         (T, Greedy_Selects_Maximum'Access,
          "greedy selects the maximum and breaks ties towards the lowest token");

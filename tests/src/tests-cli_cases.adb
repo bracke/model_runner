@@ -928,6 +928,30 @@ package body Tests.CLI_Cases is
          L.Close (Session);
       end;
 
+      --  A model still holding an open session is not a model to release.
+      --  Closing it would leave the session pointing at freed tensors.
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Under   : Harness (Held'Access);
+         Session : L.Session;
+         Status  : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Session, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         L.Close (Under.Ready, Status);
+         Assert (Status.Code = E.Lifecycle_Session_Active,
+                 "a model with a live session was released: "
+                 & E.Error_Code'Image (Status.Code));
+
+         L.Close (Session);
+         L.Close (Under.Ready, Status);
+         Assert (E.Is_Ok (Status),
+                 "a model was refused after its session closed: "
+                 & E.Error_Code'Image (Status.Code));
+      end;
+
       B.Free (Image);
 
       --  A conversation refuses the same way.
@@ -947,6 +971,36 @@ package body Tests.CLI_Cases is
          Model_Runner.Conversation.Append
            (Messages, Model_Runner.Conversation.User_Role, "hi", Status);
          Assert (E.Is_Ok (Status), "a sound message was refused");
+
+         Model_Runner.Conversation.Close (Messages);
+      end;
+
+      --  A conversation refuses a message past its bound. Tightened for the
+      --  test rather than filled to the built-in four thousand: what is being
+      --  checked is that the bound is applied and reported, not what it is.
+      declare
+         Bounds   : Model_Runner.Limits.Session_Limits :=
+           Model_Runner.Limits.Default_Session_Limits;
+         Messages : Model_Runner.Conversation.History;
+         Status   : E.Error_Info;
+      begin
+         Bounds.Max_Messages := 3;
+         Model_Runner.Conversation.Open (Messages, Bounds, Status);
+         Assert (E.Is_Ok (Status), "the bounded conversation did not open");
+
+         for Index in 1 .. 3 loop
+            Model_Runner.Conversation.Append
+              (Messages, Model_Runner.Conversation.User_Role, "hi", Status);
+            Assert (E.Is_Ok (Status),
+                    "a message inside the bound was refused at"
+                    & Integer'Image (Index));
+         end loop;
+
+         Model_Runner.Conversation.Append
+           (Messages, Model_Runner.Conversation.User_Role, "hi", Status);
+         Assert (Status.Code = E.Conversation_Too_Long,
+                 "a message past the bound was accepted: "
+                 & E.Error_Code'Image (Status.Code));
 
          Model_Runner.Conversation.Close (Messages);
       end;

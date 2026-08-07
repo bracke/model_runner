@@ -18,7 +18,9 @@ with Interfaces;
 --  always used the binary32 fixture ran the forward pass down a path where
 --  every check is still in force -- it drove the arithmetic but not the part
 --  the suppression makes dangerous. Which half a case falls in comes from its
---  number, so a failure still replays from its seed and case alone. Stopping at the parser left the campaign short of the gate its
+--  number, so a failure still replays from its seed and case alone.
+--
+--  Stopping at the parser left the campaign short of the gate its
 --  own contract names -- an invalid model must not reach an executable state
 --  -- and left the template compiler, which is the most program-like thing a
 --  file carries, never driven by a mutated template at all.
