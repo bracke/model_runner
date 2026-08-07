@@ -231,4 +231,3 @@ ordinal is never reused, not because they might appear.
 | `MR-INTERNAL-0002` | `error.internal.unexpected_exception` | recovery_terminal | 8 | raised |
 | `MR-INTERNAL-0003` | `error.internal.not_implemented` | recovery_unsupported | 4 | reserved |
 | `MR-INTERNAL-0004` | `error.internal.localization_failed` | recovery_terminal | 8 | reserved |
-

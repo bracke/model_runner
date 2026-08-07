@@ -1,6 +1,7 @@
 with Ada.Directories;
 with Hostkit.Fs;
 with Reserved_Codes;
+with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
 
 with Model_Runner.Errors;
@@ -88,18 +89,29 @@ package body Docs_Generation is
    -----------------------------
 
    procedure Write_Error_Reference (Root : String; Written : out Boolean) is
-      Path   : constant String := Hostkit.Fs.Join (Root, Relative);
-      Handle : Ada.Text_IO.File_Type;
+      Path      : constant String := Hostkit.Fs.Join (Root, Relative);
+      Directory : constant String := Hostkit.Fs.Join (Root, "docs");
+      Handle    : Ada.Streams.Stream_IO.File_Type;
+      Content   : constant String := Rendered;
    begin
       Written := False;
 
-      if not Ada.Directories.Exists (Root & "/docs") then
-         Ada.Directories.Create_Directory (Root & "/docs");
+      if not Ada.Directories.Exists (Directory) then
+         Ada.Directories.Create_Directory (Directory);
       end if;
 
-      Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Path);
-      Ada.Text_IO.Put (Handle, Rendered);
-      Ada.Text_IO.Close (Handle);
+      --  Written as bytes rather than as text. This file is committed, and a
+      --  text-mode write turns each line feed into a carriage return and a
+      --  line feed on Windows -- so regenerating it there would rewrite every
+      --  line of a file nobody had edited. The rendering already says where
+      --  the lines end.
+      --  Writing the bytes also drops a trailing blank line that the text
+      --  write left behind: closing a text file terminates the last line, and
+      --  the rendering had already terminated it.
+      Ada.Streams.Stream_IO.Create
+        (Handle, Ada.Streams.Stream_IO.Out_File, Path);
+      String'Write (Ada.Streams.Stream_IO.Stream (Handle), Content);
+      Ada.Streams.Stream_IO.Close (Handle);
       Written := True;
    exception
       when others =>
