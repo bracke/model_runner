@@ -75,7 +75,8 @@ asymmetric key and value widths, and rotary scaling other than `none` and
 | `loop.first`, `loop.last`, `loop.index`, `loop.index0` | Implemented |
 | `{%- -%}` and `{{- -}}` whitespace control | Implemented |
 | `set`, `macro`, `include`, `import`, `raise_exception` | Rejected: `MR-TMPL-0002` |
-| Filters, slicing, message indexing, arithmetic, calls | Rejected: `MR-TMPL-0002` |
+| Filters | Rejected: `MR-TMPL-0007` |
+| Slicing, message indexing, arithmetic, calls | Rejected: `MR-TMPL-0002` |
 
 ## Sampling
 
@@ -107,9 +108,9 @@ asymmetric key and value widths, and rotary scaling other than `none` and
 
 | Locale | State |
 | --- | --- |
-| `en` | Complete, 332 keys, the default |
-| `da` | Partial, 210 keys; the rest falls back per key to `en` |
-| `qps` | Pseudo-locale generated from `en`, 332 keys |
+| `en` | Complete, the default |
+| `da` | Partial; every key it does not carry falls back to `en` |
+| `qps` | Pseudo-locale generated from `en`, complete |
 
 ## Not implemented
 
@@ -120,7 +121,11 @@ The multiply is folded into the decode for Q4_0, where it measured faster.
 Q8_0, F32, F16 and the k-quant formats decode a span and then multiply, because
 fusing them measured slower; see the README. The kernels are vectorized by the compiler from ordinary Ada, with no
 intrinsics, no assembly and no target-specific flags; `-march=native` measured
-no difference, so none is used. Weights are not repacked. Row dot product,
-release build: Q8_0 0.39 ns per element, Q4_0 0.59, Q4_K 0.77, F32 1.26.
+no difference, so none is used. Weights are not repacked.
+
+Kernel measurements are in the README and only there. They were carried in both
+places, and when a measuring fault was found and corrected -- the benchmark was
+timing denormal arithmetic and reading about four times too fast -- only one
+copy was corrected. A figure worth publishing is worth having one home.
 
 See the README for the full list.
