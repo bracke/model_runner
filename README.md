@@ -277,7 +277,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   documented compile-time refusal reported by its own code rather than merely
   as an error, and all five bounds driven to their edge and one past it: size,
   instruction count, nesting depth, output size and iterations.
-- **Arithmetic, memory, clocks and packaging** — the release archive carrying
+- **Arithmetic, memory, clocks, text and packaging** — numbers rendering the
+  way a reader sees them, with fractions keeping their leading zeros and a
+  value too large for a fixed-point image saying so rather than raising inside
+  a diagnostic; the release archive carrying
   every file a distribution needs under its versioned prefix, with the program
   executable and the documents not, and refusing to write anything at all when
   one input is missing; the byte readers decoding little-endian

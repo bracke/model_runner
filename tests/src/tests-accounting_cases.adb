@@ -13,6 +13,7 @@ with Tarlib.Files;
 with Tarlib.Readers;
 with Model_Runner;
 with Model_Runner.Memory;
+with Model_Runner.Text;
 with Model_Runner.Bytes;
 with Model_Runner.Platform.Mapping;
 
@@ -625,6 +626,69 @@ package body Tests.Accounting_Cases is
       Ada.Directories.Delete_Tree (Into);
    end Archive_Carries_A_Distribution;
 
+   --  Numbers and text are rendered the way the reader will see them.
+   --
+   --  Every figure in a statistics line, every count in a diagnostic and
+   --  every path in an error goes through these. A formatter that dropped a
+   --  leading zero from a fraction would print a rate of 0.05 as 0.5, and
+   --  nothing else in the program would notice.
+   procedure Text_Renders_What_The_Reader_Sees
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package T2 renames Model_Runner.Text;
+   begin
+      --  Integers, without the leading space Ada puts on them.
+      Assert (T2.Image (Long_Long_Integer (0)) = "0", "zero rendered wrongly");
+      Assert (T2.Image (Long_Long_Integer (42)) = "42",
+              "a positive integer rendered wrongly");
+      Assert (T2.Image (Long_Long_Integer (-42)) = "-42",
+              "a negative integer rendered wrongly");
+
+      --  Fractions keep their leading zeros. This is the one that would be
+      --  wrong quietly: 0.05 printed as 0.5 is a tenfold misreport.
+      Assert (T2.Image (Long_Float (0.05), 2) = "0.05",
+              "a fraction lost its leading zero: "
+              & T2.Image (Long_Float (0.05), 2));
+      Assert (T2.Image (Long_Float (1.5), 3) = "1.500",
+              "a fraction was not padded: " & T2.Image (Long_Float (1.5), 3));
+      Assert (T2.Image (Long_Float (2.0), 0) = "2",
+              "asking for no decimals produced some: "
+              & T2.Image (Long_Float (2.0), 0));
+      Assert (T2.Image (Long_Float (-1.25), 2) = "-1.25",
+              "a negative fraction rendered wrongly: "
+              & T2.Image (Long_Float (-1.25), 2));
+
+      --  Rounding is to nearest, away from the truncation that would make
+      --  every reported rate slightly optimistic.
+      Assert (T2.Image (Long_Float (1.006), 2) = "1.01",
+              "rounding went down: " & T2.Image (Long_Float (1.006), 2));
+
+      --  A value with no fixed-point image says so instead of raising inside
+      --  a diagnostic, which is where these are usually called from.
+      Assert (T2.Image (Long_Float'Last, 2) = "inf",
+              "a value too large to render did not say so: "
+              & T2.Image (Long_Float'Last, 2));
+      Assert (T2.Image (-Long_Float'Last, 2) = "-inf",
+              "a value too small to render did not say so");
+
+      --  Bounded text records the loss rather than hiding it, so a truncated
+      --  path in a diagnostic can be told from a short one.
+      declare
+         Fits : constant T2.Bounded := T2.To_Bounded ("short");
+         Cut  : constant T2.Bounded :=
+           T2.To_Bounded ([1 .. T2.Max_Length + 10 => 'x']);
+      begin
+         Assert (T2.To_String (Fits) = "short", "short text was altered");
+         Assert (not Fits.Truncated,
+                 "short text was reported as truncated");
+         Assert (T2.To_String (Cut)'Length = T2.Max_Length,
+                 "long text was not cut to the bound");
+         Assert (Cut.Truncated,
+                 "long text was cut without recording it");
+      end;
+   end Text_Renders_What_The_Reader_Sees;
+
    ----------
    -- Name --
    ----------
@@ -660,6 +724,9 @@ package body Tests.Accounting_Cases is
       Register_Routine
         (T, Backwards_Clock_Yields_No_Duration'Access,
          "a clock that goes backwards yields no elapsed time");
+      Register_Routine
+        (T, Text_Renders_What_The_Reader_Sees'Access,
+         "numbers and text render the way the reader will see them");
       Register_Routine
         (T, Archive_Carries_A_Distribution'Access,
          "the release archive carries a distribution with the program executable");
