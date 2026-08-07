@@ -1954,6 +1954,44 @@ package body Tests.CLI_Cases is
       Prompt : constant String := "zqxjvwk";
       System : constant String := "hgfdplm";
 
+      --  Every simple name in a directory, in one string, so that two of
+      --  them can be compared. Naming the files a run must not leave behind
+      --  only rules out the names somebody thought of.
+      function Listing (Directory : String) return String is
+         package Dirs renames Ada.Directories;
+         Search : Dirs.Search_Type;
+         Item   : Dirs.Directory_Entry_Type;
+         Room   : String (1 .. 8_192);
+         Used   : Natural := 0;
+
+         procedure Note (Text : String) is
+         begin
+            if Used + Text'Length + 1 <= Room'Length then
+               Room (Used + 1 .. Used + Text'Length) := Text;
+               Used := Used + Text'Length + 1;
+               Room (Used) := '|';
+            end if;
+         end Note;
+      begin
+         if not Dirs.Exists (Directory) then
+            return "";
+         end if;
+
+         Dirs.Start_Search (Search, Directory, "");
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, Item);
+            Note (Dirs.Simple_Name (Item));
+         end loop;
+         Dirs.End_Search (Search);
+         return Room (1 .. Used);
+      end Listing;
+
+      --  What was there before the runs.
+      Before_Obj  : String (1 .. 8_192);
+      Obj_Used    : Natural := 0;
+      Before_Here : String (1 .. 8_192);
+      Here_Used   : Natural := 0;
+
       --  Run the program and return everything it wrote to standard error.
       function Diagnostics (Source : in out Fixed_Arguments) return String is
          Handle : File_Type;
@@ -1992,6 +2030,25 @@ package body Tests.CLI_Cases is
       end Diagnostics;
    begin
       Tiny_Model.Write (Model);
+
+      --  The capture file is this test's own, so it belongs to the state
+      --  the runs start from rather than to what they leave behind.
+      declare
+         Handle : File_Type;
+      begin
+         Create (Handle, Out_File, Errors);
+         Close (Handle);
+      end;
+
+      declare
+         Obj_Now  : constant String := Listing ("obj");
+         Here_Now : constant String := Listing (".");
+      begin
+         Before_Obj (1 .. Obj_Now'Length) := Obj_Now;
+         Obj_Used := Obj_Now'Length;
+         Before_Here (1 .. Here_Now'Length) := Here_Now;
+         Here_Used := Here_Now'Length;
+      end;
 
       --  A run that succeeds, at the loudest setting the program offers.
       --  Verbose is where a prompt would leak if anywhere.
@@ -2045,13 +2102,15 @@ package body Tests.CLI_Cases is
          end;
       end;
 
-      --  Nothing was written beside the model either: a conversation is not
-      --  persisted, and a run leaves no file behind that the reader did not
-      --  ask for.
-      Assert (not Ada.Directories.Exists ("obj/history"),
-              "a run left a history file behind");
-      Assert (not Ada.Directories.Exists (Model & ".session"),
-              "a run left a session file beside the model");
+      --  Nothing was written anywhere either: a conversation is not
+      --  persisted, and a run leaves behind no file the reader did not ask
+      --  for. Compared as whole directory listings rather than by name,
+      --  because a name has to be guessed and the one that matters is the
+      --  one nobody thought of.
+      Assert (Listing ("obj") = Before_Obj (1 .. Obj_Used),
+              "a run left something behind in obj");
+      Assert (Listing (".") = Before_Here (1 .. Here_Used),
+              "a run left something behind in the working directory");
 
       Ada.Directories.Delete_File (Model);
       Ada.Directories.Delete_File (Errors);
