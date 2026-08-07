@@ -574,6 +574,21 @@ first thing a run spends time on and nothing was watching it. A change to the
 reader cost a fifth of that path and the suite was entirely happy: every test
 passed, and it took a throwaway measurement to notice.
 
+That measurement is quoted against a memory copy timed in the same round, and
+the cost against the copy is the figure to keep. An absolute rate is worth
+little on its own: it moves with the machine, its load and its clock, so a
+number from one host says nothing about a number from another, and comparing
+across hosts is exactly what noticing a regression needs. Copying is what
+parsing mostly is, so the two move together and dividing takes the machine
+back out. Each round times the copy and the parse next to each other and the
+best round is kept, which is what stops a busy half-second from being reported
+as slow code.
+
+It resolves a change of about a sixth from a single run. The reader change
+above reads 820 to 900 times the cost of a copied byte, where the reader
+before it read 700 to 760, and those do not overlap across five runs of each.
+Anything smaller than that needs the comparison run several times.
+
 This is still a scalar-source implementation compiled for a portable baseline,
 and it is slower than a runtime built around hand-written vector code. It is
 not trying to compete with one; it is trying to be a correct and readable one.

@@ -1,4 +1,5 @@
 with Ada.Real_Time;
+with Interfaces;
 with Ada.Text_IO;
 
 with Model_Runner.Byte_Sources.Memory;
@@ -22,10 +23,16 @@ package body Benchmarks is
    package Q renames Model_Runner.Quantization;
    package T renames Model_Runner.Tensors;
 
+   use type Interfaces.Unsigned_64;
+
    use type B.Byte_Array_Access;
    use type B.Byte_Count;
    use type N.Element_Count;
    use type N.Real;
+
+   --  Fed by the reference copy so that the copy cannot be optimised away,
+   --  and read once at the end where the value can never be what is tested.
+   Guard : Interfaces.Unsigned_64 := 0;
 
    Rows    : constant N.Element_Count := 512;
    Columns : constant N.Element_Count := 2048;
@@ -91,7 +98,8 @@ package body Benchmarks is
    procedure Report
      (Name     : String;
       Elements : Long_Long_Integer;
-      Elapsed  : Duration)
+      Elapsed  : Duration;
+      Relative : Long_Float := 0.0)
    is
       package IO renames Ada.Text_IO;
 
@@ -108,6 +116,15 @@ package body Benchmarks is
       IO.Put (Long_Float'Image (Rate / 1.0E6) & " Me/s");
       if Rate > 0.0 then
          IO.Put ("   " & Long_Float'Image (1.0E9 / Rate) & " ns/element");
+      end if;
+
+      --  Where a reference was measured in this same run, this is the figure
+      --  worth keeping. It survives a different machine, a busy one and a
+      --  throttled one, and an absolute rate survives none of those. Quoted
+      --  as a cost so that it rises when the code gets slower.
+      if Relative > 0.0 and then Rate > 0.0 then
+         IO.Put
+           ("   " & Long_Float'Image (Relative / Rate) & " x a copied byte");
       end if;
       IO.New_Line;
    end Report;
@@ -200,6 +217,64 @@ package body Benchmarks is
 
       --  Decode blocks with no arithmetic on top, to separate the cost of
       --  producing the values from the cost of using them.
+      --  How many times a measurement is repeated before its best is kept.
+      --
+      --  A single timing on a shared machine carries a spread wider than the
+      --  regressions worth catching: the same binary measured a twelfth apart
+      --  run to run while this was being written. The best of several is the
+      --  round that was interrupted least, which is the one that says most
+      --  about the code.
+      Rounds : constant := 5;
+
+      Round_Seconds : constant Duration := Seconds / Rounds;
+
+      --  A reference measured in this same run, under the same conditions.
+      --
+      --  An absolute rate says nothing on its own. It moves with the machine,
+      --  its load and its clock, so a number recorded on one host cannot be
+      --  compared with one produced on another -- and that comparison is
+      --  exactly what catching a regression needs. Parsing is mostly copying
+      --  bytes and looking at them, so a plain memory copy moves with the
+      --  same things and divides them back out.
+      Reference_Span : constant B.Byte_Count := 4 * 1024 * 1024;
+
+      --  One round of the reference, run beside the round it is compared
+      --  with rather than once before all of them.
+      --
+      --  That is what makes the ratio worth quoting. A disturbance that
+      --  slows the machine for half a second slows both halves of the same
+      --  round, and dividing one by the other takes most of it back out. A
+      --  reference measured once, earlier, cancels nothing: it just moves
+      --  the error into the answer.
+      function Copy_Round
+        (From : B.Byte_Array_Access;
+         Into : B.Byte_Array_Access;
+         Span : Duration) return Long_Float
+      is
+         Started : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+         Copies  : Long_Long_Integer := 0;
+         Elapsed : Duration := 0.0;
+      begin
+         loop
+            Into.all := From.all;
+
+            --  Read back, so that nothing here can be discarded as work
+            --  whose result is never wanted.
+            Guard := Guard + Interfaces.Unsigned_64 (Into.all (Into.all'First));
+            Copies := Copies + 1;
+            Elapsed := Ada.Real_Time.To_Duration
+              (Ada.Real_Time.Clock - Started);
+            exit when Elapsed >= Span;
+         end loop;
+
+         if Elapsed <= 0.0 then
+            return 0.0;
+         end if;
+
+         return Long_Float (Copies * Long_Long_Integer (Reference_Span))
+           / Long_Float (Elapsed);
+      end Copy_Round;
+
       --  Time parsing a metadata-heavy container.
       --
       --  Loading a model is not a kernel, but it is the first thing a run
@@ -211,9 +286,16 @@ package body Benchmarks is
          Tokens  : constant := 100_000;
          Builder : Fixtures.Builder;
          Image   : B.Byte_Array_Access;
-         Passes  : Long_Long_Integer := 0;
-         Started : Ada.Real_Time.Time;
-         Elapsed : Duration;
+         Passes       : Long_Long_Integer := 0;
+         Started      : Ada.Real_Time.Time;
+         Elapsed      : Duration := 0.0;
+         Best_Cost    : Long_Float := 0.0;
+         Copy_Rate    : Long_Float := 0.0;
+         Kept_Copy    : Long_Float := 0.0;
+         Kept_Passes  : Long_Long_Integer := 0;
+         Kept_Elapsed : Duration := 0.0;
+         From         : B.Byte_Array_Access;
+         Into         : B.Byte_Array_Access;
       begin
          Fixtures.Reset (Builder);
          Fixtures.Add_String (Builder, "general.architecture", "llama");
@@ -237,33 +319,74 @@ package body Benchmarks is
             return;
          end if;
 
-         Started := Ada.Real_Time.Clock;
-         loop
-            declare
-               Held   : aliased constant B.Byte_Array := Image.all;
-               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
-                 (Held'Access);
-               Item   : Model_Runner.GGUF.Containers.Container;
-               Status : E.Error_Info;
-            begin
-               Model_Runner.GGUF.Containers.Reader.Parse
-                 (Item, Source, Model_Runner.Limits.Default_Model_Limits,
-                  null, null, Status);
-               exit when E.Is_Error (Status);
-               Model_Runner.GGUF.Containers.Close (Item);
-            end;
+         B.Allocate (Reference_Span, From);
+         B.Allocate (Reference_Span, Into);
 
-            Passes := Passes + 1;
-            Elapsed := Ada.Real_Time.To_Duration
-              (Ada.Real_Time.Clock - Started);
-            exit when Elapsed >= Seconds;
+         if From = null or else Into = null then
+            B.Free (From);
+            B.Free (Into);
+            B.Free (Image);
+            return;
+         end if;
+
+         Fill (From.all);
+
+         for Round in 1 .. Rounds loop
+            --  The reference first, then the parse, in the same round.
+            Copy_Rate := Copy_Round (From, Into, Round_Seconds / 2);
+
+            Passes := 0;
+            Started := Ada.Real_Time.Clock;
+
+            loop
+               declare
+                  Held   : aliased constant B.Byte_Array := Image.all;
+                  Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                    (Held'Access);
+                  Item   : Model_Runner.GGUF.Containers.Container;
+                  Status : E.Error_Info;
+               begin
+                  Model_Runner.GGUF.Containers.Reader.Parse
+                    (Item, Source, Model_Runner.Limits.Default_Model_Limits,
+                     null, null, Status);
+                  exit when E.Is_Error (Status);
+                  Model_Runner.GGUF.Containers.Close (Item);
+               end;
+
+               Passes := Passes + 1;
+               Elapsed := Ada.Real_Time.To_Duration
+                 (Ada.Real_Time.Clock - Started);
+               exit when Elapsed >= Round_Seconds / 2;
+            end loop;
+
+            --  The round with the lowest cost against its own reference,
+            --  not the average of the rounds: a slow round measured the
+            --  machine rather than the reader, and this is what says so.
+            if Elapsed > 0.0 and then Copy_Rate > 0.0 and then Passes > 0 then
+               declare
+                  Rate : constant Long_Float :=
+                    Long_Float (Passes * Long_Long_Integer (Image.all'Length))
+                    / Long_Float (Elapsed);
+                  Cost : constant Long_Float := Copy_Rate / Rate;
+               begin
+                  if Best_Cost = 0.0 or else Cost < Best_Cost then
+                     Best_Cost := Cost;
+                     Kept_Passes := Passes;
+                     Kept_Elapsed := Elapsed;
+                     Kept_Copy := Copy_Rate;
+                  end if;
+               end;
+            end if;
          end loop;
 
          --  Reported per byte of container, which is what a reader's cost
          --  scales with and what makes it comparable across fixtures.
          Report
            ("metadata parse, per byte",
-            Passes * Long_Long_Integer (Image.all'Length), Elapsed);
+            Kept_Passes * Long_Long_Integer (Image.all'Length), Kept_Elapsed,
+            Kept_Copy);
+         B.Free (From);
+         B.Free (Into);
          B.Free (Image);
       end Measure_Parse;
 
