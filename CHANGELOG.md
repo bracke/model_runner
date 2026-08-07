@@ -7,6 +7,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A differential test for stop-string matching: the earliest-then-longest rule
+  written out the slow, obvious way in the test and compared against the
+  engine's single-pass matcher over generated sets and buffers.
+
+
 - A property test over the chat-template engine: two thousand generated
   templates, built balanced so that most compile, one in four then broken, and
   rendered against conversations of varying shape into buffers small enough to

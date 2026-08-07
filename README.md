@@ -251,7 +251,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   cancellation token through a real signal, agreement with the independent
   reference implementation, and a batch producing the same bits as the same
   tokens evaluated one at a time, down to the cache it leaves behind.
-- **Sampling, stops, kernels and templates** — two thousand generated
+- **Sampling, stops, kernels and templates** — the stop-string matcher
+  compared against the rule written out the slow way, over two thousand
+  generated sets and buffers, so a disagreement is a fault in one of them
+  rather than a restatement of the other; two thousand generated
   configurations, every setting varied together over logits that include what
   a broken model produces, each returning a token inside the vocabulary or
   saying it cannot; the kernels answering

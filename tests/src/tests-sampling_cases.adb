@@ -754,6 +754,128 @@ package body Tests.Sampling_Cases is
               & " of two thousand configurations were answered");
    end Any_Sampling_Returns_A_Usable_Token;
 
+   --  The stop-string matcher agrees with a plain reading of its rule.
+   --
+   --  The rule is that the earliest match wins and the longest at that
+   --  position wins among those. The engine's matcher is written to scan once
+   --  and stop early; this test writes the rule out the slow, obvious way and
+   --  compares them over generated sets and buffers.
+   --
+   --  Comparing an implementation against itself proves nothing, which is the
+   --  trap a streaming test in this suite fell into. The reference below is
+   --  written from the rule rather than from the code, so a disagreement is a
+   --  fault in one of them and not a restatement.
+   --
+   --  What rests on it: the text before a match is released and the match
+   --  itself never is, so a matcher that reported a position one byte late
+   --  would emit the first byte of a stop string to the reader.
+   procedure Stop_Matching_Agrees_With_Its_Rule
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+
+      State : Interfaces.Unsigned_64 := 1_442_695_040_888_963_407;
+
+      function Draw (Bound : Positive) return Natural is
+      begin
+         State := State xor Interfaces.Shift_Left (State, 13);
+         State := State xor Interfaces.Shift_Right (State, 7);
+         State := State xor Interfaces.Shift_Left (State, 17);
+         return Natural (State mod Interfaces.Unsigned_64 (Bound));
+      end Draw;
+
+      --  Two letters, so that matches and overlaps are common rather than
+      --  rare enough to make the comparison decorative.
+      function Letters (Length : Natural) return String is
+         Result : String (1 .. Length);
+      begin
+         for Index in Result'Range loop
+            Result (Index) := (if Draw (2) = 0 then 'a' else 'b');
+         end loop;
+         return Result;
+      end Letters;
+
+      Matched : Natural := 0;
+   begin
+      for Case_Number in 1 .. 2_000 loop
+         declare
+            Count  : constant Natural := 1 + Draw (4);
+            Buffer : constant String := Letters (Draw (21));
+
+            type Piece is record
+               Text : String (1 .. 5);
+               Size : Natural;
+            end record;
+
+            Wanted : array (1 .. 4) of Piece;
+            Set    : Model_Runner.Stops.Set;
+            Status : E.Error_Info;
+
+            Found_First  : Natural;
+            Found_Length : Natural;
+
+            Rule_First  : Natural := 0;
+            Rule_Length : Natural := 0;
+         begin
+            Model_Runner.Stops.Open (Set);
+
+            for Index in 1 .. Count loop
+               declare
+                  Text : constant String := Letters (1 + Draw (5));
+               begin
+                  Wanted (Index).Size := Text'Length;
+                  Wanted (Index).Text (1 .. Text'Length) := Text;
+                  Model_Runner.Stops.Add_String (Set, Text, Status);
+               end;
+            end loop;
+
+            --  The rule, written out: walk the buffer from the left, and at
+            --  the first position where anything matches take the longest.
+            Position_Loop :
+            for Start in Buffer'Range loop
+               for Index in 1 .. Count loop
+                  declare
+                     Text : String renames
+                       Wanted (Index).Text (1 .. Wanted (Index).Size);
+                  begin
+                     if Start + Text'Length - 1 <= Buffer'Last
+                       and then Buffer (Start .. Start + Text'Length - 1) = Text
+                       and then Text'Length > Rule_Length
+                     then
+                        Rule_First := Start;
+                        Rule_Length := Text'Length;
+                     end if;
+                  end;
+               end loop;
+
+               exit Position_Loop when Rule_First /= 0;
+            end loop Position_Loop;
+
+            Model_Runner.Stops.Scan (Set, Buffer, Found_First, Found_Length);
+
+            Assert (Found_First = Rule_First and then Found_Length = Rule_Length,
+                    "case" & Natural'Image (Case_Number)
+                    & " over """ & Buffer & """: the matcher said"
+                    & Natural'Image (Found_First) & " for"
+                    & Natural'Image (Found_Length)
+                    & " and the rule says" & Natural'Image (Rule_First)
+                    & " for" & Natural'Image (Rule_Length));
+
+            if Rule_First /= 0 then
+               Matched := Matched + 1;
+            end if;
+
+            Model_Runner.Stops.Close (Set);
+         end;
+      end loop;
+
+      --  Reached, rather than agreeing because nothing ever matched.
+      Assert (Matched > 1_000,
+              "too few buffers contained a stop string to be comparing:"
+              & Natural'Image (Matched));
+   end Stop_Matching_Agrees_With_Its_Rule;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -761,6 +883,9 @@ package body Tests.Sampling_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Stop_Matching_Agrees_With_Its_Rule'Access,
+         "the stop-string matcher agrees with a plain reading of its rule");
       Register_Routine
         (T, Any_Sampling_Returns_A_Usable_Token'Access,
          "any configuration returns a usable token or says it cannot");
