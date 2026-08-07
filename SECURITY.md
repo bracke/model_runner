@@ -44,9 +44,26 @@ What makes it safe:
 - The parsing, validation and preparation layers are unaffected and keep every
   check. Nothing derived from a file reaches these loops without having been
   bounds-checked first.
-- `tests fuzz` drives malformed containers through the whole path. Three
-  thousand mutation cases across six seeds produce no escaped exception and no
-  invalid acceptance.
+- `tests fuzz` drives malformed containers through the whole load path: the
+  parser, the tokenizer, the chat-template compiler and model preparation. A
+  case that escapes an exception, is accepted into a usable state while
+  invalid, or runs past a time bound fails the run. The release checklist runs
+  a campaign on every invocation.
+
+### Validity checks in the numeric units
+
+`Model_Runner.Kernels` and `Model_Runner.Tensors` suppress `Validity_Check` for
+the whole unit, and `Model_Runner.Numerics` and `Model_Runner.Sampling` suppress
+it in the places that read a floating-point value apart. This is a different
+matter from the three checks above and is listed so that the section above is
+not read as saying there are no others.
+
+A validity check asks whether a scalar holds a value of its subtype when it is
+read. These units deliberately handle values that fail that question -- a
+not-a-number decoded from a file is inspected by `Is_Finite` and rejected -- and
+with the check in force the read raises before anything can look at the value.
+Suppressing it cannot turn an index into an out-of-range access: bounds are
+still checked, and every value so read is either tested or discarded.
 
 The stated guarantee is unchanged: no compatibility mode, option or file
 content disables a bounds or integrity check.
