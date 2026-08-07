@@ -569,6 +569,86 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Cancellation_Does_Not_Commit;
 
+   --  A batch is refused at the same boundary a single token is, and refusing
+   --  it leaves the cache where it was.
+   --
+   --  The two paths guard the context with different lines: one token asks
+   --  whether a slot is free, a batch asks whether the whole batch fits. Only
+   --  the first was tested, and the second is the one where being wrong
+   --  writes past the end of the cache rather than one slot into it.
+   procedure Batch_Respects_The_Context_Bound
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room  : constant := 4;
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Logits : Logit_Vector;
+      begin
+         Start (Under);
+
+         --  A batch that fills the context exactly is accepted. The bound is
+         --  a bound and not one less.
+         L.Open (Live, Under.Ready, Context => Room, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open");
+
+         L.Evaluate_Batch
+           (Live, Under.Ready, [4, 4, 4, 4], Logits, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a batch filling the context exactly was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = Room,
+                 "a filling batch left the position at"
+                 & Natural'Image (L.Position (Live)));
+
+         --  And one more token has nowhere to go.
+         L.Evaluate (Live, Under.Ready, 4, Logits, Status => Status);
+         Assert (Status.Code = E.Generation_Context_Exhausted,
+                 "a token past a full context was accepted");
+
+         --  A batch larger than the whole context is refused before anything
+         --  is written, and the cache is untouched.
+         L.Reset (Live);
+         Assert (L.Position (Live) = 0, "reset did not empty the cache");
+
+         L.Evaluate_Batch
+           (Live, Under.Ready, [4, 4, 4, 4, 4], Logits, Status => Status);
+         Assert (Status.Code = E.Generation_Context_Exhausted,
+                 "a batch larger than the context was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = 0,
+                 "a refused batch moved the cache to"
+                 & Natural'Image (L.Position (Live)));
+
+         --  A batch that would fit an empty context but not the room left is
+         --  refused too, which is the case the single-token guard cannot see.
+         L.Evaluate_Batch
+           (Live, Under.Ready, [4, 4], Logits, Status => Status);
+         Assert (E.Is_Ok (Status), "a batch inside the context was refused");
+
+         L.Evaluate_Batch
+           (Live, Under.Ready, [4, 4, 4], Logits, Status => Status);
+         Assert (Status.Code = E.Generation_Context_Exhausted,
+                 "a batch past the room left was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = 2,
+                 "a refused batch moved the cache from two to"
+                 & Natural'Image (L.Position (Live)));
+
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end Batch_Respects_The_Context_Bound;
+
    --  Filling the context reports Generation_Context_Exhausted rather than
    --  silently shifting or truncating the cache.
    procedure Context_Full_Is_Reported
@@ -821,6 +901,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Cancellation_Does_Not_Commit'Access,
          "a cancelled token leaves the committed context unchanged");
+      Register_Routine
+        (T, Batch_Respects_The_Context_Bound'Access,
+         "a batch is refused at the same boundary a single token is");
       Register_Routine
         (T, Context_Full_Is_Reported'Access,
          "a full context is reported and reset makes the session usable");

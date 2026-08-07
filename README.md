@@ -249,7 +249,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   UTF-8, checked over a vocabulary built so that a character spans three
   tokens, which the fixture model's all-ASCII vocabulary cannot express;
   preparation, finite logits, run-to-run determinism,
-  cancellation leaving the cache uncommitted, a cancellation asked for while
+  cancellation leaving the cache uncommitted, a batch refused at the same
+  context boundary a single token is -- filling it exactly accepted, one past
+  refused, and a refused batch leaving the cache where it was; a cancellation
+  asked for while
   the model is still loading stopping the load, context exhaustion and reset,
   out-of-range token rejection, tokenizer round trip, an interrupt reaching the
   cancellation token through a real signal, agreement with the independent
