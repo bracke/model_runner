@@ -403,6 +403,11 @@ package body Model_Runner.Sampling is
       for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
          if not Item.Masked.all (Natural (Index)) then
             declare
+               --  Suppressed for the same reason as the loop above: the
+               --  arithmetic below can leave a value the check would fire on
+               --  before anything can ask whether it did.
+               pragma Suppress (Validity_Check);
+
                Value : Real := Logits (Logits'First + Index);
             begin
                if Item.Settings.Repeat_Penalty /= 1.0
@@ -416,6 +421,17 @@ package body Model_Runner.Sampling is
 
                --  5  temperature
                Value := Value / Item.Settings.Temperature;
+
+               --  The inputs were all finite and the result need not be: a
+               --  large logit divided by a small temperature overflows, and a
+               --  penalty below one multiplies. Reported, like a logit that
+               --  arrived non-finite, rather than trapping here.
+               if not N.Is_Finite (Value) then
+                  Status := E.Make (E.Sampling_Non_Finite_Logit);
+                  E.Add_Integer
+                    (Status, "token", Long_Long_Integer (Index));
+                  return;
+               end if;
 
                Item.Working.all (Count) :=
                  (Token => Token_Id (Index), Logit => Value, Probability => 0.0);

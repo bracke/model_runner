@@ -2,6 +2,7 @@ with AUnit.Assertions;
 
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
+with Interfaces;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
 with Model_Runner.Kernels;
@@ -649,6 +650,110 @@ package body Tests.Sampling_Cases is
       end;
    end Kernels_Survive_Degenerate_Input;
 
+   --  Whatever it is given, the sampler returns a usable token or says it
+   --  cannot.
+   --
+   --  The token this returns is used as an index: into the vocabulary to find
+   --  its text, into the cache to place its position, into the history for
+   --  the repetition penalty. A token outside the vocabulary would be a fault
+   --  in three places at once, and the hand-written cases each exercise one
+   --  setting at a time.
+   --
+   --  So this varies all of them together, over logits that include the
+   --  values a model produces when something has gone wrong, and asks for the
+   --  property the rest of the engine relies on: either an error, or a token
+   --  that is inside the vocabulary and not one that was forbidden.
+   procedure Any_Sampling_Returns_A_Usable_Token
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+
+      Width : constant := 16;
+
+      State : Interfaces.Unsigned_64 := 3_141_592_653_589_793_238;
+
+      function Draw (Bound : Positive) return Natural is
+      begin
+         State := State xor Interfaces.Shift_Left (State, 13);
+         State := State xor Interfaces.Shift_Right (State, 7);
+         State := State xor Interfaces.Shift_Left (State, 17);
+         return Natural (State mod Interfaces.Unsigned_64 (Bound));
+      end Draw;
+
+      --  A logit, including the values that mean something went wrong.
+      function Some_Logit return N.Real is
+      begin
+         case Draw (8) is
+            when 0 => return 0.0;
+            when 1 => return 1.0;
+            when 2 => return -1.0;
+            when 3 => return N.Real (Draw (2_000)) / 100.0 - 10.0;
+            when 4 => return N.Real'Last;
+            when 5 => return -N.Real'Last;
+            when 6 => return N.Real (Draw (1_000_000));
+            when others => return N.Real (Draw (100)) / 1000.0;
+         end case;
+      end Some_Logit;
+
+      Answered : Natural := 0;
+   begin
+      for Case_Number in 1 .. 2_000 loop
+         declare
+            Config  : S.Configuration;
+            Item    : S.Sampler;
+            Logits  : N.Real_Array (0 .. Width - 1);
+            Token   : S.Token_Id;
+            Status  : E.Error_Info;
+            Opened  : E.Error_Info;
+            Forbid  : constant Natural := Draw (Width);
+         begin
+            --  Every setting varied together, including the combinations a
+            --  person writing cases would not think to pair.
+            Config.Temperature := N.Real (Draw (300)) / 100.0;
+            Config.Top_K := Draw (Width + 4);
+            Config.Top_P := N.Real (Draw (101)) / 100.0;
+            Config.Min_P := N.Real (Draw (101)) / 100.0;
+            Config.Repeat_Penalty := N.Real (Draw (300)) / 100.0;
+            Config.Repeat_Window := Draw (Width + 4);
+
+            S.Open (Item, Config, Width,
+                    Interfaces.Unsigned_64 (Case_Number), Opened);
+
+            if E.Is_Ok (Opened) then
+               for Index in Logits'Range loop
+                  Logits (Index) := Some_Logit;
+               end loop;
+
+               for Ignored in 1 .. Forbid loop
+                  S.Forbid (Item, S.Token_Id (Draw (Width)));
+               end loop;
+
+               S.Sample (Item, Logits, Token, Status);
+               Answered := Answered + 1;
+
+               if E.Is_Ok (Status) then
+                  Assert (Token >= 0 and then Natural (Token) < Width,
+                          "case" & Natural'Image (Case_Number)
+                          & " chose a token outside the vocabulary:"
+                          & S.Token_Id'Image (Token));
+               end if;
+            else
+               --  A configuration the sampler will not accept is a refusal
+               --  too, and refusing before opening is the safest of the
+               --  outcomes.
+               Answered := Answered + 1;
+            end if;
+
+            S.Close (Item);
+         end;
+      end loop;
+
+      Assert (Answered = 2_000,
+              "only" & Natural'Image (Answered)
+              & " of two thousand configurations were answered");
+   end Any_Sampling_Returns_A_Usable_Token;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -656,6 +761,9 @@ package body Tests.Sampling_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Any_Sampling_Returns_A_Usable_Token'Access,
+         "any configuration returns a usable token or says it cannot");
       Register_Routine
         (T, Kernels_Survive_Degenerate_Input'Access,
          "the kernels answer degenerate input instead of trapping on it");

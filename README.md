@@ -248,7 +248,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   cancellation token through a real signal, agreement with the independent
   reference implementation, and a batch producing the same bits as the same
   tokens evaluated one at a time, down to the cache it leaves behind.
-- **Sampling, stops, kernels and templates** — the kernels answering
+- **Sampling, stops, kernels and templates** — two thousand generated
+  configurations, every setting varied together over logits that include what
+  a broken model produces, each returning a token inside the vocabulary or
+  saying it cannot; the kernels answering
   degenerate input rather than trapping on it: a layer of zeros normalized
   without dividing by its own scale, a length mismatch leaving the target
   zeroed, and softmax refusing to turn values that are not finite into a

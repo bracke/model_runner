@@ -269,6 +269,15 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- Sampling raised instead of reporting when the transformations it applies
+  overflowed. The logits are checked for being finite when they arrive, but a
+  large finite logit divided by a small temperature, or multiplied by a
+  repetition penalty below one, produces a value that is not finite, and
+  storing it trapped. It is now reported as a non-finite logit, which is what
+  the same condition on arrival has always been. Found by a property test over
+  generated configurations, on its first run.
+
+
 - A directory given to `--prompt-file` was reported as unreadable rather than
   as not a file, which sends the reader to inspect a file that is not the
   problem. The model file reader has always made that distinction; the prompt
