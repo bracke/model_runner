@@ -236,6 +236,14 @@ wall and 16.0 s of processor time.
 
 ### Changed
 
+- Paths are built through `hostkit` rather than by concatenating a separator
+  here, and the directory holding the executable is asked of it rather than
+  derived from the executable's path. What goes between two path segments is
+  the host's business: Windows writes a backslash and accepts both, so a path
+  built with the wrong one works through every file call and shows itself only
+  when someone reads it.
+
+
 - Terminal detection is asked of `hostkit` rather than by importing `isatty`
   here. That C name is spelled `_isatty` on Windows, where the console is
   asked about through `GetConsoleMode` instead, so the import was a POSIX

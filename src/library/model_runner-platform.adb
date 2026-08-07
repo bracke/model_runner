@@ -1,8 +1,8 @@
-with Ada.Command_Line;
 with Ada.Directories;
 with Ada.Environment_Variables;
 with System.Multiprocessors;
 
+with Hostkit.FS;
 with Hostkit.Host;
 
 with Model_Runner.Text;
@@ -91,46 +91,28 @@ package body Model_Runner.Platform is
 
    function Executable_Directory return String is
    begin
-      --  Asked of hostkit, which knows where each host keeps the answer:
-      --  /proc/self/exe, _NSGetExecutablePath, GetModuleFileName. This used
-      --  to read procfs directly, which is Linux and not even macOS, so on
-      --  every other host it fell through to the command name and an
-      --  installed catalog beside the executable was never found.
-      declare
-         Target : constant String := Hostkit.Host.Executable_Path;
-      begin
-         if Target /= "" and then Ada.Directories.Exists (Target) then
-            return Ada.Directories.Containing_Directory (Target);
-         end if;
-      end;
-
-      --  Empty is hostkit declining to guess, not an error; the command name
-      --  is the honest fallback.
-
-      declare
-         Command : constant String := Ada.Command_Line.Command_Name;
-      begin
-         if Command = "" then
-            return "";
-         else
-            return Ada.Directories.Containing_Directory
-              (Ada.Directories.Full_Name (Command));
-         end if;
-      end;
+      --  Asked of hostkit, which knows both where each host keeps the answer
+      --  -- /proc/self/exe, _NSGetExecutablePath, GetModuleFileName -- and
+      --  how to take the directory off it. Taking it off here would be this
+      --  crate deciding what a path looks like, which is the question hostkit
+      --  exists to answer.
+      --
+      --  Empty is hostkit declining to guess rather than an error; the caller
+      --  falls back to looking beside the working directory.
+      return Hostkit.FS.Own_Executable_Directory;
    exception
       when others =>
          return "";
    end Executable_Directory;
 
-   -------------------
-   -- Catalog_Path --
-   -------------------
-
    function Catalog_Path return String is
       Directory : constant String := Executable_Directory;
 
-      function Joined (Parts : String) return String
-      is (Parts);
+      --  Joined by hostkit, which writes the separator this host writes.
+      --  Concatenating one here worked on the hosts it was tried on and was
+      --  still this crate deciding what a path looks like.
+      function Under (Base : String; Part : String) return String
+        renames Hostkit.FS.Join;
 
       function Existing (Path : String) return String is
       begin
@@ -141,39 +123,38 @@ package body Model_Runner.Platform is
          end if;
       end Existing;
 
-      Conventional : constant String := "resources/messages/catalog.txt";
+      --  Where the repository keeps the catalog, and where an installation
+      --  keeps it: <prefix>/share/model_runner/messages/catalog.txt.
+      Conventional : constant String :=
+        Under (Under ("resources", "messages"), "catalog.txt");
+
+      Installed_Tail : constant String :=
+        Under (Under (Under ("share", Model_Runner.Program_Name), "messages"),
+               "catalog.txt");
+
+      Shared_Tail : constant String :=
+        Under (Under ("share", Model_Runner.Program_Name), Conventional);
    begin
       if Directory /= "" then
-         --  Installed layout: <prefix>/bin/model_runner alongside
-         --  <prefix>/share/model_runner/messages/catalog.txt.
          declare
-            Installed : constant String :=
-              Existing
-                (Directory & "/../share/" & Model_Runner.Program_Name
-                 & "/messages/catalog.txt");
+            --  The prefix is the directory above the one holding the program,
+            --  which is Containing_Directory rather than a ".." segment
+            --  spelled by hand.
+            Prefix : constant String :=
+              Ada.Directories.Containing_Directory (Directory);
+
+            Installed   : constant String :=
+              Existing (Under (Prefix, Installed_Tail));
+            Shared      : constant String :=
+              Existing (Under (Prefix, Shared_Tail));
+            Development : constant String :=
+              Existing (Under (Prefix, Conventional));
          begin
             if Installed /= "" then
                return Installed;
-            end if;
-         end;
-
-         declare
-            Shared : constant String :=
-              Existing
-                (Directory & "/../share/" & Model_Runner.Program_Name
-                 & "/resources/messages/catalog.txt");
-         begin
-            if Shared /= "" then
+            elsif Shared /= "" then
                return Shared;
-            end if;
-         end;
-
-         --  Development layout: bin/model_runner alongside resources/.
-         declare
-            Development : constant String :=
-              Existing (Directory & "/../" & Conventional);
-         begin
-            if Development /= "" then
+            elsif Development /= "" then
                return Development;
             end if;
          end;
@@ -181,21 +162,20 @@ package body Model_Runner.Platform is
 
       declare
          Local : constant String := Existing (Conventional);
+         Above : constant String :=
+           Existing
+             (Under (Ada.Directories.Containing_Directory
+                       (Ada.Directories.Current_Directory),
+                     Conventional));
       begin
          if Local /= "" then
             return Local;
-         end if;
-      end;
-
-      declare
-         Above : constant String := Existing ("../" & Conventional);
-      begin
-         if Above /= "" then
+         elsif Above /= "" then
             return Above;
          end if;
       end;
 
-      return Joined (Conventional);
+      return Conventional;
    exception
       when others =>
          return Conventional;
