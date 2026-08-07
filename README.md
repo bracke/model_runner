@@ -214,9 +214,7 @@ cd tests && ./bin/tests external-model --model /path/to/your.gguf [--expect FILE
 Every test is deterministic, offline, and needs no downloaded model. The
 checklist holds both: no test source may name a socket, a resolver or an
 address, and nothing in the repository may exceed a megabyte, which is what a
-committed model would.
-
-Every test is deterministic, offline, and needs no downloaded model:
+committed model would. What the suite covers:
 
 - **GGUF** — truncation at *every* byte offset of a valid file, corrupt
   magic, unsupported versions, excessive counts, duplicate metadata keys,

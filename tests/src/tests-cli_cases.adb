@@ -2,6 +2,7 @@ with AUnit.Assertions;
 
 with Interfaces;
 
+with Model_Runner.Backend.CPU;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
@@ -401,6 +402,120 @@ package body Tests.CLI_Cases is
       L.Prepare (Item.Ready, Item.Parsed, Item.Source, Status => Status);
       Assert (E.Is_Ok (Status), "tiny model did not prepare");
    end Start;
+
+   --  How many workers run a generation does not change what it produces.
+   --
+   --  The README says the result is bit-identical whatever --threads is, and
+   --  that was held one layer down: a parallel matrix product equals the
+   --  serial one exactly. What was not held is the whole of it -- a run
+   --  partitions rows across workers for every product of every layer of
+   --  every token, and a partition that dropped or doubled a row would show
+   --  up here and nowhere in a single product.
+   procedure Worker_Count_Does_Not_Change_The_Text
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Image : B.Byte_Array_Access;
+      First : String (1 .. Max_Captured) := [others => ' '];
+      First_Used : Natural := 0;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+      begin
+         Start (Under);
+
+         for Count in Model_Runner.Backend.CPU.Worker_Count range 1 .. 4 loop
+            declare
+               Team    : aliased Model_Runner.Backend.CPU.Pool (Count);
+               Session : L.Session;
+               Stop    : Model_Runner.Stops.Set;
+               Sink    : aliased Capture_Sink;
+               Request : Gen.Request;
+               Outcome : Gen.Result;
+               Status  : E.Error_Info;
+            begin
+               Model_Runner.Backend.CPU.Open (Team);
+               Model_Runner.Stops.Open (Stop);
+
+               L.Open
+                 (Session, Under.Ready, Workers => Team'Unchecked_Access,
+                  Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the session did not open for" & Integer'Image (Count)
+                       & " workers: " & E.Error_Code'Image (Status.Code));
+
+               --  The session really is running on the pool that was opened,
+               --  with the workers asked for. Without this the whole test
+               --  could compare four serial runs and pass by saying nothing.
+               Assert (Model_Runner.Backend.CPU."/=" (L.Workers (Session), null),
+                       "the session ignored the worker pool");
+               Assert (Model_Runner.Backend.CPU.Worker_Total (Team) = Count,
+                       "the pool has"
+                       & Integer'Image
+                           (Model_Runner.Backend.CPU.Worker_Total (Team))
+                       & " workers rather than" & Integer'Image (Count));
+               Assert (Model_Runner.Backend.CPU.Is_Open (Team),
+                       "the pool is not open");
+
+               --  Enough tokens that every layer runs several times, and a
+               --  prompt long enough to be batched rather than stepped.
+               Request.Max_Tokens := 6;
+               Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+               Request.Has_Seed := True;
+               Request.Add_Beginning := True;
+
+               Gen.Generate
+                 (Under.Ready, Session, "abab", Request, Stop,
+                  Sink'Unchecked_Access, null, null, null, null,
+                  Outcome => Outcome);
+
+               Assert (Outcome.Reason = Gen.Maximum_Tokens,
+                       "the run with" & Integer'Image (Count)
+                       & " workers ended for another reason: "
+                       & Gen.Completion_Reason'Image (Outcome.Reason));
+
+               declare
+                  Text : constant String := Captured (Sink);
+               begin
+                  if Count = 1 then
+                     Assert (Text'Length > 0, "the first run produced nothing");
+                     First (1 .. Text'Length) := Text;
+                     First_Used := Text'Length;
+                  else
+                     Assert (Text = First (1 .. First_Used),
+                             "the text produced with" & Integer'Image (Count)
+                             & " workers differs from one worker's: """
+                             & Text & """ against """
+                             & First (1 .. First_Used) & """");
+                  end if;
+               end;
+
+               Assert (Outcome.Generated_Tokens > 0,
+                       "no tokens were generated with"
+                       & Integer'Image (Count) & " workers");
+
+               Gen.Release (Outcome);
+               L.Close (Session);
+               Model_Runner.Stops.Close (Stop);
+               Model_Runner.Backend.CPU.Close (Team);
+            exception
+               when others =>
+                  --  A failed assertion raises, and worker tasks left running
+                  --  keep the program from terminating. The failure would
+                  --  then arrive as a suite that hangs, which says nothing
+                  --  about which comparison went wrong.
+                  Model_Runner.Backend.CPU.Close (Team);
+                  raise;
+            end;
+         end loop;
+      end;
+
+      B.Free (Image);
+   end Worker_Count_Does_Not_Change_The_Text;
 
    --  A greedy run with a fixed seed produces the same text and the same
    --  completion reason every time.
@@ -2290,6 +2405,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Preliminary_Scans'Access,
          "the locale and colour pre-parse scans find only what is there");
+      Register_Routine
+        (T, Worker_Count_Does_Not_Change_The_Text'Access,
+         "how many workers run a generation does not change what it "
+         & "produces");
       Register_Routine
         (T, Generation_Is_Reproducible'Access,
          "a fixed seed reproduces the same generated text");
