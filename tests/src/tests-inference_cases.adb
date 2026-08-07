@@ -716,6 +716,88 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Reset_Leaves_No_Trace_Of_The_Previous_Turn;
 
+   --  Evaluation refuses arguments it cannot serve.
+   --
+   --  These are the checks at the top of both evaluation entries: that the
+   --  logit buffer is the vocabulary's width, and that a batch holds between
+   --  one and Max_Batch tokens. They are the contract the engine offers a
+   --  caller who is not the command line -- and past them, a buffer of the
+   --  wrong width is written to for the width the model has, not the width
+   --  the caller brought.
+   procedure Evaluation_Refuses_Arguments_It_Cannot_Serve
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+
+         Logits : Logit_Vector;
+         Narrow : N.Real_Array (0 .. Logit_Vector'Length - 2);
+         Wide   : N.Real_Array (0 .. Logit_Vector'Length);
+
+         Nothing  : constant Vocab.Token_Array (1 .. 0) := [];
+         Too_Many : constant Vocab.Token_Array (1 .. L.Max_Batch + 1) :=
+           [others => 1];
+
+         procedure Refused (What : String) is
+         begin
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    What & ": expected TENSOR_SHAPE_MISMATCH but got "
+                    & E.Error_Code'Image (Status.Code));
+            Assert (L.Position (Live) = 0,
+                    What & ": a refused call committed a cache position");
+         end Refused;
+      begin
+         Start (Under);
+
+         L.Open (Live, Under.Ready, Context => 8, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open");
+
+         --  A logit buffer narrower than the vocabulary, and one wider. The
+         --  width has to be the model's, not merely enough room: a caller
+         --  reading a wider buffer would read positions the model never
+         --  wrote and take them for logits.
+         L.Evaluate (Live, Under.Ready, 1, Narrow, Status => Status);
+         Refused ("a logit buffer one element short");
+
+         L.Evaluate (Live, Under.Ready, 1, Wide, Status => Status);
+         Refused ("a logit buffer one element long");
+
+         L.Evaluate_Batch (Live, Under.Ready, [1, 2], Narrow, Status => Status);
+         Refused ("a batch into a logit buffer one element short");
+
+         --  A batch of nothing is not a batch, and one past the documented
+         --  limit is refused at the limit rather than wherever the scratch
+         --  buffers happen to give out.
+         L.Evaluate_Batch (Live, Under.Ready, Nothing, Logits, Status => Status);
+         Refused ("a batch of no tokens");
+
+         L.Evaluate_Batch
+           (Live, Under.Ready, Too_Many, Logits, Status => Status);
+         Refused ("a batch of more than Max_Batch tokens");
+
+         --  The same calls with the width the model has, so that every
+         --  refusal above is about the argument and not the state.
+         L.Evaluate (Live, Under.Ready, 1, Logits, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a well-formed evaluation failed after the refusals: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = 1, "the accepted token did not commit");
+
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end Evaluation_Refuses_Arguments_It_Cannot_Serve;
+
    --  Filling the context reports Generation_Context_Exhausted rather than
    --  silently shifting or truncating the cache.
    procedure Context_Full_Is_Reported
@@ -974,6 +1056,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Reset_Leaves_No_Trace_Of_The_Previous_Turn'Access,
          "a reset session answers exactly as a fresh one does");
+      Register_Routine
+        (T, Evaluation_Refuses_Arguments_It_Cannot_Serve'Access,
+         "evaluation refuses arguments it cannot serve");
       Register_Routine
         (T, Context_Full_Is_Reported'Access,
          "a full context is reported and reset makes the session usable");
