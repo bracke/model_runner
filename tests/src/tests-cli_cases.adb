@@ -492,6 +492,13 @@ package body Tests.CLI_Cases is
          Assert (Outcome.Reason = Gen.Maximum_Tokens, "baseline run failed");
          Gen.Release (Outcome);
 
+         --  An empty prompt is not empty by the time it is tokenized: a
+         --  SentencePiece vocabulary prepends its space marker, so "" comes
+         --  back as one token and the run proceeds. The refusal for a prompt
+         --  of no tokens sits behind that and no vocabulary this program
+         --  accepts can reach it, since any other tokenizer kind is refused
+         --  when the model loads. Recorded rather than tested.
+
          declare
             Whole : constant String := Captured (Plain);
          begin
@@ -517,8 +524,26 @@ package body Tests.CLI_Cases is
                     & Captured (Sink) & """");
          end;
 
-         Model_Runner.Stops.Close (Stop);
+         Gen.Release (Outcome);
          L.Close (Session);
+
+         --  And generating from a session that has been closed. The model is
+         --  still there and still ready; what is gone is the cache the run
+         --  would extend, and continuing into it would be generating from
+         --  whatever the released memory now holds.
+         Gen.Generate
+           (Under.Ready, Session, "ab", Request, Stop,
+            Sink'Unchecked_Access, null, null, null, null, Outcome => Outcome);
+         Assert (Outcome.Reason = Gen.Runtime_Error,
+                 "a closed session generated text: "
+                 & Gen.Completion_Reason'Image (Outcome.Reason));
+         Assert (Outcome.Error.Code = E.Lifecycle_Invalid_State,
+                 "a closed session was not reported as such: "
+                 & E.Error_Code'Image (Outcome.Error.Code));
+         Assert (Outcome.Generated_Tokens = 0,
+                 "a refused run produced tokens");
+
+         Model_Runner.Stops.Close (Stop);
          Gen.Release (Outcome);
       end;
 
