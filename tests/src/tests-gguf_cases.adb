@@ -2229,6 +2229,163 @@ package body Tests.GGUF_Cases is
               "a three-byte character counted as more than one");
    end UTF8_Refuses_What_It_Must;
 
+   --  Every piece the streaming decoder hands out is itself valid UTF-8.
+   --
+   --  Generated text reaches the reader one token at a time and each piece is
+   --  written as it arrives. A model emits a character outside ASCII one byte
+   --  per token, through byte-fallback tokens, so a piece that ended half way
+   --  through one would put a broken byte on the terminal before the rest of
+   --  the character existed. Checking the finished text says nothing about
+   --  this: the whole is valid either way.
+   --
+   --  The vocabulary here is built for the question. The fixture model's
+   --  tokens are all ASCII, so no character can span two of them and the
+   --  holding-back logic never runs -- a test over that vocabulary passes
+   --  whatever the decoder does.
+   procedure Streamed_Pieces_Are_Whole_Characters
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+
+      State : Interfaces.Unsigned_64 := 6_364_136_223_846_793_005;
+
+      function Draw (Bound : Positive) return Natural is
+      begin
+         State := State xor Interfaces.Shift_Left (State, 13);
+         State := State xor Interfaces.Shift_Right (State, 7);
+         State := State xor Interfaces.Shift_Left (State, 17);
+         return Natural (State mod Interfaces.Unsigned_64 (Bound));
+      end Draw;
+
+      Builder : Fixtures.Builder;
+      Image   : B.Byte_Array_Access;
+      Item    : Containers.Container;
+      Words   : Vocab.Vocabulary;
+      Parse   : E.Error_Info;
+      Status  : E.Error_Info;
+
+      --  The three bytes of U+20AC, one per token, and two ordinary ones.
+      Byte_Tokens : constant := 3;
+      Total       : constant := 5;
+
+      Pieces   : Natural := 0;
+      Nonempty : Natural := 0;
+   begin
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+
+      Fixtures.Begin_Array
+        (Builder, "tokenizer.ggml.tokens", G.Value_String, Total);
+      Fixtures.String_Element (Builder, "<0xE2>");
+      Fixtures.String_Element (Builder, "<0x82>");
+      Fixtures.String_Element (Builder, "<0xAC>");
+      Fixtures.String_Element (Builder, "a");
+      Fixtures.String_Element (Builder, "b");
+      Fixtures.End_Array (Builder);
+
+      --  Six is the byte class. Without it these are ordinary tokens whose
+      --  text happens to look like <0xE2>, and nothing is ever split.
+      Fixtures.Begin_Array
+        (Builder, "tokenizer.ggml.token_type", G.Value_Int32, Total);
+      for Index in 1 .. Byte_Tokens loop
+         Fixtures.Int32_Element (Builder, 6);
+      end loop;
+      Fixtures.Int32_Element (Builder, 1);
+      Fixtures.Int32_Element (Builder, 1);
+      Fixtures.End_Array (Builder);
+
+      Fixtures.Build (Builder, Image);
+      Parse_Image (Image.all, Item, Parse);
+      Assert (E.Is_Ok (Parse),
+              "the byte-token fixture did not parse: "
+              & E.Error_Code'Image (Parse.Code));
+
+      Vocab.Load (Words, Item, Status => Status);
+      Assert (E.Is_Ok (Status),
+              "the byte-token vocabulary did not load: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  A whole character, decoded one byte at a time, arrives in one piece
+      --  rather than three. This is the case the property is about, so it is
+      --  checked directly before generating anything.
+      declare
+         Stream : Vocab.Decoder;
+         First  : constant String := Vocab.Push (Stream, Words, 0);
+         Second : constant String := Vocab.Push (Stream, Words, 1);
+         Third  : constant String := Vocab.Push (Stream, Words, 2);
+      begin
+         Vocab.Reset (Stream);
+         Assert (First = "" and then Second = "",
+                 "a character was handed out before it was complete");
+         Assert (Third = Character'Val (16#E2#) & Character'Val (16#82#)
+                 & Character'Val (16#AC#),
+                 "the completed character was not handed out whole");
+      end;
+
+      --  Sequences a working model produces: ordinary tokens and whole
+      --  characters, never a stray continuation byte. That restriction is the
+      --  point rather than a convenience. A byte that cannot begin a valid
+      --  character is released as it stands, deliberately -- withholding it
+      --  would wait for a completion that can never come -- so the property
+      --  being checked here is about text that is valid once assembled, which
+      --  is what a model that works produces.
+      for Case_Number in 1 .. 2_000 loop
+         declare
+            Units  : constant Natural := 1 + Draw (6);
+            Stream : Vocab.Decoder;
+
+            --  Hand one token to the decoder and hold it to the property.
+            procedure Give (Token : Natural) is
+               Part : constant String :=
+                 Vocab.Push (Stream, Words, Vocab.Token_Id (Token));
+            begin
+               Pieces := Pieces + 1;
+               if Part'Length > 0 then
+                  Nonempty := Nonempty + 1;
+               end if;
+
+               Assert (Model_Runner.UTF8.Is_Valid (Part),
+                       "case" & Natural'Image (Case_Number)
+                       & " handed out a piece that is not whole UTF-8");
+            end Give;
+         begin
+            Vocab.Reset (Stream);
+
+            for Ignored in 1 .. Units loop
+               if Draw (2) = 0 then
+                  --  An ordinary token, whole in itself.
+                  Give (3 + Draw (2));
+               else
+                  --  One character across three tokens, which is how a model
+                  --  emits anything outside ASCII.
+                  Give (0);
+                  Give (1);
+                  Give (2);
+               end if;
+            end loop;
+
+            declare
+               Tail : constant String := Vocab.Flush (Stream);
+            begin
+               Assert (Tail'Length = 0,
+                       "case" & Natural'Image (Case_Number)
+                       & " left bytes buffered after a whole sequence: """
+                       & Tail & """");
+            end;
+         end;
+      end loop;
+
+      Assert (Nonempty > 500,
+              "too few pieces carried text to be checking them:"
+              & Natural'Image (Nonempty) & " of" & Natural'Image (Pieces));
+
+      Vocab.Close (Words);
+      Containers.Close (Item);
+      B.Free (Image);
+   end Streamed_Pieces_Are_Whole_Characters;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -2298,6 +2455,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Architecture_Refusals_Report_Themselves'Access,
          "every architecture refusal reports the code that names it");
+      Register_Routine
+        (T, Streamed_Pieces_Are_Whole_Characters'Access,
+         "every piece the streaming decoder hands out is whole UTF-8");
       Register_Routine
         (T, Tokenizer_Refusals_Report_Themselves'Access,
          "every tokenizer refusal reports the code that names it");

@@ -241,7 +241,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   refuses each impossible shape by name too: no rows or columns, a quantized
   row that is not whole blocks, a format this build cannot decode, a shape
   past its buffer, and an operand that does not match.
-- **Inference** — preparation, finite logits, run-to-run determinism,
+- **Inference** — every piece the streaming decoder hands out being whole
+  UTF-8, checked over a vocabulary built so that a character spans three
+  tokens, which the fixture model's all-ASCII vocabulary cannot express;
+  preparation, finite logits, run-to-run determinism,
   cancellation leaving the cache uncommitted, a cancellation asked for while
   the model is still loading stopping the load, context exhaustion and reset,
   out-of-range token rejection, tokenizer round trip, an interrupt reaching the
