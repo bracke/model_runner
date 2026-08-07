@@ -649,6 +649,73 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Batch_Respects_The_Context_Bound;
 
+   --  A reset session answers exactly as a fresh one does.
+   --
+   --  Reset is cheap on purpose: it moves the commit point back to zero and
+   --  leaves the cache allocated, so the previous turn's keys and values are
+   --  still sitting in it. That is only sound while attention reads no
+   --  further than the commit point. If it ever read past it, the abandoned
+   --  turn would colour the next one -- and it would do so silently, because
+   --  logits stained by a stale key still look like logits.
+   procedure Reset_Leaves_No_Trace_Of_The_Previous_Turn
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+      Alone : Logit_Vector := [others => 0.0];
+      After : Logit_Vector := [others => 0.0];
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Scrap  : Logit_Vector;
+      begin
+         Start (Under);
+
+         L.Open (Live, Under.Ready, Context => 8, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open");
+
+         --  What the model says about one token with nothing behind it.
+         L.Evaluate (Live, Under.Ready, 1, Alone, Status => Status);
+         Assert (E.Is_Ok (Status), "the first evaluation failed");
+
+         --  Now put a different turn through the same cache, so that the
+         --  slots the next turn will read are full of somebody else's work.
+         L.Reset (Live);
+         for Token in Vocab.Token_Id range 4 .. 7 loop
+            L.Evaluate (Live, Under.Ready, Token, Scrap, Status => Status);
+            Assert (E.Is_Ok (Status), "filling the cache failed");
+         end loop;
+         Assert (L.Position (Live) = 4, "the cache did not fill");
+
+         L.Reset (Live);
+         Assert (L.Position (Live) = 0, "reset did not empty the cache");
+
+         --  And the same token again, over a cache that still holds the
+         --  other turn. The answer must not have moved at all.
+         L.Evaluate (Live, Under.Ready, 1, After, Status => Status);
+         Assert (E.Is_Ok (Status), "the evaluation after reset failed");
+
+         L.Close (Live);
+      end;
+
+      --  Bit-for-bit. A tolerance here would accept exactly the leak this
+      --  test exists to refuse: a stale key moves a logit a little.
+      for Index in Alone'Range loop
+         Assert
+           (Alone (Index) = After (Index),
+            "the abandoned turn changed the logit at"
+            & N.Element_Count'Image (Index));
+      end loop;
+
+      B.Free (Image);
+   end Reset_Leaves_No_Trace_Of_The_Previous_Turn;
+
    --  Filling the context reports Generation_Context_Exhausted rather than
    --  silently shifting or truncating the cache.
    procedure Context_Full_Is_Reported
@@ -904,6 +971,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Batch_Respects_The_Context_Bound'Access,
          "a batch is refused at the same boundary a single token is");
+      Register_Routine
+        (T, Reset_Leaves_No_Trace_Of_The_Previous_Turn'Access,
+         "a reset session answers exactly as a fresh one does");
       Register_Routine
         (T, Context_Full_Is_Reported'Access,
          "a full context is reported and reset makes the session usable");
