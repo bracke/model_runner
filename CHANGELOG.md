@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A release check that production code reaches nothing beyond this machine: no
+  socket API, no name resolver, no address. Local-only inference was stated and
+  enforced by nothing.
+
 - A benchmark for parsing a metadata-heavy container, alongside the row
   kernels. Loading is the first thing a run spends time on and nothing was
   measuring it. Reported as a cost against a memory copy timed in the same

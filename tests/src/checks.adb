@@ -192,6 +192,70 @@ package body Checks is
          Scan_Production ("src/platform/unsupported");
       end;
 
+      --  Local inference only, checked rather than intended.
+      --
+      --  This is the promise the program makes that a reader cannot verify by
+      --  running it: nothing here opens a connection, reports anything
+      --  anywhere, or fetches what it was not handed. Every other rule in
+      --  this file is about how the code is written. This one is about what
+      --  it must never learn to do -- and that kind of thing arrives one
+      --  convenient dependency at a time, in a change whose diff looks like
+      --  an improvement.
+      declare
+         function Holds (Text, Token : String) return Boolean is
+         begin
+            if Text'Length < Token'Length then
+               return False;
+            end if;
+            for Index in Text'First .. Text'Last - Token'Length + 1 loop
+               if Text (Index .. Index + Token'Length - 1) = Token then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Holds;
+
+         procedure Visit_Offline (Relative : String) is
+            Text : constant String := T.To_Lower (Contents (Relative));
+
+            procedure Reject_Reach (Token : String) is
+            begin
+               if Holds (Text, Token) then
+                  Fail (Relative & " reaches beyond this machine: " & Token);
+               end if;
+            end Reject_Reach;
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            --  Ada and C ways to open a socket.
+            Reject_Reach ("gnat.sockets");
+            Reject_Reach ("with aws");
+            Reject_Reach ("getaddrinfo");
+            Reject_Reach ("gethostbyname");
+            Reject_Reach ("sys/socket");
+            Reject_Reach ("inet_addr");
+            Reject_Reach ("libcurl");
+
+            --  And an address to reach, whatever would do the reaching. A
+            --  citation belongs in the prose files, where it cannot later be
+            --  mistaken for a target; in a source file here it has nothing
+            --  to be but one.
+            Reject_Reach ("http://");
+            Reject_Reach ("https://");
+
+            --  Reporting, which is a network reach with a friendlier name.
+            Reject_Reach ("telemetry");
+         end Visit_Offline;
+
+         procedure Scan_Offline is new For_Each_Source (Visit_Offline);
+      begin
+         Scan_Offline ("src/library");
+         Scan_Offline ("src/main");
+         Scan_Offline ("src/platform/posix");
+         Scan_Offline ("src/platform/windows");
+         Scan_Offline ("src/platform/unsupported");
+      end;
+
       --  Layering: nothing below the presentation layer may reach the message
       --  catalog, terminal styling or the command line.
       declare
