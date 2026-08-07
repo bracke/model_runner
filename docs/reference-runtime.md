@@ -46,8 +46,10 @@ both sides of every internal check shared the same decoder.
 independent implementation of the same forward pass in the tests crate. It
 decodes binary32 from the file bytes by reconstructing the value from its
 fields, computes in `Long_Float` throughout, keeps a full key and value history
-instead of a cache, and expands attention heads instead of mapping them. The
-two agree to within 4e-7 absolute.
+instead of a cache, and expands attention heads instead of mapping them. How
+closely the two agree is in the README, and `tests conformance` prints the
+worst divergence it measured on every run; both are one place rather than a
+figure copied here to go stale.
 
 That establishes the *arithmetic* is right. What a reference runtime adds is
 agreement on the *conventions*: tokenization of real text, the beginning-token
