@@ -212,7 +212,9 @@ Every test is deterministic, offline, and needs no downloaded model:
   fused dot product agreeing with the reference decoder for every format, the
   number of vectors in one kernel call changing none of them, and nothing a
   model file says -- metadata value, metadata key or tensor name -- reaching
-  the terminal unescaped, a hostile vocabulary, whose special-token
+  the terminal unescaped, the UTF-8 validator refusing overlong encodings,
+  surrogates and code points past U+10FFFF while accepting each length at its
+  boundaries, a hostile vocabulary, whose special-token
   identifiers name tokens that do not exist, being unable to make the
   tokenizer reach outside itself, and the structural refusals -- an unnamed
   metadata key or tensor, an alignment that is not a power of two, a string

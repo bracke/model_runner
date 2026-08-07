@@ -11,6 +11,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Quantization;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
+with Model_Runner.UTF8;
 with Model_Runner.Tokenizer;
 with Model_Runner.Llama;
 
@@ -2131,6 +2132,103 @@ package body Tests.GGUF_Cases is
       B.Free (Room);
    end View_Refusals_Report_Themselves;
 
+   --  What the UTF-8 validator must refuse, and what it must not.
+   --
+   --  Everything the program says about text safety rests on this: a metadata
+   --  string, a token, a prompt file and a chat template are each accepted
+   --  only if this says they are valid. Nothing exercised it directly.
+   --
+   --  The refusals that matter are the ones a length check alone would let
+   --  through. An overlong encoding spells a character the short way round --
+   --  C0 80 is a NUL wearing two bytes -- and a validator that accepts one
+   --  lets a byte past every check that looked for it in its ordinary form.
+   procedure UTF8_Refuses_What_It_Must
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package UTF8 renames Model_Runner.UTF8;
+
+      --  A string from byte values, so the test says what it means.
+      function Bytes (Values : B.Byte_Array) return String is
+         Result : String (1 .. Values'Length);
+         At_Index : Natural := 0;
+      begin
+         for Value of Values loop
+            At_Index := At_Index + 1;
+            Result (At_Index) := Character'Val (Value);
+         end loop;
+         return Result;
+      end Bytes;
+   begin
+      --  Accepted: the four lengths, at their boundaries.
+      Assert (UTF8.Is_Valid (""), "the empty string was refused");
+      Assert (UTF8.Is_Valid ("hello"), "ASCII was refused");
+      Assert (UTF8.Is_Valid (Bytes ([16#C2#, 16#80#])),
+              "the shortest two-byte sequence was refused");
+      Assert (UTF8.Is_Valid (Bytes ([16#DF#, 16#BF#])),
+              "the longest two-byte sequence was refused");
+      Assert (UTF8.Is_Valid (Bytes ([16#E0#, 16#A0#, 16#80#])),
+              "the shortest three-byte sequence was refused");
+      Assert (UTF8.Is_Valid (Bytes ([16#EF#, 16#BF#, 16#BF#])),
+              "the longest three-byte sequence was refused");
+      Assert (UTF8.Is_Valid (Bytes ([16#F0#, 16#90#, 16#80#, 16#80#])),
+              "the shortest four-byte sequence was refused");
+      Assert (UTF8.Is_Valid (Bytes ([16#F4#, 16#8F#, 16#BF#, 16#BF#])),
+              "U+10FFFF was refused");
+
+      --  Overlong forms, one for each length that has them.
+      Assert (not UTF8.Is_Valid (Bytes ([16#C0#, 16#80#])),
+              "an overlong NUL was accepted");
+      Assert (not UTF8.Is_Valid (Bytes ([16#C1#, 16#BF#])),
+              "an overlong two-byte form was accepted");
+      Assert (not UTF8.Is_Valid (Bytes ([16#E0#, 16#9F#, 16#BF#])),
+              "an overlong three-byte form was accepted");
+      Assert (not UTF8.Is_Valid (Bytes ([16#F0#, 16#8F#, 16#BF#, 16#BF#])),
+              "an overlong four-byte form was accepted");
+
+      --  Surrogates, which UTF-8 may not carry however they are spelled.
+      Assert (not UTF8.Is_Valid (Bytes ([16#ED#, 16#A0#, 16#80#])),
+              "a high surrogate was accepted");
+      Assert (not UTF8.Is_Valid (Bytes ([16#ED#, 16#BF#, 16#BF#])),
+              "a low surrogate was accepted");
+
+      --  Past the last code point.
+      Assert (not UTF8.Is_Valid (Bytes ([16#F4#, 16#90#, 16#80#, 16#80#])),
+              "a code point above U+10FFFF was accepted");
+      Assert (not UTF8.Is_Valid (Bytes ([16#F5#, 16#80#, 16#80#, 16#80#])),
+              "a lead byte above F4 was accepted");
+
+      --  Structure: a continuation on its own, a lead with none, and a
+      --  sequence interrupted by something that is not a continuation.
+      Assert (not UTF8.Is_Valid (Bytes ([16#80#])),
+              "a continuation byte alone was accepted");
+      Assert (not UTF8.Is_Valid (Bytes ([16#E2#, 16#82#])),
+              "a truncated three-byte sequence was accepted");
+      Assert (not UTF8.Is_Valid (Bytes ([16#E2#, 16#41#, 16#AC#])),
+              "a sequence interrupted by ASCII was accepted");
+
+      --  A prefix is safe up to a sequence that more bytes could complete,
+      --  and no further. This is what keeps a partial character out of the
+      --  output when a token boundary falls inside one.
+      declare
+         Whole : constant String := Bytes ([16#E2#, 16#82#, 16#AC#]);
+      begin
+         Assert (UTF8.Safe_Prefix_Length (Whole) = 3,
+                 "a complete sequence was withheld");
+         Assert (UTF8.Safe_Prefix_Length (Whole (1 .. 2)) = 0,
+                 "a sequence cut short was released");
+         Assert (UTF8.Safe_Prefix_Length ("ab" & Whole (1 .. 1)) = 2,
+                 "the text before a cut sequence was withheld with it");
+         Assert (UTF8.Safe_Prefix_Length ("abc") = 3,
+                 "plain text was withheld");
+      end;
+
+      --  Counting is by code point, not by byte.
+      Assert (UTF8.Code_Point_Count ("abc") = 3, "ASCII counted wrongly");
+      Assert (UTF8.Code_Point_Count (Bytes ([16#E2#, 16#82#, 16#AC#])) = 1,
+              "a three-byte character counted as more than one");
+   end UTF8_Refuses_What_It_Must;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -2185,6 +2283,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, UTF8_Refuses_What_It_Must'Access,
+         "the UTF-8 validator refuses overlongs, surrogates and stray bytes");
       Register_Routine
         (T, View_Refusals_Report_Themselves'Access,
          "a tensor view refuses each impossible shape by name");
