@@ -11,7 +11,14 @@ with Interfaces;
 --  and overflow checks -- the place SECURITY.md names as where a validation
 --  mistake would become memory unsafety rather than a clean Constraint_Error.
 --  Weight bytes are among the bytes being mutated, and until now nothing
---  drove them through those loops. Stopping at the parser left the campaign short of the gate its
+--  drove them through those loops.
+--
+--  Half the cases therefore work on a model of quantized weights and half on
+--  binary32. Those loops exist only on the quantized path, so a campaign that
+--  always used the binary32 fixture ran the forward pass down a path where
+--  every check is still in force -- it drove the arithmetic but not the part
+--  the suppression makes dangerous. Which half a case falls in comes from its
+--  number, so a failure still replays from its seed and case alone. Stopping at the parser left the campaign short of the gate its
 --  own contract names -- an invalid model must not reach an executable state
 --  -- and left the template compiler, which is the most program-like thing a
 --  file carries, never driven by a mutated template at all.

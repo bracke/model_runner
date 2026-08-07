@@ -81,7 +81,17 @@ package body Fuzzing is
       Image  : B.Byte_Array_Access;
       Result : Outcome := Rejected;
    begin
-      Tiny_Model.Build (Image);
+      --  Half the campaign works on quantized weights. The suppressed index,
+      --  range and overflow checks are in the quantized decode loops, so a
+      --  campaign that only ever mutates a model of binary32 weights never
+      --  drives them at all -- it runs the forward pass down a path where
+      --  every check is still in force. Which half a case falls in is derived
+      --  from its number, so a reported failure still replays exactly.
+      Tiny_Model.Build
+        (Image,
+         Format => (if Case_Number mod 2 = 0
+                    then Tiny_Model.Q8_0
+                    else Tiny_Model.Float32));
 
       declare
          Kind   : constant Interfaces.Unsigned_64 := Draw (Stream, 6);
