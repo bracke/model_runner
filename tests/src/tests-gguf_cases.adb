@@ -2386,6 +2386,168 @@ package body Tests.GGUF_Cases is
       B.Free (Image);
    end Streamed_Pieces_Are_Whole_Characters;
 
+   --  What the writer put in is what the reader takes out.
+   --
+   --  Two independent pieces of code meet at the container format: the
+   --  fixture builder writes it and the library reads it. Everything else in
+   --  this suite tests them together, so a disagreement about how a field is
+   --  laid out would look like agreement -- both sides would be wrong in the
+   --  same direction and every test would pass.
+   --
+   --  This writes values chosen by number, reads them back through the
+   --  accessors the engine uses, and compares. It covers the types a real
+   --  model file carries: strings, unsigned and signed integers of two
+   --  widths, floats, booleans, arrays, and the tensor descriptors.
+   procedure Written_Values_Read_Back_Unchanged
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      State : Interfaces.Unsigned_64 := 4_294_967_291;
+
+      function Draw (Bound : Positive) return Natural is
+      begin
+         State := State xor Interfaces.Shift_Left (State, 13);
+         State := State xor Interfaces.Shift_Right (State, 7);
+         State := State xor Interfaces.Shift_Left (State, 17);
+         return Natural (State mod Interfaces.Unsigned_64 (Bound));
+      end Draw;
+
+      Checked : Natural := 0;
+   begin
+      for Case_Number in 1 .. 500 loop
+         declare
+            Builder : Fixtures.Builder;
+            Image   : B.Byte_Array_Access;
+            Item    : Containers.Container;
+            Parse   : E.Error_Info;
+            Status  : E.Error_Info;
+
+            Word    : constant Interfaces.Unsigned_32 :=
+              Interfaces.Unsigned_32 (Draw (1_000_000));
+            Signed  : constant Interfaces.Integer_32 :=
+              Interfaces.Integer_32 (Draw (2_000_000)) - 1_000_000;
+            Wide    : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Draw (1_000_000)) * 4_000_000_000;
+            Flag    : constant Boolean := Draw (2) = 0;
+            Extent  : constant Natural := 1 + Draw (4);
+
+            Number  : Long_Long_Integer;
+            Text    : String (1 .. 64);
+            Last    : Natural;
+            Read_Flag : Boolean;
+         begin
+            Fixtures.Reset (Builder);
+            Fixtures.Add_String (Builder, "general.architecture", "llama");
+            Fixtures.Add_U32 (Builder, "fixture.word", Word);
+            Fixtures.Add_I32 (Builder, "fixture.signed", Signed);
+            Fixtures.Add_U64 (Builder, "fixture.wide", Wide);
+            Fixtures.Add_Bool (Builder, "fixture.flag", Flag);
+
+            Fixtures.Begin_Array
+              (Builder, "fixture.list", G.Value_Int32, Extent);
+            for Index in 1 .. Extent loop
+               Fixtures.Int32_Element (Builder, Interfaces.Integer_32 (Index));
+            end loop;
+            Fixtures.End_Array (Builder);
+
+            Fixtures.Add_Tensor
+              (Builder, "only.weight", [G.U64 (4), G.U64 (2)], G.Type_F32,
+               Fixtures.Encode_F32 (Fixtures.Sequence (8, 1)));
+
+            Fixtures.Build (Builder, Image);
+            Parse_Image (Image.all, Item, Parse);
+            Assert (E.Is_Ok (Parse),
+                    "case" & Natural'Image (Case_Number)
+                    & " did not parse: " & E.Error_Code'Image (Parse.Code));
+
+            --  Each value, through the accessor the engine uses for it.
+            Containers.Get_Integer
+              (Item, "fixture.word", 0, Long_Long_Integer'Last, Number, Status);
+            Assert (E.Is_Ok (Status)
+                    and then Number = Long_Long_Integer (Word),
+                    "case" & Natural'Image (Case_Number)
+                    & " read an unsigned word back as"
+                    & Long_Long_Integer'Image (Number));
+
+            Containers.Get_Integer
+              (Item, "fixture.signed", Long_Long_Integer'First,
+               Long_Long_Integer'Last, Number, Status);
+            Assert (E.Is_Ok (Status)
+                    and then Number = Long_Long_Integer (Signed),
+                    "case" & Natural'Image (Case_Number)
+                    & " read a signed word back as"
+                    & Long_Long_Integer'Image (Number));
+
+            Containers.Get_Integer
+              (Item, "fixture.wide", 0, Long_Long_Integer'Last, Number, Status);
+            Assert (E.Is_Ok (Status)
+                    and then Number = Long_Long_Integer (Wide),
+                    "case" & Natural'Image (Case_Number)
+                    & " read a wide value back as"
+                    & Long_Long_Integer'Image (Number));
+
+            Containers.Get_Boolean (Item, "fixture.flag", Read_Flag, Status);
+            Assert (E.Is_Ok (Status) and then Read_Flag = Flag,
+                    "case" & Natural'Image (Case_Number)
+                    & " read a flag back inverted");
+
+            Containers.Get_String
+              (Item, "general.architecture", Text'Length, Text, Last, Status);
+            Assert (E.Is_Ok (Status) and then Text (1 .. Last) = "llama",
+                    "case" & Natural'Image (Case_Number)
+                    & " read a string back as """ & Text (1 .. Last) & """");
+
+            --  The array, by length and by element.
+            declare
+               Length : Natural;
+            begin
+               Containers.Get_Array_Length
+                 (Item, "fixture.list", G.Value_Int32, Length, Status);
+               Assert (E.Is_Ok (Status) and then Length = Extent,
+                       "case" & Natural'Image (Case_Number)
+                       & " read an array of" & Natural'Image (Length)
+                       & " where" & Natural'Image (Extent) & " was written");
+
+               for Index in 1 .. Extent loop
+                  Containers.Get_Integer_Element
+                    (Item, "fixture.list", Index, Number, Status);
+                  Assert (E.Is_Ok (Status)
+                          and then Number = Long_Long_Integer (Index),
+                          "case" & Natural'Image (Case_Number)
+                          & " read element" & Natural'Image (Index)
+                          & " back as" & Long_Long_Integer'Image (Number));
+               end loop;
+            end;
+
+            --  And the tensor descriptor.
+            Assert (Containers.Tensor_Count (Item) = 1,
+                    "case" & Natural'Image (Case_Number)
+                    & " read a different number of tensors");
+            Assert (Containers.Tensor_Name (Item, 1) = "only.weight",
+                    "case" & Natural'Image (Case_Number)
+                    & " read the tensor name back as "
+                    & Containers.Tensor_Name (Item, 1));
+            Assert (Containers.Tensor_Rank (Item, 1) = 2,
+                    "case" & Natural'Image (Case_Number)
+                    & " read a different rank");
+            Assert (Containers.Tensor_Dimension (Item, 1, 1) = 4
+                    and then Containers.Tensor_Dimension (Item, 1, 2) = 2,
+                    "case" & Natural'Image (Case_Number)
+                    & " read different extents");
+            Assert (Containers.Tensor_Format (Item, 1) = G.Type_F32,
+                    "case" & Natural'Image (Case_Number)
+                    & " read a different format");
+
+            Checked := Checked + 1;
+            Containers.Close (Item);
+            B.Free (Image);
+         end;
+      end loop;
+
+      Assert (Checked = 500, "not every container was read back");
+   end Written_Values_Read_Back_Unchanged;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -2455,6 +2617,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Architecture_Refusals_Report_Themselves'Access,
          "every architecture refusal reports the code that names it");
+      Register_Routine
+        (T, Written_Values_Read_Back_Unchanged'Access,
+         "what the writer put in is what the reader takes out");
       Register_Routine
         (T, Streamed_Pieces_Are_Whole_Characters'Access,
          "every piece the streaming decoder hands out is whole UTF-8");
