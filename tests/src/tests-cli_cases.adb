@@ -22,6 +22,7 @@ with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
 
 with Expectations;
@@ -819,6 +820,168 @@ package body Tests.CLI_Cases is
       end if;
    end Notify;
 
+   --  What a prompt file can be wrong about, each reported by name.
+   --
+   --  A prompt file is named by the reader and read by the program, so the
+   --  ways it can fail are ordinary and the diagnostics have to tell them
+   --  apart: a path that is not there, a path that is not a file, a file too
+   --  large to accept, and one that is not text. Asserting merely that the
+   --  run failed would let any of them stand in for the others.
+   procedure Prompt_File_Failures_Report_Themselves
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model  : constant String := "obj/promptfile-model.gguf";
+      Errors : constant String := "obj/promptfile-errors.txt";
+
+      --  Run with a prompt file and return what reached standard error.
+      function Diagnostics (Prompt_Path : String) return String is
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+         Status : Natural;
+         Room   : String (1 .. 2_048);
+         Used   : Natural := 0;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--prompt-file");
+         Add (Source, Prompt_Path);
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+
+         Create (Handle, Out_File, Errors);
+         Set_Error (Handle);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               null;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Open (Handle, In_File, Errors);
+         while not End_Of_File (Handle) and then Used < Room'Length - 300 loop
+            declare
+               Line : String (1 .. 300);
+               Last : Natural;
+            begin
+               Get_Line (Handle, Line, Last);
+               Room (Used + 1 .. Used + Last) := Line (1 .. Last);
+               Used := Used + Last + 1;
+               Room (Used) := ' ';
+            end;
+         end loop;
+         Close (Handle);
+         return Room (1 .. Used);
+      end Diagnostics;
+
+      --  Write a file of Size bytes without holding it in memory.
+      procedure Write_Sized (Path : String; Size : Natural) is
+         use Ada.Streams;
+         Output : Ada.Streams.Stream_IO.File_Type;
+         Chunk  : constant Stream_Element_Array (1 .. 65_536) :=
+           [others => Stream_Element (Character'Pos ('x'))];
+         Left   : Natural := Size;
+      begin
+         Ada.Streams.Stream_IO.Create (Output, Ada.Streams.Stream_IO.Out_File, Path);
+         while Left > 0 loop
+            declare
+               Take : constant Natural := Natural'Min (Left, Chunk'Length);
+            begin
+               Ada.Streams.Stream_IO.Write
+                 (Output, Chunk (1 .. Stream_Element_Offset (Take)));
+               Left := Left - Take;
+            end;
+         end loop;
+         Ada.Streams.Stream_IO.Close (Output);
+      end Write_Sized;
+   begin
+      Tiny_Model.Write (Model);
+
+      --  Not there.
+      declare
+         Text : constant String := Diagnostics ("obj/no-such-prompt-xyzzy");
+      begin
+         Assert (Contains (Text, "MR-IO-0001"),
+                 "a missing prompt file was not reported as unopenable: "
+                 & Text);
+      end;
+
+      --  There, and not a file.
+      declare
+         Text : constant String := Diagnostics ("obj");
+      begin
+         Assert (Contains (Text, "MR-IO-0005"),
+                 "a directory was not reported as not a regular file: "
+                 & Text);
+      end;
+
+      --  A file, and not text. The prompt reaches the tokenizer, so what is
+      --  not UTF-8 has to stop before it.
+      declare
+         Path : constant String := "obj/promptfile-binary.txt";
+         Handle : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Create (Handle, Ada.Streams.Stream_IO.Out_File, Path);
+         for Value of Ada.Streams.Stream_Element_Array'[16#68#, 16#69#,
+                                                        16#FF#, 16#FE#]
+         loop
+            Ada.Streams.Stream_Element'Write
+              (Ada.Streams.Stream_IO.Stream (Handle), Value);
+         end loop;
+         Ada.Streams.Stream_IO.Close (Handle);
+
+         declare
+            Text : constant String := Diagnostics (Path);
+         begin
+            Assert (Contains (Text, "MR-IO-0006"),
+                    "a prompt file that is not UTF-8 was accepted: " & Text);
+         end;
+         Ada.Directories.Delete_File (Path);
+      end;
+
+      --  A file past the limit. Refused on its size before it is read, so
+      --  the bytes are never held.
+      declare
+         Path  : constant String := "obj/promptfile-large.txt";
+         Limit : constant Natural :=
+           Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes;
+      begin
+         Write_Sized (Path, Limit + 1);
+         declare
+            Text : constant String := Diagnostics (Path);
+         begin
+            Assert (Contains (Text, "MR-IO-0004"),
+                    "a prompt file past the limit was accepted: " & Text);
+         end;
+         Ada.Directories.Delete_File (Path);
+      end;
+
+      --  And a prompt file that is none of those things is read.
+      declare
+         Path   : constant String := "obj/promptfile-good.txt";
+         Handle : File_Type;
+      begin
+         Create (Handle, Out_File, Path);
+         Put (Handle, "ab");
+         Close (Handle);
+
+         declare
+            Text : constant String := Diagnostics (Path);
+         begin
+            Assert (not Contains (Text, "MR-IO-"),
+                    "a sound prompt file was refused: " & Text);
+         end;
+         Ada.Directories.Delete_File (Path);
+      end;
+
+      Ada.Directories.Delete_File (Model);
+      Ada.Directories.Delete_File (Errors);
+   end Prompt_File_Failures_Report_Themselves;
+
    --  Interactive mode needs a terminal at both ends.
    --
    --  Chosen implicitly, when no prompt source is given, it was already
@@ -1482,6 +1645,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Retained_Text_Matches'Access,
          "retained text matches what was streamed");
+      Register_Routine
+        (T, Prompt_File_Failures_Report_Themselves'Access,
+         "each way a prompt file can be wrong reports the code that names it");
       Register_Routine
         (T, Interaction_Needs_Both_Terminals'Access,
          "interactive mode needs a terminal at both ends");

@@ -32,6 +32,8 @@ with Model_Runner.CLI.Interactive;
 
 package body Model_Runner.CLI.Execute is
 
+   use type Ada.Directories.File_Kind;
+
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Byte_Sources.Files.Mapping_Policy;
    use type Model_Runner.CLI.Options.Prompt_Source;
@@ -72,6 +74,16 @@ package body Model_Runner.CLI.Execute is
 
       if not Ada.Directories.Exists (Path) then
          Status := E.Make (E.IO_Open_Failed);
+         E.Add_Text (Status, "path", Path, E.Param_Path);
+         return;
+      end if;
+
+      --  A directory exists and has a size, and opening one fails in a way
+      --  that reads as "cannot read this file" -- which sends the reader to
+      --  look at a file that is not the problem. The model file reader has
+      --  always made this distinction; the prompt file reader did not.
+      if Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File then
+         Status := E.Make (E.IO_Not_A_Regular_File);
          E.Add_Text (Status, "path", Path, E.Param_Path);
          return;
       end if;

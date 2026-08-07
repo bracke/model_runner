@@ -270,6 +270,12 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- A directory given to `--prompt-file` was reported as unreadable rather than
+  as not a file, which sends the reader to inspect a file that is not the
+  problem. The model file reader has always made that distinction; the prompt
+  file reader now does too.
+
+
 - Three more diagnostics that were declared and never produced now are. A
   tokenizer score or token-type table that is present but does not match the
   vocabulary is refused rather than silently dropped -- scores decide which
