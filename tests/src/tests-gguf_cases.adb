@@ -218,6 +218,207 @@ package body Tests.GGUF_Cases is
       B.Free (Image);
    end Typed_Accessors;
 
+   --  Build a container holding one key of every readable shape.
+   procedure Build_Shapes (Result : out B.Byte_Array_Access) is
+      Builder : Fixtures.Builder;
+   begin
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_U32 (Builder, "fixture.count", 2);
+      Fixtures.Add_F32 (Builder, "fixture.real", 0.5);
+      Fixtures.Add_Bool (Builder, "fixture.flag", True);
+
+      Fixtures.Begin_Array (Builder, "fixture.strings", G.Value_String, 3);
+      Fixtures.String_Element (Builder, "<unk>");
+      Fixtures.String_Element (Builder, "a");
+      Fixtures.String_Element (Builder, "b");
+      Fixtures.End_Array (Builder);
+
+      Fixtures.Begin_Array (Builder, "fixture.ints", G.Value_Int32, 3);
+      Fixtures.Int32_Element (Builder, 10);
+      Fixtures.Int32_Element (Builder, 20);
+      Fixtures.Int32_Element (Builder, 30);
+      Fixtures.End_Array (Builder);
+
+      Fixtures.Begin_Array (Builder, "fixture.floats", G.Value_Float32, 3);
+      Fixtures.Float_Element (Builder, 0.0);
+      Fixtures.Float_Element (Builder, -1.5);
+      Fixtures.Float_Element (Builder, 2.25);
+      Fixtures.End_Array (Builder);
+
+      Fixtures.Add_Tensor
+        (Builder, "token_embd.weight", [4], G.Type_F32,
+         Fixtures.Encode_F32 (Fixtures.Sequence (4, 1)));
+
+      Fixtures.Build (Builder, Result);
+   end Build_Shapes;
+
+   --  Every accessor refuses a key it cannot read, whichever way it is wrong.
+   --
+   --  Metadata is untrusted input, and each accessor is the boundary a caller
+   --  reads it through. Only the integer accessor had its three refusals held;
+   --  the others were tested where they succeed. This holds the whole matrix:
+   --  absent, wrongly typed, wrong element type, past the end, and -- for the
+   --  string accessor -- too long for the caller's buffer.
+   procedure Accessors_Refuse_Every_Way (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+
+      Item   : Containers.Container;
+      Status : E.Error_Info;
+      Number : Long_Long_Integer;
+      Real   : Model_Runner.Numerics.Wide_Real;
+      Flag   : Boolean;
+      Length : Natural;
+
+      --  Name the expected code in the message, so a wrong refusal reads as
+      --  clearly as no refusal at all.
+      procedure Refuses
+        (What     : String;
+         Expected : E.Error_Code) is
+      begin
+         Assert (Status.Code = Expected,
+                 What & ": expected " & E.Error_Code'Image (Expected)
+                 & " but got " & E.Error_Code'Image (Status.Code));
+      end Refuses;
+   begin
+      Build_Shapes (Image);
+      Parse_Image (Image.all, Item, Status);
+      Assert (E.Is_Ok (Status), "fixture did not parse");
+
+      --  A real number.
+      Containers.Get_Float (Item, "fixture.absent", 0.0, 1.0, Real, Status);
+      Refuses ("absent float key", E.GGUF_Missing_Metadata_Key);
+
+      Containers.Get_Float
+        (Item, "general.architecture", 0.0, 1.0, Real, Status);
+      Refuses ("float read of a string key", E.GGUF_Metadata_Type_Mismatch);
+
+      Containers.Get_Float (Item, "fixture.real", 0.0, 0.25, Real, Status);
+      Refuses ("float outside the caller range", E.GGUF_Metadata_Out_Of_Range);
+
+      --  A flag.
+      Containers.Get_Boolean (Item, "fixture.absent", Flag, Status);
+      Refuses ("absent boolean key", E.GGUF_Missing_Metadata_Key);
+      Assert (not Flag, "a refused boolean did not read False");
+
+      Containers.Get_Boolean (Item, "general.architecture", Flag, Status);
+      Refuses ("boolean read of a string key", E.GGUF_Metadata_Type_Mismatch);
+
+      --  An array length. Asking for the wrong element type is a mismatch
+      --  even though the key really is an array, which is what stops a
+      --  caller sizing a loop from one array and reading another.
+      Containers.Get_Array_Length
+        (Item, "fixture.absent", G.Value_String, Length, Status);
+      Refuses ("absent array key", E.GGUF_Missing_Metadata_Key);
+
+      Containers.Get_Array_Length
+        (Item, "fixture.count", G.Value_String, Length, Status);
+      Refuses ("array length of a scalar key", E.GGUF_Metadata_Type_Mismatch);
+      Assert (Length = 0, "a refused length did not read zero");
+
+      Containers.Get_Array_Length
+        (Item, "fixture.strings", G.Value_Int32, Length, Status);
+      Refuses ("array length with the wrong element type",
+               E.GGUF_Metadata_Type_Mismatch);
+
+      --  A string element.
+      declare
+         Text : String (1 .. 16);
+         Last : Natural;
+      begin
+         Containers.Get_String_Element
+           (Item, "fixture.absent", 1, Text, Last, Status);
+         Refuses ("absent string array", E.GGUF_Missing_Metadata_Key);
+
+         Containers.Get_String_Element
+           (Item, "fixture.count", 1, Text, Last, Status);
+         Refuses ("string element of a scalar key",
+                  E.GGUF_Metadata_Type_Mismatch);
+
+         Containers.Get_String_Element
+           (Item, "fixture.floats", 1, Text, Last, Status);
+         Refuses ("string element of a float array",
+                  E.GGUF_Metadata_Type_Mismatch);
+
+         Containers.Get_String_Element
+           (Item, "fixture.strings", 4, Text, Last, Status);
+         Refuses ("string element past the end",
+                  E.GGUF_Metadata_Out_Of_Range);
+         Assert (Last = 0, "a refused element still reported a length");
+      end;
+
+      --  A string too long for the caller is refused rather than truncated,
+      --  and the length accessor is how the caller avoids the refusal.
+      declare
+         Narrow : String (1 .. 2);
+         Last   : Natural;
+      begin
+         Containers.Get_String_Element
+           (Item, "fixture.strings", 1, Narrow, Last, Status);
+         Refuses ("a string longer than the buffer",
+                  E.GGUF_Metadata_Out_Of_Range);
+         Assert (Last = 0, "a refused string still reported a length");
+      end;
+
+      Containers.Get_String_Element_Length
+        (Item, "fixture.strings", 1, Length, Status);
+      Assert (E.Is_Ok (Status) and then Length = 5,
+              "the length accessor did not size the buffer");
+
+      declare
+         Sized : String (1 .. Length);
+         Last  : Natural;
+      begin
+         Containers.Get_String_Element
+           (Item, "fixture.strings", 1, Sized, Last, Status);
+         Assert (E.Is_Ok (Status) and then Sized (1 .. Last) = "<unk>",
+                 "a buffer sized by the length accessor still did not fit");
+      end;
+
+      --  An integer element.
+      Containers.Get_Integer_Element (Item, "fixture.absent", 1, Number, Status);
+      Refuses ("absent integer array", E.GGUF_Missing_Metadata_Key);
+
+      Containers.Get_Integer_Element (Item, "fixture.count", 1, Number, Status);
+      Refuses ("integer element of a scalar key",
+               E.GGUF_Metadata_Type_Mismatch);
+
+      Containers.Get_Integer_Element (Item, "fixture.floats", 1, Number, Status);
+      Refuses ("integer element of a float array",
+               E.GGUF_Metadata_Type_Mismatch);
+
+      Containers.Get_Integer_Element (Item, "fixture.ints", 4, Number, Status);
+      Refuses ("integer element past the end", E.GGUF_Metadata_Out_Of_Range);
+      Assert (Number = 0, "a refused integer element did not read zero");
+
+      Containers.Get_Integer_Element (Item, "fixture.ints", 2, Number, Status);
+      Assert (E.Is_Ok (Status) and then Number = 20,
+              "the integer element that is there was not read");
+
+      --  A float element.
+      Containers.Get_Float_Element (Item, "fixture.absent", 1, Real, Status);
+      Refuses ("absent float array", E.GGUF_Missing_Metadata_Key);
+
+      Containers.Get_Float_Element (Item, "fixture.count", 1, Real, Status);
+      Refuses ("float element of a scalar key", E.GGUF_Metadata_Type_Mismatch);
+
+      Containers.Get_Float_Element (Item, "fixture.ints", 1, Real, Status);
+      Refuses ("float element of an integer array",
+               E.GGUF_Metadata_Type_Mismatch);
+
+      Containers.Get_Float_Element (Item, "fixture.floats", 4, Real, Status);
+      Refuses ("float element past the end", E.GGUF_Metadata_Out_Of_Range);
+      Assert (Real = 0.0, "a refused float element did not read zero");
+
+      Containers.Get_Float_Element (Item, "fixture.floats", 2, Real, Status);
+      Assert (E.Is_Ok (Status) and then Real = -1.5,
+              "the float element that is there was not read");
+
+      Containers.Close (Item);
+      B.Free (Image);
+   end Accessors_Refuse_Every_Way;
+
    --  A wrong magic is rejected before anything else is read.
    procedure Invalid_Magic (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -2561,6 +2762,10 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Typed_Accessors'Access,
          "typed accessors separate missing, mistyped and out-of-range keys");
+      Register_Routine
+        (T, Accessors_Refuse_Every_Way'Access,
+         "every accessor refuses a key it cannot read, whichever way it is "
+         & "wrong");
       Register_Routine
         (T, Invalid_Magic'Access, "a corrupt magic is rejected");
       Register_Routine
