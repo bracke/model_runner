@@ -283,7 +283,12 @@ Every test is deterministic, offline, and needs no downloaded model:
   emergency path, locale fallback, escaped parameters, the pseudo-locale
   differing everywhere while keeping every placeholder, a partial second locale
   translating and inheriting per key, and POSIX host-locale normalization.
-- **Chat template** — an ordinary template compiling and rendering, every
+- **Chat template** — two thousand generated templates, mostly balanced so
+  that rendering rather than compiling is what is examined, one in four broken
+  on purpose, rendered into buffers small enough to overrun: none raises, and
+  every render that fails reports writing nothing, which is what stops a
+  caller emitting the previous turn's bytes; an ordinary template compiling
+  and rendering, every
   documented compile-time refusal reported by its own code rather than merely
   as an error, and all five bounds driven to their edge and one past it: size,
   instruction count, nesting depth, output size and iterations.

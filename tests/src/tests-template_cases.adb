@@ -1,5 +1,7 @@
 with AUnit.Assertions;
 
+with Interfaces;
+
 with Model_Runner.Conversation;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
@@ -301,6 +303,181 @@ package body Tests.Template_Cases is
       return AUnit.Format ("chat template");
    end Name;
 
+   --  Any template at all is answered, and a failed render writes nothing.
+   --
+   --  The engine's own bounds are checked by cases chosen to reach them. This
+   --  assembles templates from fragments instead -- balanced and unbalanced,
+   --  nested and interleaved, with tags a person writing cases would not put
+   --  next to each other -- and renders whatever compiles against
+   --  conversations of varying shape into buffers of varying size.
+   --
+   --  Two properties, both of which the rest of the engine relies on. Neither
+   --  compiling nor rendering may raise: a template comes out of a model file
+   --  and a fault here would be a file taking the process down. And a render
+   --  that fails must report writing nothing, because the caller emits Last
+   --  bytes and would otherwise emit whatever the buffer held.
+   procedure Any_Template_Is_Answered
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+
+      State : Interfaces.Unsigned_64 := 2_718_281_828_459_045_235;
+
+      function Draw (Bound : Positive) return Natural is
+      begin
+         State := State xor Interfaces.Shift_Left (State, 13);
+         State := State xor Interfaces.Shift_Right (State, 7);
+         State := State xor Interfaces.Shift_Left (State, 17);
+         return Natural (State mod Interfaces.Unsigned_64 (Bound));
+      end Draw;
+
+      --  Fragments of the supported grammar, and of what is nearly it.
+      function Body_Fragment (Which : Natural) return String is
+      begin
+         case Which is
+            when 0 => return "{{ message.role }}";
+            when 1 => return "{{ message.content }}";
+            when 2 => return "{{ bos_token }}";
+            when 3 => return "{{ eos_token }}";
+            when 4 => return "{{ loop.first }}";
+            when 5 => return "{{ loop.index }}";
+            when 6 => return "text";
+            when 7 => return "{{- bos_token -}}";
+            when others => return "{{ message['content'] }}";
+         end case;
+      end Body_Fragment;
+
+      Answered : Natural := 0;
+      Compiled : Natural := 0;
+      Rendered : Natural := 0;
+      Refused  : Natural := 0;
+   begin
+      for Case_Number in 1 .. 2_000 loop
+         declare
+            Source : String (1 .. 512);
+            Filled : Natural := 0;
+            Open_Blocks : array (1 .. 8) of Natural := [others => 0];
+            Depth  : Natural := 0;
+
+            --  Append a fragment if there is room for it.
+            procedure Put (Part : String) is
+            begin
+               if Filled + Part'Length <= Source'Length then
+                  Source (Filled + 1 .. Filled + Part'Length) := Part;
+                  Filled := Filled + Part'Length;
+               end if;
+            end Put;
+         begin
+            --  Built balanced, so that most of them compile and the render
+            --  is what is being examined. A generator that mostly produced
+            --  templates the compiler rejects would be testing the compiler
+            --  and calling it a test of rendering.
+            for Step in 1 .. 4 + Draw (5) loop
+               case Draw (10) is
+                  when 0 | 1 =>
+                     if Depth < Open_Blocks'Length then
+                        Depth := Depth + 1;
+                        Open_Blocks (Depth) := 0;
+                        Put ("{% for message in messages %}");
+                     end if;
+
+                  when 2 =>
+                     if Depth < Open_Blocks'Length then
+                        Depth := Depth + 1;
+                        Open_Blocks (Depth) := 1;
+                        Put ("{% if add_generation_prompt %}");
+                     end if;
+
+                  when 3 =>
+                     if Depth > 0 and then Open_Blocks (Depth) = 1 then
+                        Put ("{% else %}");
+                     end if;
+
+                  when others =>
+                     Put (Body_Fragment (Draw (9)));
+               end case;
+            end loop;
+
+            --  Close what was opened, innermost first.
+            while Depth > 0 loop
+               Put ((if Open_Blocks (Depth) = 0
+                     then "{% endfor %}" else "{% endif %}"));
+               Depth := Depth - 1;
+            end loop;
+
+            --  One in four is then broken on purpose, so the refusals are
+            --  reached by more than accident.
+            if Draw (4) = 0 and then Filled > 12 then
+               Filled := Filled - Draw (12);
+            end if;
+
+            declare
+               Item     : Tmpl.Compiled;
+               Status   : E.Error_Info;
+               Messages : Conv.History;
+               Outcome  : E.Error_Info;
+
+               --  Small buffers on purpose: a loop over messages emitting
+               --  their content overruns them, which is the failing render
+               --  this is here to watch.
+               Room     : constant Natural :=
+                 (if Draw (2) = 0 then 1 + Draw (24) else 1 + Draw (256));
+               Target   : String (1 .. Room) := [others => '?'];
+               Last     : Natural;
+            begin
+               Tmpl.Compile (Item, Source (1 .. Filled), Status => Status);
+               Answered := Answered + 1;
+
+               if E.Is_Ok (Status) then
+                  Compiled := Compiled + 1;
+                  Fill (Messages, 1 + Draw (4));
+
+                  Tmpl.Render
+                    (Item, Messages, "<s>", "</s>",
+                     Draw (2) = 0, Target, Last, Outcome);
+
+                  if E.Is_Ok (Outcome) then
+                     Rendered := Rendered + 1;
+                     Assert (Last <= Target'Length,
+                             "case" & Natural'Image (Case_Number)
+                             & " reported writing more than the buffer holds:"
+                             & Natural'Image (Last));
+                  else
+                     Refused := Refused + 1;
+                     --  The caller emits Last bytes. A failed render that
+                     --  left a count behind would emit whatever was in the
+                     --  buffer, which here is a row of question marks and in
+                     --  the engine is the previous turn.
+                     Assert (Last = 0,
+                             "case" & Natural'Image (Case_Number)
+                             & " failed and still reported"
+                             & Natural'Image (Last) & " bytes");
+                  end if;
+
+                  Conv.Close (Messages);
+               end if;
+
+               Tmpl.Close (Item);
+            end;
+         end;
+      end loop;
+
+      --  Both paths must be reached, or this passes by never rendering.
+      --  Measured when written: about fifteen hundred of two thousand
+      --  compile, of which roughly half render and half overrun their buffer.
+      Assert (Compiled > 500,
+              "too few templates compiled to be testing rendering:"
+              & Natural'Image (Compiled));
+      Assert (Rendered > 100 and then Refused > 100,
+              "the render outcomes are too one-sided to hold both:"
+              & Natural'Image (Rendered) & " ok," & Natural'Image (Refused)
+              & " refused");
+      Assert (Answered = 2_000,
+              "only" & Natural'Image (Answered)
+              & " of two thousand templates were answered");
+   end Any_Template_Is_Answered;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -308,6 +485,9 @@ package body Tests.Template_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Any_Template_Is_Answered'Access,
+         "any template is answered and a failed render writes nothing");
       Register_Routine
         (T, Ordinary_Template_Renders'Access,
          "a template the program would meet compiles and renders");

@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A property test over the chat-template engine: two thousand generated
+  templates, built balanced so that most compile, one in four then broken, and
+  rendered against conversations of varying shape into buffers small enough to
+  overrun. It holds that neither compiling nor rendering raises, and that a
+  failed render reports writing nothing.
+
+
 - A property test over the command-line parser: four thousand generated
   argument vectors, each derived from its case number so a failure replays,
   asserting only what the parser owes every caller -- that it returns with a
