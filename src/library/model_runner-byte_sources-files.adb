@@ -171,8 +171,12 @@ package body Model_Runner.Byte_Sources.Files is
       Target : out B.Byte_Array;
       Status : out E.Error_Info)
    is
+      --  Every path that leaves Target unfilled defines it here. Zeroing it
+      --  first and then copying over it writes every byte twice, which for a
+      --  caller reading straight into a large buffer is the whole of it.
       procedure Report_Truncated is
       begin
+         Target := [others => 0];
          Status := E.Make (E.GGUF_Truncated);
          E.Add_Integer
            (Status, "offset", Long_Long_Integer (Offset), E.Param_Offset);
@@ -183,10 +187,10 @@ package body Model_Runner.Byte_Sources.Files is
          E.Set_Location (Status, Interfaces.Unsigned_64 (Offset));
       end Report_Truncated;
    begin
-      Target := [others => 0];
       Status := E.Success;
 
       if not Self.Opened then
+         Target := [others => 0];
          Status := E.Make (E.IO_Read_Failed);
          return;
       end if;
@@ -247,6 +251,7 @@ package body Model_Runner.Byte_Sources.Files is
          when Ada.IO_Exceptions.End_Error =>
             Report_Truncated;
          when others =>
+            Target := [others => 0];
             Status := E.Make (E.IO_Read_Failed);
             E.Add_Integer
               (Status, "offset", Long_Long_Integer (Offset), E.Param_Offset);

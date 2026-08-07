@@ -24,11 +24,13 @@ package body Model_Runner.Byte_Sources.Memory is
       Target : out B.Byte_Array;
       Status : out E.Error_Info) is
    begin
-      Target := [others => 0];
-
       if Self.Data = null
         or else not B.Has_Room (Self.Data.all, Offset, Target'Length)
       then
+         --  Defined only where it is not filled. Zeroing first and copying
+         --  over it writes every byte twice, and a caller reading straight
+         --  into a large buffer pays that for the whole of it.
+         Target := [others => 0];
          Status := E.Make (E.GGUF_Truncated);
          E.Add_Integer
            (Status, "offset", Long_Long_Integer (Offset), E.Param_Offset);

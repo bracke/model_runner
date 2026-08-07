@@ -310,6 +310,11 @@ wall and 16.0 s of processor time.
   time rather than as one object, since the string limit allows sixteen
   megabytes. A code point lying across a window edge is judged whole.
 
+- A byte source no longer zeroes the caller's buffer before filling it, only
+  on the paths that return without filling it. Zeroing first writes every byte
+  twice, which a caller reading straight into a large buffer pays for the
+  whole of it.
+
 - The host locale is asked of `hostkit` when the environment does not answer.
   Reading only `LC_ALL` and `LANG` is a POSIX convention: neither is set on
   Windows, so a Windows user's own locale was never looked for and the program

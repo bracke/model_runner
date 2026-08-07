@@ -207,18 +207,20 @@ package body Model_Runner.GGUF.Containers.Reader is
 
    --  Read a GGUF string: a 64-bit length followed by that many bytes. The
    --  bytes are validated as UTF-8 and appended to the pool.
-   --  Largest run copied out of a source in one step.
+   --  Largest run of bytes examined in one step when checking an encoding.
    --
    --  Every length in a file is chosen by whoever wrote the file, so no
-   --  object may be sized from one. A run of any declared length is copied
-   --  in pieces of this size instead.
+   --  object may be sized from one. Bytes already in the pool are looked at
+   --  a window of this size at a time instead.
    Copy_Chunk : constant B.Byte_Count := 64 * 1024;
 
    --  Append a run of source bytes to the metadata pool.
    --
    --  The run is checked against the end of the file before any of it is
-   --  copied, so a file that merely claims a large run is refused as
-   --  truncated rather than asking for the storage first.
+   --  taken, so a file that merely claims a large run is refused as truncated
+   --  rather than asking for the storage first. The pool is grown to hold it
+   --  and the bytes land there directly: no object is ever sized by a length
+   --  the file chose.
    procedure Take_Into_Pool
      (Source : in out Model_Runner.Byte_Sources.Source'Class;
       Item   : in out Container;
@@ -254,31 +256,28 @@ package body Model_Runner.GGUF.Containers.Reader is
 
       Result := (Offset => Item.Pool_Used, Length => Length);
 
-      declare
-         Buffer : B.Byte_Array (1 .. Copy_Chunk);
-         Left   : B.Byte_Count := Length;
-      begin
-         while Left > 0 loop
-            declare
-               Piece : constant B.Byte_Count :=
-                 (if Left < Copy_Chunk then Left else Copy_Chunk);
-            begin
-               Source.Read (Cursor.Cursor, Buffer (1 .. Piece), Status);
-               if E.Is_Error (Status) then
-                  Result := (0, 0);
-                  return;
-               end if;
+      if Length > 0 then
+         declare
+            First : constant B.Byte_Count :=
+              Item.Pool.all'First + Item.Pool_Used;
+         begin
+            --  Straight into the pool, which Reserve has already grown to
+            --  hold it. Nothing is created for the run on the way, so its
+            --  length -- chosen by the file -- sizes no object at all, and
+            --  the bytes are copied once rather than twice.
+            Source.Read
+              (Cursor.Cursor, Item.Pool.all (First .. First + Length - 1),
+               Status);
 
-               Item.Pool.all
-                 (Item.Pool.all'First + Item.Pool_Used
-                  .. Item.Pool.all'First + Item.Pool_Used + Piece - 1) :=
-                 Buffer (1 .. Piece);
-               Item.Pool_Used := Item.Pool_Used + Piece;
-               Cursor.Cursor := Cursor.Cursor + Piece;
-               Left := Left - Piece;
-            end;
-         end loop;
-      end;
+            if E.Is_Error (Status) then
+               Result := (0, 0);
+               return;
+            end if;
+         end;
+
+         Item.Pool_Used := Item.Pool_Used + Length;
+         Cursor.Cursor := Cursor.Cursor + Length;
+      end if;
 
       Status := E.Success;
    end Take_Into_Pool;
@@ -297,6 +296,17 @@ package body Model_Runner.GGUF.Containers.Reader is
    begin
       if Run.Length = 0 then
          return True;
+      end if;
+
+      --  Almost every run is a key or a token and fits a window whole. The
+      --  windowing below exists for the ones that do not.
+      if Run.Length <= Copy_Chunk then
+         declare
+            Only : constant B.Byte_Count := Item.Pool.all'First + Run.Offset;
+         begin
+            return Model_Runner.UTF8.Is_Valid
+              (B.To_String (Item.Pool.all (Only .. Only + Run.Length - 1)));
+         end;
       end if;
 
       while Position < Run.Length loop
