@@ -69,6 +69,65 @@ Keep a Changelog and the project uses semantic versioning.
 - A recording format for values produced by a trusted reference runtime, with
   required provenance, and `--expect` to compare against it.
 
+- `tests benchmark` measures the row kernels on synthetic tensors, with no
+  model file and no network. It was written because reading the code produced
+  two confident wrong answers about where the time went.
+
+- `tests package` assembles the distributable archive: the executable, the
+  message catalog it looks for beside itself, and the documents that say what
+  the program is and what it does not do. The layout inside is the layout
+  `alr install` writes, so unpacking it over a prefix gives a working
+  installation -- verified by unpacking and running it from the filesystem
+  root, where it resolves its catalog and renders Danish.
+- The archive sets the executable's mode rather than taking tarlib's default,
+  which is 0644 for every regular file. An archive whose program unpacks
+  without the execute bit is not a distribution, and that failure would appear
+  on someone else's machine rather than here.
+- It refuses rather than guesses: every input is checked before anything is
+  written, so a missing file names itself and leaves no half-made archive.
+  Nothing is built and nothing is fetched.
+- `inspect --metadata` shows each entry's type and value, not just its key.
+  Strings are escaped and shortened on a code-point boundary, with an explicit
+  mark, so a prefix is never mistaken for the whole and no invalid UTF-8
+  reaches the terminal. Arrays are described rather than dumped: a tokenizer
+  vocabulary is a metadata array of tens of thousands of strings, and nobody
+  asking to see the metadata asked for that.
+- Windows memory mapping, over CreateFileMapping and MapViewOfFile. The
+  platform-specific bodies now sit one per host under `src/platform`, chosen by
+  the project file the way hostkit chooses its own, with a body for hosts
+  covered by neither that reports mapping unavailable rather than pretending.
+  Read-only throughout: the file is opened for reading, shared for reading and
+  mapped for reading, so the model cannot be modified through it.
+- `hostkit` is a dependency, for the things that exist only because operating
+  systems differ. `Platform.Host_Name` asks it which host this is, and
+  `Executable_Directory` asks it where the running program is rather than
+  reading `/proc/self/exe` directly -- that is Linux and not even macOS, so on
+  every other host the installed layout could not be found and the catalog
+  silently fell back. `Hostkit.Host.Executable_Path` was added upstream for
+  this.
+
+- Memory accounting and the monotonic clock had no tests at all. Seven now
+  cover them: an allocation past the budget refused before any allocator runs,
+  totals following allocation and release, a peak that does not fall when
+  memory is freed and reallocated, mapped bytes counted apart from allocated
+  ones, a plan that cannot be represented refused rather than wrapped, a plan
+  totalling what will actually be resident, a clock that goes backwards
+  yielding no duration, and a rate over no elapsed time reading zero rather
+  than infinite.
+- `tests conformance` runs on quantized weights as well as binary32: eight
+  sequences and 128 logits rather than four and 64. Nothing offline had
+  compared quantized inference against an independent implementation before;
+  the only check on it was two tokens recorded from another runtime, against a
+  model that is not committed. `Reference_Transformer` gained its own Q8_0
+  decoder, working the half-precision scale out from its sign, exponent and
+  mantissa rather than reusing the engine's conversion, so a fault there cannot
+  hide by being made twice. Shifting the engine's Q8_0 decode by one element
+  puts 64 logits outside tolerance.
+- `Fixtures.Encode_Q8_0` quantizes to blocks the way the format's producers do,
+  and the fixture widens to thirty-two and sixty-four when quantized, because a
+  quantized row is a whole number of thirty-two element blocks and the narrow
+  model cannot hold one.
+
 ### Performance
 
 All figures are from the release build, on a Ryzen 7 7840U, against
@@ -156,71 +215,6 @@ wall and 16.0 s of processor time.
   and the corrected numbers agree with the end-to-end timing where the earlier
   ones did not.
 
-### Added
-
-- `tests benchmark` measures the row kernels on synthetic tensors, with no
-  model file and no network. It was written because reading the code produced
-  two confident wrong answers about where the time went.
-
-### Added
-
-- `tests package` assembles the distributable archive: the executable, the
-  message catalog it looks for beside itself, and the documents that say what
-  the program is and what it does not do. The layout inside is the layout
-  `alr install` writes, so unpacking it over a prefix gives a working
-  installation -- verified by unpacking and running it from the filesystem
-  root, where it resolves its catalog and renders Danish.
-- The archive sets the executable's mode rather than taking tarlib's default,
-  which is 0644 for every regular file. An archive whose program unpacks
-  without the execute bit is not a distribution, and that failure would appear
-  on someone else's machine rather than here.
-- It refuses rather than guesses: every input is checked before anything is
-  written, so a missing file names itself and leaves no half-made archive.
-  Nothing is built and nothing is fetched.
-- `inspect --metadata` shows each entry's type and value, not just its key.
-  Strings are escaped and shortened on a code-point boundary, with an explicit
-  mark, so a prefix is never mistaken for the whole and no invalid UTF-8
-  reaches the terminal. Arrays are described rather than dumped: a tokenizer
-  vocabulary is a metadata array of tens of thousands of strings, and nobody
-  asking to see the metadata asked for that.
-- Windows memory mapping, over CreateFileMapping and MapViewOfFile. The
-  platform-specific bodies now sit one per host under `src/platform`, chosen by
-  the project file the way hostkit chooses its own, with a body for hosts
-  covered by neither that reports mapping unavailable rather than pretending.
-  Read-only throughout: the file is opened for reading, shared for reading and
-  mapped for reading, so the model cannot be modified through it.
-- `hostkit` is a dependency, for the things that exist only because operating
-  systems differ. `Platform.Host_Name` asks it which host this is, and
-  `Executable_Directory` asks it where the running program is rather than
-  reading `/proc/self/exe` directly -- that is Linux and not even macOS, so on
-  every other host the installed layout could not be found and the catalog
-  silently fell back. `Hostkit.Host.Executable_Path` was added upstream for
-  this.
-
-### Added
-
-- Memory accounting and the monotonic clock had no tests at all. Seven now
-  cover them: an allocation past the budget refused before any allocator runs,
-  totals following allocation and release, a peak that does not fall when
-  memory is freed and reallocated, mapped bytes counted apart from allocated
-  ones, a plan that cannot be represented refused rather than wrapped, a plan
-  totalling what will actually be resident, a clock that goes backwards
-  yielding no duration, and a rate over no elapsed time reading zero rather
-  than infinite.
-- `tests conformance` runs on quantized weights as well as binary32: eight
-  sequences and 128 logits rather than four and 64. Nothing offline had
-  compared quantized inference against an independent implementation before;
-  the only check on it was two tokens recorded from another runtime, against a
-  model that is not committed. `Reference_Transformer` gained its own Q8_0
-  decoder, working the half-precision scale out from its sign, exponent and
-  mantissa rather than reusing the engine's conversion, so a fault there cannot
-  hide by being made twice. Shifting the engine's Q8_0 decode by one element
-  puts 64 logits outside tolerance.
-- `Fixtures.Encode_Q8_0` quantizes to blocks the way the format's producers do,
-  and the fixture widens to thirty-two and sixty-four when quantized, because a
-  quantized row is a whole number of thirty-two element blocks and the narrow
-  model cannot hold one.
-
 ### Changed
 
 - `docs/error-codes.md` marks every code raised or reserved. Thirty-six of the
@@ -228,7 +222,6 @@ wall and 16.0 s of processor time.
   read as a reference the document promised diagnostics the program cannot
   emit. The list lives in one place, the repository checks verify it against
   the sources, and the document renders it, so the three cannot disagree.
-
 
 - `tests fuzz` now drives the whole load path rather than stopping at the
   parser: a mutated container goes through the parser, the tokenizer, the
@@ -245,7 +238,6 @@ wall and 16.0 s of processor time.
   terminate, and there was no clock anywhere in the fuzzer. A stage that never
   returns at all still cannot be interrupted from the single task a run uses,
   and the contract now says so instead of claiming otherwise.
-
 
 - Architecture metadata that is present and wrong now stops preparation
   instead of falling back to a default. `attention.head_count_kv`,
@@ -275,7 +267,6 @@ wall and 16.0 s of processor time.
   problem. The model file reader has always made that distinction; the prompt
   file reader now does too.
 
-
 - Three more diagnostics that were declared and never produced now are. A
   tokenizer score or token-type table that is present but does not match the
   vocabulary is refused rather than silently dropped -- scores decide which
@@ -286,7 +277,6 @@ wall and 16.0 s of processor time.
   was: the same value should not be an error on the command line and ignored
   in the environment.
 
-
 - `--interactive` no longer starts a session without a terminal to hold it.
   Interactive mode chosen implicitly, when no prompt source was given, was
   already conditional on standard input and standard output both being
@@ -295,18 +285,15 @@ wall and 16.0 s of processor time.
   typing it. It now reports `MR-CLI-0019`, which was declared and catalogued
   from the start with nothing producing it.
 
-
 - An option that takes no value accepted one and dropped it. `--verbose=5`,
   `--raw=yes` and eleven others parsed as though the value had not been
   written, so a mistake in a command line was silently ignored rather than
   reported. All thirteen now refuse, under `MR-CLI-0005`, which was declared
   and catalogued from the start with nothing producing it.
 
-
 - A verbose run printed its last progress line twice: the last token produced
   and the end of generation carried identical wording, so the reader saw a
   stutter rather than two things happening. The completion line now says so.
-
 
 - A verbose run with more than one worker hung, about two runs in three. The
   seed is an unsigned 64-bit value and the whole range is generated, but the
@@ -324,7 +311,6 @@ wall and 16.0 s of processor time.
   the whole unsigned range. That last one was its own defect: a run whose seed
   came from the upper half of the range could not be reproduced, which is what
   the option is for. Interactive mode's `/settings` had the same conversion.
-
 
 - A prompt read from standard input was read without a bound. Input that was
   one very long line was placed on the stack in a single piece, and the
