@@ -7,3 +7,13 @@ docs/error-codes.md text eol=lf
 #  The message catalog is read by the program itself rather than by a text
 #  editor, and its values are compared exactly.
 resources/messages/catalog.txt text eol=lf
+
+#  The synthetic model is a container of packed binary fields, and its bytes
+#  are what the parser reads. Git guesses binary from the first NUL and would
+#  guess right here, but a guess is a poor thing to rest a fixture on: a
+#  converted byte inside a tensor would fail every test at once and none of
+#  them would say why.
+tests/fixtures/*.gguf binary
+
+#  The recording is read line by line and its values compared exactly.
+tests/fixtures/*.expect text eol=lf
