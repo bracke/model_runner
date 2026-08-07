@@ -33,6 +33,131 @@ package body Tests.Sampling_Cases is
 
    subtype Logit_Vector is N.Real_Array (0 .. Vocabulary - 1);
 
+   --  The sampler refuses what it cannot sample from.
+   --
+   --  Four checks stood unheld: a configuration whose temperature is not a
+   --  number a distribution can be built from, a sampler opened for a
+   --  vocabulary of nothing, sampling from a sampler that was never opened
+   --  or has been closed, and sampling when every candidate has been
+   --  forbidden. The last is not exotic -- forbidding tokens is a caller's
+   --  own operation, and forbidding all of them is a thing a loop can do.
+   procedure Sampler_Refuses_What_It_Cannot_Sample
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Config  : S.Configuration;
+      Sampler : S.Sampler;
+      Status  : E.Error_Info;
+      Token   : Vocab.Token_Id;
+      Logits  : Logit_Vector := [others => 0.0];
+   begin
+      --  A temperature that is not a number, and one below zero. Both would
+      --  otherwise reach the softmax, where a negative temperature does not
+      --  fail: it quietly ranks the least likely token first.
+      Config := S.Greedy_Configuration;
+      Config.Temperature := -1.0;
+      S.Validate (Config, Status);
+      Assert (Status.Code = E.Sampling_Invalid_Configuration,
+              "a negative temperature was accepted: "
+              & E.Error_Code'Image (Status.Code));
+
+      Config.Temperature := 0.8;
+      S.Validate (Config, Status);
+      Assert (E.Is_Ok (Status),
+              "an ordinary temperature was refused: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  A vocabulary of nothing has no token to return.
+      S.Open (Sampler, S.Greedy_Configuration, 0, 1, Status);
+      Assert (Status.Code = E.Sampling_Vocabulary_Mismatch,
+              "a sampler opened for an empty vocabulary: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (not S.Is_Open (Sampler),
+              "a refused open left the sampler open");
+
+      --  Sampling from a sampler that was never opened.
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (Status.Code = E.Sampling_Invalid_Configuration,
+              "an unopened sampler produced a token: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Token = Vocab.No_Token,
+              "an unopened sampler named a token anyway");
+
+      --  And from one that was opened and then closed, which is the same
+      --  state reached the way a caller actually reaches it.
+      S.Open (Sampler, S.Greedy_Configuration, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "sampler did not open");
+      S.Close (Sampler);
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (Status.Code = E.Sampling_Invalid_Configuration,
+              "a closed sampler produced a token: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  Every candidate forbidden. There is nothing left to choose, and
+      --  saying so is better than choosing something forbidden.
+      S.Open (Sampler, S.Greedy_Configuration, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "sampler did not reopen");
+
+      Logits := [others => 1.0];
+      for Token_Index in 0 .. Vocabulary - 1 loop
+         S.Forbid (Sampler, Vocab.Token_Id (Token_Index));
+      end loop;
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (Status.Code = E.Sampling_No_Candidates,
+              "a sampler with everything forbidden produced a token: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Token = Vocab.No_Token,
+              "a refused sample named a token anyway");
+
+      --  The same with a temperature, which is a different path through the
+      --  sampler: greedy selection scans the mask itself, while sampling
+      --  gathers candidates first and has its own reason to find none.
+      S.Close (Sampler);
+      Config := S.Greedy_Configuration;
+      Config.Temperature := 0.8;
+      Config.Top_P := 1.0;
+      S.Open (Sampler, Config, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "sampling sampler did not open");
+
+      for Token_Index in 0 .. Vocabulary - 1 loop
+         S.Forbid (Sampler, Vocab.Token_Id (Token_Index));
+      end loop;
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (Status.Code = E.Sampling_No_Candidates,
+              "sampling with everything forbidden produced a token: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Token = Vocab.No_Token,
+              "a refused sampling named a token anyway");
+
+      --  With one token left it picks that one, so the refusal above is
+      --  about there being nothing rather than about forbidding at all.
+      --
+      --  Reopened rather than reset: a reset clears the history and reseeds
+      --  the generator, and a forbidden token is forbidden ever, which is
+      --  what the operation says and what a caller masking a control token
+      --  for a whole run depends on.
+      S.Close (Sampler);
+      S.Open (Sampler, S.Greedy_Configuration, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "sampler did not reopen for the last case");
+
+      for Token_Index in 0 .. Vocabulary - 1 loop
+         if Token_Index /= 5 then
+            S.Forbid (Sampler, Vocab.Token_Id (Token_Index));
+         end if;
+      end loop;
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 5,
+              "the one candidate left was not chosen: "
+              & E.Error_Code'Image (Status.Code));
+
+      S.Close (Sampler);
+   end Sampler_Refuses_What_It_Cannot_Sample;
+
    --  Greedy selection picks the maximum and breaks ties towards the lowest
    --  token identifier, without touching the generator.
    procedure Greedy_Selects_Maximum (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -907,6 +1032,9 @@ package body Tests.Sampling_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Sampler_Refuses_What_It_Cannot_Sample'Access,
+         "the sampler refuses what it cannot sample from");
       Register_Routine
         (T, Stop_Matching_Agrees_With_Its_Rule'Access,
          "the stop-string matcher agrees with a plain reading of its rule");
