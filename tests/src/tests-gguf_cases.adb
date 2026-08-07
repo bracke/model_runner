@@ -1786,6 +1786,89 @@ package body Tests.GGUF_Cases is
               "an embedding tensor of the wrong shape was accepted");
    end Architecture_Refusals_Report_Themselves;
 
+   --  A container that stops short, and tensors whose shape is not a shape.
+   --
+   --  Truncation is checked elsewhere at every byte offset, but only for
+   --  producing some diagnostic. These check which one: a file that ends
+   --  inside a field is truncated, a rank of zero or past the limit is an
+   --  invalid rank, and an extent of zero is an invalid dimension. A reader
+   --  that answered "truncated" to all three would pass the other test.
+   procedure Shape_Refusals_Report_Themselves
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  Parse a prefix of a sound container.
+      function Cut_At (Length : B.Byte_Count) return E.Error_Code is
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Status : E.Error_Info;
+         Result : E.Error_Code;
+      begin
+         Build_Valid (Image);
+         Parse_Image
+           (Image.all (Image.all'First .. Image.all'First + Length - 1),
+            Item, Status);
+         Result := Status.Code;
+         Containers.Close (Item);
+         B.Free (Image);
+         return Result;
+      end Cut_At;
+
+      --  Build a container carrying one tensor of the given shape.
+      function Shaped (Dimensions : Fixtures.Dimension_List) return E.Error_Code
+      is
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Item    : Containers.Container;
+         Status  : E.Error_Info;
+         Result  : E.Error_Code;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_Tensor
+           (Builder, "weight", Dimensions, G.Type_F32,
+            Fixtures.Encode_F32 (Fixtures.Sequence (4, 1)));
+         Fixtures.Build (Builder, Image);
+
+         Parse_Image (Image.all, Item, Status);
+         Result := Status.Code;
+         Containers.Close (Item);
+         B.Free (Image);
+         return Result;
+      end Shaped;
+   begin
+      --  Inside the magic, inside the header, and part way through the body.
+      --  Every one of them ends in a field the reader was reading.
+      Assert (Cut_At (2) = E.GGUF_Truncated,
+              "a file ending inside the magic was not reported as truncated: "
+              & E.Error_Code'Image (Cut_At (2)));
+      Assert (Cut_At (12) = E.GGUF_Truncated,
+              "a file ending inside the header was not reported as truncated: "
+              & E.Error_Code'Image (Cut_At (12)));
+      Assert (Cut_At (40) = E.GGUF_Truncated,
+              "a file ending inside the metadata was not reported as"
+              & " truncated: " & E.Error_Code'Image (Cut_At (40)));
+
+      --  A rank past what the reader accepts. Four is the limit, so five is
+      --  one too many rather than an arbitrary large number.
+      Assert (Shaped ([2, 1, 1, 1, 1]) = E.GGUF_Invalid_Tensor_Rank,
+              "a tensor of rank five was accepted: "
+              & E.Error_Code'Image (Shaped ([2, 1, 1, 1, 1])));
+
+      --  An extent of zero. The tensor would hold nothing and every stride
+      --  computed from it would be meaningless.
+      Assert (Shaped ([4, 0]) = E.GGUF_Invalid_Tensor_Dimension,
+              "a tensor with an extent of zero was accepted: "
+              & E.Error_Code'Image (Shaped ([4, 0])));
+
+      --  A shape the reader accepts, so none of the above can come from a
+      --  reader that refuses every tensor.
+      Assert (Shaped ([4]) = E.No_Error,
+              "a sound tensor shape was refused: "
+              & E.Error_Code'Image (Shaped ([4])));
+   end Shape_Refusals_Report_Themselves;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -1840,6 +1923,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Shape_Refusals_Report_Themselves'Access,
+         "truncation and impossible tensor shapes report the codes that name them");
       Register_Routine
         (T, Architecture_Refusals_Report_Themselves'Access,
          "every architecture refusal reports the code that names it");
