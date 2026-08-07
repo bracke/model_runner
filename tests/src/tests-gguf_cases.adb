@@ -1869,6 +1869,130 @@ package body Tests.GGUF_Cases is
               & E.Error_Code'Image (Shaped ([4])));
    end Shape_Refusals_Report_Themselves;
 
+   --  Refusals that can only be reached by writing a sound file and then
+   --  making one field wrong.
+   --
+   --  The builder writes correct containers by construction, so a type code
+   --  the format does not define, a tensor placed off its alignment, and two
+   --  tensors sharing bytes cannot be built -- only edited in afterwards. The
+   --  builder records where it put each field and the test asks for the
+   --  position by name, so this does not become a table of byte offsets that
+   --  rots the moment the layout moves.
+   procedure Edited_Fields_Report_Themselves
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  Build a container with two tensors and one array, then hand the
+      --  caller the image and the builder that knows where things are.
+      procedure Written
+        (Builder : in out Fixtures.Builder;
+         Image   : out B.Byte_Array_Access) is
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Begin_Array
+           (Builder, "fixture.list", G.Value_Int32, 2);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 2);
+         Fixtures.End_Array (Builder);
+         Fixtures.Add_Tensor
+           (Builder, "first.weight", [4], G.Type_F32,
+            Fixtures.Encode_F32 (Fixtures.Sequence (4, 1)));
+         Fixtures.Add_Tensor
+           (Builder, "second.weight", [4], G.Type_F32,
+            Fixtures.Encode_F32 (Fixtures.Sequence (4, 2)));
+         Fixtures.Build (Builder, Image);
+      end Written;
+
+      --  Parse an edited image and report the code.
+      function Reading (Image : B.Byte_Array) return E.Error_Code is
+         Item   : Containers.Container;
+         Status : E.Error_Info;
+         Result : E.Error_Code;
+      begin
+         Parse_Image (Image, Item, Status);
+         Result := Status.Code;
+         Containers.Close (Item);
+         return Result;
+      end Reading;
+
+      Builder : Fixtures.Builder;
+      Image   : B.Byte_Array_Access;
+      Where   : B.Byte_Count;
+   begin
+      --  Unedited, the container is sound. Everything below is one field
+      --  away from this.
+      Written (Builder, Image);
+      Assert (Reading (Image.all) = E.No_Error,
+              "the unedited fixture was refused: "
+              & E.Error_Code'Image (Reading (Image.all)));
+      B.Free (Image);
+
+      --  A metadata value type the format does not define.
+      Written (Builder, Image);
+      Where := Fixtures.Field_Position
+        (Builder, Fixtures.Metadata_Value_Type, Owner => 1);
+      Assert (Where > 0, "the builder recorded no metadata value type");
+      Fixtures.Poke_U32 (Image.all, Where, 4_000);
+      Assert (Reading (Image.all) = E.GGUF_Unknown_Value_Type,
+              "an undefined value type was accepted");
+      B.Free (Image);
+
+      --  An array element type that names nothing is an unknown value type,
+      --  the same answer as for a value. The separate array diagnostic is for
+      --  an element type the format defines and an array may not hold: an
+      --  array of arrays, which has no length the reader could trust.
+      Written (Builder, Image);
+      Where := Fixtures.Field_Position
+        (Builder, Fixtures.Array_Element_Type, Owner => 2);
+      Assert (Where > 0, "the builder recorded no array element type");
+      Fixtures.Poke_U32 (Image.all, Where, 4_000);
+      Assert (Reading (Image.all) = E.GGUF_Unknown_Value_Type,
+              "an undefined array element type was accepted");
+      B.Free (Image);
+
+      Written (Builder, Image);
+      Where := Fixtures.Field_Position
+        (Builder, Fixtures.Array_Element_Type, Owner => 2);
+      Fixtures.Poke_U32 (Image.all, Where, G.Value_Code (G.Value_Array));
+      Assert (Reading (Image.all) = E.GGUF_Invalid_Array_Element_Type,
+              "an array of arrays was accepted");
+      B.Free (Image);
+
+      --  A tensor type the format does not define.
+      Written (Builder, Image);
+      Where := Fixtures.Field_Position
+        (Builder, Fixtures.Tensor_Format, Owner => 1);
+      Assert (Where > 0, "the builder recorded no tensor format");
+      Fixtures.Poke_U32 (Image.all, Where, 4_000);
+      Assert (Reading (Image.all) = E.GGUF_Unknown_Tensor_Type,
+              "an undefined tensor type was accepted");
+      B.Free (Image);
+
+      --  A tensor that does not start on the alignment. Every offset in the
+      --  data section is relative to it, so one tensor off the grid means the
+      --  reader and the writer disagree about where the data begins.
+      Written (Builder, Image);
+      Where := Fixtures.Field_Position
+        (Builder, Fixtures.Tensor_Offset, Owner => 2);
+      Assert (Where > 0, "the builder recorded no tensor offset");
+      Fixtures.Poke_U64 (Image.all, Where, 1);
+      Assert (Reading (Image.all) = E.GGUF_Tensor_Offset_Misaligned,
+              "a tensor off the alignment was accepted");
+      B.Free (Image);
+
+      --  Two tensors over the same bytes. Each is inside the file and the
+      --  pair is still impossible.
+      Written (Builder, Image);
+      Where := Fixtures.Field_Position
+        (Builder, Fixtures.Tensor_Offset, Owner => 2);
+      Fixtures.Poke_U64 (Image.all, Where, 0);
+      Assert (Reading (Image.all) = E.GGUF_Tensor_Overlap,
+              "two tensors sharing bytes were accepted");
+      B.Free (Image);
+   end Edited_Fields_Report_Themselves;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -1923,6 +2047,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Edited_Fields_Report_Themselves'Access,
+         "a field edited into a sound container reports the code that names it");
       Register_Routine
         (T, Shape_Refusals_Report_Themselves'Access,
          "truncation and impossible tensor shapes report the codes that name them");

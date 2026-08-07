@@ -177,12 +177,83 @@ package Fixtures is
       Seed  : Interfaces.Unsigned_64;
       Scale : N.Real := 1.0) return N.Real_Array;
 
+   ---------------------------------------------------------------------------
+   --  Editing a built image
+   ---------------------------------------------------------------------------
+
+   --  A field the builder wrote, which a test may want to make wrong.
+   --
+   --  Some refusals cannot be reached by building a container, only by
+   --  writing one and then changing a field: a value type the format does not
+   --  define, a tensor whose data overlaps its neighbour, an offset that is
+   --  not aligned. The builder writes correct files by construction, so the
+   --  fault has to be introduced afterwards -- and doing that with counted
+   --  byte offsets makes a test that breaks whenever the layout moves.
+   --
+   --  The builder therefore records where it put each of these, and a test
+   --  asks for the position by name.
+   type Field_Name is
+     (Metadata_Value_Type,
+      Array_Element_Type,
+      Tensor_Format,
+      Tensor_Extent,
+      Tensor_Offset);
+
+   --  Where a field lies in the image Build produced.
+   --
+   --  @param Item Builder that produced the image.
+   --  @param Field Which field.
+   --  @param Owner Which metadata entry or tensor, counting from one.
+   --  @param Axis Which extent, for Tensor_Extent, counting from one.
+   --  @return Offset from the start of the image, or zero when the builder
+   --    wrote no such field.
+   function Field_Position
+     (Item  : Builder;
+      Field : Field_Name;
+      Owner : Positive;
+      Axis  : Positive := 1) return B.Byte_Count;
+
+   --  Overwrite a 32-bit field in a built image.
+   --
+   --  @param Image Image to edit in place.
+   --  @param At_Offset Offset from the start of the image.
+   --  @param Value Value to write, little-endian as the format requires.
+   procedure Poke_U32
+     (Image     : in out B.Byte_Array;
+      At_Offset : B.Byte_Count;
+      Value     : Interfaces.Unsigned_32);
+
+   --  Overwrite a 64-bit field in a built image.
+   --
+   --  @param Image Image to edit in place.
+   --  @param At_Offset Offset from the start of the image.
+   --  @param Value Value to write, little-endian as the format requires.
+   procedure Poke_U64
+     (Image     : in out B.Byte_Array;
+      At_Offset : B.Byte_Count;
+      Value     : Interfaces.Unsigned_64);
+
 private
 
    type Byte_Buffer is record
       Data : B.Byte_Array_Access := null;
       Used : B.Byte_Count := 0;
    end record;
+
+   --  Where the builder put a field, before the sections are joined.
+   type Section is (In_Metadata, In_Descriptors);
+
+   type Mark is record
+      Where : Section := In_Metadata;
+      Field : Field_Name := Metadata_Value_Type;
+      Owner : Natural := 0;
+      Axis  : Natural := 0;
+      At_Offset : B.Byte_Count := 0;
+   end record;
+
+   Max_Marks : constant := 256;
+
+   type Mark_List is array (1 .. Max_Marks) of Mark;
 
    type Builder is tagged limited record
       Version        : G.U32 := 3;
@@ -193,6 +264,8 @@ private
       Tensor_Count   : Natural := 0;
       Tensor_Data    : Byte_Buffer;
       Array_Open     : Boolean := False;
+      Marks          : Mark_List;
+      Marks_Used     : Natural := 0;
    end record;
 
 end Fixtures;

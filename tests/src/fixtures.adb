@@ -45,12 +45,37 @@ package body Fixtures is
    end Put_String;
 
    --  Append a metadata key and its value-type tag.
+   --  Record where a field was written, within its own section.
+   procedure Note
+     (Item  : in out Builder;
+      Where : Section;
+      Field : Field_Name;
+      Owner : Natural;
+      Axis  : Natural := 0)
+   is
+      Position : constant B.Byte_Count :=
+        (if Where = In_Metadata
+         then Item.Metadata.Used
+         else Item.Descriptors.Used);
+   begin
+      if Item.Marks_Used < Max_Marks then
+         Item.Marks_Used := Item.Marks_Used + 1;
+         Item.Marks (Item.Marks_Used) :=
+           (Where     => Where,
+            Field     => Field,
+            Owner     => Owner,
+            Axis      => Axis,
+            At_Offset => Position);
+      end if;
+   end Note;
+
    procedure Put_Header
      (Item : in out Builder;
       Key  : String;
       Kind : G.Value_Type) is
    begin
       Put_String (Item.Metadata, Key);
+      Note (Item, In_Metadata, Metadata_Value_Type, Item.Metadata_Count + 1);
       Put (Item.Metadata, B.Put_U32 (G.Value_Code (Kind)));
       Item.Metadata_Count := Item.Metadata_Count + 1;
    end Put_Header;
@@ -161,6 +186,7 @@ package body Fixtures is
       Count   : Natural) is
    begin
       Put_Header (Item, Key, G.Value_Array);
+      Note (Item, In_Metadata, Array_Element_Type, Item.Metadata_Count);
       Put (Item.Metadata, B.Put_U32 (G.Value_Code (Element)));
       Put (Item.Metadata, B.Put_U64 (Interfaces.Unsigned_64 (Count)));
       Item.Array_Open := True;
@@ -234,15 +260,79 @@ package body Fixtures is
 
       Put_String (Item.Descriptors, Name);
       Put (Item.Descriptors, B.Put_U32 (Interfaces.Unsigned_32 (Dimensions'Length)));
-      for Extent of Dimensions loop
-         Put (Item.Descriptors, B.Put_U64 (Extent));
+      for Axis in Dimensions'Range loop
+         Note (Item, In_Descriptors, Tensor_Extent, Item.Tensor_Count + 1,
+               Axis - Dimensions'First + 1);
+         Put (Item.Descriptors, B.Put_U64 (Dimensions (Axis)));
       end loop;
+      Note (Item, In_Descriptors, Tensor_Format, Item.Tensor_Count + 1);
       Put (Item.Descriptors, B.Put_U32 (G.Tensor_Code (Format)));
+      Note (Item, In_Descriptors, Tensor_Offset, Item.Tensor_Count + 1);
       Put (Item.Descriptors, B.Put_U64 (Interfaces.Unsigned_64 (Item.Tensor_Data.Used)));
 
       Put (Item.Tensor_Data, Data);
       Item.Tensor_Count := Item.Tensor_Count + 1;
    end Add_Tensor;
+
+   --------------------
+   -- Field_Position --
+   --------------------
+
+   function Field_Position
+     (Item  : Builder;
+      Field : Field_Name;
+      Owner : Positive;
+      Axis  : Positive := 1) return B.Byte_Count
+   is
+      --  Magic, version, tensor count and metadata count.
+      Header_Bytes : constant B.Byte_Count := 24;
+   begin
+      for Index in 1 .. Item.Marks_Used loop
+         declare
+            Found : Mark renames Item.Marks (Index);
+         begin
+            if Found.Field = Field
+              and then Found.Owner = Owner
+              and then (Field /= Tensor_Extent or else Found.Axis = Axis)
+            then
+               return Header_Bytes
+                 + (if Found.Where = In_Metadata
+                    then Found.At_Offset
+                    else Item.Metadata.Used + Found.At_Offset);
+            end if;
+         end;
+      end loop;
+
+      return 0;
+   end Field_Position;
+
+   --------------
+   -- Poke_U32 --
+   --------------
+
+   procedure Poke_U32
+     (Image     : in out B.Byte_Array;
+      At_Offset : B.Byte_Count;
+      Value     : Interfaces.Unsigned_32)
+   is
+      Written : constant B.Byte_Array := B.Put_U32 (Value);
+   begin
+      Image (Image'First + At_Offset .. Image'First + At_Offset + 3) := Written;
+   end Poke_U32;
+
+   --------------
+   -- Poke_U64 --
+   --------------
+
+   procedure Poke_U64
+     (Image     : in out B.Byte_Array;
+      At_Offset : B.Byte_Count;
+      Value     : Interfaces.Unsigned_64)
+   is
+      Written : constant B.Byte_Array := B.Put_U64 (Value);
+   begin
+      Image (Image'First + At_Offset .. Image'First + At_Offset + 7) := Written;
+   end Poke_U64;
 
    -----------
    -- Build --
