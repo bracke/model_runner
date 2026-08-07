@@ -270,6 +270,36 @@ package body Tests.CLI_Cases is
       Expect (E.No_Error, "run m.gguf --prompt hi --stop-token=5");
       Expect (E.No_Error, "run m.gguf --prompt hi --memory-limit=1073741824");
       Expect (E.No_Error, "run m.gguf --prompt-file p.txt --system=hi");
+      --  A number that is punctuation and no digits. Without the check for
+      --  a digit these parse as zero and succeed, and zero is a temperature
+      --  the program accepts: it means greedy. So the run would go ahead
+      --  under a setting the caller never asked for and nothing would say
+      --  so. The other three take a range that excludes zero and would be
+      --  refused a step later, for the wrong reason.
+      Expect (E.CLI_Invalid_Option_Value,
+              "run m.gguf --prompt hi --temperature=.");
+      Expect (E.CLI_Invalid_Option_Value,
+              "run m.gguf --prompt hi --temperature=-");
+      Expect (E.CLI_Invalid_Option_Value,
+              "run m.gguf --prompt hi --temperature=+");
+      Expect (E.CLI_Invalid_Option_Value,
+              "run m.gguf --prompt hi --top-p=-.");
+
+      --  And a whole part too large to hold. The parser refuses it while
+      --  reading rather than overflowing, which is what it would otherwise
+      --  do: the digits are accumulated in a signed integer.
+      Expect (E.CLI_Invalid_Option_Value,
+              "run m.gguf --prompt hi --temperature=99999999999999999999");
+      Expect (E.CLI_Invalid_Option_Value,
+              "run m.gguf --prompt hi --repeat-penalty=1"
+              & "0000000000000000000.5");
+
+      --  Ordinary numbers in the same shapes still parse, so none of the
+      --  refusals above is the parser giving up on decimals.
+      Expect (E.No_Error, "run m.gguf --prompt hi --temperature=.5");
+      Expect (E.No_Error, "run m.gguf --prompt hi --temperature=1.");
+      Expect (E.No_Error, "run m.gguf --prompt hi --temperature=+0.7");
+
       Expect (E.CLI_Conflicting_Prompt_Sources,
               "run m.gguf --prompt a --prompt-file b");
       Expect (E.CLI_Conflicting_System_Sources,
