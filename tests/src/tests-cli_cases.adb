@@ -22,6 +22,7 @@ with Model_Runner.Stops;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 
+with Ada.Calendar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
@@ -757,6 +758,121 @@ package body Tests.CLI_Cases is
    --  The matching recording here is produced from this engine, so it is a
    --  test of the mechanism and not evidence about the engine. Cross-runtime
    --  evidence needs a recording from a different implementation, which is
+   --  The model file is never written to.
+   --
+   --  This is stated in the README and was held by nothing. It is not a
+   --  property of one code path either: the file is opened, memory-mapped
+   --  where the host allows it, read through for metadata and tensors, and
+   --  kept open for the length of a run. Any of that could write, and a
+   --  mapping that was not read-only would write without anything failing.
+   --
+   --  So this reads the bytes before and after a whole run and compares
+   --  them, and checks the modification time as well -- a file rewritten
+   --  with identical contents is still a file this program wrote to.
+   procedure Model_File_Is_Never_Modified
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Path : constant String := "obj/readonly-model.gguf";
+
+      --  Read a whole file into fresh storage.
+      function Whole (Name : String) return B.Byte_Array_Access is
+         use Ada.Streams.Stream_IO;
+         use type B.Byte_Array_Access;
+         Handle : File_Type;
+         Result : B.Byte_Array_Access;
+      begin
+         Open (Handle, In_File, Name);
+         B.Allocate (B.Byte_Count (Size (Handle)), Result);
+         if Result /= null then
+            for Index in Result.all'Range loop
+               B.Byte'Read (Stream (Handle), Result.all (Index));
+            end loop;
+         end if;
+         Close (Handle);
+         return Result;
+      end Whole;
+
+      use type Ada.Calendar.Time;
+      use type B.Byte_Array;
+      use type B.Byte_Array_Access;
+
+      Before  : B.Byte_Array_Access;
+      After   : B.Byte_Array_Access;
+      Stamped : Ada.Calendar.Time;
+      Status  : Natural;
+      Errors  : constant String := "obj/readonly-model.err";
+      Handle  : Ada.Text_IO.File_Type;
+   begin
+      Tiny_Model.Write (Path);
+      Before := Whole (Path);
+      Assert (Before /= null, "the model file could not be read");
+      Stamped := Ada.Directories.Modification_Time (Path);
+
+      --  A whole run: the model is opened, mapped where it can be, read for
+      --  metadata and tensors, and generated from.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, Path);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "3");
+         Add (Source, "--threads");
+         Add (Source, "1");
+
+         Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Errors);
+         Ada.Text_IO.Set_Output (Handle);
+         Ada.Text_IO.Set_Error (Handle);
+         Model_Runner.CLI.Driver.Run (Source, Status);
+         Ada.Text_IO.Set_Output (Ada.Text_IO.Standard_Output);
+         Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+         Ada.Text_IO.Close (Handle);
+
+         Assert (Status = 0,
+                 "the run failed with status" & Natural'Image (Status));
+      end;
+
+      --  And an inspection, which walks every descriptor rather than the
+      --  tensors one architecture happens to need.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "inspect");
+         Add (Source, Path);
+         Add (Source, "--metadata");
+         Add (Source, "--tensors");
+
+         Ada.Text_IO.Open (Handle, Ada.Text_IO.Out_File, Errors);
+         Ada.Text_IO.Set_Output (Handle);
+         Ada.Text_IO.Set_Error (Handle);
+         Model_Runner.CLI.Driver.Run (Source, Status);
+         Ada.Text_IO.Set_Output (Ada.Text_IO.Standard_Output);
+         Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+         Ada.Text_IO.Close (Handle);
+
+         Assert (Status = 0,
+                 "the inspection failed with status" & Natural'Image (Status));
+      end;
+
+      After := Whole (Path);
+      Assert (After /= null, "the model file could not be read afterwards");
+      Assert (After.all'Length = Before.all'Length,
+              "the model file changed size");
+      Assert (After.all = Before.all, "the model file changed");
+      Assert (Ada.Directories.Modification_Time (Path) = Stamped,
+              "the model file was rewritten with the same contents");
+
+      B.Free (Before);
+      B.Free (After);
+      Ada.Directories.Delete_File (Path);
+      Ada.Directories.Delete_File (Errors);
+   end Model_File_Is_Never_Modified;
+
    --  what docs/reference-runtime.md describes.
    procedure Reference_Comparison_Works
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -2163,6 +2279,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Standard_Input_Prompt_Is_Bounded'Access,
          "a prompt from standard input is bounded and refused plainly");
+      Register_Routine
+        (T, Model_File_Is_Never_Modified'Access,
+         "the model file is never written to");
       Register_Routine
         (T, Reference_Comparison_Works'Access,
          "the reference comparison accepts a match and rejects a mismatch");
