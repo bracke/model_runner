@@ -3013,87 +3013,98 @@ package body Tests.GGUF_Cases is
 
       subtype Octet is Natural range 0 .. 255;
 
-      function Continuation (Value : Octet) return Boolean
-        is (Value in 16#80# .. 16#BF#);
-
       --  Unicode 15, table 3-7, written from the table rather than from the
       --  validator -- which is the whole point of having it here. A string
       --  is well formed when it is a run of well-formed sequences with
       --  nothing left over, so this scans rather than deciding one
       --  character.
+      --
+      --  Written flat, without inner functions closing over the string: at
+      --  sixteen million calls the up-level references cost more than the
+      --  work they tidy.
       function Well_Formed (Item : String) return Boolean is
          Index : Natural := Item'First;
-
-         function At_Offset (Step : Natural) return Octet is
-           (if Index + Step <= Item'Last
-            then Character'Pos (Item (Index + Step))
-            else 0);
-
-         function Present (Count : Natural) return Boolean is
-           (Index + Count - 1 <= Item'Last);
+         Left  : Natural;
+         Lead  : Octet;
+         B1    : Octet;
+         B2    : Octet;
+         B3    : Octet;
       begin
          while Index <= Item'Last loop
-            declare
-               Lead : constant Octet := Character'Pos (Item (Index));
-            begin
-               if Lead <= 16#7F# then
-                  Index := Index + 1;
+            Left := Item'Last - Index + 1;
+            Lead := Character'Pos (Item (Index));
 
-               elsif Lead in 16#C2# .. 16#DF# then
-                  if not Present (2) or else not Continuation (At_Offset (1))
-                  then
-                     return False;
-                  end if;
-                  Index := Index + 2;
+            if Lead <= 16#7F# then
+               Index := Index + 1;
 
-               elsif Lead in 16#E0# .. 16#EF# then
-                  if not Present (3) or else not Continuation (At_Offset (2))
-                  then
-                     return False;
-                  end if;
-
-                  --  The second byte is where the overlong forms and the
-                  --  surrogates are excluded, and each lead has its own range.
-                  if Lead = 16#E0# then
-                     if At_Offset (1) not in 16#A0# .. 16#BF# then
-                        return False;
-                     end if;
-                  elsif Lead = 16#ED# then
-                     if At_Offset (1) not in 16#80# .. 16#9F# then
-                        return False;
-                     end if;
-                  elsif not Continuation (At_Offset (1)) then
-                     return False;
-                  end if;
-
-                  Index := Index + 3;
-
-               elsif Lead in 16#F0# .. 16#F4# then
-                  if not Present (4)
-                    or else not Continuation (At_Offset (2))
-                    or else not Continuation (At_Offset (3))
-                  then
-                     return False;
-                  end if;
-
-                  if Lead = 16#F0# then
-                     if At_Offset (1) not in 16#90# .. 16#BF# then
-                        return False;
-                     end if;
-                  elsif Lead = 16#F4# then
-                     if At_Offset (1) not in 16#80# .. 16#8F# then
-                        return False;
-                     end if;
-                  elsif not Continuation (At_Offset (1)) then
-                     return False;
-                  end if;
-
-                  Index := Index + 4;
-
-               else
+            elsif Lead in 16#C2# .. 16#DF# then
+               if Left < 2 then
                   return False;
                end if;
-            end;
+               B1 := Character'Pos (Item (Index + 1));
+               if B1 not in 16#80# .. 16#BF# then
+                  return False;
+               end if;
+               Index := Index + 2;
+
+            elsif Lead in 16#E0# .. 16#EF# then
+               if Left < 3 then
+                  return False;
+               end if;
+               B1 := Character'Pos (Item (Index + 1));
+               B2 := Character'Pos (Item (Index + 2));
+
+               if B2 not in 16#80# .. 16#BF# then
+                  return False;
+               end if;
+
+               --  The second byte is where the overlong forms and the
+               --  surrogates are excluded, and each lead has its own range.
+               if Lead = 16#E0# then
+                  if B1 not in 16#A0# .. 16#BF# then
+                     return False;
+                  end if;
+               elsif Lead = 16#ED# then
+                  if B1 not in 16#80# .. 16#9F# then
+                     return False;
+                  end if;
+               elsif B1 not in 16#80# .. 16#BF# then
+                  return False;
+               end if;
+
+               Index := Index + 3;
+
+            elsif Lead in 16#F0# .. 16#F4# then
+               if Left < 4 then
+                  return False;
+               end if;
+               B1 := Character'Pos (Item (Index + 1));
+               B2 := Character'Pos (Item (Index + 2));
+               B3 := Character'Pos (Item (Index + 3));
+
+               if B2 not in 16#80# .. 16#BF#
+                 or else B3 not in 16#80# .. 16#BF#
+               then
+                  return False;
+               end if;
+
+               if Lead = 16#F0# then
+                  if B1 not in 16#90# .. 16#BF# then
+                     return False;
+                  end if;
+               elsif Lead = 16#F4# then
+                  if B1 not in 16#80# .. 16#8F# then
+                     return False;
+                  end if;
+               elsif B1 not in 16#80# .. 16#BF# then
+                  return False;
+               end if;
+
+               Index := Index + 4;
+
+            else
+               return False;
+            end if;
          end loop;
 
          return True;
