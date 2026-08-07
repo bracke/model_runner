@@ -899,6 +899,174 @@ package body Tests.GGUF_Cases is
    --  the block removes a rounding to single precision per element, so the
    --  fused result is the more accurate of the two; the check is that they
    --  agree to the precision the inputs carry.
+   --  Decoding refuses every call it cannot fit, for every format.
+   --
+   --  These three entry points are the only places in the engine that read
+   --  packed weights, and all three unpack with Index_Check, Range_Check and
+   --  Overflow_Check suppressed. That is deliberate and it is measured: the
+   --  checks cost the vectorizer the loops entirely. What makes it sound is
+   --  the guard at the top of each, which establishes once that every index
+   --  the loops will compute lies inside the buffers.
+   --
+   --  So that guard is not an ordinary refusal. It is the whole of the bounds
+   --  checking for the hottest code in the program, and past it a short
+   --  buffer is not a diagnostic but a read of whatever follows the array.
+   --  Every condition of it is held here, for every format, because a format
+   --  added later has the same guard and the same suppressions.
+   procedure Decoding_Refuses_What_It_Cannot_Fit
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Formats : constant array (1 .. 7) of Model_Runner.GGUF.Tensor_Type :=
+        [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
+         Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
+         Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
+         Model_Runner.GGUF.Type_Q6_K];
+
+      Checked : Natural := 0;
+   begin
+      for Format of Formats loop
+         declare
+            Name  : constant String := Model_Runner.GGUF.Type_Name (Format);
+            Per   : constant N.Element_Count :=
+              N.Element_Count (Model_Runner.GGUF.Block_Elements (Format));
+            Width : constant B.Byte_Count :=
+              B.Byte_Count (Model_Runner.GGUF.Block_Bytes (Format));
+
+            Blocks : constant N.Element_Count := 4;
+            Room   : constant N.Element_Count := Per * Blocks;
+
+            --  Exactly enough packed bytes for the span, and not one more.
+            Data    : constant B.Byte_Array
+              (1 .. Width * B.Byte_Count (Blocks)) := [others => 0];
+            Decoded : N.Real_Array (0 .. Room - 1);
+            Ok      : Boolean;
+         begin
+            --  The call this is all about: it fits, so it works.
+            Q.Decode_Blocks (Format, Data, 0, Blocks, Decoded, Ok);
+            Assert (Ok, Name & ": an exactly-sized span was refused");
+
+            --  One byte short of the packed bytes the span needs.
+            Q.Decode_Blocks
+              (Format, Data (Data'First .. Data'Last - 1), 0, Blocks,
+               Decoded, Ok);
+            Assert (not Ok, Name & ": a span past the end of the data "
+                    & "was decoded");
+
+            --  All the bytes are there, but not at that offset.
+            Q.Decode_Blocks (Format, Data, 1, Blocks, Decoded, Ok);
+            Assert (not Ok, Name & ": a span past the end was decoded from "
+                    & "an offset");
+
+            --  Room for every element but the last.
+            Q.Decode_Blocks
+              (Format, Data, 0, Blocks, Decoded (0 .. Room - 2), Ok);
+            Assert (not Ok, Name & ": a span was decoded into a buffer one "
+                    & "element short");
+
+            --  A refused call zeroes the target rather than leaving whatever
+            --  the caller had there, so a caller that ignores Ok reads zeros
+            --  and not a stale row.
+            Decoded := [others => 1.0];
+            Q.Decode_Blocks (Format, Data, 1, Blocks, Decoded, Ok);
+            Assert (not Ok, Name & ": refusal expected");
+            Assert ((for all Value of Decoded => Value = 0.0),
+                    Name & ": a refused decode left the target as it was");
+
+            --  Nothing to do is not something to do.
+            Q.Decode_Blocks (Format, Data, 0, 0, Decoded, Ok);
+            Assert (not Ok, Name & ": a span of no blocks reported success");
+
+            --  One block, through the entry the golden vectors use.
+            declare
+               Single : Q.Block_Buffer;
+            begin
+               Q.Decode_Block (Format, Data, 0, Single, Ok);
+               Assert (Ok, Name & ": an exactly-sized block was refused");
+
+               Q.Decode_Block
+                 (Format, Data (Data'First .. Data'First + Width - 2), 0,
+                  Single, Ok);
+               Assert (not Ok, Name & ": a block past the end of the data "
+                       & "was decoded");
+
+               --  A buffer holding exactly one block, read one byte late.
+               Q.Decode_Block
+                 (Format, Data (Data'First .. Data'First + Width - 1), 1,
+                  Single, Ok);
+               Assert (not Ok, Name & ": a block past the end was decoded "
+                       & "from an offset");
+            end;
+
+            --  And the fused path, which reads the same bytes and writes
+            --  into accumulators the caller owns.
+            declare
+               Vector : constant N.Real_Array (0 .. Room - 1) :=
+                 [others => 1.0];
+               Sums   : N.Wide_Real_Array (0 .. 1) := [others => 0.0];
+               Kept   : N.Wide_Real_Array (0 .. 1);
+            begin
+               Q.Accumulate_Dot
+                 (Format, Data, 0, Blocks, Vector, Vector'First, Room, 1,
+                  Sums (0 .. 0), Ok);
+               Assert (Ok, Name & ": an exactly-sized dot was refused");
+
+               Sums := [others => 7.0];
+               Kept := Sums;
+
+               Q.Accumulate_Dot
+                 (Format, Data (Data'First .. Data'Last - 1), 0, Blocks,
+                  Vector, Vector'First, Room, 1, Sums (0 .. 0), Ok);
+               Assert (not Ok, Name & ": a dot past the end of the data was "
+                       & "accumulated");
+
+               Q.Accumulate_Dot
+                 (Format, Data, 1, Blocks, Vector, Vector'First, Room, 1,
+                  Sums (0 .. 0), Ok);
+               Assert (not Ok, Name & ": a dot past the end was accumulated "
+                       & "from an offset");
+
+               --  Two vectors asked for, one accumulator given.
+               Q.Accumulate_Dot
+                 (Format, Data, 0, Blocks, Vector, Vector'First, Room, 2,
+                  Sums (0 .. 0), Ok);
+               Assert (not Ok, Name & ": more vectors than accumulators were "
+                       & "accumulated");
+
+               --  Two vectors asked for, one vector's worth of input given.
+               Q.Accumulate_Dot
+                 (Format, Data, 0, Blocks, Vector, Vector'First, Room, 2,
+                  Sums, Ok);
+               Assert (not Ok, Name & ": a vector past the end of the input "
+                       & "was read");
+
+               Q.Accumulate_Dot
+                 (Format, Data, 0, 0, Vector, Vector'First, Room, 1,
+                  Sums (0 .. 0), Ok);
+               Assert (not Ok, Name & ": a span of no blocks reported "
+                       & "success");
+
+               Q.Accumulate_Dot
+                 (Format, Data, 0, Blocks, Vector, Vector'First, Room, 0,
+                  Sums (0 .. 0), Ok);
+               Assert (not Ok, Name & ": no vectors reported success");
+
+               --  Sums are accumulated into, so a refusal has to leave them
+               --  alone. Adding a partial span would be worse than refusing.
+               Assert ((for all Index in Sums'Range =>
+                          Sums (Index) = Kept (Index)),
+                       Name & ": a refused dot changed the accumulators");
+            end;
+
+            Checked := Checked + 1;
+         end;
+      end loop;
+
+      Assert (Checked = Formats'Length,
+              "not every format was checked");
+   end Decoding_Refuses_What_It_Cannot_Fit;
+
    procedure Fused_Dot_Matches_Decoder
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -2958,6 +3126,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Decoders_Produce_The_Documented_Values'Access,
          "each decoder produces the values its layout documents");
+      Register_Routine
+        (T, Decoding_Refuses_What_It_Cannot_Fit'Access,
+         "decoding refuses every call it cannot fit, for every format");
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");

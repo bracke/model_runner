@@ -86,9 +86,10 @@ package Model_Runner.Quantization is
    --  @param Offset Byte position of the first block's first byte.
    --  @param Count Number of consecutive blocks to decode.
    --  @param Target Decoded values, Count * Block_Elements of them, written
-   --    from Target'First. Untouched when Ok is False.
-   --  @param Ok True when every block lay wholly inside Data, the format is
-   --    one this package decodes, and Target had room.
+   --    from Target'First. Zeroed when Ok is False, so that a caller which
+   --    ignores Ok reads zeros rather than whatever it left there.
+   --  @param Ok True when Count is not zero, every block lay wholly inside
+   --    Data, the format is one this package decodes, and Target had room.
    procedure Decode_Blocks
      (Format : Model_Runner.GGUF.Tensor_Type;
       Data   : Model_Runner.Bytes.Byte_Array;
@@ -133,8 +134,13 @@ package Model_Runner.Quantization is
    --  @param Stride Distance in Vectors from one vector to the next.
    --  @param Count Number of vectors.
    --  @param Sums Accumulators, Count of them from Sums'First, added to.
-   --  @param Ok True when the span lay wholly inside Data and the format is
-   --    one this package decodes.
+   --    Left as they were when Ok is False: a refused call adds nothing
+   --    rather than part of a span.
+   --  @param Ok True when Blocks and Count are not zero, the span lay wholly
+   --    inside Data, every element the call would read lay inside Vectors,
+   --    Sums held Count accumulators, and the format is one this package
+   --    decodes. The bounds are established here because the loops below run
+   --    with the runtime checks suppressed.
    procedure Accumulate_Dot
      (Format  : Model_Runner.GGUF.Tensor_Type;
       Data    : Model_Runner.Bytes.Byte_Array;
