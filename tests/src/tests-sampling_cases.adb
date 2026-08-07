@@ -4,6 +4,7 @@ with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
+with Model_Runner.Kernels;
 with Model_Runner.Numerics;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
@@ -572,6 +573,82 @@ package body Tests.Sampling_Cases is
       S.Close (Item);
    end Sampling_Without_Candidates;
 
+   --  The kernels answer degenerate input instead of trapping on it.
+   --
+   --  Conformance checks the kernels against an independent implementation,
+   --  but only on a model that makes sense. What a hostile file can produce is
+   --  a layer of zeros, a weight vector of the wrong length, or logits that
+   --  are not finite -- and each of those reaches the arithmetic before any
+   --  check the caller performs on the result.
+   --
+   --  The engine's rule is that the arithmetic stays finite and the caller's
+   --  own finiteness check reports the condition. A kernel that divided by a
+   --  zero scale instead would take the process with it.
+   procedure Kernels_Survive_Degenerate_Input
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package K renames Model_Runner.Kernels;
+
+      Zeros  : constant N.Real_Array (0 .. 3) := [others => 0.0];
+      Ones   : constant N.Real_Array (0 .. 3) := [others => 1.0];
+      Result : N.Real_Array (0 .. 3) := [others => 9.0];
+   begin
+      --  A layer of zeros has no scale to normalize by. The fallback keeps
+      --  the output finite rather than dividing by zero.
+      K.RMS_Norm (Zeros, Ones, 0.0, Result);
+      for Value of Result loop
+         Assert (N.Is_Finite (Value),
+                 "normalizing a zero vector produced a value that is not"
+                 & " finite");
+      end loop;
+
+      --  A weight vector of the wrong length is refused by leaving the target
+      --  zeroed, rather than by reading past either array.
+      declare
+         Short  : constant N.Real_Array (0 .. 1) := [others => 1.0];
+         Filled : N.Real_Array (0 .. 3) := [others => 9.0];
+      begin
+         K.RMS_Norm (Zeros, Short, 1.0E-5, Filled);
+         for Value of Filled loop
+            Assert (Value = 0.0,
+                    "a length mismatch left something behind in the target");
+         end loop;
+      end;
+
+      --  Softmax over logits that are not finite leaves the target alone
+      --  rather than propagating them into a distribution.
+      declare
+         Broken : N.Real_Array (0 .. 3) := [others => 0.0];
+         Usable : Boolean;
+      begin
+         Broken (1) := N.Real'Last;
+         Broken (2) := -N.Real'Last;
+         K.Softmax (Broken, Usable);
+         for Value of Broken loop
+            Assert (N.Is_Finite (Value),
+                    "softmax produced a value that is not finite");
+         end loop;
+      end;
+
+      --  And an ordinary vector still normalizes to one, so none of the
+      --  above can come from kernels that decline to compute.
+      declare
+         Ordinary : N.Real_Array (0 .. 3) := [1.0, 2.0, 3.0, 4.0];
+         Total    : N.Real := 0.0;
+         Usable   : Boolean;
+      begin
+         K.Softmax (Ordinary, Usable);
+         Assert (Usable, "an ordinary softmax was reported unusable");
+         for Value of Ordinary loop
+            Total := Total + Value;
+         end loop;
+         Assert (abs (Total - 1.0) < 1.0E-5,
+                 "an ordinary softmax did not sum to one:"
+                 & N.Real'Image (Total));
+      end;
+   end Kernels_Survive_Degenerate_Input;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -579,6 +656,9 @@ package body Tests.Sampling_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Kernels_Survive_Degenerate_Input'Access,
+         "the kernels answer degenerate input instead of trapping on it");
       Register_Routine
         (T, Sampling_Without_Candidates'Access,
          "a sampler with nothing left to choose says so");

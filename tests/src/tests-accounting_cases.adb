@@ -369,10 +369,20 @@ package body Tests.Accounting_Cases is
       --  caller that forgets to check the answer depends on.
       Assert (A.To_Natural (Modest, Room) and then Room = 100,
               "a value inside Natural did not convert");
-      Assert (not A.To_Natural (Big, Room) and then Room = 0,
-              "a value past Natural converted anyway or left a value behind");
-      Assert (not A.To_Natural (Big + Modest, Room) and then Room = 0,
-              "an invalid value converted anyway or left a value behind");
+      declare
+         Fits : Boolean;
+      begin
+         --  Split so that Room is read whatever the answer: with these joined
+         --  by and then, a compiler is right to say the assignment might
+         --  never be looked at.
+         Fits := A.To_Natural (Big, Room);
+         Assert (not Fits, "a value past Natural converted anyway");
+         Assert (Room = 0, "a refused conversion left a value behind");
+
+         Fits := A.To_Natural (Big + Modest, Room);
+         Assert (not Fits, "an invalid value converted anyway");
+         Assert (Room = 0, "an invalid conversion left a value behind");
+      end;
 
       --  And the range test that guards every bound in the parser.
       Assert (A.In_Range (Modest, 100), "a value at its bound was refused");

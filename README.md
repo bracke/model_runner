@@ -248,7 +248,11 @@ Every test is deterministic, offline, and needs no downloaded model:
   cancellation token through a real signal, agreement with the independent
   reference implementation, and a batch producing the same bits as the same
   tokens evaluated one at a time, down to the cache it leaves behind.
-- **Sampling, stops and templates** — greedy maximum and tie-breaking, greedy
+- **Sampling, stops, kernels and templates** — the kernels answering
+  degenerate input rather than trapping on it: a layer of zeros normalized
+  without dividing by its own scale, a length mismatch leaving the target
+  zeroed, and softmax refusing to turn values that are not finite into a
+  distribution; greedy maximum and tie-breaking, greedy
   entropy independence, fixed-seed reproducibility, top-k, min-p, repetition
   penalty, NaN and infinity rejection, stop-string earliest-then-longest
   matching, stop bounds, exact template rendering, branches and whitespace
