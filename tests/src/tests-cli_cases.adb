@@ -846,6 +846,90 @@ package body Tests.CLI_Cases is
       end if;
    end Notify;
 
+   --  The conversation keeps its shape under the edits interactive mode makes.
+   --
+   --  Interactive mode needs a terminal, so its loop is driven by no test.
+   --  What the loop does to the history, though, is ordinary calls: it sets a
+   --  system message that must land first and replace rather than accumulate,
+   --  and it drops a cancelled turn so that the history never holds a reply
+   --  the model did not finish. Both are what keeps the displayed
+   --  conversation and the model's context the same conversation.
+   procedure Conversation_Survives_Interactive_Edits
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package C renames Model_Runner.Conversation;
+      use type C.Role;
+
+      Messages : C.History;
+      Status   : E.Error_Info;
+   begin
+      C.Open (Messages, Status => Status);
+      Assert (E.Is_Ok (Status), "the conversation did not open");
+      Assert (not C.Has_System (Messages),
+              "a fresh conversation claims a system message");
+
+      C.Append (Messages, C.User_Role, "first", Status);
+      C.Append (Messages, C.Assistant_Role, "second", Status);
+      Assert (C.Length (Messages) = 2, "two messages did not append");
+
+      --  A system message set after the fact goes first, not last, so the
+      --  template renders it where a model expects it.
+      C.Set_System (Messages, "be brief", Status);
+      Assert (E.Is_Ok (Status), "a system message was refused");
+      Assert (C.Has_System (Messages), "the system message was not recorded");
+      Assert (C.Length (Messages) = 3, "the system message did not add one");
+      Assert (C.Sender_At (Messages, 1) = C.System_Role,
+              "the system message is not first");
+      Assert (C.Content_At (Messages, 1) = "be brief",
+              "the system message holds the wrong text: "
+              & C.Content_At (Messages, 1));
+      Assert (C.Content_At (Messages, 2) = "first",
+              "the conversation was reordered around the system message");
+
+      --  Setting it again replaces it rather than adding another.
+      C.Set_System (Messages, "be briefer", Status);
+      Assert (E.Is_Ok (Status), "replacing the system message was refused");
+      Assert (C.Length (Messages) = 3,
+              "replacing the system message added one:"
+              & Natural'Image (C.Length (Messages)));
+      Assert (C.Content_At (Messages, 1) = "be briefer",
+              "the system message was not replaced");
+
+      --  Setting it empty removes it and leaves the rest in order.
+      C.Set_System (Messages, "", Status);
+      Assert (E.Is_Ok (Status), "removing the system message was refused");
+      Assert (not C.Has_System (Messages),
+              "the system message survived being cleared");
+      Assert (C.Length (Messages) = 2, "clearing removed more than itself");
+      Assert (C.Content_At (Messages, 1) = "first",
+              "clearing disturbed the conversation");
+
+      --  A cancelled turn is dropped. The history must not hold a reply the
+      --  model did not finish, because the next turn is rendered from it.
+      C.Append (Messages, C.User_Role, "third", Status);
+      C.Append (Messages, C.Assistant_Role, "unfinished", Status);
+      Assert (C.Length (Messages) = 4, "the turn did not append");
+
+      C.Drop_Last (Messages, 1);
+      Assert (C.Length (Messages) = 3, "dropping one removed a different number");
+      Assert (C.Content_At (Messages, 3) = "third",
+              "dropping removed the wrong end of the conversation");
+
+      --  Dropping more than there is empties it rather than going negative.
+      C.Drop_Last (Messages, 99);
+      Assert (C.Length (Messages) = 0,
+              "dropping past the beginning left"
+              & Natural'Image (C.Length (Messages)) & " messages");
+
+      --  And it is usable afterwards rather than left in a broken state.
+      C.Append (Messages, C.User_Role, "again", Status);
+      Assert (E.Is_Ok (Status) and then C.Length (Messages) = 1,
+              "the conversation was unusable after being emptied");
+
+      C.Close (Messages);
+   end Conversation_Survives_Interactive_Edits;
+
    --  What the engine refuses about a request, a conversation and a model,
    --  each by name.
    --
@@ -1856,6 +1940,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Retained_Text_Matches'Access,
          "retained text matches what was streamed");
+      Register_Routine
+        (T, Conversation_Survives_Interactive_Edits'Access,
+         "the conversation keeps its shape under the edits interactive makes");
       Register_Routine
         (T, Caller_Refusals_Report_Themselves'Access,
          "requests, conversations and models refuse by name");

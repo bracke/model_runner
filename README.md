@@ -258,7 +258,11 @@ Every test is deterministic, offline, and needs no downloaded model:
   matching, stop bounds, exact template rendering, branches and whitespace
   control, rejection of unsupported constructs, and automatic seeding varying
   between runs without falling back to the fixed seed.
-- **CLI and generation** — command parsing, fifteen distinct usage errors,
+- **CLI and generation** — the conversation keeping its shape under the edits
+  interactive mode makes: a system message landing first, replacing rather
+  than accumulating, clearing without disturbing the rest, and a cancelled
+  turn dropped from the end without going past the beginning; command
+  parsing, fifteen distinct usage errors,
   end-of-options, pre-parse scans, reproducible generation, stop strings across
   token boundaries with no leak, stop tokens producing no text, closed output
   as a normal end, context budget checked before evaluation, retained text
