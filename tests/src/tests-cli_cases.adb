@@ -7,6 +7,7 @@ with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
 with Model_Runner.CLI.Options;
 with Model_Runner.Cancellation;
+with Model_Runner.Conversation;
 with Model_Runner.Errors;
 with Model_Runner.Presentation;
 with Model_Runner.Progress;
@@ -819,6 +820,137 @@ package body Tests.CLI_Cases is
          Self.Flag.all.Request;
       end if;
    end Notify;
+
+   --  What the engine refuses about a request, a conversation and a model,
+   --  each by name.
+   --
+   --  These are refusals a caller meets rather than a file: a request asking
+   --  for no tokens, an empty prompt, a prompt longer than the context, a
+   --  message with no content, a conversation past its bound, and a model that
+   --  is not ready. They are the library's contract with whatever drives it,
+   --  and none of their codes appeared in a test.
+   procedure Caller_Refusals_Report_Themselves
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Under   : Harness (Held'Access);
+         Session : L.Session;
+         Stop    : Model_Runner.Stops.Set;
+         Sink    : aliased Capture_Sink;
+         Request : Gen.Request;
+         Outcome : Gen.Result;
+         Status  : E.Error_Info;
+
+         --  Generate with the current request and report the diagnostic.
+         function Refusal (Prompt : String) return E.Error_Code is
+         begin
+            Gen.Generate
+              (Under.Ready, Session, Prompt, Request, Stop,
+               Sink'Unchecked_Access, null, null, null, null,
+               Outcome => Outcome);
+            declare
+               Code : constant E.Error_Code := Outcome.Error.Code;
+            begin
+               Gen.Release (Outcome);
+               return Code;
+            end;
+         end Refusal;
+      begin
+         Start (Under);
+         L.Open (Session, Under.Ready, Status => Status);
+         Model_Runner.Stops.Open (Stop);
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+
+         --  A request for no tokens at all. Nothing to do is a mistake in the
+         --  asking, not a run that produces nothing.
+         Request.Max_Tokens := 0;
+         Assert (Refusal ("ab") = E.Generation_Invalid_Request,
+                 "a request for no tokens was accepted");
+
+         --  A batch of no tokens, the same mistake in the other field.
+         Request.Max_Tokens := 4;
+         Request.Batch_Size := 0;
+         Assert (Refusal ("ab") = E.Generation_Invalid_Request,
+                 "a batch size of zero was accepted");
+
+         --  An empty prompt is not reached from here and the case is left
+         --  out rather than bent to fit: this vocabulary adds a beginning
+         --  token, so empty text still tokenizes to one token and the engine
+         --  has something to continue from. Reaching that refusal needs a
+         --  vocabulary that adds nothing, which is a fixture this suite does
+         --  not have.
+         Request.Batch_Size := 8;
+
+         --  A prompt longer than the context can hold. The tiny model's
+         --  context is sixteen tokens, so this is not a large prompt, only a
+         --  larger one than the model was built for.
+         Assert (Refusal ([1 .. 200 => 'a']) = E.Generation_Prompt_Too_Long,
+                 "a prompt past the context was accepted");
+
+         --  And a request the engine accepts, so none of the above can come
+         --  from an engine that refuses whatever it is given.
+         Assert (Refusal ("ab") = E.No_Error,
+                 "a sound request was refused");
+
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Session);
+      end;
+
+      B.Free (Image);
+
+      --  A conversation refuses the same way.
+      declare
+         Messages : Model_Runner.Conversation.History;
+         Status   : E.Error_Info;
+      begin
+         Model_Runner.Conversation.Open (Messages, Status => Status);
+         Assert (E.Is_Ok (Status), "the conversation did not open");
+
+         Model_Runner.Conversation.Append
+           (Messages, Model_Runner.Conversation.User_Role, "", Status);
+         Assert (Status.Code = E.Conversation_Empty,
+                 "a message with no content was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Model_Runner.Conversation.Append
+           (Messages, Model_Runner.Conversation.User_Role, "hi", Status);
+         Assert (E.Is_Ok (Status), "a sound message was refused");
+
+         Model_Runner.Conversation.Close (Messages);
+      end;
+
+      --  A model that was never prepared is not a model to generate from.
+      declare
+         Unprepared : L.Model;
+         Session    : L.Session;
+         Stop       : Model_Runner.Stops.Set;
+         Request    : Gen.Request;
+         Outcome    : Gen.Result;
+         Status     : E.Error_Info;
+      begin
+         Model_Runner.Stops.Open (Stop);
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+
+         Gen.Generate
+           (Unprepared, Session, "ab", Request, Stop,
+            null, null, null, null, null, Outcome => Outcome);
+
+         Assert (Outcome.Error.Code = E.Lifecycle_Model_Not_Ready,
+                 "generating from an unprepared model was accepted: "
+                 & E.Error_Code'Image (Outcome.Error.Code));
+
+         Gen.Release (Outcome);
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Unprepared, Status);
+      end;
+   end Caller_Refusals_Report_Themselves;
 
    --  What a prompt file can be wrong about, each reported by name.
    --
@@ -1645,6 +1777,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Retained_Text_Matches'Access,
          "retained text matches what was streamed");
+      Register_Routine
+        (T, Caller_Refusals_Report_Themselves'Access,
+         "requests, conversations and models refuse by name");
       Register_Routine
         (T, Prompt_File_Failures_Report_Themselves'Access,
          "each way a prompt file can be wrong reports the code that names it");

@@ -226,7 +226,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   file that is absent, a directory, past the size limit or not UTF-8 likewise,
   with a sound one read. A file that ends inside a field is truncated, a rank
   past the limit is an invalid rank, and an extent of zero is an invalid
-  dimension -- three answers a reader could give as one.
+  dimension -- three answers a reader could give as one. What a caller can be
+  wrong about is checked the same way: a request for no tokens or no batch, a
+  prompt longer than the context, a message with no content, and generating
+  from a model that was never prepared.
 - **Inference** — preparation, finite logits, run-to-run determinism,
   cancellation leaving the cache uncommitted, a cancellation asked for while
   the model is still loading stopping the load, context exhaustion and reset,
