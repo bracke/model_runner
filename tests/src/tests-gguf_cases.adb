@@ -1564,6 +1564,36 @@ package body Tests.GGUF_Cases is
 
       Builder : Fixtures.Builder;
    begin
+      --  A vocabulary that was never loaded. Encoding through it is a
+      --  mistake in the caller rather than in any file, and the answer says
+      --  so instead of returning no tokens as though the text were empty.
+      declare
+         Empty  : Vocab.Vocabulary;
+         Tokens : Vocab.Token_Array (1 .. 8);
+         Last   : Natural;
+         Status : E.Error_Info;
+      begin
+         Vocab.Encode (Empty, "ab", False, False, Tokens, Last, Status);
+         Assert (Status.Code = E.Tokenizer_Invalid_Vocabulary,
+                 "encoding through an unloaded vocabulary was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+         Vocab.Close (Empty);
+      end;
+
+      --  A token longer than the reader will hold. A vocabulary entry is
+      --  bounded because every one of them is copied into a pool, and a file
+      --  declaring a longer one is describing something this engine cannot
+      --  represent.
+      Bare (Builder);
+      Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+      Fixtures.Begin_Array
+        (Builder, "tokenizer.ggml.tokens", G.Value_String, 2);
+      Fixtures.String_Element (Builder, "<unk>");
+      Fixtures.String_Element (Builder, [1 .. 2_048 => 'x']);
+      Fixtures.End_Array (Builder);
+      Assert (Loading (Builder) = E.Tokenizer_Invalid_Token_Text,
+              "a token past the length limit was accepted");
+
       --  No tokenizer at all. A file may legitimately carry no tokenizer, but
       --  this engine cannot generate without one and says which is missing.
       Bare (Builder);
@@ -1630,6 +1660,25 @@ package body Tests.GGUF_Cases is
               (Words, "abababab", False, False, Cramped, Last, Status);
             Assert (Status.Code = E.Tokenizer_Buffer_Too_Small,
                     "a buffer too small for the tokens was accepted: "
+                    & E.Error_Code'Image (Status.Code));
+         end;
+
+         --  Text with more symbols than the merge loop will hold. The bound
+         --  is on code points rather than bytes, so this is the count the
+         --  loop works with rather than the size of the string.
+         --
+         --  Two guards give this answer -- one counting the code points
+         --  before the loop, one stopping the loop when it fills -- and this
+         --  holds the pair rather than either. Measured: disabling either
+         --  alone changes nothing, and disabling both does not merely lose
+         --  the diagnostic, it reaches an internal invariant violation. They
+         --  are load-bearing for more than the message.
+         declare
+            Long : constant String (1 .. 65_537) := [others => 'a'];
+         begin
+            Vocab.Encode (Words, Long, False, False, Tokens, Last, Status);
+            Assert (Status.Code = E.Tokenizer_Input_Too_Long,
+                    "text past the symbol limit was encoded: "
                     & E.Error_Code'Image (Status.Code));
          end;
 
