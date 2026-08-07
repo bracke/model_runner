@@ -981,6 +981,19 @@ package body Tests.GGUF_Cases is
             Q.Decode_Blocks (Format, Data, 0, 0, Decoded, Ok);
             Assert (not Ok, Name & ": a span of no blocks reported success");
 
+            --  A format this package does not decode, through the same
+            --  entry. Its block holds no elements, so there is nothing to
+            --  write and nothing to read: saying so is the only answer.
+            declare
+               Unsupported : Q.Block_Buffer := [others => 1.0];
+            begin
+               Q.Decode_Block
+                 (Model_Runner.GGUF.Type_Q2_K, Data, 0, Unsupported, Ok);
+               Assert (not Ok, "an undecodable format was decoded");
+               Assert ((for all Value of Unsupported => Value = 0.0),
+                       "an undecodable format left the target as it was");
+            end;
+
             --  One block, through the entry the golden vectors use.
             declare
                Single : Q.Block_Buffer;

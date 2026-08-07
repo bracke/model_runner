@@ -270,6 +270,15 @@ package body Tests.CLI_Cases is
       Expect (E.No_Error, "run m.gguf --prompt hi --stop-token=5");
       Expect (E.No_Error, "run m.gguf --prompt hi --memory-limit=1073741824");
       Expect (E.No_Error, "run m.gguf --prompt-file p.txt --system=hi");
+      --  A size that is negative. It is read into an unsigned quantity, so
+      --  without the check the conversion raises rather than reporting a bad
+      --  value, and a suffix does not change that.
+      Expect (E.CLI_Invalid_Option_Value,
+              "run m.gguf --prompt hi --memory-limit=-1");
+      Expect (E.CLI_Invalid_Option_Value,
+              "run m.gguf --prompt hi --memory-limit=-1G");
+      Expect (E.No_Error, "run m.gguf --prompt hi --memory-limit=1G");
+
       --  A number that is punctuation and no digits. Without the check for
       --  a digit these parse as zero and succeed, and zero is a temperature
       --  the program accepts: it means greedy. So the run would go ahead
