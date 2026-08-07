@@ -2207,6 +2207,87 @@ package body Tests.GGUF_Cases is
       end;
    end Tokenizer_Refusals_Report_Themselves;
 
+   --  How large a vocabulary the tokenizer will take from a file.
+   --
+   --  The bound was there and nothing held it. The other two bounds the
+   --  tokenizer carries -- how long one token may be, and how much text one
+   --  call may encode -- are held elsewhere and are not repeated here.
+   procedure Vocabulary_Size_Is_Bounded
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+      package Limits renames Model_Runner.Limits;
+
+      procedure Write_Three (Builder : in out Fixtures.Builder) is
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, 3);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "a");
+         Fixtures.String_Element (Builder, "b");
+         Fixtures.End_Array (Builder);
+      end Write_Three;
+
+      --  Load a built container under the given bounds and report the code.
+      function Loading
+        (Builder : in out Fixtures.Builder;
+         Bounds  : Limits.Model_Limits) return E.Error_Code
+      is
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+      begin
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse),
+                 "the fixture container did not parse: "
+                 & E.Error_Code'Image (Parse.Code));
+
+         Vocab.Load (Words, Item, Bounds, Status);
+         Containers.Close (Item);
+         Vocab.Close (Words);
+         B.Free (Image);
+         return Status.Code;
+      end Loading;
+
+      Roomy : constant Limits.Model_Limits := Limits.Default_Model_Limits;
+      Tight : Limits.Model_Limits := Limits.Default_Model_Limits;
+
+      Builder : Fixtures.Builder;
+   begin
+      --  A vocabulary of nothing is not a vocabulary. Every token id a model
+      --  could produce would be out of range in it.
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+      Fixtures.Begin_Array
+        (Builder, "tokenizer.ggml.tokens", G.Value_String, 0);
+      Fixtures.End_Array (Builder);
+      Assert (Loading (Builder, Roomy) = E.Tokenizer_Vocabulary_Too_Large,
+              "an empty vocabulary was accepted");
+
+      --  And one past the configured bound, which is what stops a file
+      --  naming a vocabulary larger than this machine should try to hold.
+      Tight.Max_Vocabulary := 2;
+      Write_Three (Builder);
+      Assert (Loading (Builder, Tight) = E.Tokenizer_Vocabulary_Too_Large,
+              "a vocabulary past the bound was accepted");
+
+      --  At the bound it is accepted, so the refusal above is the bound
+      --  doing its work rather than a vocabulary of this shape being
+      --  refused for some other reason.
+      Tight.Max_Vocabulary := 3;
+      Write_Three (Builder);
+      Assert (Loading (Builder, Tight) = E.No_Error,
+              "a vocabulary at the bound was refused");
+   end Vocabulary_Size_Is_Bounded;
+
    --  Every architecture refusal, reported by name.
    --
    --  A model file describes a shape, and this profile runs one shape. Eleven
@@ -3156,6 +3237,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Tokenizer_Refusals_Report_Themselves'Access,
          "every tokenizer refusal reports the code that names it");
+      Register_Routine
+        (T, Vocabulary_Size_Is_Bounded'Access,
+         "the tokenizer bounds how large a vocabulary it will take");
       Register_Routine
         (T, Structural_Refusals_Report_Themselves'Access,
          "structural refusals report the code that names them");
