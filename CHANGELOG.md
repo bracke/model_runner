@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A property test over the command-line parser: four thousand generated
+  argument vectors, each derived from its case number so a failure replays,
+  asserting only what the parser owes every caller -- that it returns with a
+  definite outcome and does not raise. The hand-written cases check which
+  outcome; this checks that there is one for vectors nobody thought to write.
+
+
 - Tests for the chat template engine's bounds: template size, instruction
   count, nesting depth at and past the documented limit, output size at and
   past the buffer, and the iteration bound. The engine already refused

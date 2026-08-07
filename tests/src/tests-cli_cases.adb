@@ -846,6 +846,100 @@ package body Tests.CLI_Cases is
       end if;
    end Notify;
 
+   --  Any command line at all is answered, never raised on.
+   --
+   --  The parser is the first thing an untrusted command line meets, and it
+   --  is tested by cases someone thought of. This throws vectors nobody
+   --  thought of at it -- options in impossible orders, values where flags
+   --  go, empty arguments, text that is not UTF-8, numbers too long to be
+   --  numbers -- and asks only for the property the parser owes every caller:
+   --  it returns, with a definite outcome, and does not raise.
+   --
+   --  Every vector comes from the case number alone, so a failure is replayed
+   --  by running the same case.
+   procedure Any_Command_Line_Is_Answered
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      --  A small deterministic generator. The parser is what is being
+      --  examined, so the source of the vectors is kept obvious.
+      State : Interfaces.Unsigned_64 := 88_172_645_463_325_252;
+
+      function Draw (Bound : Positive) return Natural is
+      begin
+         State := State xor Interfaces.Shift_Left (State, 13);
+         State := State xor Interfaces.Shift_Right (State, 7);
+         State := State xor Interfaces.Shift_Left (State, 17);
+         return Natural (State mod Interfaces.Unsigned_64 (Bound));
+      end Draw;
+
+      --  Pieces a command line is made of, sound and otherwise.
+      function Piece (Which : Natural) return String is
+      begin
+         case Which is
+            when 0 => return "run";
+            when 1 => return "inspect";
+            when 2 => return "help";
+            when 3 => return "version";
+            when 4 => return "model.gguf";
+            when 5 => return "--prompt";
+            when 6 => return "--max-tokens";
+            when 7 => return "--seed";
+            when 8 => return "--verbose";
+            when 9 => return "--raw";
+            when 10 => return "--color";
+            when 11 => return "--threads";
+            when 12 => return "--stop";
+            when 13 => return "--";
+            when 14 => return "-";
+            when 15 => return "";
+            when 16 => return "=";
+            when 17 => return "--=";
+            when 18 => return "--prompt=";
+            when 19 => return "--max-tokens=-1";
+            when 20 => return "--max-tokens=99999999999999999999";
+            when 21 => return "0";
+            when 22 => return "-1";
+            when 23 => return "never";
+            when 24 => return [1 .. 200 => 'x'];
+            when 25 => return Character'Val (16#FF#) & "bad";
+            when 26 => return "--" & Character'Val (16#01#) & "ctl";
+            when 27 => return "--unknown-option";
+            when 28 => return "--PROMPT";
+            when 29 => return "--prompt=--seed";
+            when others => return "--interactive";
+         end case;
+      end Piece;
+
+      Answered : Natural := 0;
+   begin
+      for Case_Number in 1 .. 4_000 loop
+         declare
+            Source : Fixed_Arguments;
+            Item   : Opt.Command;
+            Status : E.Error_Info;
+            Count  : constant Natural := Draw (8);
+         begin
+            for Index in 1 .. Count loop
+               Add (Source, Piece (Draw (31)));
+            end loop;
+
+            --  The property: it comes back, with an outcome, whatever it was
+            --  handed. Which outcome is not the question here -- the cases
+            --  above check that -- only that there is one and it arrived.
+            Opt.Parse (Source, Item, Status);
+            Answered := Answered + 1;
+
+            Opt.Release (Item);
+         end;
+      end loop;
+
+      Assert (Answered = 4_000,
+              "only" & Natural'Image (Answered)
+              & " of four thousand command lines were answered");
+   end Any_Command_Line_Is_Answered;
+
    --  The conversation keeps its shape under the edits interactive mode makes.
    --
    --  Interactive mode needs a terminal, so its loop is driven by no test.
@@ -1940,6 +2034,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Retained_Text_Matches'Access,
          "retained text matches what was streamed");
+      Register_Routine
+        (T, Any_Command_Line_Is_Answered'Access,
+         "any command line is answered rather than raised on");
       Register_Routine
         (T, Conversation_Survives_Interactive_Edits'Access,
          "the conversation keeps its shape under the edits interactive makes");

@@ -258,7 +258,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   matching, stop bounds, exact template rendering, branches and whitespace
   control, rejection of unsupported constructs, and automatic seeding varying
   between runs without falling back to the fixed seed.
-- **CLI and generation** — the conversation keeping its shape under the edits
+- **CLI and generation** — four thousand generated command lines, built from
+  options in impossible orders, values where flags go, empty arguments, text
+  that is not UTF-8 and numbers too long to be numbers, each answered with a
+  definite outcome rather than raised on; the conversation keeping its shape under the edits
   interactive mode makes: a system message landing first, replacing rather
   than accumulating, clearing without disturbing the rest, and a cancelled
   turn dropped from the end without going past the beginning; command
