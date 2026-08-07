@@ -206,6 +206,7 @@ package Fixtures is
    type Field_Name is
      (Metadata_Value_Type,
       Array_Element_Type,
+      String_Value_Length,
       Tensor_Format,
       Tensor_Extent,
       Tensor_Offset);

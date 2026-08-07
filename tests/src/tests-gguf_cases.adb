@@ -437,6 +437,131 @@ package body Tests.GGUF_Cases is
       B.Free (Image);
    end Accessors_Refuse_Every_Way;
 
+   --  Parse an image and require it to be refused as truncated.
+   --
+   --  Every length in a container is written by whoever wrote the file. The
+   --  reader used to size a run's storage before reading it, so a file of a
+   --  hundred-odd bytes could ask for tens of megabytes of stack and get it
+   --  -- the refusal then arrived as Storage_Error, caught at the top of the
+   --  parse and reported as a defect in the reader, which is what it was.
+   procedure Refused_As_Truncated (Image : B.Byte_Array; What : String) is
+      Item   : Containers.Container;
+      Status : E.Error_Info;
+   begin
+      Parse_Image (Image, Item, Status);
+      Assert (Status.Code = E.GGUF_Truncated,
+              What & ": expected GGUF_TRUNCATED but got "
+              & E.Error_Code'Image (Status.Code));
+      Containers.Close (Item);
+   end Refused_As_Truncated;
+
+   --  An array the file claims but does not hold is refused, not allocated.
+   procedure Claimed_Array_Is_Refused
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  Within every declared limit, and far past the end of the file.
+      Elements : constant := 4_000_000;
+
+      Builder : Fixtures.Builder;
+      Image   : B.Byte_Array_Access;
+   begin
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Begin_Array
+        (Builder, "fixture.claimed", G.Value_Float32, Elements);
+      Fixtures.End_Array (Builder);
+      Fixtures.Build (Builder, Image);
+
+      Assert (Image.all'Length < 1024,
+              "the fixture is supposed to be small, not large");
+      Refused_As_Truncated (Image.all, "an array claimed but absent");
+      B.Free (Image);
+   end Claimed_Array_Is_Refused;
+
+   --  And a string, whose length the file also chooses.
+   procedure Claimed_String_Is_Refused
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Builder : Fixtures.Builder;
+      Image   : B.Byte_Array_Access;
+   begin
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_String (Builder, "fixture.claimed", "short");
+      Fixtures.Build (Builder, Image);
+
+      --  Say the value is eight megabytes long and leave the file as it is:
+      --  within the string limit, nowhere near within the file.
+      Fixtures.Poke_U64
+        (Image.all,
+         Fixtures.Field_Position (Builder, Fixtures.String_Value_Length, 2),
+         8 * 1024 * 1024);
+
+      Assert (Image.all'Length < 1024,
+              "the fixture is supposed to be small, not large");
+      Refused_As_Truncated (Image.all, "a string claimed but absent");
+      B.Free (Image);
+   end Claimed_String_Is_Refused;
+
+   --  A string longer than one validation window is judged whole.
+   --
+   --  The reader checks a long string's encoding a window at a time, so that
+   --  a string as long as the limit allows never becomes one object. Two
+   --  things can go wrong at a window edge and neither is visible in a short
+   --  string: a sequence split across the edge can be read as truncated, and
+   --  a window after the first can go unchecked.
+   procedure Long_Strings_Are_Judged_Across_Windows
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  The reader's window is 64 KiB; these sit either side of that edge.
+      Edge : constant := 64 * 1024;
+
+      procedure Parses (Value : String; Ok : Boolean; What : String) is
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Item    : Containers.Container;
+         Status  : E.Error_Info;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_String (Builder, "fixture.long", Value);
+         Fixtures.Build (Builder, Image);
+
+         Parse_Image (Image.all, Item, Status);
+         if Ok then
+            Assert (E.Is_Ok (Status),
+                    What & ": refused with "
+                    & E.Error_Code'Image (Status.Code));
+         else
+            Assert (Status.Code = E.GGUF_Invalid_UTF8,
+                    What & ": expected GGUF_INVALID_UTF8 but got "
+                    & E.Error_Code'Image (Status.Code));
+         end if;
+         Containers.Close (Item);
+         B.Free (Image);
+      end Parses;
+
+      --  Three bytes of one code point, laid across the window edge so that
+      --  the first window ends in the middle of it.
+      Straddling : String (1 .. Edge + 8) := [others => 'a'];
+
+      --  Well-formed until well past the first window.
+      Late_Fault : String (1 .. Edge + 4096) := [others => 'a'];
+   begin
+      Straddling (Edge - 1) := Character'Val (16#E2#);
+      Straddling (Edge)     := Character'Val (16#82#);
+      Straddling (Edge + 1) := Character'Val (16#AC#);
+      Parses (Straddling, True, "a code point split by the window edge");
+
+      Late_Fault (Edge + 2048) := Character'Val (16#80#);
+      Parses (Late_Fault, False, "a fault past the first window");
+   end Long_Strings_Are_Judged_Across_Windows;
+
    --  A wrong magic is rejected before anything else is read.
    procedure Invalid_Magic (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -2784,6 +2909,17 @@ package body Tests.GGUF_Cases is
         (T, Accessors_Refuse_Every_Way'Access,
          "every accessor refuses a key it cannot read, whichever way it is "
          & "wrong");
+      Register_Routine
+        (T, Claimed_Array_Is_Refused'Access,
+         "an array the file claims but does not hold is refused, not "
+         & "allocated");
+      Register_Routine
+        (T, Claimed_String_Is_Refused'Access,
+         "a string the file claims but does not hold is refused, not "
+         & "allocated");
+      Register_Routine
+        (T, Long_Strings_Are_Judged_Across_Windows'Access,
+         "a string longer than one validation window is judged whole");
       Register_Routine
         (T, Invalid_Magic'Access, "a corrupt magic is rejected");
       Register_Routine

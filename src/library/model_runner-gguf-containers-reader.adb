@@ -133,29 +133,6 @@ package body Model_Runner.GGUF.Containers.Reader is
       end;
    end Reserve;
 
-   --  Append bytes to the pool and return the slice that describes them.
-   procedure Append_Pool
-     (Item   : in out Container;
-      Data   : B.Byte_Array;
-      Result : out Slice;
-      Status : out E.Error_Info) is
-   begin
-      Result := (Offset => Item.Pool_Used, Length => Data'Length);
-      Reserve (Item, Data'Length, Status);
-
-      if E.Is_Error (Status) then
-         Result := (0, 0);
-         return;
-      end if;
-
-      if Data'Length > 0 then
-         Item.Pool.all (Item.Pool.all'First + Item.Pool_Used
-                        .. Item.Pool.all'First + Item.Pool_Used + Data'Length - 1)
-           := Data;
-         Item.Pool_Used := Item.Pool_Used + Data'Length;
-      end if;
-   end Append_Pool;
-
    -----------------------------------------------------------------------
    --  Primitive readers
    -----------------------------------------------------------------------
@@ -230,6 +207,150 @@ package body Model_Runner.GGUF.Containers.Reader is
 
    --  Read a GGUF string: a 64-bit length followed by that many bytes. The
    --  bytes are validated as UTF-8 and appended to the pool.
+   --  Largest run copied out of a source in one step.
+   --
+   --  Every length in a file is chosen by whoever wrote the file, so no
+   --  object may be sized from one. A run of any declared length is copied
+   --  in pieces of this size instead.
+   Copy_Chunk : constant B.Byte_Count := 64 * 1024;
+
+   --  Append a run of source bytes to the metadata pool.
+   --
+   --  The run is checked against the end of the file before any of it is
+   --  copied, so a file that merely claims a large run is refused as
+   --  truncated rather than asking for the storage first.
+   procedure Take_Into_Pool
+     (Source : in out Model_Runner.Byte_Sources.Source'Class;
+      Item   : in out Container;
+      Cursor : in out State;
+      Length : B.Byte_Count;
+      Result : out Slice;
+      Status : out E.Error_Info)
+   is
+      Next : constant A.Checked :=
+        A.To_Checked (Interfaces.Unsigned_64 (Cursor.Cursor))
+        + A.To_Checked (Interfaces.Unsigned_64 (Length));
+   begin
+      Result := (0, 0);
+
+      if not A.Is_Valid (Next) then
+         Status := At_Offset (E.GGUF_Arithmetic_Overflow, Cursor.Cursor);
+         return;
+      end if;
+
+      if B.Byte_Count (A.Value (Next)) > Cursor.Size then
+         Status := At_Offset (E.GGUF_Truncated, Cursor.Cursor);
+         E.Add_Integer
+           (Status, "length", Long_Long_Integer (Length), E.Param_Bytes);
+         E.Add_Integer
+           (Status, "size", Long_Long_Integer (Cursor.Size), E.Param_Bytes);
+         return;
+      end if;
+
+      Reserve (Item, Length, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Result := (Offset => Item.Pool_Used, Length => Length);
+
+      declare
+         Buffer : B.Byte_Array (1 .. Copy_Chunk);
+         Left   : B.Byte_Count := Length;
+      begin
+         while Left > 0 loop
+            declare
+               Piece : constant B.Byte_Count :=
+                 (if Left < Copy_Chunk then Left else Copy_Chunk);
+            begin
+               Source.Read (Cursor.Cursor, Buffer (1 .. Piece), Status);
+               if E.Is_Error (Status) then
+                  Result := (0, 0);
+                  return;
+               end if;
+
+               Item.Pool.all
+                 (Item.Pool.all'First + Item.Pool_Used
+                  .. Item.Pool.all'First + Item.Pool_Used + Piece - 1) :=
+                 Buffer (1 .. Piece);
+               Item.Pool_Used := Item.Pool_Used + Piece;
+               Cursor.Cursor := Cursor.Cursor + Piece;
+               Left := Left - Piece;
+            end;
+         end loop;
+      end;
+
+      Status := E.Success;
+   end Take_Into_Pool;
+
+   --  Report whether a run already in the pool is well-formed UTF-8.
+   --
+   --  Checked a window at a time, because the run may be as long as the
+   --  string limit allows and a String of that length is exactly the object
+   --  this must not create. Each window is first pulled back to a sequence
+   --  boundary, so a sequence split by the window edge is judged whole in
+   --  the next window rather than truncated in this one.
+   function Pool_Is_Valid_UTF8
+     (Item : Container; Run : Slice) return Boolean
+   is
+      Position : B.Byte_Count := 0;
+   begin
+      if Run.Length = 0 then
+         return True;
+      end if;
+
+      while Position < Run.Length loop
+         declare
+            Rest   : constant B.Byte_Count := Run.Length - Position;
+            Window : B.Byte_Count := (if Rest < Copy_Chunk then Rest else Copy_Chunk);
+            First  : constant B.Byte_Count :=
+              Item.Pool.all'First + Run.Offset + Position;
+         begin
+            if Window < Rest then
+               --  Walk back to the last byte that can begin a sequence. It
+               --  is within three bytes of the edge or the run is malformed
+               --  whatever the next window holds.
+               declare
+                  Back : B.Byte_Count := 0;
+                  Need : Natural := 0;
+               begin
+                  loop
+                     Need := Model_Runner.UTF8.Sequence_Length
+                       (Character'Val
+                          (Item.Pool.all (First + Window - 1 - Back)));
+                     exit when Need > 0;
+
+                     if Back = 3 then
+                        return False;
+                     end if;
+                     Back := Back + 1;
+                  end loop;
+
+                  --  Keep the sequence whole: if this window cannot hold all
+                  --  of it, it belongs to the next one.
+                  if B.Byte_Count (Need) > Back + 1 then
+                     Window := Window - (Back + 1);
+                  end if;
+               end;
+
+               if Window = 0 then
+                  return False;
+               end if;
+            end if;
+
+            if not Model_Runner.UTF8.Is_Valid
+                     (B.To_String (Item.Pool.all (First .. First + Window - 1)))
+            then
+               return False;
+            end if;
+
+            Position := Position + Window;
+         end;
+      end loop;
+
+      return True;
+   end Pool_Is_Valid_UTF8;
+
    procedure Take_String
      (Source : in out Model_Runner.Byte_Sources.Source'Class;
       Item   : in out Container;
@@ -256,21 +377,20 @@ package body Model_Runner.GGUF.Containers.Reader is
          return;
       end if;
 
-      declare
-         Payload : B.Byte_Array (1 .. B.Byte_Count (Length));
-      begin
-         Take (Source, Cursor, B.Byte_Count (Length), Payload, Status);
-         if E.Is_Error (Status) then
-            return;
-         end if;
+      Take_Into_Pool
+        (Source, Item, Cursor, B.Byte_Count (Length), Result, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
 
-         if not Model_Runner.UTF8.Is_Valid (B.To_String (Payload)) then
-            Status := At_Offset (E.GGUF_Invalid_UTF8, Origin);
-            return;
-         end if;
-
-         Append_Pool (Item, Payload, Result, Status);
-      end;
+      if not Pool_Is_Valid_UTF8 (Item, Result) then
+         --  Give the pool back, so that a rejected string leaves the
+         --  container exactly as large as it was.
+         Item.Pool_Used := Result.Offset;
+         Result := (0, 0);
+         Status := At_Offset (E.GGUF_Invalid_UTF8, Origin);
+         return;
+      end if;
    end Take_String;
 
    -----------------------------------------------------------------------
@@ -418,15 +538,9 @@ package body Model_Runner.GGUF.Containers.Reader is
             return;
          end if;
 
-         declare
-            Payload : B.Byte_Array (1 .. B.Byte_Count (A.Value (Total)));
-         begin
-            Take (Source, Cursor, Payload'Length, Payload, Status);
-            if E.Is_Error (Status) then
-               return;
-            end if;
-            Append_Pool (Item, Payload, Target.Payload, Status);
-         end;
+         Take_Into_Pool
+           (Source, Item, Cursor, B.Byte_Count (A.Value (Total)),
+            Target.Payload, Status);
       end;
    end Take_Array;
 

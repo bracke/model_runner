@@ -296,6 +296,20 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- A container no longer sizes storage from a length it has not read. A file
+  could declare a metadata array of four million elements, or a string of
+  eight megabytes, and the reader would create storage of that size before
+  reading a single byte of it -- so a file of a hundred bytes was enough to
+  exhaust the stack. The failure surfaced as an internal invariant violation,
+  which is the diagnostic reserved for a defect in the program rather than a
+  fault in the file, and it was accurate: this was one. Runs of both kinds are
+  now checked against the end of the file first and copied in fixed-size
+  pieces, and such a file is refused as truncated.
+
+- Long metadata strings are now checked for well-formed UTF-8 a window at a
+  time rather than as one object, since the string limit allows sixteen
+  megabytes. A code point lying across a window edge is judged whole.
+
 - The host locale is asked of `hostkit` when the environment does not answer.
   Reading only `LC_ALL` and `LANG` is a POSIX convention: neither is set on
   Windows, so a Windows user's own locale was never looked for and the program

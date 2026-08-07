@@ -113,6 +113,7 @@ package body Fixtures is
    procedure Add_String (Item : in out Builder; Key, Value : String) is
    begin
       Put_Header (Item, Key, G.Value_String);
+      Note (Item, In_Metadata, String_Value_Length, Item.Metadata_Count);
       Put_String (Item.Metadata, Value);
    end Add_String;
 
