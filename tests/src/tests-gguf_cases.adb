@@ -9,6 +9,7 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization;
+with Model_Runner.Tensors;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.Llama;
@@ -1993,6 +1994,94 @@ package body Tests.GGUF_Cases is
       B.Free (Image);
    end Edited_Fields_Report_Themselves;
 
+   --  What a tensor view refuses about a shape it is asked to take.
+   --
+   --  A view is the only thing standing between a shape a file declared and
+   --  an index into a buffer, so each way a shape can be impossible has its
+   --  own answer: no shape at all, a quantized row that is not whole blocks,
+   --  a format this build cannot decode, a buffer too small for the shape,
+   --  and a multiply whose operand does not match.
+   procedure View_Refusals_Report_Themselves
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Tensors renames Model_Runner.Tensors;
+
+      Room   : B.Byte_Array_Access := new B.Byte_Array (1 .. 4_096);
+      Made   : Tensors.View;
+      Status : E.Error_Info;
+
+      --  Build a view and report the code.
+      function Shaped
+        (Format  : G.Tensor_Type;
+         Rows    : N.Element_Count;
+         Columns : N.Element_Count;
+         Offset  : B.Byte_Count := 0) return E.Error_Code
+      is
+         Outcome : E.Error_Info;
+         Ignored : Tensors.View;
+      begin
+         Tensors.Make (Format, Rows, Columns, Room, Offset, Ignored, Outcome);
+         return Outcome.Code;
+      end Shaped;
+   begin
+      Room.all := [others => 0];
+
+      --  A shape with nothing in it.
+      Assert (Shaped (G.Type_F32, 0, 4) = E.Tensor_Invalid_Shape,
+              "a view with no rows was made: "
+              & E.Error_Code'Image (Shaped (G.Type_F32, 0, 4)));
+      Assert (Shaped (G.Type_F32, 4, 0) = E.Tensor_Invalid_Shape,
+              "a view with no columns was made");
+
+      --  A quantized row that is not a whole number of blocks. Q8_0 works
+      --  thirty-two elements at a time, so twenty is half a block short.
+      Assert (Shaped (G.Type_Q8_0, 1, 20) = E.Tensor_Block_Misaligned,
+              "a quantized row that is not whole blocks was made: "
+              & E.Error_Code'Image (Shaped (G.Type_Q8_0, 1, 20)));
+
+      --  A format this build does not decode. The container may carry it and
+      --  the engine still cannot run it, and the two are different refusals.
+      Assert (Shaped (G.Type_Q4_1, 1, 32) = E.Tensor_Format_Unsupported,
+              "a view over an undecodable format was made: "
+              & E.Error_Code'Image (Shaped (G.Type_Q4_1, 1, 32)));
+
+      --  A shape that does not fit the buffer it is placed in.
+      Assert (Shaped (G.Type_F32, 1_000, 1_000) = E.Tensor_Out_Of_Bounds,
+              "a view past the end of its buffer was made: "
+              & E.Error_Code'Image (Shaped (G.Type_F32, 1_000, 1_000)));
+
+      --  A shape that fits is made, so none of the above can come from a
+      --  constructor that refuses everything.
+      Tensors.Make (G.Type_F32, 4, 8, Room, 0, Made, Status);
+      Assert (E.Is_Ok (Status),
+              "a sound shape was refused: " & E.Error_Code'Image (Status.Code));
+      Assert (Tensors.Is_Present (Made), "a made view says it is not present");
+
+      --  And a multiply whose operand does not match the shape.
+      declare
+         Vector : constant N.Real_Array (1 .. 3) := [others => 0.0];
+         Target : N.Real_Array (1 .. 4) := [others => 0.0];
+         Outcome : E.Error_Info;
+      begin
+         Tensors.Mat_Vec (Made, Vector, Target, Outcome);
+         Assert (Outcome.Code = E.Tensor_Shape_Mismatch,
+                 "a vector of the wrong length was multiplied: "
+                 & E.Error_Code'Image (Outcome.Code));
+
+         declare
+            Right : constant N.Real_Array (1 .. 8) := [others => 1.0];
+         begin
+            Tensors.Mat_Vec (Made, Right, Target, Outcome);
+            Assert (E.Is_Ok (Outcome),
+                    "a matching multiply was refused: "
+                    & E.Error_Code'Image (Outcome.Code));
+         end;
+      end;
+
+      B.Free (Room);
+   end View_Refusals_Report_Themselves;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -2047,6 +2136,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, View_Refusals_Report_Themselves'Access,
+         "a tensor view refuses each impossible shape by name");
       Register_Routine
         (T, Edited_Fields_Report_Themselves'Access,
          "a field edited into a sound container reports the code that names it");

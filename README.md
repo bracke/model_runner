@@ -233,7 +233,10 @@ Every test is deterministic, offline, and needs no downloaded model:
   container are edited into one: an undefined value, array-element or tensor
   type, an array of arrays, a tensor off its alignment, and two tensors over
   the same bytes. The builder records where it wrote each field and the test
-  asks by name, so no test carries a table of byte offsets.
+  asks by name, so no test carries a table of byte offsets. A tensor view
+  refuses each impossible shape by name too: no rows or columns, a quantized
+  row that is not whole blocks, a format this build cannot decode, a shape
+  past its buffer, and an operand that does not match.
 - **Inference** — preparation, finite logits, run-to-run determinism,
   cancellation leaving the cache uncommitted, a cancellation asked for while
   the model is still loading stopping the load, context exhaustion and reset,
