@@ -1,8 +1,11 @@
+with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with AUnit.Assertions;
 
 with Interfaces;
 
 with Model_Runner.Bytes;
+with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
@@ -2207,6 +2210,97 @@ package body Tests.GGUF_Cases is
       end;
    end Tokenizer_Refusals_Report_Themselves;
 
+   --  What a file source refuses to open, and what it refuses to read.
+   --
+   --  This is where a model path meets the filesystem, and every mandatory
+   --  test reached it only through the command line with a fixture that was
+   --  present, regular and small. So the refusals were never asked for: a
+   --  path that is a directory, a file past the size a caller allows, and a
+   --  read from a source that was never opened.
+   procedure File_Source_Refuses_What_It_Cannot_Open
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Files renames Model_Runner.Byte_Sources.Files;
+
+      Path   : constant String := "obj/filesource-sample.bin";
+      Source : Files.File_Source;
+      Status : E.Error_Info;
+      Buffer : B.Byte_Array (1 .. 4);
+   begin
+      --  A small file to point at.
+      declare
+         Handle : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Create
+           (Handle, Ada.Streams.Stream_IO.Out_File, Path);
+         for Value of Ada.Streams.Stream_Element_Array'[1, 2, 3, 4, 5, 6, 7, 8]
+         loop
+            Ada.Streams.Stream_Element'Write
+              (Ada.Streams.Stream_IO.Stream (Handle), Value);
+         end loop;
+         Ada.Streams.Stream_IO.Close (Handle);
+      end;
+
+      --  Nothing named at all.
+      Files.Open (Source, "", Files.Mapping_Disabled, 0, Status);
+      Assert (Status.Code = E.IO_Open_Failed,
+              "an empty path was opened: " & E.Error_Code'Image (Status.Code));
+      Assert (not Files.Is_Open (Source), "a refused open left a file open");
+
+      --  A name nothing answers to.
+      Files.Open
+        (Source, "obj/filesource-absent.bin", Files.Mapping_Disabled, 0,
+         Status);
+      Assert (Status.Code = E.IO_Open_Failed,
+              "an absent path was opened: " & E.Error_Code'Image (Status.Code));
+
+      --  There, and not a file. Saying which is the difference between a
+      --  caller learning they named a directory and being told the file
+      --  could not be opened, which of a directory is not informative.
+      Files.Open (Source, "obj", Files.Mapping_Disabled, 0, Status);
+      Assert (Status.Code = E.IO_Not_A_Regular_File,
+              "a directory was opened as a file: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  Larger than the caller allows. Refused on the size the filesystem
+      --  reports, before any of it is read.
+      Files.Open (Source, Path, Files.Mapping_Disabled, 4, Status);
+      Assert (Status.Code = E.IO_File_Too_Large,
+              "a file past the caller's limit was opened: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  Reading from a source that was never opened.
+      Files.Read (Source, 0, Buffer, Status);
+      Assert (Status.Code = E.IO_Read_Failed,
+              "an unopened source was read: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  At the limit, and unlimited, it opens and reads, so none of the
+      --  refusals above is this file being unreadable.
+      Files.Open (Source, Path, Files.Mapping_Disabled, 8, Status);
+      Assert (E.Is_Ok (Status),
+              "a file at the caller's limit was refused: "
+              & E.Error_Code'Image (Status.Code));
+
+      Files.Read (Source, 0, Buffer, Status);
+      Assert (E.Is_Ok (Status), "the file did not read");
+      Assert (Buffer = B.Byte_Array'[1, 2, 3, 4], "the file read wrongly");
+
+      --  And a read that runs off the end is refused rather than served
+      --  short, whatever the source holds.
+      declare
+         Past : B.Byte_Array (1 .. 4);
+      begin
+         Files.Read (Source, 6, Past, Status);
+         Assert (E.Is_Error (Status),
+                 "a read past the end of the file succeeded");
+      end;
+
+      Files.Close (Source);
+      Ada.Directories.Delete_File (Path);
+   end File_Source_Refuses_What_It_Cannot_Open;
+
    --  How large a vocabulary the tokenizer will take from a file.
    --
    --  The bound was there and nothing held it. The other two bounds the
@@ -3237,6 +3331,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Tokenizer_Refusals_Report_Themselves'Access,
          "every tokenizer refusal reports the code that names it");
+      Register_Routine
+        (T, File_Source_Refuses_What_It_Cannot_Open'Access,
+         "a file source refuses what it cannot open and what it cannot read");
       Register_Routine
         (T, Vocabulary_Size_Is_Bounded'Access,
          "the tokenizer bounds how large a vocabulary it will take");
