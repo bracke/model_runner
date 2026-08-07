@@ -44,8 +44,10 @@ What makes it safe:
 - The parsing, validation and preparation layers are unaffected and keep every
   check. Nothing derived from a file reaches these loops without having been
   bounds-checked first.
-- `tests fuzz` drives malformed containers through the whole load path: the
-  parser, the tokenizer, the chat-template compiler and model preparation. A
+- `tests fuzz` drives malformed containers through the whole path: the parser,
+  the tokenizer, the chat-template compiler, model preparation, and a forward
+  pass over the mutated weights, so the loops described here are driven by
+  hostile bytes rather than only by valid ones. A
   case that escapes an exception, is accepted into a usable state while
   invalid, or runs past a time bound fails the run. The release checklist runs
   a campaign on every invocation.

@@ -2,9 +2,16 @@ with Interfaces;
 
 --  GGUF mutation fuzzing.
 --
---  A valid synthetic container is mutated and fed to the whole load path: the
+--  A valid synthetic container is mutated and fed to the whole path: the
 --  parser, then the tokenizer, then the chat-template compiler, then model
---  preparation. Stopping at the parser left the campaign short of the gate its
+--  preparation, and then a forward pass over the mutated weights.
+--
+--  The forward pass matters most. It is where the quantization kernels run,
+--  and those are the one place in this project that suppresses index, range
+--  and overflow checks -- the place SECURITY.md names as where a validation
+--  mistake would become memory unsafety rather than a clean Constraint_Error.
+--  Weight bytes are among the bytes being mutated, and until now nothing
+--  drove them through those loops. Stopping at the parser left the campaign short of the gate its
 --  own contract names -- an invalid model must not reach an executable state
 --  -- and left the template compiler, which is the most program-like thing a
 --  file carries, never driven by a mutated template at all.

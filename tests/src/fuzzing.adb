@@ -4,6 +4,7 @@ with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
+with Model_Runner.Numerics;
 with Model_Runner.Tokenizer;
 with Model_Runner.Llama;
 with Model_Runner.Templates;
@@ -234,6 +235,51 @@ package body Fuzzing is
                begin
                   Model_Runner.Llama.Prepare
                     (Prepared, Item, Source, Bounds, null, null, Outcome);
+
+                  --  A model that prepared is a model the engine would run,
+                  --  so run it. Until now the campaign stopped here, which
+                  --  left the forward pass -- and with it the quantization
+                  --  kernels, the one place this project suppresses index,
+                  --  range and overflow checks -- never driven by a mutated
+                  --  file. Weight bytes are among the bytes being mutated.
+                  --
+                  --  Either outcome is acceptable: logits, or a structured
+                  --  refusal such as a non-finite value found in a tensor.
+                  --  What is not acceptable is an escaped exception, and the
+                  --  handler around this case is what catches that.
+                  if E.Is_Ok (Outcome) then
+                     declare
+                        Width : constant Natural :=
+                          Model_Runner.Tokenizer.Size
+                            (Model_Runner.Llama.Vocabulary (Prepared).all);
+                     begin
+                        if Width > 0 then
+                           declare
+                              Live   : Model_Runner.Llama.Session;
+                              Opened : E.Error_Info;
+                              Ran    : E.Error_Info;
+                              Last : constant Model_Runner.Numerics.Element_Count
+                                := Model_Runner.Numerics.Element_Count
+                                     (Width - 1);
+                              Logits : Model_Runner.Numerics.Real_Array
+                                (0 .. Last);
+                           begin
+                              Model_Runner.Llama.Open
+                                (Live, Prepared, Status => Opened);
+
+                              if E.Is_Ok (Opened) then
+                                 Model_Runner.Llama.Evaluate
+                                   (Live, Prepared,
+                                    Model_Runner.Tokenizer.Token_Id (0),
+                                    Logits, Status => Ran);
+                              end if;
+
+                              Model_Runner.Llama.Close (Live);
+                           end;
+                        end if;
+                     end;
+                  end if;
+
                   Model_Runner.Llama.Close (Prepared, Closing);
                end;
 
