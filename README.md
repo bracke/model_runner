@@ -435,7 +435,12 @@ strings are validated as UTF-8; tensor ranges are checked against the file and
 against each other. Embedded chat templates are compiled into a bounded
 allowlisted form that has no operation capable of reaching a file, a process,
 the environment or the network. Metadata values are escaped before they reach a
-terminal. Model files are opened read-only and are never modified.
+terminal. Model files are opened read-only and are never modified, which a
+test holds by comparing the file's bytes and its modification time across a
+run. The units that interpret what a container holds -- the template engine,
+the tokenizer, the metadata accessors, the engine itself -- may not name a
+file, a stream, a directory, the environment or the command line at all, and
+the release checklist fails if one of them does.
 
 Prompt text given with `--prompt` may be visible to other local processes. Use
 `--prompt-file` or standard input for sensitive text.

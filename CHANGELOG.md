@@ -7,6 +7,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A release check that no unit interpreting a model's contents can reach a
+  file, a stream, a directory, the environment or the command line.
+
 - A release check that the environment surface is the one the README lists,
   and that only two files read it at all.
 

@@ -561,6 +561,61 @@ package body Checks is
          Agrees ("CHANGELOG.md", "diagnostic");
       end;
 
+      --  Reading a model must not lead to reading anything else.
+      --
+      --  A file says what its metadata says, and a chat template is a small
+      --  program written by whoever produced the model. Both are interpreted
+      --  here, and neither may reach the filesystem while it is: a template
+      --  that could name a file to include, or a metadata value that could
+      --  name one to load, turns a model into something that reads what it
+      --  likes from the machine that opened it.
+      --
+      --  So the units that interpret what a container holds may not reach a
+      --  file, a stream, a directory, the environment or the command line.
+      --  Reading the container itself is the reader's work, and the reader
+      --  is not on this list.
+      declare
+         procedure Reject_Reach (Relative, Token : String) is
+         begin
+            if Holds (Contents (Relative), Token) then
+               Fail (Relative & " reaches a file while reading a model: "
+                     & Token);
+            end if;
+         end Reject_Reach;
+
+         procedure Interprets_Only (Simple : String) is
+            Relative : constant String :=
+              Hostkit.Fs.Join ("src/library", Simple);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if not Files.File_Exists (Path (Relative)) then
+               Fail (Relative & " is named by this check but is not there");
+               return;
+            end if;
+
+            Reject_Reach (Relative, "with Ada.Text_IO");
+            Reject_Reach (Relative, "with Ada.Streams");
+            Reject_Reach (Relative, "with Ada.Directories");
+            Reject_Reach (Relative, "with Ada.Command_Line");
+            Reject_Reach (Relative, "with Ada.Environment_Variables");
+            Reject_Reach (Relative, "with Model_Runner.Byte_Sources");
+            Reject_Reach (Relative, "with Model_Runner.Platform");
+            Reject_Reach (Relative, "with Hostkit");
+         end Interprets_Only;
+      begin
+         Interprets_Only ("model_runner-templates.adb");
+         Interprets_Only ("model_runner-conversation.adb");
+         Interprets_Only ("model_runner-tokenizer.adb");
+         Interprets_Only ("model_runner-gguf-containers.adb");
+         Interprets_Only ("model_runner-stops.adb");
+         Interprets_Only ("model_runner-sampling.adb");
+         Interprets_Only ("model_runner-llama.adb");
+         Interprets_Only ("model_runner-quantization.adb");
+         Interprets_Only ("model_runner-tensors.adb");
+         Interprets_Only ("model_runner-kernels.adb");
+      end;
+
       --  The environment surface is what the README says it is.
       --
       --  Every variable this program reads is an input somebody else can
