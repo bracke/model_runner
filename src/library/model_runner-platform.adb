@@ -1,7 +1,6 @@
 with Ada.Command_Line;
 with Ada.Directories;
 with Ada.Environment_Variables;
-with Interfaces.C;
 with System.Multiprocessors;
 
 with Hostkit.Host;
@@ -10,21 +9,22 @@ with Model_Runner.Text;
 
 package body Model_Runner.Platform is
 
-   use type Interfaces.C.int;
-
-   function C_Isatty (Descriptor : Interfaces.C.int) return Interfaces.C.int
-   with Import, Convention => C, External_Name => "isatty";
 
    -----------------
    -- Is_Terminal --
    -----------------
 
+   --  Asked through hostkit rather than by importing isatty here. The C name
+   --  is spelled _isatty on Windows and the console is asked about through
+   --  GetConsoleMode instead, so an import by that name is a POSIX assumption
+   --  wearing a portable-looking coat. hostkit keeps one body per host.
    function Is_Terminal (Descriptor : Natural) return Boolean is
    begin
-      return C_Isatty (Interfaces.C.int (Descriptor)) = 1;
-   exception
-      when others =>
-         return False;
+      return Hostkit.Host.Is_Terminal
+        (case Descriptor is
+            when 0 => Hostkit.Host.Standard_Input,
+            when 1 => Hostkit.Host.Standard_Output,
+            when others => Hostkit.Host.Standard_Error);
    end Is_Terminal;
 
    ---------------------------

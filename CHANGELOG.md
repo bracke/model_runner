@@ -236,6 +236,13 @@ wall and 16.0 s of processor time.
 
 ### Changed
 
+- Terminal detection is asked of `hostkit` rather than by importing `isatty`
+  here. That C name is spelled `_isatty` on Windows, where the console is
+  asked about through `GetConsoleMode` instead, so the import was a POSIX
+  assumption that looked portable. `hostkit` keeps one body per host and this
+  crate keeps none for it.
+
+
 - `docs/error-codes.md` marks every code raised or reserved. Thirty-six of the
   148 are declared, carry a message in every locale and are raised nowhere;
   read as a reference the document promised diagnostics the program cannot
