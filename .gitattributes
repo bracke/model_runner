@@ -1,0 +1,9 @@
+#  Generated files are written byte for byte by the tooling and compared
+#  against what the code would produce. Git converting their line endings on
+#  checkout would make a Windows working tree disagree with the generator
+#  about a file neither had edited, so these are pinned.
+docs/error-codes.md text eol=lf
+
+#  The message catalog is read by the program itself rather than by a text
+#  editor, and its values are compared exactly.
+resources/messages/catalog.txt text eol=lf

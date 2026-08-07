@@ -2,7 +2,6 @@ with Ada.Directories;
 with Hostkit.Fs;
 with Reserved_Codes;
 with Ada.Streams.Stream_IO;
-with Ada.Text_IO;
 
 with Model_Runner.Errors;
 with Model_Runner.Text;
@@ -123,30 +122,38 @@ package body Docs_Generation is
    ----------------------------------
 
    function Error_Reference_Is_Current (Root : String) return Boolean is
+      use Ada.Streams;
+
       Path     : constant String := Hostkit.Fs.Join (Root, Relative);
       Expected : constant String := Rendered;
-      Handle   : Ada.Text_IO.File_Type;
-      Buffer   : String (1 .. Expected'Length + 16);
-      Filled   : Natural := 0;
+      Handle   : Stream_IO.File_Type;
    begin
       if not Ada.Directories.Exists (Path) then
          return False;
       end if;
 
-      Ada.Text_IO.Open (Handle, Ada.Text_IO.In_File, Path);
-      while not Ada.Text_IO.End_Of_File (Handle) loop
-         declare
-            Item : constant String := Ada.Text_IO.Get_Line (Handle);
-         begin
-            exit when Filled + Item'Length + 1 > Buffer'Length;
-            Buffer (Filled + 1 .. Filled + Item'Length) := Item;
-            Filled := Filled + Item'Length + 1;
-            Buffer (Filled) := ASCII.LF;
-         end;
-      end loop;
-      Ada.Text_IO.Close (Handle);
+      --  Compared as bytes. Reading it line by line and rebuilding with a
+      --  line feed made the comparison blind to how the lines actually end
+      --  and to a trailing blank one -- a file written on a host that spells
+      --  line endings differently read as current, which is the one thing
+      --  this is here to notice. The file is pinned to line feeds in
+      --  .gitattributes so that a checkout cannot introduce the difference
+      --  this now refuses.
+      Stream_IO.Open (Handle, Stream_IO.In_File, Path);
 
-      return Buffer (1 .. Filled) = Expected;
+      declare
+         Size    : constant Stream_IO.Count := Stream_IO.Size (Handle);
+         Content : String (1 .. Natural (Size));
+      begin
+         if Natural (Size) /= Expected'Length then
+            Stream_IO.Close (Handle);
+            return False;
+         end if;
+
+         String'Read (Stream_IO.Stream (Handle), Content);
+         Stream_IO.Close (Handle);
+         return Content = Expected;
+      end;
    exception
       when others =>
          return False;
