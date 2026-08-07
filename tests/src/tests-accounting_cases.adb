@@ -6,12 +6,19 @@ with Model_Runner.Clocks;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
 with Model_Runner.Arithmetic;
+with Packaging;
+with Tarlib.Entries;
+with Tarlib.Errors;
+with Tarlib.Files;
+with Tarlib.Readers;
+with Model_Runner;
 with Model_Runner.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.Platform.Mapping;
 
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
+with Ada.Text_IO;
 
 package body Tests.Accounting_Cases is
 
@@ -451,6 +458,163 @@ package body Tests.Accounting_Cases is
       end;
    end Byte_Readers_Decode_And_Refuse;
 
+   --  The release archive contains what a distribution needs, with the
+   --  executable executable.
+   --
+   --  This is the one piece of tooling whose failure appears on somebody
+   --  else's machine: an archive missing a file, or unpacking a program
+   --  without its execute bit, is discovered when it is unpacked and not
+   --  before. Nothing exercised it, and the release checklist does not build
+   --  one.
+   procedure Archive_Carries_A_Distribution
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Tarlib.Entries.File_Mode;
+
+      Root : constant String := "obj/package-root";
+      Into : constant String := "obj/package-out";
+
+      --  Write a file with some content, making its directory first.
+      procedure Put_File (Relative : String; Content : String) is
+         Full : constant String := Root & "/" & Relative;
+         Cut  : Natural := 0;
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         for Index in reverse Full'Range loop
+            if Full (Index) = '/' then
+               Cut := Index;
+               exit;
+            end if;
+         end loop;
+
+         if Cut > 0 and then not Ada.Directories.Exists (Full (Full'First .. Cut - 1))
+         then
+            Ada.Directories.Create_Path (Full (Full'First .. Cut - 1));
+         end if;
+
+         Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Full);
+         Ada.Text_IO.Put (Handle, Content);
+         Ada.Text_IO.Close (Handle);
+      end Put_File;
+
+      --  Report whether the archive holds a path, and with which mode.
+      procedure Look_For
+        (Archive : String;
+         Wanted  : String;
+         Found   : out Boolean;
+         Mode    : out Tarlib.Entries.File_Mode)
+      is
+         Source : aliased Tarlib.Files.File_Input_Source;
+         Reader : Tarlib.Readers.Reader;
+         Info   : Tarlib.Readers.Entry_Info;
+         Present : Boolean;
+         Result : Tarlib.Errors.Status;
+      begin
+         Found := False;
+         Mode := 0;
+
+         Tarlib.Files.Open_Read (Source, Archive, Result);
+         Assert (Tarlib.Errors.Is_Success (Result),
+                 "the archive could not be opened: " & Archive & " -- "
+                 & Tarlib.Errors.Status_Code'Image (Result.Code));
+
+         Tarlib.Readers.Initialize (Reader, Source, Result);
+         Assert (Tarlib.Errors.Is_Success (Result),
+                 "the archive could not be read");
+
+         loop
+            Tarlib.Readers.Next_Entry (Reader, Info, Present, Result);
+            exit when not Present or else not Tarlib.Errors.Is_Success (Result);
+
+            if Tarlib.Readers.Path (Info) = Wanted then
+               Found := True;
+               Mode := Tarlib.Readers.Metadata (Info).Mode;
+            end if;
+
+            Tarlib.Readers.Skip_Entry (Reader, Result);
+            exit when not Tarlib.Errors.Is_Success (Result);
+         end loop;
+
+         --  Closed before returning. Ada refuses to reopen a file that is
+         --  still open in the same program, so a reader left open here makes
+         --  the next question about the same archive fail as though the
+         --  archive were at fault.
+         Tarlib.Files.Close (Source, Result);
+      end Look_For;
+
+      Prefix : constant String :=
+        Model_Runner.Program_Name & "-" & Model_Runner.Version;
+      Archive : constant String :=
+        Into & "/" & Prefix & ".tar";
+
+      Written : Boolean;
+      Found   : Boolean;
+      Mode    : Tarlib.Entries.File_Mode;
+
+      --  Every member the archive is supposed to carry.
+      procedure Must_Hold (Wanted : String) is
+         Present : Boolean;
+         Ignored : Tarlib.Entries.File_Mode;
+      begin
+         Look_For (Archive, Wanted, Present, Ignored);
+         Assert (Present, "the archive is missing " & Wanted);
+      end Must_Hold;
+   begin
+      --  A root holding everything the archive is supposed to carry.
+      if Ada.Directories.Exists (Root) then
+         Ada.Directories.Delete_Tree (Root);
+      end if;
+      Ada.Directories.Create_Path (Into);
+
+      Put_File ("bin/" & Model_Runner.Program_Name, "not really a program");
+      Put_File ("resources/messages/catalog.txt", "en.x = y");
+      Put_File ("LICENSE", "a licence");
+      Put_File ("README.md", "a readme");
+      Put_File ("CHANGELOG.md", "a changelog");
+      Put_File ("SECURITY.md", "a security note");
+
+      Packaging.Run (Root, Into, Written);
+      Assert (Written, "a complete root did not produce an archive");
+
+      --  Every member is there, under the versioned prefix that makes the
+      --  archive unpack over a prefix as an installation.
+      Must_Hold (Prefix & "/bin/" & Model_Runner.Program_Name);
+      Must_Hold
+        (Prefix & "/share/" & Model_Runner.Program_Name
+         & "/messages/catalog.txt");
+      Must_Hold (Prefix & "/LICENSE");
+      Must_Hold (Prefix & "/README.md");
+      Must_Hold (Prefix & "/CHANGELOG.md");
+      Must_Hold (Prefix & "/SECURITY.md");
+
+      --  The program is executable and the documents are not. An archive
+      --  whose program unpacks without its execute bit is not a distribution.
+      Look_For (Archive, Prefix & "/bin/" & Model_Runner.Program_Name,
+                Found, Mode);
+      Assert (Mode = 8#0755#,
+              "the program is not executable in the archive:"
+              & Tarlib.Entries.File_Mode'Image (Mode));
+
+      Look_For (Archive, Prefix & "/README.md", Found, Mode);
+      Assert (Mode = 8#0644#,
+              "a document carries the execute bit:"
+              & Tarlib.Entries.File_Mode'Image (Mode));
+
+      --  A root missing one file produces no archive at all, rather than one
+      --  that is quietly incomplete.
+      Ada.Directories.Delete_File (Root & "/LICENSE");
+      Ada.Directories.Delete_File (Archive);
+      Packaging.Run (Root, Into, Written);
+      Assert (not Written,
+              "an incomplete root produced an archive anyway");
+      Assert (not Ada.Directories.Exists (Archive),
+              "a refused packaging left an archive behind");
+
+      Ada.Directories.Delete_Tree (Root);
+      Ada.Directories.Delete_Tree (Into);
+   end Archive_Carries_A_Distribution;
+
    ----------
    -- Name --
    ----------
@@ -486,6 +650,9 @@ package body Tests.Accounting_Cases is
       Register_Routine
         (T, Backwards_Clock_Yields_No_Duration'Access,
          "a clock that goes backwards yields no elapsed time");
+      Register_Routine
+        (T, Archive_Carries_A_Distribution'Access,
+         "the release archive carries a distribution with the program executable");
       Register_Routine
         (T, Byte_Readers_Decode_And_Refuse'Access,
          "the byte readers decode little-endian and refuse to read past the end");
