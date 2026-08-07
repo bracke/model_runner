@@ -273,7 +273,9 @@ Every test is deterministic, offline, and needs no downloaded model:
   documented compile-time refusal reported by its own code rather than merely
   as an error, and all five bounds driven to their edge and one past it: size,
   instruction count, nesting depth, output size and iterations.
-- **Arithmetic, memory and clocks** — checked arithmetic carrying overflow
+- **Arithmetic, memory and clocks** — the byte readers decoding little-endian
+  from any offset and refusing a field that runs past the end, returning zero
+  when they do; checked arithmetic carrying overflow
   rather than raising or wrapping, invalidity absorbing through further
   operations, alignment refusing a non-power of two, narrowing to Natural
   reporting range loss and zeroing its result; an allocation past the budget

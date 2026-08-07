@@ -374,6 +374,83 @@ package body Tests.Accounting_Cases is
               "an invalid value passed a range test");
    end Checked_Arithmetic_Carries_Overflow;
 
+   --  The byte readers decode little-endian and refuse to read past the end.
+   --
+   --  Every field of a model file is read through these: a magic number, a
+   --  count, an offset, a scale. They are the boundary between a buffer and a
+   --  value, and nothing tested them directly -- the container tests reach
+   --  them only through a parser that has already decided what to read.
+   --
+   --  Two properties matter. The byte order is fixed by the format and not by
+   --  the host, so a value must decode the same way on any machine. And a
+   --  field that runs past the end must report that rather than read whatever
+   --  follows the buffer.
+   procedure Byte_Readers_Decode_And_Refuse
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package B renames Model_Runner.Bytes;
+      use type Interfaces.Unsigned_8;
+      use type Interfaces.Unsigned_16;
+      use type Interfaces.Unsigned_32;
+      use type Interfaces.Integer_32;
+
+      --  Eight bytes counting up, so a wrong byte order is visible in the
+      --  value rather than hidden by symmetry.
+      Data : constant B.Byte_Array (1 .. 8) :=
+        [16#01#, 16#02#, 16#03#, 16#04#, 16#05#, 16#06#, 16#07#, 16#08#];
+      Ok   : Boolean;
+   begin
+      --  Little-endian, least significant byte first.
+      Assert (B.Get_U8 (Data, 0, Ok) = 16#01# and then Ok,
+              "one byte decoded wrongly");
+      Assert (B.Get_U16 (Data, 0, Ok) = 16#0201# and then Ok,
+              "two bytes decoded in the wrong order");
+      Assert (B.Get_U32 (Data, 0, Ok) = 16#04030201# and then Ok,
+              "four bytes decoded in the wrong order");
+      Assert (B.Get_U64 (Data, 0, Ok) = 16#0807060504030201# and then Ok,
+              "eight bytes decoded in the wrong order");
+
+      --  From an offset, not only from the start.
+      Assert (B.Get_U16 (Data, 6, Ok) = 16#0807# and then Ok,
+              "a field at an offset decoded wrongly");
+
+      --  Signed values are two's complement over the same bytes.
+      declare
+         Negative : constant B.Byte_Array (1 .. 4) :=
+           [16#FF#, 16#FF#, 16#FF#, 16#FF#];
+      begin
+         Assert (B.Get_I32 (Negative, 0, Ok) = -1 and then Ok,
+                 "all ones did not decode as minus one");
+      end;
+
+      --  A field that would run past the end is refused, and the value it
+      --  returns is zero rather than whatever was in the buffer.
+      Assert (B.Get_U64 (Data, 1, Ok) = 0 and then not Ok,
+              "eight bytes were read from an offset with seven left");
+      Assert (B.Get_U32 (Data, 5, Ok) = 0 and then not Ok,
+              "four bytes were read from an offset with three left");
+      Assert (B.Get_U16 (Data, 7, Ok) = 0 and then not Ok,
+              "two bytes were read from an offset with one left");
+      Assert (B.Get_U8 (Data, 8, Ok) = 0 and then not Ok,
+              "a byte was read from one past the end");
+
+      --  The last field that does fit is read, so the refusals above are a
+      --  boundary rather than a blanket.
+      Assert (B.Get_U64 (Data, 0, Ok) /= 0 and then Ok,
+              "the only eight-byte field that fits was refused");
+      Assert (B.Get_U8 (Data, 7, Ok) = 16#08# and then Ok,
+              "the last byte was refused");
+
+      --  An empty buffer refuses everything rather than raising.
+      declare
+         Nothing : constant B.Byte_Array (1 .. 0) := [];
+      begin
+         Assert (B.Get_U8 (Nothing, 0, Ok) = 0 and then not Ok,
+                 "a byte was read from an empty buffer");
+      end;
+   end Byte_Readers_Decode_And_Refuse;
+
    ----------
    -- Name --
    ----------
@@ -409,6 +486,9 @@ package body Tests.Accounting_Cases is
       Register_Routine
         (T, Backwards_Clock_Yields_No_Duration'Access,
          "a clock that goes backwards yields no elapsed time");
+      Register_Routine
+        (T, Byte_Readers_Decode_And_Refuse'Access,
+         "the byte readers decode little-endian and refuse to read past the end");
       Register_Routine
         (T, Checked_Arithmetic_Carries_Overflow'Access,
          "checked arithmetic carries overflow instead of raising or wrapping");
