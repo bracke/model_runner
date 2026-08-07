@@ -1,12 +1,17 @@
 with Ada.Real_Time;
 with Ada.Text_IO;
 
+with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
+with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Limits;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization;
 with Model_Runner.Tensors;
+
+with Fixtures;
 
 package body Benchmarks is
 
@@ -195,6 +200,73 @@ package body Benchmarks is
 
       --  Decode blocks with no arithmetic on top, to separate the cost of
       --  producing the values from the cost of using them.
+      --  Time parsing a metadata-heavy container.
+      --
+      --  Loading a model is not a kernel, but it is the first thing a run
+      --  spends time on, and until this was here a change to the reader could
+      --  cost a fifth of it without anything noticing. A vocabulary is what
+      --  makes a real file's metadata large: a hundred thousand token strings
+      --  and their scores, which is the shape of a small real model.
+      procedure Measure_Parse is
+         Tokens  : constant := 100_000;
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Passes  : Long_Long_Integer := 0;
+         Started : Ada.Real_Time.Time;
+         Elapsed : Duration;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, Tokens);
+         for Index in 1 .. Tokens loop
+            Fixtures.String_Element
+              (Builder, "token" & Integer'Image (Index) & "xyzzy");
+         end loop;
+         Fixtures.End_Array (Builder);
+
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.scores", G.Value_Float32, Tokens);
+         for Index in 1 .. Tokens loop
+            Fixtures.Float_Element (Builder, N.Real (Index));
+         end loop;
+         Fixtures.End_Array (Builder);
+         Fixtures.Build (Builder, Image);
+
+         if Image = null then
+            return;
+         end if;
+
+         Started := Ada.Real_Time.Clock;
+         loop
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Item   : Model_Runner.GGUF.Containers.Container;
+               Status : E.Error_Info;
+            begin
+               Model_Runner.GGUF.Containers.Reader.Parse
+                 (Item, Source, Model_Runner.Limits.Default_Model_Limits,
+                  null, null, Status);
+               exit when E.Is_Error (Status);
+               Model_Runner.GGUF.Containers.Close (Item);
+            end;
+
+            Passes := Passes + 1;
+            Elapsed := Ada.Real_Time.To_Duration
+              (Ada.Real_Time.Clock - Started);
+            exit when Elapsed >= Seconds;
+         end loop;
+
+         --  Reported per byte of container, which is what a reader's cost
+         --  scales with and what makes it comparable across fixtures.
+         Report
+           ("metadata parse, per byte",
+            Passes * Long_Long_Integer (Image.all'Length), Elapsed);
+         B.Free (Image);
+      end Measure_Parse;
+
       procedure Measure_Decode (Name : String; Format : G.Tensor_Type) is
          Per_Block : constant N.Element_Count :=
            N.Element_Count (G.Block_Elements (Format));
@@ -257,6 +329,10 @@ package body Benchmarks is
       IO.Put_Line ("row dequantization");
       Measure ("q8_0 Dequantize_Row", G.Type_Q8_0, False);
       Measure ("f32  Dequantize_Row", G.Type_F32, False);
+      IO.New_Line;
+
+      IO.Put_Line ("metadata parsing");
+      Measure_Parse;
       IO.New_Line;
 
       IO.Put_Line ("block decode alone");

@@ -194,7 +194,7 @@ alr build                                  # debug: -Og, all validity checks
 cd tests && ./bin/tests test               # the whole suite
 cd tests && ./bin/tests check              # repository and layering checks
 cd tests && ./bin/tests conformance        # engine vs independent reference
-cd tests && ./bin/tests benchmark          # row kernels, synthetic, no model
+cd tests && ./bin/tests benchmark          # row kernels and parsing, synthetic
 cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
 cd tests && ./bin/tests fuzz --seed 1 --cases 2000
 cd tests && ./bin/tests fixtures           # write tests/fixtures/tiny-model.gguf
@@ -568,6 +568,11 @@ nibbles of the fused Q4_0 path fails the suite.
 `tests benchmark` measures the row kernels directly, on synthetic tensors, with
 no model file and no network. It exists because reading the code produced two
 confident wrong answers about where the time went.
+
+It also measures parsing a metadata-heavy container, because loading is the
+first thing a run spends time on and nothing was watching it. A change to the
+reader cost a fifth of that path and the suite was entirely happy: every test
+passed, and it took a throwaway measurement to notice.
 
 This is still a scalar-source implementation compiled for a portable baseline,
 and it is slower than a runtime built around hand-written vector code. It is

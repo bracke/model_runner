@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A benchmark for parsing a metadata-heavy container, alongside the row
+  kernels. Loading is the first thing a run spends time on and nothing was
+  measuring it.
+
 - A differential test for stop-string matching: the earliest-then-longest rule
   written out the slow, obvious way in the test and compared against the
   engine's single-pass matcher over generated sets and buffers.
