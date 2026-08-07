@@ -240,6 +240,12 @@ package body Tests.GGUF_Cases is
       Fixtures.Int32_Element (Builder, 30);
       Fixtures.End_Array (Builder);
 
+      --  One value that fits a signed 64-bit reading and one that does not.
+      Fixtures.Begin_Array (Builder, "fixture.wide", G.Value_UInt64, 2);
+      Fixtures.UInt64_Element (Builder, 7);
+      Fixtures.UInt64_Element (Builder, Interfaces.Unsigned_64'Last);
+      Fixtures.End_Array (Builder);
+
       Fixtures.Begin_Array (Builder, "fixture.floats", G.Value_Float32, 3);
       Fixtures.Float_Element (Builder, 0.0);
       Fixtures.Float_Element (Builder, -1.5);
@@ -395,6 +401,18 @@ package body Tests.GGUF_Cases is
       Containers.Get_Integer_Element (Item, "fixture.ints", 2, Number, Status);
       Assert (E.Is_Ok (Status) and then Number = 20,
               "the integer element that is there was not read");
+
+      --  An unsigned value too large for the signed reading the accessor
+      --  hands back is refused rather than wrapped. Wrapping would turn the
+      --  largest possible token id into -1, which every bound would accept.
+      Containers.Get_Integer_Element (Item, "fixture.wide", 1, Number, Status);
+      Assert (E.Is_Ok (Status) and then Number = 7,
+              "a wide element that fits was not read");
+
+      Containers.Get_Integer_Element (Item, "fixture.wide", 2, Number, Status);
+      Refuses ("an unsigned element too wide to represent",
+               E.GGUF_Metadata_Out_Of_Range);
+      Assert (Number = 0, "a refused wide element did not read zero");
 
       --  A float element.
       Containers.Get_Float_Element (Item, "fixture.absent", 1, Real, Status);

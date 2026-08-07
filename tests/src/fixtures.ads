@@ -108,6 +108,17 @@ package Fixtures is
    procedure Int32_Element
      (Item : in out Builder; Value : Interfaces.Integer_32);
 
+   --  Append one unsigned 64-bit element to the open array.
+   --
+   --  Values above Long_Long_Integer'Last are writable on purpose: a reader
+   --  has to refuse them, and it cannot be shown doing so unless a fixture
+   --  can hold one.
+   --
+   --  @param Item Builder to extend.
+   --  @param Value Element value.
+   procedure UInt64_Element
+     (Item : in out Builder; Value : Interfaces.Unsigned_64);
+
    --  Append one binary32 element to the open array.
    --
    --  @param Item Builder to extend.

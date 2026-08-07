@@ -221,6 +221,12 @@ package body Fixtures is
    -- Float_Element --
    -------------------
 
+   procedure UInt64_Element
+     (Item : in out Builder; Value : Interfaces.Unsigned_64) is
+   begin
+      Put (Item.Metadata, B.Put_U64 (Value));
+   end UInt64_Element;
+
    procedure Float_Element (Item : in out Builder; Value : N.Real) is
    begin
       Put (Item.Metadata, B.Put_F32 (Value));
