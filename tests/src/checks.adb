@@ -57,6 +57,19 @@ package body Checks is
       end Contents;
 
       --  Report whether a file mentions a token.
+      function Holds (Text, Token : String) return Boolean is
+      begin
+         if Text'Length < Token'Length then
+            return False;
+         end if;
+         for Index in Text'First .. Text'Last - Token'Length + 1 loop
+            if Text (Index .. Index + Token'Length - 1) = Token then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Holds;
+
       function Mentions (Relative, Token : String) return Boolean is
          Text : constant String := Contents (Relative);
       begin
@@ -202,19 +215,6 @@ package body Checks is
       --  convenient dependency at a time, in a change whose diff looks like
       --  an improvement.
       declare
-         function Holds (Text, Token : String) return Boolean is
-         begin
-            if Text'Length < Token'Length then
-               return False;
-            end if;
-            for Index in Text'First .. Text'Last - Token'Length + 1 loop
-               if Text (Index .. Index + Token'Length - 1) = Token then
-                  return True;
-               end if;
-            end loop;
-            return False;
-         end Holds;
-
          procedure Visit_Offline (Relative : String) is
             Text : constant String := T.To_Lower (Contents (Relative));
 
@@ -559,6 +559,88 @@ package body Checks is
 
          Agrees ("README.md", "diagnostic codes");
          Agrees ("CHANGELOG.md", "diagnostic");
+      end;
+
+      --  The environment surface is what the README says it is.
+      --
+      --  Every variable this program reads is an input somebody else can
+      --  set, and the README lists them so a reader can see the whole of
+      --  that surface. A variable read but not listed is a way in that
+      --  nobody was told about -- which is how the locale variables sat
+      --  unlisted here until this check went looking.
+      --
+      --  Only two files may read the environment at all. That is what keeps
+      --  the surface small enough to list: a read anywhere else has to be
+      --  moved or the rule changed deliberately.
+      declare
+         Readme : constant String := Contents ("README.md");
+
+         --  Names appear as Environment_Value ("X") or Environment_Exists
+         --  ("X"). The declarations of those functions take a parameter
+         --  rather than a literal, so requiring the quote is what tells a
+         --  call from the thing being called.
+         procedure Visit_Environment (Relative : String) is
+            Text : constant String := Contents (Relative);
+            Lower : constant String := T.To_Lower (Relative);
+
+            Allowed : constant Boolean :=
+              Holds (Lower, "model_runner-platform.adb")
+                or else Holds (Lower, "model_runner-cli-driver.adb");
+
+            procedure Scan_For (Token : String) is
+               Index : Natural := Text'First;
+            begin
+               if Text'Length < Token'Length then
+                  return;
+               end if;
+
+               while Index <= Text'Last - Token'Length + 1 loop
+                  if Text (Index .. Index + Token'Length - 1) = Token then
+                     if not Allowed then
+                        Fail (Relative & " reads the environment");
+                     end if;
+
+                     declare
+                        First : constant Natural := Index + Token'Length;
+                        Close : Natural := First;
+                     begin
+                        while Close <= Text'Last
+                          and then Text (Close) /= '"'
+                        loop
+                           Close := Close + 1;
+                        end loop;
+
+                        if Close <= Text'Last and then Close > First then
+                           declare
+                              Named : constant String :=
+                                Text (First .. Close - 1);
+                           begin
+                              if not Holds (Readme, "`" & Named & "`") then
+                                 Fail
+                                   (Relative & " reads " & Named
+                                    & ", which the README does not list");
+                              end if;
+                           end;
+                        end if;
+                     end;
+                  end if;
+
+                  Index := Index + 1;
+               end loop;
+            end Scan_For;
+         begin
+            Result.Performed := Result.Performed + 1;
+            Scan_For ("Environment_Value (""");
+            Scan_For ("Environment_Exists (""");
+         end Visit_Environment;
+
+         procedure Scan_Environment is new For_Each_Source (Visit_Environment);
+      begin
+         Scan_Environment ("src/library");
+         Scan_Environment ("src/main");
+         Scan_Environment ("src/platform/posix");
+         Scan_Environment ("src/platform/windows");
+         Scan_Environment ("src/platform/unsupported");
       end;
 
       Ada.Text_IO.Put_Line

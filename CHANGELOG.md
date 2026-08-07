@@ -7,6 +7,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A release check that the environment surface is the one the README lists,
+  and that only two files read it at all.
+
 - A release check that production code reaches nothing beyond this machine: no
   socket API, no name resolver, no address. Local-only inference was stated and
   enforced by nothing.
@@ -304,6 +307,9 @@ wall and 16.0 s of processor time.
   tokenizer was discarding that distinction.
 
 ### Fixed
+
+- The environment table in the README now lists `LC_ALL` and `LANG`, which the
+  program reads to choose a locale and which it did not mention.
 
 - A container no longer sizes storage from a length it has not read. A file
   could declare a metadata array of four million elements, or a string of

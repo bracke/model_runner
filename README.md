@@ -86,8 +86,13 @@ generated text in `answer.txt` — no trailing newline, no styling, no prefix.
 | `MODEL_RUNNER_LOCALE` | locale for program messages (`en`, `da`, `qps`) |
 | `MODEL_RUNNER_COLOR` | `always` or `never` |
 | `NO_COLOR` | suppresses automatic styling |
+| `LC_ALL` | locale, when `MODEL_RUNNER_LOCALE` is unset |
+| `LANG` | locale, when neither of the above is set |
 
-Prompts are never taken from the environment.
+Prompts are never taken from the environment. This table is the whole of what
+the program reads: the release checklist fails on a variable read but not
+listed here, and on a read from anywhere but the two files that are allowed
+one. Both locale variables were read and unlisted until that check was written.
 
 ### Exit statuses
 
