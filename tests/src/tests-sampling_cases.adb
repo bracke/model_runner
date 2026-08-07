@@ -433,6 +433,21 @@ package body Tests.Sampling_Cases is
       Length : Natural;
    begin
       Stop.Open (Set);
+
+      --  A token that is not a token. Stop conditions come from the command
+      --  line, and a negative identifier compared against generated tokens
+      --  would simply never match, which looks like a stop condition that
+      --  was accepted and then ignored.
+      Stop.Add_Token (Set, -1, Status);
+      Assert (Status.Code = E.Tokenizer_Invalid_Token_Id,
+              "a negative stop token was accepted: "
+              & E.Error_Code'Image (Status.Code));
+
+      Stop.Add_Token (Set, 0, Status);
+      Assert (E.Is_Ok (Status),
+              "token zero was refused as a stop token: "
+              & E.Error_Code'Image (Status.Code));
+
       Stop.Add_String (Set, "END", Status);
       Assert (E.Is_Ok (Status), "adding a stop string failed");
       Stop.Add_String (Set, "ENDING", Status);

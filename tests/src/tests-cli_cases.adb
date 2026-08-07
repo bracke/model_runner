@@ -1213,6 +1213,41 @@ package body Tests.CLI_Cases is
          Model_Runner.Conversation.Close (Messages);
       end;
 
+      --  And the other bound, which is on the bytes rather than the count.
+      --  A conversation can reach its storage limit with room left for more
+      --  messages, and that is the limit an interactive session actually
+      --  meets: it grows by what was said, not by how often.
+      declare
+         Bounds   : Model_Runner.Limits.Session_Limits :=
+           Model_Runner.Limits.Default_Session_Limits;
+         Messages : Model_Runner.Conversation.History;
+         Status   : E.Error_Info;
+         Filled   : Natural := 0;
+      begin
+         Bounds.Max_Rendered_Bytes := 64;
+         Model_Runner.Conversation.Open (Messages, Bounds, Status);
+         Assert (E.Is_Ok (Status), "the byte-bounded conversation did not open");
+
+         --  Well inside the message count, and past the storage.
+         for Index in 1 .. 8 loop
+            Model_Runner.Conversation.Append
+              (Messages, Model_Runner.Conversation.User_Role,
+               "0123456789abcdef", Status);
+            exit when E.Is_Error (Status);
+            Filled := Filled + 1;
+         end loop;
+
+         Assert (Status.Code = E.Conversation_Too_Long,
+                 "a conversation past its storage was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Filled > 0,
+                 "the storage bound refused the first message as well");
+         Assert (Filled < 8,
+                 "the storage bound was never reached");
+
+         Model_Runner.Conversation.Close (Messages);
+      end;
+
       --  A model that was never prepared is not a model to generate from.
       declare
          Unprepared : L.Model;

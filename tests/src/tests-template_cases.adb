@@ -150,6 +150,13 @@ package body Tests.Template_Cases is
       end;
 
       --  Nesting. At the limit it compiles; one deeper it does not.
+      --  Nothing to compile. A model whose template metadata is present and
+      --  empty has said nothing, and rendering from it would produce a
+      --  prompt with no conversation in it at all.
+      Assert (Compile_Status ("") = E.Template_Missing,
+              "an empty template compiled: "
+              & E.Error_Code'Image (Compile_Status ("")));
+
       Assert (Compile_Status (Nested (Tmpl.Max_Depth)) = E.No_Error,
               "nesting at the documented depth was refused");
       Assert (Compile_Status (Nested (Tmpl.Max_Depth + 1))
