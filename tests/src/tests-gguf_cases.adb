@@ -2995,6 +2995,175 @@ package body Tests.GGUF_Cases is
               "a three-byte character counted as more than one");
    end UTF8_Refuses_What_It_Must;
 
+   --  Every string of up to three bytes, against the rule as the standard
+   --  states it.
+   --
+   --  The cases above are the ones a careful reader writes down: an overlong
+   --  form of each length, a surrogate, a code point past the last. They are
+   --  the right cases and they were chosen by somebody who knew what to look
+   --  for. This decides the same question a different way -- the well-formed
+   --  byte sequences are a table in the Unicode standard, and that table
+   --  written out as a scanner is a second opinion that no amount of care
+   --  about examples can give.
+   procedure UTF8_Agrees_With_The_Table
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package UTF8 renames Model_Runner.UTF8;
+
+      subtype Octet is Natural range 0 .. 255;
+
+      function Continuation (Value : Octet) return Boolean
+        is (Value in 16#80# .. 16#BF#);
+
+      --  Unicode 15, table 3-7, written from the table rather than from the
+      --  validator -- which is the whole point of having it here. A string
+      --  is well formed when it is a run of well-formed sequences with
+      --  nothing left over, so this scans rather than deciding one
+      --  character.
+      function Well_Formed (Item : String) return Boolean is
+         Index : Natural := Item'First;
+
+         function At_Offset (Step : Natural) return Octet is
+           (if Index + Step <= Item'Last
+            then Character'Pos (Item (Index + Step))
+            else 0);
+
+         function Present (Count : Natural) return Boolean is
+           (Index + Count - 1 <= Item'Last);
+      begin
+         while Index <= Item'Last loop
+            declare
+               Lead : constant Octet := Character'Pos (Item (Index));
+            begin
+               if Lead <= 16#7F# then
+                  Index := Index + 1;
+
+               elsif Lead in 16#C2# .. 16#DF# then
+                  if not Present (2) or else not Continuation (At_Offset (1))
+                  then
+                     return False;
+                  end if;
+                  Index := Index + 2;
+
+               elsif Lead in 16#E0# .. 16#EF# then
+                  if not Present (3) or else not Continuation (At_Offset (2))
+                  then
+                     return False;
+                  end if;
+
+                  --  The second byte is where the overlong forms and the
+                  --  surrogates are excluded, and each lead has its own range.
+                  if Lead = 16#E0# then
+                     if At_Offset (1) not in 16#A0# .. 16#BF# then
+                        return False;
+                     end if;
+                  elsif Lead = 16#ED# then
+                     if At_Offset (1) not in 16#80# .. 16#9F# then
+                        return False;
+                     end if;
+                  elsif not Continuation (At_Offset (1)) then
+                     return False;
+                  end if;
+
+                  Index := Index + 3;
+
+               elsif Lead in 16#F0# .. 16#F4# then
+                  if not Present (4)
+                    or else not Continuation (At_Offset (2))
+                    or else not Continuation (At_Offset (3))
+                  then
+                     return False;
+                  end if;
+
+                  if Lead = 16#F0# then
+                     if At_Offset (1) not in 16#90# .. 16#BF# then
+                        return False;
+                     end if;
+                  elsif Lead = 16#F4# then
+                     if At_Offset (1) not in 16#80# .. 16#8F# then
+                        return False;
+                     end if;
+                  elsif not Continuation (At_Offset (1)) then
+                     return False;
+                  end if;
+
+                  Index := Index + 4;
+
+               else
+                  return False;
+               end if;
+            end;
+         end loop;
+
+         return True;
+      end Well_Formed;
+
+      --  One buffer, written into rather than built, because sixteen million
+      --  strings is enough work without allocating each of them.
+      Item : String (1 .. 3) := [others => ' '];
+
+      Checked  : Natural := 0;
+      Accepted : Natural := 0;
+
+      procedure Compare (Length : Positive) is
+         Says : constant Boolean := UTF8.Is_Valid (Item (1 .. Length));
+         Rule : constant Boolean := Well_Formed (Item (1 .. Length));
+      begin
+         Checked := Checked + 1;
+         if Says then
+            Accepted := Accepted + 1;
+         end if;
+
+         if Says /= Rule then
+            Assert (False,
+                    "on" & Natural'Image (Length) & " bytes"
+                    & Natural'Image (Character'Pos (Item (1)))
+                    & (if Length > 1
+                       then Natural'Image (Character'Pos (Item (2))) else "")
+                    & (if Length > 2
+                       then Natural'Image (Character'Pos (Item (3))) else "")
+                    & ": the validator says " & Boolean'Image (Says)
+                    & " and the table says " & Boolean'Image (Rule));
+         end if;
+      end Compare;
+   begin
+      for First in Octet loop
+         Item (1) := Character'Val (First);
+         Compare (1);
+
+         for Second in Octet loop
+            Item (2) := Character'Val (Second);
+            Compare (2);
+
+            for Third in Octet loop
+               Item (3) := Character'Val (Third);
+               Compare (3);
+            end loop;
+         end loop;
+      end loop;
+
+      Assert (Checked = 256 + 65_536 + 16_777_216,
+              "not every string was tried:" & Natural'Image (Checked));
+
+      --  Counted from the table rather than from the run. One byte: the 128
+      --  ASCII values. Two: 30 * 64 two-byte sequences, plus ASCII twice.
+      --  Three: the three-byte sequences, plus ASCII beside a two-byte
+      --  sequence either way round, plus ASCII three times.
+      declare
+         Two_Byte   : constant Natural := 30 * 64;
+         Three_Byte : constant Natural :=
+           32 * 64 + 12 * 64 * 64 + 32 * 64 + 2 * 64 * 64;
+      begin
+         Assert (Accepted = 128
+                   + (Two_Byte + 128 * 128)
+                   + (Three_Byte + 128 * Two_Byte + Two_Byte * 128
+                      + 128 * 128 * 128),
+                 "the number accepted is" & Natural'Image (Accepted)
+                 & ", which is not what the table counts");
+      end;
+   end UTF8_Agrees_With_The_Table;
+
    --  Every piece the streaming decoder hands out is itself valid UTF-8.
    --
    --  Generated text reaches the reader one token at a time and each piece is
@@ -3386,6 +3555,10 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, UTF8_Agrees_With_The_Table'Access,
+         "the UTF-8 validator agrees with the standard's table on every "
+         & "sequence of up to three bytes");
       Register_Routine
         (T, UTF8_Refuses_What_It_Must'Access,
          "the UTF-8 validator refuses overlongs, surrogates and stray bytes");

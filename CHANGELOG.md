@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A differential test for UTF-8 validation: every string of up to three bytes,
+  compared against the standard's table of well-formed sequences written out
+  separately. It adds about twenty-five seconds to the suite.
+
 - Release checks that the test sources reach no network either, and that
   nothing in the repository is large enough to be a model.
 
