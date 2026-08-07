@@ -273,7 +273,11 @@ Every test is deterministic, offline, and needs no downloaded model:
   documented compile-time refusal reported by its own code rather than merely
   as an error, and all five bounds driven to their edge and one past it: size,
   instruction count, nesting depth, output size and iterations.
-- **Memory accounting and clocks** — an allocation past the budget refused
+- **Arithmetic, memory and clocks** — checked arithmetic carrying overflow
+  rather than raising or wrapping, invalidity absorbing through further
+  operations, alignment refusing a non-power of two, narrowing to Natural
+  reporting range loss and zeroing its result; an allocation past the budget
+  refused
   before it is attempted, mapped bytes not counted as allocated, a plan that
   cannot be represented refused rather than wrapped, a clock that goes
   backwards yielding no elapsed time, and a file mapping reading back what is

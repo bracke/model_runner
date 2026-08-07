@@ -5,6 +5,7 @@ with Interfaces;
 with Model_Runner.Clocks;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
+with Model_Runner.Arithmetic;
 with Model_Runner.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.Platform.Mapping;
@@ -293,6 +294,86 @@ package body Tests.Accounting_Cases is
       Ada.Directories.Delete_File (Path);
    end Mapping_Reads_And_Refuses;
 
+   --  Checked arithmetic carries overflow instead of raising or wrapping.
+   --
+   --  Every offset addition, alignment rounding and element-count multiply in
+   --  the parser goes through this package, and nothing tested it directly. A
+   --  multiply that wrapped would be the worst of the possibilities: a file
+   --  could declare dimensions whose product wraps to something small, pass
+   --  the bound that checks the product, and then be read at its real size.
+   procedure Checked_Arithmetic_Carries_Overflow
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package A renames Model_Runner.Arithmetic;
+      use type A.Checked;
+
+      Big  : constant A.Checked := A.To_Checked (Interfaces.Unsigned_64'Last);
+      Two  : constant A.Checked := A.To_Checked (Interfaces.Unsigned_64 (2));
+      Zero : constant A.Checked := A.To_Checked (Interfaces.Unsigned_64 (0));
+      Modest : constant A.Checked := A.To_Checked (Interfaces.Unsigned_64 (100));
+      Room : Natural;
+   begin
+      --  Ordinary arithmetic is ordinary.
+      Assert (A.Is_Valid (Modest + Modest) and then A.Value (Modest + Modest) = 200,
+              "a sum inside the range was refused or wrong");
+      Assert (A.Is_Valid (Modest * Two) and then A.Value (Modest * Two) = 200,
+              "a product inside the range was refused or wrong");
+      Assert (A.Is_Valid (Modest - Two) and then A.Value (Modest - Two) = 98,
+              "a difference inside the range was refused or wrong");
+
+      --  Overflow is carried, not raised and not wrapped. Wrapping is the
+      --  dangerous answer: it produces a small number that passes a bound.
+      Assert (not A.Is_Valid (Big + Modest), "a sum past the range was accepted");
+      Assert (not A.Is_Valid (Big * Two),
+              "a product past the range was accepted");
+      Assert (not A.Is_Valid (Modest - Big),
+              "a difference below zero was accepted");
+      Assert (not A.Is_Valid (Modest / Zero), "a division by zero was accepted");
+
+      --  Zero multiplies to zero rather than to invalid, which the size
+      --  computations rely on for an empty tensor.
+      Assert (A.Is_Valid (Big * Zero) and then A.Value (Big * Zero) = 0,
+              "multiplying by zero was refused");
+
+      --  Invalidity is absorbing: once lost it cannot be recovered by
+      --  arithmetic that would otherwise be sound. This is what lets the
+      --  parser compute a chain and ask once at the end.
+      Assert (not A.Is_Valid ((Big + Modest) - Big),
+              "an invalid value became valid again by subtraction");
+      Assert (not A.Is_Valid ((Big * Two) * Zero),
+              "an invalid value became valid again by multiplying by zero");
+      Assert (not A.Is_Valid (A.Align_Up (Big + Modest, 16)),
+              "an invalid value became valid again by alignment");
+
+      --  Alignment rounds up, leaves an aligned value alone, and refuses an
+      --  alignment that is not a power of two.
+      Assert (A.Value (A.Align_Up (A.To_Checked (Interfaces.Unsigned_64 (1)), 16)) = 16,
+              "one did not round up to sixteen");
+      Assert (A.Value (A.Align_Up (A.To_Checked (Interfaces.Unsigned_64 (16)), 16)) = 16,
+              "an aligned value was moved");
+      Assert (not A.Is_Valid (A.Align_Up (Modest, 3)),
+              "an alignment that is not a power of two was accepted");
+      Assert (not A.Is_Valid (A.Align_Up (Big, 16)),
+              "rounding up past the range was accepted");
+
+      --  Narrowing to Natural reports whether it fits rather than raising.
+      --  The result is zeroed on failure, which the spec promises and a
+      --  caller that forgets to check the answer depends on.
+      Assert (A.To_Natural (Modest, Room) and then Room = 100,
+              "a value inside Natural did not convert");
+      Assert (not A.To_Natural (Big, Room) and then Room = 0,
+              "a value past Natural converted anyway or left a value behind");
+      Assert (not A.To_Natural (Big + Modest, Room) and then Room = 0,
+              "an invalid value converted anyway or left a value behind");
+
+      --  And the range test that guards every bound in the parser.
+      Assert (A.In_Range (Modest, 100), "a value at its bound was refused");
+      Assert (not A.In_Range (Modest, 99), "a value past its bound was accepted");
+      Assert (not A.In_Range (Big + Modest, Interfaces.Unsigned_64'Last),
+              "an invalid value passed a range test");
+   end Checked_Arithmetic_Carries_Overflow;
+
    ----------
    -- Name --
    ----------
@@ -328,6 +409,9 @@ package body Tests.Accounting_Cases is
       Register_Routine
         (T, Backwards_Clock_Yields_No_Duration'Access,
          "a clock that goes backwards yields no elapsed time");
+      Register_Routine
+        (T, Checked_Arithmetic_Carries_Overflow'Access,
+         "checked arithmetic carries overflow instead of raising or wrapping");
       Register_Routine
         (T, Mapping_Reads_And_Refuses'Access,
          "a mapping reads back what is in the file and refuses the rest");
