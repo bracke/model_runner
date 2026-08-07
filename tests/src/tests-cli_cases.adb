@@ -517,6 +517,106 @@ package body Tests.CLI_Cases is
       B.Free (Image);
    end Worker_Count_Does_Not_Change_The_Text;
 
+   --  How a prompt is divided into batches does not change what follows it.
+   --
+   --  A batch of tokens against the same tokens one at a time is held
+   --  already, on the logits and on the cache left behind. What that cannot
+   --  reach is the seam: a prompt longer than the batch size is evaluated in
+   --  several passes, and each must continue from where the last committed.
+   --  An error there is invisible in a single batch and shows up as a run
+   --  that answers differently depending on a performance setting.
+   procedure Batch_Size_Does_Not_Change_The_Text
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Image : B.Byte_Array_Access;
+      First : String (1 .. Max_Captured) := [others => ' '];
+      First_Used : Natural := 0;
+      Sizes : Natural := 0;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+      begin
+         Start (Under);
+
+         --  One divides the prompt into as many passes as it has tokens,
+         --  and six takes it in a single pass, so the seam is crossed a
+         --  different number of times in every run here.
+         for Size in 1 .. 6 loop
+            declare
+               Session : L.Session;
+               Stop    : Model_Runner.Stops.Set;
+               Sink    : aliased Capture_Sink;
+               Request : Gen.Request;
+               Outcome : Gen.Result;
+               Status  : E.Error_Info;
+            begin
+               Model_Runner.Stops.Open (Stop);
+               L.Open (Session, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the session did not open for batch size"
+                       & Integer'Image (Size));
+
+               Request.Max_Tokens := 5;
+               Request.Batch_Size := Size;
+               Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+               Request.Has_Seed := True;
+               Request.Add_Beginning := True;
+
+               Gen.Generate
+                 (Under.Ready, Session, "ababab", Request, Stop,
+                  Sink'Unchecked_Access, null, null, null, null,
+                  Outcome => Outcome);
+
+               Assert (Outcome.Reason = Gen.Maximum_Tokens,
+                       "the run at batch size" & Integer'Image (Size)
+                       & " ended for another reason: "
+                       & Gen.Completion_Reason'Image (Outcome.Reason));
+
+               --  The prompt has to be long enough that the small batch
+               --  sizes really do take several passes.
+               Assert (Outcome.Prompt_Tokens > 3,
+                       "the prompt is too short to be divided:"
+                       & Natural'Image (Outcome.Prompt_Tokens) & " tokens");
+
+               declare
+                  Text : constant String := Captured (Sink);
+               begin
+                  if Size = 1 then
+                     Assert (Text'Length > 0,
+                             "the run at batch size one produced nothing");
+                     First (1 .. Text'Length) := Text;
+                     First_Used := Text'Length;
+                  else
+                     Assert (Text = First (1 .. First_Used),
+                             "batch size" & Integer'Image (Size)
+                             & " produced """ & Text
+                             & """ where one token at a time produced """
+                             & First (1 .. First_Used) & """");
+                  end if;
+               end;
+
+               Sizes := Sizes + 1;
+               Gen.Release (Outcome);
+               L.Close (Session);
+               Model_Runner.Stops.Close (Stop);
+            exception
+               when others =>
+                  L.Close (Session);
+                  Model_Runner.Stops.Close (Stop);
+                  raise;
+            end;
+         end loop;
+      end;
+
+      Assert (Sizes = 6, "not every batch size was run");
+      B.Free (Image);
+   end Batch_Size_Does_Not_Change_The_Text;
+
    --  A greedy run with a fixed seed produces the same text and the same
    --  completion reason every time.
    procedure Generation_Is_Reproducible
@@ -2405,6 +2505,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Preliminary_Scans'Access,
          "the locale and colour pre-parse scans find only what is there");
+      Register_Routine
+        (T, Batch_Size_Does_Not_Change_The_Text'Access,
+         "how a prompt is divided into batches does not change what "
+         & "follows it");
       Register_Routine
         (T, Worker_Count_Does_Not_Change_The_Text'Access,
          "how many workers run a generation does not change what it "
