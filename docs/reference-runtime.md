@@ -28,6 +28,28 @@ external-model: ok, architecture llama, 201 tensors,
   tokens-match TRUE, greedy-match TRUE, text-match TRUE
 ```
 
+It has since been done a second time, against the same model requantized to
+Q4_K_M, recorded in `tests/fixtures/tinyllama-q4_k.expect`:
+
+```
+external-model: ok, architecture llama, 201 tensors,
+  checked against llama.cpp b1-717dad5, prompt 6 tokens, generated 2,
+  deterministic TRUE, thread-stable TRUE,
+  tokens-match TRUE, greedy-match TRUE, text-match TRUE
+```
+
+That one exists because every recording before it was of a file whose tensors
+were all one type. A Q4_K_M file carries Q4_K, Q6_K and F32 tensors together
+and the type is read per tensor, which nothing had compared against another
+runtime. It agreed on the first attempt, so it found nothing -- which is worth
+having written down, because the alternative was not knowing.
+
+One trap is worth naming, since it cost an hour here. Recent `llama.cpp`
+wraps the prompt in the model's chat template unless told not to: pass
+`--no-conversation` to `llama-completion`, or it will feed fourteen tokens
+where the harness feeds six and the two runtimes will disagree about something
+neither of them got wrong.
+
 Neither the runtime nor the model is needed to read that recording, and no
 mandatory test touches either. The model is not committed.
 

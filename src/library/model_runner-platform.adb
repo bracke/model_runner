@@ -1,11 +1,11 @@
 with Ada.Directories;
-with Ada.Text_IO;
 with Ada.Environment_Variables;
 with System.Multiprocessors;
 
 with Hostkit.Fs;
 with Hostkit.Host;
 
+with Model_Runner.Platform.Topology;
 with Model_Runner.Text;
 
 package body Model_Runner.Platform is
@@ -218,75 +218,14 @@ package body Model_Runner.Platform is
 
    function Core_Count return Positive is
       Processors : constant Positive := Processor_Count;
-
-      --  The host describes its topology under this directory, one entry per
-      --  processor, each naming every processor that shares its core. The
-      --  entry for processor three of a pair reading "2,3" is the same text
-      --  as the entry for processor two, so counting the entries that begin
-      --  with their own number counts each core exactly once.
-      --
-      --  This is where Linux keeps it. Everywhere else the directory is
-      --  absent, the first read fails, and the processor count stands -- the
-      --  same answer this returned before the directory was consulted.
-      Root : constant String := "/sys/devices/system/cpu/cpu";
-      Tail : constant String := "/topology/thread_siblings_list";
-
-      Found : Natural := 0;
+      Cores      : constant Natural :=
+        Model_Runner.Platform.Topology.Physical_Cores (Processors);
    begin
-      for Index in 0 .. Processors - 1 loop
-         declare
-            Path : constant String :=
-              Root & Model_Runner.Text.Trim (Integer'Image (Index)) & Tail;
-            File : Ada.Text_IO.File_Type;
-         begin
-            if not Ada.Directories.Exists (Path) then
-               return Processors;
-            end if;
-
-            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
-
-            declare
-               --  Bounded: a line longer than this is not a sibling list this
-               --  understands, and is treated as a host that did not answer.
-               Line : String (1 .. 512);
-               Last : Natural;
-               Stop : Natural;
-            begin
-               Ada.Text_IO.Get_Line (File, Line, Last);
-               Ada.Text_IO.Close (File);
-
-               --  The leading number, which is the lowest processor sharing
-               --  this core.
-               Stop := Line'First - 1;
-               for Position in Line'First .. Last loop
-                  exit when Line (Position) not in '0' .. '9';
-                  Stop := Position;
-               end loop;
-
-               if Stop < Line'First then
-                  return Processors;
-               end if;
-
-               if Integer'Value (Line (Line'First .. Stop)) = Index then
-                  Found := Found + 1;
-               end if;
-            end;
-         exception
-            when others =>
-               if Ada.Text_IO.Is_Open (File) then
-                  Ada.Text_IO.Close (File);
-               end if;
-               return Processors;
-         end;
-      end loop;
-
-      --  A count of zero, or one above the processor count, means the reading
-      --  was not understood rather than that the machine is unusual.
-      if Found < 1 or else Found > Processors then
-         return Processors;
-      end if;
-
-      return Found;
+      --  Zero is what a host body returns when it cannot say, and the
+      --  processor count is the answer this gave before any host was asked.
+      --  The range is checked here as well as there, because a body that is
+      --  wrong about its host should not be able to set a worker count.
+      return (if Cores in 1 .. Processors then Cores else Processors);
    exception
       when others =>
          return Processor_Count;

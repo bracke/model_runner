@@ -515,8 +515,14 @@ own processor time. Scaling stops at about 4.6x on eight either way, which is
 the chip, not the pool -- there are only 2015 matrix products in this run, so
 handing each of them out costs milliseconds in total.
 
-The default therefore follows the core count rather than the processor count.
-`--threads` overrides it and still accepts any number the backend allows.
+The default therefore follows the core count rather than the processor count,
+where the host will say what that is. Linux publishes it and macOS answers
+sysctl; Windows would answer too, but through a walk over variable-length
+records that has not been written because it cannot be run here, so a Windows
+host still defaults to the processor count as every host did before. There is
+one body per host for this, beside the ones for mapping and signals, and a
+host that cannot answer says so rather than guessing. `--threads` overrides it
+everywhere and still accepts any number the backend allows.
 
 The 4.6x is not the memory. Measured on its own, away from the model, the
 matrix product reaches 4.8x on seven workers and falls back at eight, and it

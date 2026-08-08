@@ -38,6 +38,27 @@ repository: a 1.1 GB binary does not belong in version control, and a test that
 needed it would violate the rule that no mandatory test depends on a large
 model. Obtain it yourself if you want to run the comparison.
 
+### TinyLlama-1.1B-Chat-v1.0, Q4_K_M
+
+| | |
+|---|---|
+| File | `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf` |
+| Size | 668 788 096 bytes |
+| Source | made locally from the Q8_0 file above |
+| Made by | `llama-quantize --allow-requantize IN OUT Q4_K_M` |
+| Licence | Apache-2.0, inherited from the upstream model |
+
+Requantizing from Q8_0 rather than from the original weights is not how a
+model should be made, and `llama.cpp` refuses it without `--allow-requantize`
+for good reason: the values pass through two lossy steps instead of one. It is
+the right way to make **this** file, whose only purpose is to be the same model
+with tensors of several types in it -- Q4_K, Q6_K and F32 together, read per
+tensor. Everything else about it is held constant, which is what makes the
+comparison about the types rather than about the model.
+
+Do not use it to judge what a model says. It answers `The capital of France
+is` with ` Paris.`, as the Q8_0 file does, and that is all it is asked.
+
 ## Reference runtime
 
 Recordings under `tests/fixtures/*.expect` state which runtime produced them in

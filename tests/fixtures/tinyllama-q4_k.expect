@@ -1,0 +1,29 @@
+# Recorded by hand from a reference runtime; see docs/reference-runtime.md.
+# The model this refers to is NOT committed -- see docs/fixture-provenance.md
+# for how to make it. No mandatory test reads this file.
+#
+# This one exists because every recording before it was of a file whose
+# tensors were all one type. A Q4_K_M file is not: it carries Q4_K, Q6_K and
+# F32 tensors together, and the type is read per tensor. Nothing had checked
+# that the engine reads such a file the way another runtime does.
+#
+# Tokenization came from:
+#   llama-tokenize -m tinyllama-q4_k.gguf -p "The capital of France is" --ids
+#     -> [1, 450, 7483, 310, 3444, 338]
+#
+# Greedy continuation came from:
+#   llama-completion -m tinyllama-q4_k.gguf -p "The capital of France is"
+#     -n 8 --temp 0 --top-k 1 --no-conversation
+# which printed "The capital of France is Paris." The --no-conversation is
+# what matters and is easy to leave out: without it the reference wraps the
+# prompt in the model's chat template, feeds fourteen tokens where this feeds
+# six, and the two runtimes then disagree about something neither got wrong.
+#
+# The continuation is " Paris." -- the leading space belongs to the token and
+# is written as the \s escape because the directive value is trimmed.
+
+runtime llama.cpp b1-717dad5
+model tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (requantized locally)
+prompt The capital of France is
+tokens 1 450 7483 310 3444 338
+greedy_text \sParis.
