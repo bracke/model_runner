@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A benchmark for the vector kernels each token passes through -- softmax,
+  normalization, the activation and the plain dot product -- which nothing had
+  been measuring, and one for how the matrix product scales across shares,
+  counted against its own serial rate.
+
+- Benchmark rows for decoding f16 and q4_k without a dot product on top.
+  Separating decode from the product is what located the half-precision
+  defect below; the row product hid it.
+
+- `Model_Runner.Platform.Core_Count`, and a body per host behind it, so the
+  worker default can follow cores rather than processors. Linux reads the
+  topology the kernel publishes and macOS asks sysctl; a host that cannot say
+  returns the processor count rather than guessing.
+
+- A reference recording for a Q4_K_M model, which carries Q4_K, Q6_K and F32
+  tensors together and is read per tensor. Every recording before it was of a
+  file whose tensors were all one type.
+
+- A sweep over all 65 536 half-precision bit patterns, compared against the
+  format's definition computed in binary64 rather than against another bit
+  trick.
+
+- Element-wise reference decoders for the four-bit, five-bit and six-bit block
+  formats, comparing all 256 elements of a block of arbitrary bytes against a
+  reading that starts from an element index and asks where its bits are.
+
+- A test that a malformed request is refused by the range procedures rather
+  than raising, which is what makes the failure handlers in the pool a net and
+  not a path.
+
 - The render step bound is a field in the model limits rather than a constant
   in the engine, so a caller rendering untrusted templates can tighten it.
 
@@ -179,6 +209,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Performance
 
+- Six-bit blocks decode about four times faster. The inner loop produced four
+  elements per iteration and wrote them thirty-two apart; split into four runs
+  that each read sixteen adjacent bytes and write sixteen adjacent elements,
+  the same arithmetic runs against contiguous memory.
+
+- Half precision decodes about 2.6 times faster, and the row product about the
+  same. The conversion was being called once per element across a unit
+  boundary; it is inlined now, and computes without branching.
+
+- Softmax is about a third faster. Its finiteness test was a call per element
+  for the same reason.
+
+- A binary32 weight is read as a binary32 where the byte order and alignment
+  allow it, rather than assembled a byte at a time.
+
+- The task that submits a matrix product takes a share of it instead of
+  waiting for the workers. With one worker per core the waiting task was one
+  more runnable task than there were cores, and a job is not finished until
+  its slowest share is. Pinned to one processor per core, eight shares went
+  from 9326 to 14132 Me/s; unpinned and end to end it is about six per cent.
+
 All figures are from the release build, on a Ryzen 7 7840U, against
 TinyLlama-1.1B-Chat Q8_0. Generating twelve tokens with 14 threads takes 2.18 s
 wall and 16.0 s of processor time.
@@ -266,6 +317,25 @@ wall and 16.0 s of processor time.
 
 ### Changed
 
+- The default worker count follows the number of cores rather than the number
+  of processors, and asks for one fewer than that because the submitting task
+  takes the last share. On an eight-core machine reporting sixteen
+  processors, twelve tokens took the same wall time for 14.6 s of processor
+  time instead of 27.4 s. `--threads` overrides it as before.
+
+- Kernel figures in the README are re-measured and were between two and four
+  times too slow. The support matrix names the README as their only home,
+  which makes keeping them current a duty rather than a courtesy.
+
+- Both the README and the support matrix said `-march=native` measured no
+  difference. It measures 37 per cent slower for the f32 row product and 14
+  per cent for Q8_0. The conclusion drawn from it was right; the reason given
+  was not.
+
+- The benchmark says what its numbers are worth: comparable within one sitting
+  and not across two, since the same binary has reported 785 and 598 Me/s for
+  one kernel hours apart.
+
 - Paths are built through `hostkit` rather than by concatenating a separator
   here, and the directory holding the executable is asked of it rather than
   derived from the executable's path. What goes between two path segments is
@@ -325,6 +395,15 @@ wall and 16.0 s of processor time.
   tokenizer was discarding that distinction.
 
 ### Fixed
+
+- `Model_Runner.CLI` described the command-line interface, the sampler, the
+  generation coordinator, the template engine and the presentation layer as
+  not implemented. All of them work. The rule against describing planned work
+  as finished cuts both ways.
+
+- The processor-time figure published for a twelve-token run was wrong when it
+  was written. Building the commit that published it and running it again
+  gives the same number this build gives, so nothing had regressed.
 
 - The rest of the metadata parsing slowdown is gone. A run within the copy
   bound is read into a buffer and placed, and a string's encoding is checked

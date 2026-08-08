@@ -482,6 +482,60 @@ package body Tests.Backend_Cases is
       B.Free (Data);
    end Shares_Cannot_Raise;
 
+   -----------------------------------
+   -- Default_Team_Leaves_A_Share --
+   -----------------------------------
+
+   --  What the command line opens a pool with when nobody says.
+   --
+   --  The number itself is not the point; the relation is. A job is cut into
+   --  one more share than the pool has workers, so what has to fit on the
+   --  machine is the workers plus one, and a default that forgets the plus
+   --  one puts a runnable task on every core and then one more. That is
+   --  measurably slower, and it is the kind of arithmetic that is corrected
+   --  once and quietly undone later.
+
+   procedure Default_Team_Leaves_A_Share
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+   begin
+      --  The whole point, for every machine size above the two-core case.
+      for Cores in 3 .. 256 loop
+         declare
+            Workers : constant Positive :=
+              Positive (CPU.Default_Workers (Cores));
+            Shares  : constant Positive := Workers + 1;
+         begin
+            Assert (Shares <= Cores
+                    or else Workers = CPU.Max_Workers,
+                    "on" & Integer'Image (Cores) & " cores the default asks"
+                    & " for" & Integer'Image (Workers) & " workers, which is"
+                    & Integer'Image (Shares) & " shares");
+         end;
+      end loop;
+
+      --  And it does not leave more than one core idle either, which a
+      --  cores-minus-two would.
+      for Cores in 3 .. 64 loop
+         Assert (Positive (CPU.Default_Workers (Cores)) + 1 = Cores,
+                 "on" & Integer'Image (Cores) & " cores the default leaves"
+                 & " more than the submitting task's share idle");
+      end loop;
+
+      --  One core is serial, and two are both used rather than becoming one
+      --  worker, which the command line would run serially.
+      Assert (Positive (CPU.Default_Workers (1)) = 1,
+              "one core did not give one worker");
+      Assert (Positive (CPU.Default_Workers (2)) = 2,
+              "two cores did not give two workers");
+
+      --  A machine larger than the pool allows is capped rather than
+      --  refused, since the result is a worker count and has to be one.
+      Assert (Positive (CPU.Default_Workers (10_000)) = CPU.Max_Workers,
+              "a machine larger than the pool allows was not capped");
+   end Default_Team_Leaves_A_Share;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -515,6 +569,10 @@ package body Tests.Backend_Cases is
         (T, Shares_Cannot_Raise'Access,
          "a malformed request is refused by the range procedures rather "
          & "than raising, which is what makes the failure handlers a net "
-         & "and not a path");  end Register_Tests;
+         & "and not a path"); 
+      Register_Routine
+        (T, Default_Team_Leaves_A_Share'Access,
+         "the default worker count leaves a share for the task that submits "
+         & "the job, on every machine size"); end Register_Tests;
 
 end Tests.Backend_Cases;

@@ -156,6 +156,24 @@ package Model_Runner.Backend.CPU is
       Target  : Model_Runner.Tensors.Real_Array_Access;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Workers to open a pool with on a machine of a given size.
+   --
+   --  One fewer than the cores, because a job is cut into one more share than
+   --  there are workers and the task that submits it takes the last one.
+   --  Asking for a worker per core instead leaves one more runnable task than
+   --  there are cores, the operating system takes a core from a worker, and
+   --  the whole job waits for it, because a job is not finished until its
+   --  slowest share is.
+   --
+   --  Two cores are the exception: one worker there is the serial path, which
+   --  gives up half the machine, so both are used and the submitting task
+   --  competes. That case was not measurable where this was written and is
+   --  left as it was rather than changed on reasoning alone.
+   --
+   --  @param Cores Cores the machine has.
+   --  @return Workers to open, never above Max_Workers.
+   function Default_Workers (Cores : Positive) return Worker_Count;
+
    --  Row range one share of a job covers.
    --
    --  Exposed so that the tests can assert the partition is a disjoint cover

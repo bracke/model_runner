@@ -36,6 +36,16 @@ package body Model_Runner.Backend.CPU is
       return Result;
    end Describe;
 
+   ----------------------
+   -- Default_Workers --
+   ----------------------
+
+   function Default_Workers (Cores : Positive) return Worker_Count is
+      Wanted : constant Positive := (if Cores <= 2 then Cores else Cores - 1);
+   begin
+      return Worker_Count (Positive'Min (Wanted, Max_Workers));
+   end Default_Workers;
+
    ---------------
    -- Partition --
    ---------------
