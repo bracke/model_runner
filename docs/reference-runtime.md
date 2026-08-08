@@ -72,21 +72,33 @@ tokenizer: the same shape appears on a SentencePiece model and a byte-pair
 one. And the recordings in this file cannot see it, because both compare two
 generated tokens, which is fewer than any divergence found so far.
 
-What it is has not been established. It is consistent with the arithmetic
-differing in its last bits -- this engine and that one decode the same
-quantized weights and sum them in different orders, and a token chosen by a
-close margin flips on very little -- and the conformance comparison supports
-that reading, agreeing with an independent implementation to about one part
-in a hundred thousand on F32 weights. But consistent with is not the same as
-demonstrated, and nothing here has compared the logits at the point where the
-two part company, which is what would settle it. The expectation format
-already carries a `logit` directive for exactly that purpose and no recording
-uses it.
+It is the quantization, and the same model at three precisions says so. The
+same prompt, fourteen tokens, greedy, against `llama.cpp`:
 
-Until then: the engine produces sensible text, its output is reproducible
-under a fixed seed and unchanged by the worker count, and it is not
-bit-identical to another implementation on quantized weights beyond the first
-few tokens.
+| weights | agreement |
+|---|---|
+| BF16 | identical, all fourteen tokens |
+| Q8_0 | parts company after about four |
+| Q4_K | parts company after about six |
+
+BF16 is the control. Widening one of those is a shift and nothing else, so
+both implementations hold bit-identical weights, and fourteen tokens of a full
+forward pass -- attention, normalization, softmax, the sampler -- come back
+the same. Whatever differs cannot be in that path.
+
+What differs is decoding a quantized weight, where a value is a small integer
+times a scale, and the two implementations apply that scale and sum the
+products in different orders. The last bits of a logit differ, and a token
+chosen by a close margin flips. That is why the divergence appears at all and
+why it appears at a different point for each format rather than at a
+consistent one.
+
+So: exact weights are exact, and quantized weights agree until they meet a
+near-tie. The engine's output is reproducible under a fixed seed and unchanged
+by the worker count either way. It is not bit-identical to another
+implementation on quantized weights beyond the first few tokens, and no
+implementation of these formats is bit-identical to another for the same
+reason.
 
 ## The tokenizer, compared the same way
 
