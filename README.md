@@ -10,9 +10,10 @@ output tokens, decodes them incrementally and streams the generated text.
 Inference is local only: no network access, no daemon, no Ollama, no llama.cpp,
 no delegation to an external model runtime. The release checklist holds that
 one: it reads every production source and fails on a socket API, a name
-resolver, or an address to reach. It is the promise here that a reader cannot
-check by running the program, and the kind that would otherwise arrive one
-convenient dependency at a time.
+resolver, or an address to reach — and on process spawning, since a program
+that can start another can reach whatever that one reaches. It is the promise
+here that a reader cannot check by running the program, and the kind that would
+otherwise arrive one convenient dependency at a time.
 
 ## Status
 
