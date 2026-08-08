@@ -856,8 +856,23 @@ package body Model_Runner.Quantization is
                      --  The four scales depend only on which half of the
                      --  thirty-two positions L is in, so the loop is split
                      --  and they are formed twice rather than 128 times.
+                     --
+                     --  Each of the four runs below reads sixteen adjacent
+                     --  bytes and writes sixteen adjacent elements. Doing
+                     --  all four inside one loop, as this once did, wrote
+                     --  four streams thirty-two elements apart on every
+                     --  iteration, and that scattering is what left this
+                     --  format decoding several times slower than the
+                     --  others rather than at their speed.
                      for Sub in 0 .. 1 loop
                       declare
+                        Low_Run  : constant B.Byte_Count :=
+                          Low_Half + B.Byte_Count (Sub) * 16;
+                        High_Run : constant B.Byte_Count :=
+                          High_Half + B.Byte_Count (Sub) * 16;
+                        Out_Run  : constant Element_Count :=
+                          Out_Half + Element_Count (Sub) * 16;
+
                         Scale_1 : constant Real :=
                           D * Real (Signed (Data, Scale_Half
                                             + B.Byte_Count (Sub)));
@@ -871,47 +886,68 @@ package body Model_Runner.Quantization is
                           D * Real (Signed (Data, Scale_Half
                                             + B.Byte_Count (Sub + 6)));
                       begin
-                       for L in Sub * 16 .. Sub * 16 + 15 loop
-                        declare
-                           Position : constant B.Byte_Count := B.Byte_Count (L);
-                           Low_A    : constant Interfaces.Unsigned_8 :=
-                             Data (Data'First + Low_Half + Position);
-                           Low_B    : constant Interfaces.Unsigned_8 :=
-                             Data (Data'First + Low_Half + Position + 32);
-                           Bits     : constant Interfaces.Unsigned_8 :=
-                             Data (Data'First + High_Half + Position);
-                           Q1 : constant Integer :=
-                             Integer (Low_A and 16#0F#)
-                             + 16 * Integer (Bits and 3) - 32;
-                           Q2 : constant Integer :=
-                             Integer (Low_B and 16#0F#)
-                             + 16 * Integer
-                                     (Interfaces.Shift_Right (Bits, 2) and 3)
-                             - 32;
-                           Q3 : constant Integer :=
-                             Integer (Interfaces.Shift_Right (Low_A, 4))
-                             + 16 * Integer
-                                     (Interfaces.Shift_Right (Bits, 4) and 3)
-                             - 32;
-                           Q4 : constant Integer :=
-                             Integer (Interfaces.Shift_Right (Low_B, 4))
-                             + 16 * Integer
-                                     (Interfaces.Shift_Right (Bits, 6) and 3)
-                             - 32;
-                        begin
-                           Target
-                             (Target'First + Out_Half + Element_Count (L)) :=
-                             Scale_1 * Real (Q1);
-                           Target
-                             (Target'First + Out_Half + 32
-                              + Element_Count (L)) := Scale_2 * Real (Q2);
-                           Target
-                             (Target'First + Out_Half + 64
-                              + Element_Count (L)) := Scale_3 * Real (Q3);
-                           Target
-                             (Target'First + Out_Half + 96
-                              + Element_Count (L)) := Scale_4 * Real (Q4);
-                        end;
+                       --  Low nibble of the first thirty-two bytes, with the
+                       --  lowest two bits of the shared byte.
+                       for L in 0 .. 15 loop
+                          Target (Target'First + Out_Run + Element_Count (L)) :=
+                            Scale_1
+                            * Real (Integer
+                                      (Data (Data'First + Low_Run
+                                             + B.Byte_Count (L)) and 16#0F#)
+                                    + 16 * Integer
+                                             (Data (Data'First + High_Run
+                                                    + B.Byte_Count (L)) and 3)
+                                    - 32);
+                       end loop;
+
+                       --  Low nibble of the second thirty-two bytes.
+                       for L in 0 .. 15 loop
+                          Target (Target'First + Out_Run + 32
+                                  + Element_Count (L)) :=
+                            Scale_2
+                            * Real (Integer
+                                      (Data (Data'First + Low_Run + 32
+                                             + B.Byte_Count (L)) and 16#0F#)
+                                    + 16 * Integer
+                                             (Interfaces.Shift_Right
+                                                (Data (Data'First + High_Run
+                                                       + B.Byte_Count (L)), 2)
+                                              and 3)
+                                    - 32);
+                       end loop;
+
+                       --  High nibble of the first thirty-two bytes.
+                       for L in 0 .. 15 loop
+                          Target (Target'First + Out_Run + 64
+                                  + Element_Count (L)) :=
+                            Scale_3
+                            * Real (Integer
+                                      (Interfaces.Shift_Right
+                                         (Data (Data'First + Low_Run
+                                                + B.Byte_Count (L)), 4))
+                                    + 16 * Integer
+                                             (Interfaces.Shift_Right
+                                                (Data (Data'First + High_Run
+                                                       + B.Byte_Count (L)), 4)
+                                              and 3)
+                                    - 32);
+                       end loop;
+
+                       --  High nibble of the second thirty-two bytes.
+                       for L in 0 .. 15 loop
+                          Target (Target'First + Out_Run + 96
+                                  + Element_Count (L)) :=
+                            Scale_4
+                            * Real (Integer
+                                      (Interfaces.Shift_Right
+                                         (Data (Data'First + Low_Run + 32
+                                                + B.Byte_Count (L)), 4))
+                                    + 16 * Integer
+                                             (Interfaces.Shift_Right
+                                                (Data (Data'First + High_Run
+                                                       + B.Byte_Count (L)), 6)
+                                              and 3)
+                                    - 32);
                        end loop;
                       end;
                      end loop;

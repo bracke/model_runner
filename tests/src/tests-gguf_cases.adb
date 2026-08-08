@@ -30,6 +30,7 @@ package body Tests.GGUF_Cases is
    use type Model_Runner.GGUF.Tensor_Type;
    use type Model_Runner.GGUF.Value_Type;
    use type Interfaces.Integer_32;
+   use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Model_Runner.Bytes.Byte_Array;
@@ -3669,6 +3670,119 @@ package body Tests.GGUF_Cases is
               "negative zero did not widen to negative zero");
    end Every_Half_Widens_To_Its_Value;
 
+   ------------------------------------------
+   -- Q6_K_Matches_An_Element_Wise_Reading --
+   ------------------------------------------
+
+   --  Six-bit decoding, against a reading that walks the other way.
+   --
+   --  The decoder walks the block: halves, then sub-blocks, then the four
+   --  streams of nibbles and high-bit pairs, writing runs of elements as it
+   --  goes. The reference below starts from an element index and asks where
+   --  its bits are -- which byte holds its nibble, which byte and which pair
+   --  of bits lift it, which of the sixteen scales applies. Two orders that
+   --  agree on all 256 elements of a block of arbitrary bytes agree on the
+   --  layout; the hand-built block above, whose scales are all one and whose
+   --  quants are all zero, does not distinguish the streams from each other
+   --  at all.
+
+   procedure Q6_K_Matches_An_Element_Wise_Reading
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Width : constant B.Byte_Count := 210;
+      Seed  : Interfaces.Unsigned_32 := 20_260_805;
+
+      function Next return Interfaces.Unsigned_32 is
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Seed;
+      end Next;
+
+      Data    : B.Byte_Array_Access;
+      Decoded : N.Real_Array (0 .. 255);
+      Ok      : Boolean;
+      Wrong   : Natural := 0;
+      First   : N.Element_Count := 0;
+   begin
+      B.Allocate (Width, Data);
+      Assert (Data /= null, "could not allocate the block");
+
+      for Index in Data.all'Range loop
+         Data.all (Index) :=
+           B.Byte (Interfaces.Shift_Right (Next, 24) and 16#FF#);
+      end loop;
+
+      --  The scale of the whole block is a half precision number and the
+      --  bytes above could make it infinite or not-a-number, which would
+      --  compare unequal to itself and say nothing about the layout. One
+      --  keeps the comparison about placement.
+      Data.all (Data.all'First + 208) := 16#00#;
+      Data.all (Data.all'First + 209) := 16#3C#;
+
+      Q.Decode_Blocks (Model_Runner.GGUF.Type_Q6_K, Data.all, 0, 1,
+                       Decoded, Ok);
+      Assert (Ok, "the block was not decoded");
+
+      for Index in N.Element_Count range 0 .. 255 loop
+         declare
+            --  Where this element's bits live.
+            Half     : constant Natural := Natural (Index / 128);
+            Rest     : constant Natural := Natural (Index mod 128);
+            Stream   : constant Natural := Rest / 32;
+            Position : constant Natural := Rest mod 32;
+
+            Nibble_At : constant B.Byte_Count :=
+              B.Byte_Count (Half * 64
+                            + (if Stream mod 2 = 1 then 32 else 0)
+                            + Position);
+            Lift_At   : constant B.Byte_Count :=
+              B.Byte_Count (128 + Half * 32 + Position);
+            Scale_At  : constant B.Byte_Count :=
+              B.Byte_Count (192 + Half * 8 + Stream * 2 + Position / 16);
+
+            Nibble_Byte : constant Interfaces.Unsigned_8 :=
+              Data.all (Data.all'First + Nibble_At);
+            Lift_Byte   : constant Interfaces.Unsigned_8 := Data.all (Data.all'First + Lift_At);
+
+            Nibble : constant Natural :=
+              (if Stream < 2
+               then Natural (Nibble_Byte and 16#0F#)
+               else Natural (Interfaces.Shift_Right (Nibble_Byte, 4)));
+            Lift   : constant Natural :=
+              Natural (Interfaces.Shift_Right (Lift_Byte, 2 * Stream) and 3);
+
+            --  The sub-block scale is signed; the byte is not.
+            Raw_Scale : constant Natural := Natural (Data.all (Data.all'First + Scale_At));
+            Sub_Scale : constant Integer :=
+              (if Raw_Scale >= 128 then Raw_Scale - 256 else Raw_Scale);
+
+            --  One, from the bytes written above, so the product is exact
+            --  and formed in the same order as the decoder forms it.
+            Whole : constant N.Real := 1.0;
+
+            Expected : constant N.Real :=
+              (Whole * N.Real (Sub_Scale))
+              * N.Real (Nibble + 16 * Lift - 32);
+         begin
+            if Decoded (Index) /= Expected then
+               if Wrong = 0 then
+                  First := Index;
+               end if;
+               Wrong := Wrong + 1;
+            end if;
+         end;
+      end loop;
+
+      B.Free (Data);
+
+      Assert (Wrong = 0,
+              "six-bit decoding disagrees with an element-wise reading on"
+              & Natural'Image (Wrong) & " of 256 elements, first at"
+              & N.Element_Count'Image (First));
+   end Q6_K_Matches_An_Element_Wise_Reading;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3790,6 +3904,10 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Every_Half_Widens_To_Its_Value'Access,
          "every one of the 65536 half precision patterns widens to the "
-         & "value the format defines");   end Register_Tests;
+         & "value the format defines"); 
+      Register_Routine
+        (T, Q6_K_Matches_An_Element_Wise_Reading'Access,
+         "six-bit decoding places every element where reading the layout "
+         & "element by element says it goes");  end Register_Tests;
 
 end Tests.GGUF_Cases;
