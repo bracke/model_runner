@@ -353,6 +353,73 @@ package body Model_Runner.Templates is
                   end;
                end if;
 
+               --  A message named by position: messages[0]['role'] and the
+               --  like. Templates use it to ask whether the conversation
+               --  already opens with a system message before adding one,
+               --  which is the only construct standing between this engine
+               --  and the templates modern models ship.
+               if Word = "messages" and then From <= Text'Last
+                 and then Text (From) = '['
+               then
+                  declare
+                     Digits_At : Natural := From + 1;
+                     Index     : Natural := 0;
+                     Close     : Natural;
+                  begin
+                     while Digits_At <= Text'Last
+                       and then Text (Digits_At) in '0' .. '9'
+                     loop
+                        Index := Index * 10
+                          + Character'Pos (Text (Digits_At)) - Character'Pos ('0');
+                        Digits_At := Digits_At + 1;
+                     end loop;
+
+                     if Digits_At = From + 1
+                       or else Digits_At > Text'Last
+                       or else Text (Digits_At) /= ']'
+                     then
+                        return;
+                     end if;
+
+                     Close := Digits_At + 1;
+                     if Close > Text'Last or else Text (Close) /= '[' then
+                        return;
+                     end if;
+
+                     declare
+                        Shut : Natural := Close + 1;
+                     begin
+                        while Shut <= Text'Last and then Text (Shut) /= ']'
+                        loop
+                           Shut := Shut + 1;
+                        end loop;
+                        if Shut > Text'Last then
+                           return;
+                        end if;
+
+                        declare
+                           Field : constant String :=
+                             Model_Runner.Text.Trim
+                               (Text (Close + 1 .. Shut - 1));
+                        begin
+                           if Field = "'role'" or else Field = """role""" then
+                              Result.Kind := Term_Indexed_Role;
+                           elsif Field = "'content'"
+                             or else Field = """content"""
+                           then
+                              Result.Kind := Term_Indexed_Content;
+                           else
+                              return;
+                           end if;
+                        end;
+                        Result.Offset := Index;
+                        From := Shut + 1;
+                        Ok := True;
+                        return;
+                     end;
+                  end;
+               end if;
+
                if Word = "message.role" then
                   Result.Kind := Term_Message_Role;
                elsif Word = "message.content" then
@@ -993,6 +1060,23 @@ package body Model_Runner.Templates is
             when Term_Message_Content =>
                return (if Current = 0 then ""
                        else Conv.Content_At (Messages, Current));
+            when Term_Indexed_Role | Term_Indexed_Content =>
+               --  Counted from zero in the template and from one here. A
+               --  position the conversation does not reach is empty rather
+               --  than an error, which is what a template comparing it
+               --  against a role name expects.
+               declare
+                  At_Message : constant Natural := Value.Offset + 1;
+               begin
+                  if At_Message > Conv.Length (Messages) then
+                     return "";
+                  elsif Value.Kind = Term_Indexed_Role then
+                     return Conv.Role_Name
+                       (Conv.Sender_At (Messages, At_Message));
+                  else
+                     return Conv.Content_At (Messages, At_Message);
+                  end if;
+               end;
             when Term_Generation_Prompt =>
                return (if Add_Generation_Prompt then "true" else "");
             when Term_Loop_First =>

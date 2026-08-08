@@ -1091,14 +1091,58 @@ package body Model_Runner.Tokenizer is
                Target (Target'First) := Item.Beginning;
             end if;
 
+            --  A marker such as <|im_start|> is one token, not the dozen
+            --  its spelling would merge into. A chat template writes them
+            --  into the text it renders, so a model reading that text has to
+            --  see the token the template meant rather than its letters --
+            --  and a model that sees the letters answers in letters, ending
+            --  its turn by spelling the marker out instead of stopping.
+            --
+            --  Only positions beginning a bracket are tried, and the longest
+            --  match that the vocabulary calls a control token wins, so
+            --  ordinary text that merely starts with one is untouched.
             while From <= Text'Last loop
                declare
-                  Stop : constant Natural :=
-                    BPE.Cut_At (Text, From, Item.Cutting);
+                  Marker : Natural := 0;
+                  Ending : Natural := 0;
                begin
-                  exit when Stop < From;
-                  Emit (Text (From .. Stop));
-                  From := Stop + 1;
+                  if Text (From) = '<' then
+                     for Reach in reverse 1 .. Natural'Min
+                       (Max_Token_Bytes, Text'Last - From + 1)
+                     loop
+                        declare
+                           Candidate : constant Token_Id :=
+                             Find (Item, Text (From .. From + Reach - 1));
+                        begin
+                           if Candidate /= No_Token
+                             and then Class_Of (Item, Candidate) in
+                                        Class_Control | Class_User_Defined
+                           then
+                              Marker := Natural (Candidate);
+                              Ending := From + Reach - 1;
+                              exit;
+                           end if;
+                        end;
+                     end loop;
+                  end if;
+
+                  if Ending > 0 then
+                     if Produced < Target'Length then
+                        Produced := Produced + 1;
+                        Target (Target'First + Produced - 1) :=
+                          Token_Id (Marker);
+                     end if;
+                     From := Ending + 1;
+                  else
+                     declare
+                        Stop : constant Natural :=
+                          BPE.Cut_At (Text, From, Item.Cutting);
+                     begin
+                        exit when Stop < From;
+                        Emit (Text (From .. Stop));
+                        From := Stop + 1;
+                     end;
+                  end if;
                end;
             end loop;
 

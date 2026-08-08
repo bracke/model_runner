@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Chat templates may name a message by position -- `messages[0]['role']` --
+  which is how a template asks whether a conversation already opens with a
+  system message before adding one. It was the only construct standing
+  between this engine and the templates modern models ship.
+
+- A marker such as `<|im_start|>` is encoded as the token it is rather than
+  the dozen its spelling merges into. A template writes markers into the text
+  it renders, and a model shown their letters answers in letters: it ended its
+  turn by spelling the marker out instead of stopping.
+
 - Q4_1, Q5_0 and Q5_1 tensors are decoded rather than refused. Q4_1 is a
   nibble with a scale and a minimum instead of a fixed bias; the two five-bit
   formats hold each element's fifth bit in a thirty-two bit word beside the

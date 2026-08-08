@@ -724,12 +724,34 @@ package body Tests.Sampling_Cases is
       Reject ("{% include 'other' %}", "include");
       Reject ("{{ raise_exception('no') }}", "raise_exception");
       Reject ("{{ message['content'] | trim }}", "a filter");
-      Reject ("{{ messages[0]['role'] }}", "message indexing");
+      --  Indexing by position is supported now: templates use it to ask
+      --  whether a conversation already opens with a system message. What
+      --  stays outside is indexing by anything that is not a plain number,
+      --  which would need expressions this engine deliberately has none of.
+      Reject ("{{ messages[i]['role'] }}", "indexing by a variable");
+      Reject ("{{ messages[0]['tool_calls'] }}", "an unknown message field");
       Reject ("{% for x in other %}{% endfor %}", "iteration over a non-list");
       Reject ("{% if true %}", "an unbalanced if");
       Reject ("{% endfor %}", "a stray endfor");
       Reject ("{{ unknown_variable }}", "an unknown variable");
       Reject ("{{ oops", "an unterminated tag");
+
+      --  And the construct that moved: a template naming a message by
+      --  position compiles, because the models that ship one need it.
+      declare
+         Fine : Tmpl.Compiled;
+         How  : E.Error_Info;
+      begin
+         Tmpl.Compile
+           (Fine,
+            "{% for message in messages %}"
+            & "{% if loop.first and messages[0]['role'] != 'system' %}S"
+            & "{% endif %}{{ message['content'] }}{% endfor %}",
+            Status => How);
+         Assert (not E.Is_Error (How),
+                 "a template naming a message by position was refused");
+         Tmpl.Close (Fine);
+      end;
 
       Tmpl.Close (Item);
    end Template_Rejects_Unsupported;

@@ -130,7 +130,13 @@ private
       Term_Loop_First,
       Term_Loop_Last,
       Term_Loop_Index_Zero,
-      Term_Loop_Index_One);
+      Term_Loop_Index_One,
+
+      --  A named message rather than the one being looped over:
+      --  messages[0]['role'] and its like. Offset carries the index, counted
+      --  from zero as the template writes it.
+      Term_Indexed_Role,
+      Term_Indexed_Content);
 
    type Term is record
       Kind   : Term_Kind := Term_Literal;
