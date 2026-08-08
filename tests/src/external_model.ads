@@ -38,7 +38,11 @@ package External_Model is
       Prompt_Tokens : Natural := 0;
       Generated     : Natural := 0;
       Deterministic : Boolean := False;
-      Thread_Stable : Boolean := False;
+      --  Whether varying the worker count was tried, and what it found. A
+      --  run with one worker cannot try it, and saying so beats reporting a
+      --  check that never ran as one that held.
+      Thread_Checked : Boolean := False;
+      Thread_Stable  : Boolean := False;
       Compared      : Natural := 0;
       Worst_Gap     : Long_Float := 0.0;
       Reference_Run : Boolean := False;

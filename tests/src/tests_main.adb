@@ -210,8 +210,10 @@ begin
                   & Natural'Image (Result.Generated)
                   & ", deterministic "
                   & Boolean'Image (Result.Deterministic)
-                  & ", thread-stable "
-                  & Boolean'Image (Result.Thread_Stable)
+                  & (if Result.Thread_Checked
+                     then ", thread-stable "
+                          & Boolean'Image (Result.Thread_Stable)
+                     else ", thread-stability not checked: one worker")
                   & (if Result.Reference_Run
                      then ", tokens-match "
                           & Boolean'Image (Result.Tokens_Match)

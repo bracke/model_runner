@@ -329,6 +329,8 @@ package body External_Model is
             return;
          end if;
 
+         Result.Thread_Checked := Threads > 1;
+
          if Threads > 1 then
             declare
                Team : aliased CPU.Pool (CPU.Worker_Count (Threads));
@@ -345,8 +347,6 @@ package body External_Model is
                Give_Up (Failed, "the worker count changed the result");
                return;
             end if;
-         else
-            Result.Thread_Stable := True;
          end if;
       end;
 
