@@ -2,6 +2,20 @@ with Interfaces;
 
 package body Model_Runner.Quantization is
 
+   --  Validity checking is not suppressed here, unlike in the packages that
+   --  read a file's floats back: the byte decoder, the metadata accessors,
+   --  the tokenizer, the engine and the kernels all had to, because a
+   --  not-a-number in a weight is ordinary input and the check fired before
+   --  the guard that refuses it.
+   --
+   --  This package decodes bytes into floats and multiplies them, and a
+   --  not-a-number reaches those loops as readily. It was checked rather
+   --  than assumed: a weight whose bits spell one, put through the fused dot
+   --  product, comes back with no exception and no refusal. What raises is
+   --  compiler-chosen and not visible in the source, so the answer here is
+   --  what running it says, and it says this package needs nothing.
+
+
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
