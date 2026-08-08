@@ -59,6 +59,34 @@ should not be. Both had already drifted from what the runner prints -- they
 omitted the last field -- which is the argument for keeping the hand-copied
 ones few.
 
+## The tokenizer, compared the same way
+
+`tests tokenize --model PATH --prompt TEXT` prints the identifiers a
+vocabulary makes of a prompt, which `llama-tokenize -m PATH -p TEXT --ids`
+prints for the same file. Setting the two beside each other is how the
+byte-pair implementation was checked, and it is how the next one should be.
+
+    $ tests tokenize --model ggml-vocab-gpt-2.gguf --prompt "hello world"
+    [31373, 995]
+    $ llama-tokenize -m ggml-vocab-gpt-2.gguf -p "hello world" --ids
+    [31373, 995]
+
+What was compared: forty-five strings against the five vocabularies
+`llama.cpp` ships for its own tokenizer tests -- gpt-2, falcon, starcoder,
+llama-bpe and qwen2 -- covering Latin, Cyrillic, Greek, CJK, emoji, runs of
+spaces, tabs, newlines, contractions, punctuation, an address and dates. All
+forty-five agree. A vocabulary that adds a beginning-of-text marker differs by
+that marker, which `tests tokenize` does not add.
+
+Two differences were found this way and neither would have been found by
+reading the patterns. A tab joins the word after it under some rules and
+stands alone under others, which no string without a tab can show. Digits
+group in threes under `falcon`, which no run shorter than four digits can
+show, and `falcon` had been cut by the wrong rule until one was tried.
+
+Those files are not committed here and are not needed unless the comparison is
+being run again.
+
 One trap is worth naming, since it cost an hour here. Recent `llama.cpp`
 wraps the prompt in the model's chat template unless told not to: pass
 `--no-conversation` to `llama-completion`, or it will feed fourteen tokens
