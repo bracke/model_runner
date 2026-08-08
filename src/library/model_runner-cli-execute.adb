@@ -1080,6 +1080,14 @@ package body Model_Runner.CLI.Execute is
       Team_Size : constant Natural := Chosen_Workers;
 
    begin
+      --  Which backend runs this. There is one, and going through the choice
+      --  rather than around it is what makes --backend an option and not a
+      --  word the parser accepts and forgets. The case has no others, so a
+      --  kind added to the enumeration stops this compiling until something
+      --  here answers for it -- which is the only way a second backend can
+      --  arrive without the flag that selects it quietly doing nothing.
+      case Item.Backend is
+      when Model_Runner.Backend.Backend_CPU =>
       if Team_Size <= 1 then
          Run_With (null);
       else
@@ -1105,6 +1113,7 @@ package body Model_Runner.CLI.Execute is
                raise;
          end;
       end if;
+      end case;
    end Do_Run;
 
    --------------

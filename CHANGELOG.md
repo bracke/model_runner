@@ -67,7 +67,11 @@ Keep a Changelog and the project uses semantic versioning.
   refused by name and exits as the usage error it is, where before the option
   itself was unknown and a caller learned nothing about what was available.
   The names come from the backend enumeration, in the help as well as in the
-  matching, so neither can list one that is not there.
+  matching, so neither can list one that is not there. Running goes through
+  the choice rather than around it, on a case with no `others`: a kind added
+  to the enumeration stops the program compiling until something answers for
+  it, which is the only way a second backend can arrive without the flag that
+  selects it quietly doing nothing.
 
   `Backend_Unknown` was on the list of diagnostics this program declares and
   never produces, with the reason "there is no --backend to be invalid".
