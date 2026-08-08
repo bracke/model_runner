@@ -702,6 +702,78 @@ package body Tests.Sampling_Cases is
       Tmpl.Close (Item);
    end Template_Branches;
 
+   --------------------------------
+   -- Built_In_Formats_Compile --
+   --------------------------------
+
+   --  The chat formats this build carries are ordinary templates.
+   --
+   --  They exist because some models ship a template this engine will not
+   --  compile, and the point of writing them in the supported subset is that
+   --  they are not a second mechanism with second rules. So they must compile
+   --  through the same door, render the same way, and an unknown name must
+   --  produce nothing rather than something empty that later reads as the
+   --  model having no template at all.
+
+   procedure Built_In_Formats_Compile
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Item     : Tmpl.Compiled;
+      Status   : E.Error_Info;
+      Messages : Conv.History;
+      Room     : String (1 .. 4096);
+      Last     : Natural;
+   begin
+      Assert (Tmpl.Built_In ("nope") = "",
+              "an unknown format name returned a template");
+      Assert (Tmpl.Built_In ("llama3") /= "", "llama3 is not carried");
+      Assert (Tmpl.Built_In ("chatml") /= "", "chatml is not carried");
+
+      Conv.Open (Messages, Status => Status);
+      Assert (E.Is_Ok (Status), "could not open a conversation");
+      Conv.Append (Messages, Conv.User_Role, "Hi", Status);
+      Assert (E.Is_Ok (Status), "could not build a conversation");
+
+      for Which in 1 .. 2 loop
+         declare
+            Name : constant String :=
+              (if Which = 1 then "llama3" else "chatml");
+         begin
+         Tmpl.Compile (Item, Tmpl.Built_In (Name), Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the " & Name & " format did not compile");
+
+         Tmpl.Render
+           (Item, Messages, "<bos>", "<eos>", True, Room, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "the " & Name & " format did not render");
+
+         --  Whatever the markers are, the message has to be in there and the
+         --  turn has to be opened for the assistant to answer.
+         declare
+            Text : constant String := Room (1 .. Last);
+            Held : Boolean := False;
+         begin
+            for Index in Text'First .. Text'Last - 1 loop
+               if Text (Index .. Index + 1) = "Hi" then
+                  Held := True;
+               end if;
+            end loop;
+            Assert (Held,
+                    "the " & Name & " format dropped the message: "
+                    & Text);
+            Assert (Last > 10,
+                    "the " & Name & " format rendered almost nothing");
+         end;
+
+         Tmpl.Close (Item);
+         end;
+      end loop;
+
+      Conv.Close (Messages);
+   end Built_In_Formats_Compile;
+
    --  Constructs outside the supported subset are rejected at compile time,
    --  and the engine has no operation that could reach a file or a process.
    procedure Template_Rejects_Unsupported
@@ -1258,6 +1330,10 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Penalty_Range_Rejected'Access,
          "a penalty large enough to make every logit infinite is refused, "
-         & "and an ordinary negative one is not");   end Register_Tests;
+         & "and an ordinary negative one is not"); 
+      Register_Routine
+        (T, Built_In_Formats_Compile'Access,
+         "the chat formats this build carries compile and render through "
+         & "the same door as a model's own");  end Register_Tests;
 
 end Tests.Sampling_Cases;

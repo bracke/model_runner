@@ -2,6 +2,7 @@ with Ada.Command_Line;
 with Ada.Unchecked_Deallocation;
 
 with Model_Runner.Numerics;
+with Model_Runner.Templates;
 
 package body Model_Runner.CLI.Options is
 
@@ -731,6 +732,21 @@ package body Model_Runner.CLI.Options is
                      Bounded_Value
                        (Flag_Chat_Template, Result.Chat_Template, Good);
                      if not Good then
+                        return;
+                     end if;
+
+                     --  Refused here, by name, rather than later when the
+                     --  empty source it would resolve to is reported as the
+                     --  model having no template at all -- which is a true
+                     --  sentence about the wrong subject.
+                     if Model_Runner.Templates.Built_In
+                          (Model_Runner.Text.To_String (Result.Chat_Template))
+                        = ""
+                     then
+                        Fail (E.CLI_Invalid_Option_Value, Name,
+                              Model_Runner.Text.To_String
+                                (Result.Chat_Template));
+                        Good := False;
                         return;
                      end if;
 
