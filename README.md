@@ -496,8 +496,22 @@ Named in the specification, absent here:
 ## Speed
 
 All figures below are from the release build, on a Ryzen 7 7840U, against
-TinyLlama-1.1B-Chat Q8_0. Generating twelve tokens with 14 threads takes
-**2.18 s** wall and 16.0 s of processor time.
+TinyLlama-1.1B-Chat Q8_0. From a short prompt, twelve tokens with 14 threads
+take **2.19 s** -- about 1.1 s evaluating the prompt and 1.1 s generating --
+and 24.5 s of processor time. Loading the model costs a further 0.8 s of wall
+that this figure does not include, because the two are worth separating: one
+is the model, the other is the disk.
+
+That processor figure was published here as 16.0 s, which was wrong. Building
+the commit that published it and running it again gives 24.8 s, the same as
+this build does, so nothing regressed between then and now and the number was
+mis-recorded when it was written down. The 2.19 s stands as published.
+
+Fourteen threads is more than this work can use. Eight take 2.22 s for 13.5 s
+of processor time, so the last six buy about one per cent of wall for eighty
+per cent more processor time. `--threads` is how to choose; the default
+chooses a number near the core count, which is the right default for a machine
+doing nothing else and the wrong one for a machine that is not.
 
 ### Batched prefill
 
