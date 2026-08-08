@@ -518,6 +518,21 @@ handing each of them out costs milliseconds in total.
 The default therefore follows the core count rather than the processor count.
 `--threads` overrides it and still accepts any number the backend allows.
 
+The 4.6x is not the memory. Measured on its own, away from the model, the
+matrix product reaches 4.8x on seven workers and falls back at eight, and it
+does that whether one vector is passed or thirty-two -- if memory were the
+wall, the thirty-two case would be well clear of it, since it reads each
+weight byte once for thirty-two multiplies instead of one. At eight workers
+the product moves 11.5 GB/s, which this machine is not troubled by. What does
+change is the clock: 4898 MHz with one worker and 3748 with eight, sampled
+while running. That alone caps eight workers at 6.1x, and the rest is cache
+and hand-off. It is a 15 W part doing what a 15 W part does.
+
+Nor is there redundant traffic to remove. Each worker reads only its own rows,
+each weight byte is read once per pass, and the span buffer that looks like
+waste when one vector is passed is what makes the loops vectorizable --
+decoding straight into the sum was written and measured at 44 per cent slower.
+
 ### Batched prefill
 
 A prompt is evaluated in batches: every token in a batch shares one pass over

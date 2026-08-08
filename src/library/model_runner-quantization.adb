@@ -565,6 +565,15 @@ package body Model_Runner.Quantization is
       end if;
 
       --  Decode a span, then multiply it by each vector.
+      --
+      --  The buffer looks like waste when one vector is passed, because every
+      --  value is stored and then read back one instruction later and never
+      --  used again. Decoding straight into the sum instead was written and
+      --  measured, and it is 44 per cent slower: 1487 Me/s against 2657. The
+      --  buffer is what leaves two simple loops the compiler can vectorize --
+      --  bytes to floats, then floats to a sum -- and fusing them produces
+      --  one loop it will not touch. The same reason Q8_0 is not in
+      --  Fused_Formats above.
       declare
          Scratch  : Real_Array (0 .. Span_Elements - 1);
          Per_Span : constant Element_Count :=

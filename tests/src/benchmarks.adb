@@ -8,7 +8,9 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
+with Model_Runner.Backend.CPU;
 with Model_Runner.Kernels;
+with Model_Runner.Platform;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization;
 with Model_Runner.Tensors;
@@ -30,6 +32,7 @@ package body Benchmarks is
    use type B.Byte_Count;
    use type N.Element_Count;
    use type N.Real;
+   use type T.Real_Array_Access;
 
    --  Fed by the reference copy so that the copy cannot be optimised away,
    --  and read once at the end where the value can never be what is tested.
@@ -290,6 +293,103 @@ package body Benchmarks is
          end if;
       end Measure_Vector;
 
+      --  How the matrix product scales across workers, with nothing else in
+      --  the way.
+      --
+      --  A whole run reaches about four and a half times on eight cores, and
+      --  the question this answers is whether that ceiling is in the kernel
+      --  or in what surrounds it. The weight matrix here is larger than this
+      --  machine's last-level cache, so every pass reads it from memory, as a
+      --  real one does. Count is what separates the two cases a run spends
+      --  its time in: one vector per pass is generating a token, where each
+      --  weight byte is read for a single multiply, and thirty-two is
+      --  evaluating a prompt, where the same byte serves thirty-two.
+      procedure Measure_Scaling (Name : String; Vectors_Per_Pass : N.Element_Count)
+      is
+         Rows    : constant N.Element_Count := 4096;
+         Columns : constant N.Element_Count := 4096;
+         Format  : constant G.Tensor_Type := G.Type_Q8_0;
+         Width   : constant B.Byte_Count :=
+           B.Byte_Count (Columns) / B.Byte_Count (G.Block_Elements (Format))
+           * B.Byte_Count (G.Block_Bytes (Format));
+
+         Data   : B.Byte_Array_Access;
+         Item   : T.View;
+         Status : E.Error_Info;
+
+         Inputs  : T.Real_Array_Access;
+         Outputs : T.Real_Array_Access;
+
+         Cores : constant Positive := Model_Runner.Platform.Core_Count;
+         Serial : Long_Float := 0.0;
+      begin
+         T.Allocate (Columns * Vectors_Per_Pass, Inputs);
+         T.Allocate (Rows * Vectors_Per_Pass, Outputs);
+         B.Allocate (Width * B.Byte_Count (Rows), Data);
+         if Data = null or else Inputs = null or else Outputs = null then
+            return;
+         end if;
+         Fill (Data.all);
+         Tame_Scales (Data.all, Format,
+                      B.Byte_Count (Rows) * B.Byte_Count (Columns)
+                      / B.Byte_Count (G.Block_Elements (Format)));
+         T.Make (Format, Rows, Columns, Data, 0, Item, Status);
+         if E.Is_Error (Status) then
+            B.Free (Data);
+            return;
+         end if;
+
+         for Index in Inputs.all'Range loop
+            Inputs.all (Index) := N.Real (Index mod 17) * 0.125 - 1.0;
+         end loop;
+
+         IO.Put_Line ("  " & Name);
+
+         for Team in 1 .. Cores loop
+            declare
+               Pool    : Model_Runner.Backend.CPU.Pool
+                 (Model_Runner.Backend.CPU.Worker_Count (Team));
+               Started : Ada.Real_Time.Time;
+               Passes  : Long_Long_Integer := 0;
+               Elapsed : Duration := 0.0;
+               Rate    : Long_Float;
+            begin
+               Started := Ada.Real_Time.Clock;
+               loop
+                  Model_Runner.Backend.CPU.Mat_Mul
+                    (Pool, Item, Inputs, Vectors_Per_Pass, Outputs, Status);
+                  exit when E.Is_Error (Status);
+                  Passes := Passes + 1;
+                  Elapsed := Ada.Real_Time.To_Duration
+                    (Ada.Real_Time.Clock - Started);
+                  exit when Elapsed >= Seconds;
+               end loop;
+
+               if Elapsed > 0.0 and then Passes > 0 then
+                  Rate :=
+                    Long_Float (Passes)
+                    * Long_Float (Long_Long_Integer (Rows)
+                                  * Long_Long_Integer (Columns)
+                                  * Long_Long_Integer (Vectors_Per_Pass))
+                    / Long_Float (Elapsed);
+                  if Team = 1 then
+                     Serial := Rate;
+                  end if;
+                  IO.Put_Line
+                    ("   " & Integer'Image (Team) & " workers"
+                     & Long_Float'Image (Rate / 1.0E6) & " Me/s   "
+                     & Long_Float'Image (Rate / Serial) & "x");
+               end if;
+
+               Model_Runner.Backend.CPU.Close (Pool);
+            end;
+         end loop;
+
+         B.Free (Data);
+         T.Free (Inputs);
+         T.Free (Outputs);
+      end Measure_Scaling;
+
       --  Decode blocks with no arithmetic on top, to separate the cost of
       --  producing the values from the cost of using them.
       --  How many times a measurement is repeated before its best is kept.
@@ -529,6 +629,11 @@ package body Benchmarks is
       Measure ("f16  Dequantize_Row", G.Type_F16, False);
       Measure ("q4_k Dequantize_Row", G.Type_Q4_K, False);
       Measure ("f32  Dequantize_Row", G.Type_F32, False);
+      IO.New_Line;
+
+      IO.Put_Line ("matrix product across workers");
+      Measure_Scaling ("one vector per pass, as when generating", 1);
+      Measure_Scaling ("thirty-two per pass, as when evaluating a prompt", 32);
       IO.New_Line;
 
       IO.Put_Line ("vector kernels");
