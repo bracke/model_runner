@@ -387,6 +387,101 @@ package body Tests.Backend_Cases is
               "the core count changed between two readings");
    end Cores_Are_Not_Above_Processors;
 
+   -------------------------------
+   -- Shares_Cannot_Raise --
+   -------------------------------
+
+   --  What keeps a share from raising, held so that it stays true.
+   --
+   --  Both the worker and the task that submits a job run their share inside
+   --  a handler that catches everything and reports a failure rather than
+   --  letting the task die. Neither handler can be reached through this
+   --  package: the range procedures check every shape they are given and
+   --  return, so a caller that asks for something impossible gets nothing
+   --  done rather than an exception. The handlers are a net for what nobody
+   --  thought of, and a net is not a path.
+   --
+   --  That is a property of the guards in Mat_Mul_Range and Mat_Vec_Range,
+   --  and this is what says so. If one of those guards is removed, a
+   --  malformed request reaches the arithmetic, and this fails -- which is
+   --  the warning that the handlers have become reachable and now need
+   --  reaching in a test.
+
+   procedure Shares_Cannot_Raise
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Data   : B.Byte_Array_Access;
+      Item   : T.View;
+
+      Vector : constant N.Real_Array (0 .. Columns - 1) := [others => 1.0];
+      Target : N.Real_Array (0 .. Rows - 1) := [others => 0.0];
+
+      Untouched : Boolean;
+
+      --  Every shape the guards are there to refuse. A short output, a short
+      --  input, no vectors at all, an empty range, and a last row past the
+      --  end of the matrix.
+      procedure Nothing_Happened (What : String) is
+      begin
+         Untouched := True;
+         for Value of Target loop
+            if Value /= 0.0 then
+               Untouched := False;
+            end if;
+         end loop;
+         Assert (Untouched,
+                 "a malformed request wrote to the output: " & What);
+      end Nothing_Happened;
+   begin
+      Make_Weight (Data, Item);
+
+      declare
+         Short_Target : N.Real_Array (0 .. Rows - 2) := [others => 0.0];
+         Short_Vector : constant N.Real_Array (0 .. Columns - 2) :=
+           [others => 1.0];
+      begin
+         T.Mat_Mul_Range (Item, Vector, 1, Short_Target, 0, Rows - 1);
+         for Value of Short_Target loop
+            Assert (Value = 0.0, "a short output was written to");
+         end loop;
+
+         T.Mat_Mul_Range (Item, Short_Vector, 1, Target, 0, Rows - 1);
+         Nothing_Happened ("a short input");
+
+         T.Mat_Mul_Range (Item, Vector, 0, Target, 0, Rows - 1);
+         Nothing_Happened ("no vectors");
+
+         T.Mat_Mul_Range (Item, Vector, 1, Target, 2, 1);
+         Nothing_Happened ("an empty row range");
+
+         T.Mat_Mul_Range (Item, Vector, 1, Target, 0, Rows);
+         Nothing_Happened ("a last row past the end");
+
+         T.Mat_Vec_Range (Item, Short_Vector, Target, 0, Rows - 1);
+         Nothing_Happened ("a short input to the single-vector form");
+
+         T.Mat_Vec_Range (Item, Vector, Target, 0, Rows);
+         Nothing_Happened ("a last row past the end, single vector");
+      end;
+
+      --  And the shape that is not malformed still works, so that the checks
+      --  above are not passing because nothing works at all.
+      T.Mat_Vec_Range (Item, Vector, Target, 0, Rows - 1);
+      Untouched := True;
+      for Value of Target loop
+         if Value /= 0.0 then
+            Untouched := False;
+         end if;
+      end loop;
+      Assert (not Untouched,
+              "a well-formed request wrote nothing, so the checks above "
+              & "prove nothing");
+
+      B.Free (Data);
+   end Shares_Cannot_Raise;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -415,6 +510,11 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Cores_Are_Not_Above_Processors'Access,
          "the core count is at least one and never above the processor "
-         & "count, whatever the host reports");   end Register_Tests;
+         & "count, whatever the host reports"); 
+      Register_Routine
+        (T, Shares_Cannot_Raise'Access,
+         "a malformed request is refused by the range procedures rather "
+         & "than raising, which is what makes the failure handlers a net "
+         & "and not a path");  end Register_Tests;
 
 end Tests.Backend_Cases;

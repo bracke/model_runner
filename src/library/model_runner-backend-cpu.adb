@@ -307,6 +307,14 @@ package body Model_Runner.Backend.CPU is
          --  Reported the way a worker's failure is, after the workers are
          --  collected: leaving before they finish would free the vector and
          --  the target under them.
+         --
+         --  Nothing reaches this through this package. Mat_Mul_Range checks
+         --  every shape it is given and returns rather than raising, so a
+         --  malformed request does no work instead of failing, and this is a
+         --  net for what nobody thought of rather than a path anything
+         --  travels. Shares_Cannot_Raise in the tests holds those checks, and
+         --  fails if one is removed, which is the warning that this handler
+         --  has become reachable and now wants a test of its own.
          when others =>
             Mine_Failed := True;
       end;
@@ -406,6 +414,14 @@ package body Model_Runner.Backend.CPU is
          --  Reported the way a worker's failure is, after the workers are
          --  collected: leaving before they finish would free the vector and
          --  the target under them.
+         --
+         --  Nothing reaches this through this package. Mat_Mul_Range checks
+         --  every shape it is given and returns rather than raising, so a
+         --  malformed request does no work instead of failing, and this is a
+         --  net for what nobody thought of rather than a path anything
+         --  travels. Shares_Cannot_Raise in the tests holds those checks, and
+         --  fails if one is removed, which is the warning that this handler
+         --  has become reachable and now wants a test of its own.
          when others =>
             Mine_Failed := True;
       end;

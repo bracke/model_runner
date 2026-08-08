@@ -293,8 +293,15 @@ package body Benchmarks is
          end if;
       end Measure_Vector;
 
-      --  How the matrix product scales across workers, with nothing else in
-      --  the way.
+      --  How the matrix product scales, with nothing else in the way.
+      --
+      --  Counted in shares rather than workers, because a job is cut into one
+      --  more piece than the pool has workers: the task that submits it takes
+      --  the last piece instead of waiting. One share is therefore the serial
+      --  path and no pool at all, and eight shares is a pool of seven. Naming
+      --  the rows after the workers, as this once did, made a pool of one
+      --  look like the serial baseline when it was already two-way parallel,
+      --  and halved every speedup below it.
       --
       --  A whole run reaches about four and a half times on eight cores, and
       --  the question this answers is whether that ceiling is in the kernel
@@ -347,19 +354,25 @@ package body Benchmarks is
 
          IO.Put_Line ("  " & Name);
 
-         for Team in 1 .. Cores loop
+         for Shares in 1 .. Cores loop
             declare
-               Pool    : Model_Runner.Backend.CPU.Pool
-                 (Model_Runner.Backend.CPU.Worker_Count (Team));
                Started : Ada.Real_Time.Time;
                Passes  : Long_Long_Integer := 0;
                Elapsed : Duration := 0.0;
                Rate    : Long_Float;
+
+               --  One share is the serial path, which is a null pool
+               --  reference rather than a pool of nothing.
+               Team : aliased Model_Runner.Backend.CPU.Pool
+                 (Model_Runner.Backend.CPU.Worker_Count
+                    (Integer'Max (1, Shares - 1)));
+               Where : constant Model_Runner.Backend.CPU.Pool_Reference :=
+                 (if Shares = 1 then null else Team'Unchecked_Access);
             begin
                Started := Ada.Real_Time.Clock;
                loop
-                  Model_Runner.Backend.CPU.Mat_Mul
-                    (Pool, Item, Inputs, Vectors_Per_Pass, Outputs, Status);
+                  Model_Runner.Backend.CPU.Dispatch_Batch
+                    (Where, Item, Inputs, Vectors_Per_Pass, Outputs, Status);
                   exit when E.Is_Error (Status);
                   Passes := Passes + 1;
                   Elapsed := Ada.Real_Time.To_Duration
@@ -374,16 +387,17 @@ package body Benchmarks is
                                   * Long_Long_Integer (Columns)
                                   * Long_Long_Integer (Vectors_Per_Pass))
                     / Long_Float (Elapsed);
-                  if Team = 1 then
+                  if Shares = 1 then
                      Serial := Rate;
                   end if;
                   IO.Put_Line
-                    ("   " & Integer'Image (Team) & " workers"
+                    ("   " & Integer'Image (Shares)
+                     & (if Shares = 1 then " share " else " shares")
                      & Long_Float'Image (Rate / 1.0E6) & " Me/s   "
                      & Long_Float'Image (Rate / Serial) & "x");
                end if;
 
-               Model_Runner.Backend.CPU.Close (Pool);
+               Model_Runner.Backend.CPU.Close (Team);
             end;
          end loop;
 
@@ -633,7 +647,7 @@ package body Benchmarks is
       Measure ("f32  Dequantize_Row", G.Type_F32, False);
       IO.New_Line;
 
-      IO.Put_Line ("matrix product across workers");
+      IO.Put_Line ("matrix product across shares");
       Measure_Scaling ("q8_0, one vector per pass, as when generating", 1);
       Measure_Scaling ("q4_k, one vector per pass", 1, G.Type_Q4_K);
       Measure_Scaling ("q8_0, thirty-two per pass, as when evaluating a prompt",
