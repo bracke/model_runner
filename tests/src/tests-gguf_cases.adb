@@ -4126,6 +4126,230 @@ package body Tests.GGUF_Cases is
       Compare (Model_Runner.GGUF.Type_Q5_K, 176, Fifths => True);
    end K_Quants_Match_An_Element_Wise_Reading;
 
+   ------------------------------------------------
+   -- Newer_Formats_Match_An_Element_Wise_Reading --
+   ------------------------------------------------
+
+   --  The formats added most recently, read the other way.
+   --
+   --  Each has a hand-built block earlier in this file with a handful of
+   --  elements in it, and those blocks are worth less than they look: the
+   --  three-bit one passed four wrong decoders before its values were chosen
+   --  so that a wrong answer differed from the right one. This decodes a
+   --  block of arbitrary bytes and compares every element against a reading
+   --  that starts from the element and asks where its bits are, which is the
+   --  check a hand-built block cannot be talked out of.
+
+   procedure Newer_Formats_Match_An_Element_Wise_Reading
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      pragma Suppress (Validity_Check);
+
+      Seed : Interfaces.Unsigned_32 := 20_260_811;
+
+      function Next return Interfaces.Unsigned_32 is
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Seed;
+      end Next;
+
+      Decoded : N.Real_Array (0 .. 255);
+      Ok      : Boolean;
+
+      --  One and two, so a scale used as a minimum does not pass unnoticed.
+      Whole : constant N.Real := 1.0;
+      Twice : constant N.Real := 2.0;
+
+      procedure Compare
+        (Format : Model_Runner.GGUF.Tensor_Type;
+         Width  : B.Byte_Count)
+      is
+         Per   : constant N.Element_Count :=
+           N.Element_Count (Model_Runner.GGUF.Block_Elements (Format));
+         Data  : B.Byte_Array_Access;
+         Wrong : Natural := 0;
+         First : N.Element_Count := 0;
+
+         function Raw (At_Byte : Natural) return Natural
+         is (Natural (Data.all (Data.all'First + B.Byte_Count (At_Byte))));
+
+         --  Where each format keeps its half-precision factors, so they can
+         --  be set to one and two whatever the layout.
+         function Head (Which : Natural) return Natural is
+         begin
+            case Format is
+               when Model_Runner.GGUF.Type_Q2_K =>
+                  return (if Which = 0 then 80 else 82);
+               when Model_Runner.GGUF.Type_Q3_K =>
+                  return 108;
+               when Model_Runner.GGUF.Type_Q5_1
+                  | Model_Runner.GGUF.Type_Q4_1 =>
+                  return (if Which = 0 then 0 else 2);
+               when others =>
+                  return 0;
+            end case;
+         end Head;
+
+         --  The fifth bits of the legacy five-bit formats, as one number.
+         function Fifths return Interfaces.Unsigned_32 is
+            At_Byte : constant Natural :=
+              (if Format = Model_Runner.GGUF.Type_Q5_0 then 2 else 4);
+         begin
+            return
+              Interfaces.Unsigned_32 (Raw (At_Byte))
+              + 256 * Interfaces.Unsigned_32 (Raw (At_Byte + 1))
+              + 65536 * Interfaces.Unsigned_32 (Raw (At_Byte + 2))
+              + 16777216 * Interfaces.Unsigned_32 (Raw (At_Byte + 3));
+         end Fifths;
+      begin
+         B.Allocate (Width, Data);
+         Assert (Data /= null, "could not allocate a block");
+
+         for Index in Data.all'Range loop
+            Data.all (Index) :=
+              B.Byte (Interfaces.Shift_Right (Next, 24) and 16#FF#);
+         end loop;
+
+         --  The block scales are half precision, and arbitrary bytes there
+         --  would make them infinite, which says nothing about layout.
+         Data.all (Data.all'First + B.Byte_Count (Head (0))) := 16#00#;
+         Data.all (Data.all'First + B.Byte_Count (Head (0)) + 1) := 16#3C#;
+         if Format in Model_Runner.GGUF.Type_Q2_K
+                    | Model_Runner.GGUF.Type_Q4_1
+                    | Model_Runner.GGUF.Type_Q5_1
+         then
+            Data.all (Data.all'First + B.Byte_Count (Head (1))) := 16#00#;
+            Data.all (Data.all'First + B.Byte_Count (Head (1)) + 1) := 16#40#;
+         end if;
+
+         Q.Decode_Blocks (Format, Data.all, 0, 1, Decoded (0 .. Per - 1), Ok);
+         Assert (Ok, "the block was not decoded for "
+                 & Model_Runner.GGUF.Type_Name (Format));
+
+         for Index in 0 .. Per - 1 loop
+            declare
+               E : constant Natural := Natural (Index);
+               Expected : N.Real := 0.0;
+            begin
+               case Format is
+                  when Model_Runner.GGUF.Type_Q4_1 =>
+                     declare
+                        Byte : constant Natural := Raw (4 + E mod 16);
+                        Nib  : constant Natural :=
+                          (if E < 16 then Byte mod 16 else Byte / 16);
+                     begin
+                        Expected := Whole * N.Real (Nib) + Twice;
+                     end;
+
+                  when Model_Runner.GGUF.Type_Q5_0
+                     | Model_Runner.GGUF.Type_Q5_1 =>
+                     declare
+                        Centred : constant Boolean :=
+                          Format = Model_Runner.GGUF.Type_Q5_0;
+                        Quants : constant Natural := (if Centred then 6 else 8);
+                        Byte : constant Natural := Raw (Quants + E mod 16);
+                        Nib  : constant Natural :=
+                          (if E < 16 then Byte mod 16 else Byte / 16);
+                        Bit  : constant Natural :=
+                          Natural (Interfaces.Shift_Right (Fifths, E) and 1);
+                     begin
+                        Expected :=
+                          Whole * N.Real (Nib + 16 * Bit
+                                          - (if Centred then 16 else 0))
+                          + (if Centred then 0.0 else Twice);
+                     end;
+
+                  when Model_Runner.GGUF.Type_BF16 =>
+                     Expected :=
+                       N.From_Bits
+                         (Interfaces.Shift_Left
+                            (Interfaces.Unsigned_32 (Raw (0))
+                             + 256 * Interfaces.Unsigned_32 (Raw (1)), 16));
+
+                  when Model_Runner.GGUF.Type_Q2_K =>
+                     declare
+                        Half  : constant Natural := E / 128;
+                        Rest  : constant Natural := E mod 128;
+                        Grp   : constant Natural := Rest / 32;
+                        Up    : constant Natural := (Rest mod 32) / 16;
+                        L     : constant Natural := E mod 16;
+                        Which : constant Natural := Half * 8 + Grp * 2 + Up;
+                        Sc    : constant Natural := Raw (Which);
+                        Byte  : constant Natural :=
+                          Raw (16 + Half * 32 + Up * 16 + L);
+                        Level : constant Natural :=
+                          (Byte / (2 ** (2 * Grp))) mod 4;
+                     begin
+                        Expected :=
+                          Whole * N.Real (Sc mod 16) * N.Real (Level)
+                          - Twice * N.Real (Sc / 16);
+                     end;
+
+                  when Model_Runner.GGUF.Type_Q3_K =>
+                     declare
+                        Half  : constant Natural := E / 128;
+                        Rest  : constant Natural := E mod 128;
+                        Grp   : constant Natural := Rest / 32;
+                        Up    : constant Natural := (Rest mod 32) / 16;
+                        L     : constant Natural := E mod 16;
+                        Which : constant Natural := Half * 8 + Grp * 2 + Up;
+
+                        --  Six bits in two pieces, as the decoder describes.
+                        Band  : constant Natural := Which / 4;
+                        Place : constant Natural := Which mod 4;
+                        Byte4 : constant Natural :=
+                          Raw (96 + (if Band mod 2 = 0 then Place
+                                     else Place + 4));
+                        Low4  : constant Natural :=
+                          (if Band < 2 then Byte4 mod 16 else Byte4 / 16);
+                        Top2  : constant Natural :=
+                          (Raw (96 + Place + 8) / (2 ** (2 * Band))) mod 4;
+
+                        Byte  : constant Natural :=
+                          Raw (32 + Half * 32 + Up * 16 + L);
+                        Level : constant Natural :=
+                          (Byte / (2 ** (2 * Grp))) mod 4;
+                        Mask  : constant Natural := Raw (Up * 16 + L);
+                        Lifted : constant Boolean :=
+                          (Mask / (2 ** (Half * 4 + Grp))) mod 2 = 1;
+                     begin
+                        Expected :=
+                          Whole * N.Real (Low4 + 16 * Top2 - 32)
+                          * N.Real (if Lifted then Level else Level - 4);
+                     end;
+
+                  when others =>
+                     null;
+               end case;
+
+               if Decoded (Index) /= Expected then
+                  if Wrong = 0 then
+                     First := Index;
+                  end if;
+                  Wrong := Wrong + 1;
+               end if;
+            end;
+         end loop;
+
+         B.Free (Data);
+
+         Assert (Wrong = 0,
+                 Model_Runner.GGUF.Type_Name (Format)
+                 & " disagrees with an element-wise reading on"
+                 & Natural'Image (Wrong) & " of"
+                 & N.Element_Count'Image (Per) & " elements, first at"
+                 & N.Element_Count'Image (First));
+      end Compare;
+   begin
+      Compare (Model_Runner.GGUF.Type_BF16, 2);
+      Compare (Model_Runner.GGUF.Type_Q4_1, 20);
+      Compare (Model_Runner.GGUF.Type_Q5_0, 22);
+      Compare (Model_Runner.GGUF.Type_Q5_1, 24);
+      Compare (Model_Runner.GGUF.Type_Q2_K, 84);
+      Compare (Model_Runner.GGUF.Type_Q3_K, 110);
+   end Newer_Formats_Match_An_Element_Wise_Reading;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -4255,6 +4479,10 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, K_Quants_Match_An_Element_Wise_Reading'Access,
          "four-bit and five-bit decoding place every element where reading "
-         & "the layout element by element says it goes"); end Register_Tests;
+         & "the layout element by element says it goes"); 
+      Register_Routine
+        (T, Newer_Formats_Match_An_Element_Wise_Reading'Access,
+         "the formats added most recently place every element where reading "
+         & "the layout element by element says it goes");end Register_Tests;
 
 end Tests.GGUF_Cases;

@@ -75,6 +75,13 @@ Keep a Changelog and the project uses semantic versioning.
   format's definition computed in binary64 rather than against another bit
   trick.
 
+- Element-wise reference decoders for BF16, Q4_1, Q5_0, Q5_1, Q2_K and Q3_K,
+  comparing every element of a block of arbitrary bytes against a reading that
+  starts from the element rather than walking the block. The hand-built blocks
+  those formats also carry are worth less than they look: the three-bit one
+  passed four wrong decoders before its values were chosen so that a wrong
+  answer differs from a right one.
+
 - Element-wise reference decoders for the four-bit, five-bit and six-bit block
   formats, comparing all 256 elements of a block of arbitrary bytes against a
   reading that starts from an element index and asks where its bits are.
