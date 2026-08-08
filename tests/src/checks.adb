@@ -282,6 +282,25 @@ package body Checks is
 
             --  Reporting, which is a network reach with a friendlier name.
             Reject_Reach ("telemetry");
+
+            --  And handing the work to something else. A program that spawns
+            --  can reach anything the machine can, so this belongs with the
+            --  rule above rather than beside it -- and it is the half a
+            --  linked binary cannot show: fork and execv are already
+            --  imported by the runtime, so a shell-out would add no symbol
+            --  that was not there before.
+            --  The package that spawns, and the C names a binding would
+            --  have to give. Matching the bare words instead catches this
+            --  crate's own prose saying it does none of it, and Set_System.
+            Reject_Reach ("gnat.os_lib");
+            Reject_Reach ("os_lib.spawn");
+            Reject_Reach ("""popen""");
+            Reject_Reach ("""execv""");
+            Reject_Reach ("""execve""");
+            --  Tighter than the bare word: a conversation role is spelled
+            --  "system" in this crate's own documentation.
+            Reject_Reach (", ""system"")");
+            Reject_Reach ("""fork""");
          end Visit_Offline;
 
          procedure Scan_Offline is new For_Each_Source (Visit_Offline);
