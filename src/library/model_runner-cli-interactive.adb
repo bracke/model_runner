@@ -35,6 +35,66 @@ package body Model_Runner.CLI.Interactive is
    --  Largest prompt one turn may accumulate before it is submitted.
    Max_Turn_Bytes : constant := 65_536;
 
+   -----------
+   -- Parse --
+   -----------
+
+   function Parse (Line : String) return Parsed_Command is
+      Stop : Natural := Line'First;
+   begin
+      if Line'Length = 0 or else Line (Line'First) /= '/' then
+         return (others => <>);
+      end if;
+
+      --  The command word runs to the first space. Splitting here rather
+      --  than comparing whole lines is what lets a command with an argument
+      --  and the same command without one be the same command: /system was
+      --  matched as "/system " with the space, so a bare /system was an
+      --  unknown command rather than one missing its text.
+      while Stop <= Line'Last and then Line (Stop) /= ' ' loop
+         Stop := Stop + 1;
+      end loop;
+
+      declare
+         Word  : constant String := Line (Line'First .. Stop - 1);
+         First : Natural := Stop + 1;
+         Last  : Natural := Line'Last;
+      begin
+         --  The argument, with the space that separates it and any padding
+         --  around it removed. An argument of nothing but spaces is no
+         --  argument, which is what makes "/system   " clear the message
+         --  rather than set it to blanks.
+         while First <= Last and then Line (First) = ' ' loop
+            First := First + 1;
+         end loop;
+         while Last >= First and then Line (Last) = ' ' loop
+            Last := Last - 1;
+         end loop;
+         if Last < First then
+            First := 0;
+            Last := 0;
+         end if;
+
+         if Word = "/exit" then
+            return (Leave, 0, 0);
+         elsif Word = "/reset" then
+            return (Reset, 0, 0);
+         elsif Word = "/help" then
+            return (Help, 0, 0);
+         elsif Word = "/settings" then
+            return (Settings, 0, 0);
+         elsif Word = "/stats" then
+            return (Statistics, 0, 0);
+         elsif Word = "/context" then
+            return (Context, 0, 0);
+         elsif Word = "/system" then
+            return (Set_System, First, Last);
+         else
+            return (Unknown, 0, 0);
+         end if;
+      end;
+   end Parse;
+
    ---------
    -- Run --
    ---------
@@ -120,21 +180,22 @@ package body Model_Runner.CLI.Interactive is
 
       --  Handle one slash command. Returns True when the input was a command.
       function Handle_Command (Line : String) return Boolean is
+         Asked : constant Parsed_Command := Parse (Line);
       begin
-         if Line'Length = 0 or else Line (Line'First) /= '/' then
+         if Asked.Kind = Not_A_Command then
             return False;
          end if;
 
-         if Line = "/exit" then
+         if Asked.Kind = Leave then
             Leaving := True;
 
-         elsif Line = "/reset" then
+         elsif Asked.Kind = Reset then
             Conv.Clear (Messages);
             L.Reset (Session);
             Have_Stats := False;
             Pres.Put_Note (Screen, "cli.interactive.reset_done");
 
-         elsif Line = "/help" then
+         elsif Asked.Kind = Help then
             Pres.Put_Note (Screen, "cli.interactive.help.exit");
             Pres.Put_Note (Screen, "cli.interactive.help.reset");
             Pres.Put_Note (Screen, "cli.interactive.help.help");
@@ -143,17 +204,17 @@ package body Model_Runner.CLI.Interactive is
             Pres.Put_Note (Screen, "cli.interactive.help.context");
             Pres.Put_Note (Screen, "cli.interactive.help.system");
 
-         elsif Line = "/settings" then
+         elsif Asked.Kind = Settings then
             Show_Settings;
 
-         elsif Line = "/stats" then
+         elsif Asked.Kind = Statistics then
             if Have_Stats then
                Pres.Put_Statistics (Screen, Last_Result);
             else
                Pres.Put_Note (Screen, "cli.interactive.no_stats");
             end if;
 
-         elsif Line = "/context" then
+         elsif Asked.Kind = Context then
             Pres.Put_Note
               (Screen, "cli.interactive.context",
                [Loc.Named
@@ -162,10 +223,11 @@ package body Model_Runner.CLI.Interactive is
                   ("capacity",
                    T.Image (Long_Long_Integer (L.Capacity (Session))))]);
 
-         elsif T.Starts_With (Line, "/system ") then
+         elsif Asked.Kind = Set_System then
             declare
                Content : constant String :=
-                 T.Trim (Line (Line'First + 8 .. Line'Last));
+                 (if Asked.First = 0 then ""
+                  else Line (Asked.First .. Asked.Last));
                Outcome : E.Error_Info;
             begin
                Conv.Set_System (Messages, Content, Outcome);
@@ -176,7 +238,10 @@ package body Model_Runner.CLI.Interactive is
                   --  position, so the context is cleared rather than reused.
                   L.Reset (Session);
                   Have_Stats := False;
-                  Pres.Put_Note (Screen, "cli.interactive.system_done");
+                  Pres.Put_Note
+                    (Screen,
+                     (if Content = "" then "cli.interactive.system_cleared"
+                      else "cli.interactive.system_done"));
                end if;
             end;
 

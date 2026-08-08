@@ -16,7 +16,12 @@ with Model_Runner.Presentation;
 --  descriptions and responses are. An unknown command produces a localized
 --  diagnostic and the session continues.
 --
---    /exit   /reset   /help   /settings   /stats   /context   /system TEXT
+--    /exit   /reset   /help   /settings   /stats   /context   /system [TEXT]
+--
+--  /system with no text removes the system message, which is otherwise the
+--  one thing a session cannot undo: --system sets one before the first turn
+--  and /system TEXT replaces it, and without this there is no way back to a
+--  conversation that has none.
 --
 --  Input policy. Non-empty lines accumulate; a blank line submits. An empty
 --  submission is ignored. At end of file a pending non-empty prompt is
@@ -31,6 +36,36 @@ with Model_Runner.Presentation;
 --
 --  Task safety: the loop runs on the calling task.
 package Model_Runner.CLI.Interactive is
+
+   --  What a line of input asks for.
+   type Command_Kind is
+     (Not_A_Command,
+      Leave,
+      Reset,
+      Help,
+      Settings,
+      Statistics,
+      Context,
+      Set_System,
+      Unknown);
+
+   --  Where the argument of a command sits in the line.
+   type Parsed_Command is record
+      Kind  : Command_Kind := Not_A_Command;
+      First : Natural := 0;
+      Last  : Natural := 0;
+   end record;
+
+   --  Read one line of input as a command.
+   --
+   --  Separated from the loop that acts on it so that it can be tested:
+   --  the loop itself needs a terminal at both ends and no test drives it.
+   --
+   --  @param Line One line of input, already stripped of its terminator.
+   --  @return What the line asks for. First and Last bound the argument
+   --    within Line, and are zero when there is none. A line that does not
+   --    begin with a slash is Not_A_Command, which is ordinary text.
+   function Parse (Line : String) return Parsed_Command;
 
    --  Hold a conversation until the user leaves or input ends.
    --

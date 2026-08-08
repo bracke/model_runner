@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `/system` with no text removes the system message. It was matched as the
+  eight characters `"/system "` -- with the space -- so a bare `/system` was
+  not a command missing its argument but an unknown command, and a session
+  had no way back to holding no system message at all: `--system` sets one
+  before the first turn and `/system TEXT` replaces it, and nothing removed
+  it. The conversation layer has removed one on an empty string all along;
+  the interactive loop simply could not reach that.
+
+  Reading a line as a command is now separate from acting on it, and tested.
+  The loop needs a terminal at both ends and no test drives it, which is how
+  the command word came to be compared with its argument still attached.
+
 - The README said the engine decodes seven formats. It decodes thirteen: the
   row had not been touched since BF16, Q4_1, Q5_0, Q5_1, Q2_K and Q3_K were
   implemented. The support matrix still said the multiply was folded into the

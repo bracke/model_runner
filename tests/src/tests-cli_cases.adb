@@ -11,6 +11,7 @@ with Model_Runner.CLI.Driver;
 with Project_Tools.Files;
 with Model_Runner.CLI.Options;
 with Model_Runner.Cancellation;
+with Model_Runner.CLI.Interactive;
 with Model_Runner.Conversation;
 with Model_Runner.Errors;
 with Model_Runner.Presentation;
@@ -1463,6 +1464,102 @@ package body Tests.CLI_Cases is
               & " generated command lines were refused, so the refusing path "
               & "was barely walked");
    end Any_Command_Line_Is_Answered;
+
+   --  Interactive reads a line of input as the command it is.
+   --
+   --  The loop needs a terminal at both ends and no test drives it, so what
+   --  it does with a line is separated from the reading of one. This is the
+   --  reading.
+   --
+   --  It exists because /system was matched as the eight characters
+   --  "/system " -- with the space -- so a bare /system was not a command
+   --  missing its text but an unknown command, and the one thing a session
+   --  could not do was go back to having no system message at all. --system
+   --  sets one before the first turn and /system TEXT replaces it; nothing
+   --  removed it, although the layer underneath has always removed it when
+   --  handed an empty string.
+   procedure Interactive_Reads_Its_Commands
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package I renames Model_Runner.CLI.Interactive;
+      use type I.Command_Kind;
+
+      --  Assert a line parses to a kind, and to an argument or to none.
+      procedure Reads
+        (Line     : String;
+         Kind     : I.Command_Kind;
+         Argument : String := "")
+      is
+         Got : constant I.Parsed_Command := I.Parse (Line);
+      begin
+         Assert (Got.Kind = Kind,
+                 "'" & Line & "' read as "
+                 & I.Command_Kind'Image (Got.Kind) & ", not "
+                 & I.Command_Kind'Image (Kind));
+
+         if Argument = "" then
+            Assert (Got.First = 0 and then Got.Last = 0,
+                    "'" & Line & "' found an argument where there is none");
+         else
+            Assert (Got.First /= 0 and then Got.Last >= Got.First,
+                    "'" & Line & "' found no argument");
+            Assert (Line (Got.First .. Got.Last) = Argument,
+                    "'" & Line & "' read the argument as '"
+                    & Line (Got.First .. Got.Last) & "'");
+         end if;
+      end Reads;
+   begin
+      --  Ordinary text is not a command, and neither is a bare slash in the
+      --  middle of a sentence.
+      Reads ("", I.Not_A_Command);
+      Reads ("hello", I.Not_A_Command);
+      Reads ("what is 3/4 of 8?", I.Not_A_Command);
+
+      --  Every command word.
+      Reads ("/exit", I.Leave);
+      Reads ("/reset", I.Reset);
+      Reads ("/help", I.Help);
+      Reads ("/settings", I.Settings);
+      Reads ("/stats", I.Statistics);
+      Reads ("/context", I.Context);
+
+      --  A command word this build does not know is refused, not guessed at.
+      --  A prefix of a real one is not the real one.
+      Reads ("/nonsense", I.Unknown);
+      Reads ("/sys", I.Unknown);
+      Reads ("/systematic", I.Unknown);
+      Reads ("/", I.Unknown);
+
+      --  The system message, with text and without.
+      Reads ("/system be brief", I.Set_System, "be brief");
+      Reads ("/system    padded   ", I.Set_System, "padded");
+      Reads ("/system be brief. use 3/4 of the words", I.Set_System,
+             "be brief. use 3/4 of the words");
+      Reads ("/system", I.Set_System);
+      Reads ("/system ", I.Set_System);
+      Reads ("/system      ", I.Set_System);
+
+      --  What the empty argument then means, at the layer that acts on it.
+      --  Reading the command and carrying out the removal are two things and
+      --  this test owns only the first, so it checks the second is there to
+      --  be reached: an empty system message removes it.
+      declare
+         package C renames Model_Runner.Conversation;
+         Messages : C.History;
+         Status   : E.Error_Info;
+      begin
+         C.Open (Messages, Status => Status);
+         C.Set_System (Messages, "be brief", Status);
+         Assert (C.Has_System (Messages), "the system message was not set");
+         C.Set_System (Messages, "", Status);
+         Assert (E.Is_Ok (Status), "removing the system message was refused");
+         Assert (not C.Has_System (Messages),
+                 "an empty system message did not remove it, so a bare "
+                 & "/system would set a blank one");
+         C.Close (Messages);
+      end;
+   end Interactive_Reads_Its_Commands;
 
    --  The conversation keeps its shape under the edits interactive mode makes.
    --
@@ -3175,6 +3272,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Conversation_Survives_Interactive_Edits'Access,
          "the conversation keeps its shape under the edits interactive makes");
+      Register_Routine
+        (T, Interactive_Reads_Its_Commands'Access,
+         "interactive reads a line of input as the command it is");
       Register_Routine
         (T, Caller_Refusals_Report_Themselves'Access,
          "requests, conversations and models refuse by name");
