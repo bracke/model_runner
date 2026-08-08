@@ -59,6 +59,35 @@ should not be. Both had already drifted from what the runner prints -- they
 omitted the last field -- which is the argument for keeping the hand-copied
 ones few.
 
+## Where greedy decoding parts company
+
+Greedy output agrees with `llama.cpp` for the first several tokens and then
+diverges, on every quantized model tried. TinyLlama at Q4_K agrees for six
+tokens -- " Paris.", a blank line, "2.", "B.", "C." -- and then takes "D."
+where the reference takes "The capital". Llama-3.2-1B at Q4_K_M agrees for
+three and then takes " E" where the reference takes " capital".
+
+Two things are worth saying about that. It is not particular to a model or a
+tokenizer: the same shape appears on a SentencePiece model and a byte-pair
+one. And the recordings in this file cannot see it, because both compare two
+generated tokens, which is fewer than any divergence found so far.
+
+What it is has not been established. It is consistent with the arithmetic
+differing in its last bits -- this engine and that one decode the same
+quantized weights and sum them in different orders, and a token chosen by a
+close margin flips on very little -- and the conformance comparison supports
+that reading, agreeing with an independent implementation to about one part
+in a hundred thousand on F32 weights. But consistent with is not the same as
+demonstrated, and nothing here has compared the logits at the point where the
+two part company, which is what would settle it. The expectation format
+already carries a `logit` directive for exactly that purpose and no recording
+uses it.
+
+Until then: the engine produces sensible text, its output is reproducible
+under a fixed seed and unchanged by the worker count, and it is not
+bit-identical to another implementation on quantized weights beyond the first
+few tokens.
+
 ## The tokenizer, compared the same way
 
 `tests tokenize --model PATH --prompt TEXT` prints the identifiers a
