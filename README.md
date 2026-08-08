@@ -533,6 +533,20 @@ each weight byte is read once per pass, and the span buffer that looks like
 waste when one vector is passed is what makes the loops vectorizable --
 decoding straight into the sum was written and measured at 44 per cent slower.
 
+What is left is to move fewer bytes per weight, and that was measured too.
+Away from the model the four-bit format is sixteen per cent faster than the
+eight-bit one at eight workers, and level with it at one -- the gap is
+contention, not arithmetic. End to end it is smaller: the same model at Q4_K,
+669 MB against 1171, generates twelve tokens in 1.19 s against 1.21 and uses
+14.4 s of processor time against 14.9. Three to five per cent, because a run
+is more than its widest matrix product and because the ceiling is the clock
+rather than the bytes. Real, and small.
+
+(That file was requantized from the eight-bit one rather than built from the
+original weights, which is not how a model should be made. It is here to move
+fewer bytes, not to answer well, though it answers "Name three colours"
+exactly as the eight-bit one does.)
+
 ### Batched prefill
 
 A prompt is evaluated in batches: every token in a batch shares one pass over
