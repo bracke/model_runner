@@ -49,9 +49,15 @@ package Model_Runner.Numerics is
    --  bits. Every binary16 value is representable in binary32, so the
    --  conversion is exact and never rounds.
    --
+   --  Inlined because it is called once per element of every half-precision
+   --  tensor, and a call there costs several times the conversion itself:
+   --  the compiler emitted one call per element and the format decoded at a
+   --  fifth of the speed of the others until this aspect was added.
+   --
    --  @param Item Half-precision bit pattern.
    --  @return Exactly equal single-precision value.
-   function To_Real (Item : Half) return Real;
+   function To_Real (Item : Half) return Real
+     with Inline;
 
    --  Encode a value as IEEE binary16 with round-to-nearest-even.
    --

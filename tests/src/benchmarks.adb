@@ -471,6 +471,8 @@ package body Benchmarks is
 
       IO.Put_Line ("row dequantization");
       Measure ("q8_0 Dequantize_Row", G.Type_Q8_0, False);
+      Measure ("f16  Dequantize_Row", G.Type_F16, False);
+      Measure ("q4_k Dequantize_Row", G.Type_Q4_K, False);
       Measure ("f32  Dequantize_Row", G.Type_F32, False);
       IO.New_Line;
 
