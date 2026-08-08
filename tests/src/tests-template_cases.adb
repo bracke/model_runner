@@ -310,6 +310,63 @@ package body Tests.Template_Cases is
       return AUnit.Format ("chat template");
    end Name;
 
+   --  A caller can tighten the step bound, and the render says which bound
+   --  stopped it.
+   --
+   --  Every other limit this program applies is a field a caller sets; this
+   --  one was a constant in the engine until now. A caller rendering
+   --  templates from files it does not trust may want a tighter bound than
+   --  one rendering its own.
+   procedure Render_Step_Bound_Is_A_Setting
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Tight : constant Model_Runner.Limits.Model_Limits :=
+        (Model_Runner.Limits.Default_Model_Limits with delta
+           Max_Render_Iterations => 32);
+
+      --  Nested loops over a conversation: the shape that runs away.
+      Runaway : constant String :=
+        "{% for message in messages %}{% for message in messages %}"
+        & "{{ message.content }}{% endfor %}{% endfor %}";
+
+      Item     : Tmpl.Compiled;
+      Messages : Conv.History;
+      Target   : String (1 .. 4_096);
+      Last     : Natural;
+      Status   : E.Error_Info;
+   begin
+      Conv.Open (Messages, Status => Status);
+      Assert (E.Is_Ok (Status), "the conversation did not open");
+      Fill (Messages, 8);
+
+      Tmpl.Compile (Item, Runaway, Bounds => Tight, Status => Status);
+      Assert (E.Is_Ok (Status),
+              "the template did not compile: "
+              & E.Error_Code'Image (Status.Code));
+
+      Tmpl.Render (Item, Messages, "<s>", "</s>", True, Target, Last, Status);
+      Assert (Status.Code = E.Template_Iteration_Limit,
+              "a render past the tightened bound was allowed: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Last = 0, "a refused render reported writing something");
+
+      Tmpl.Close (Item);
+
+      --  And the same template under the default bound gets further: the
+      --  setting is what stopped it, not the template being impossible.
+      Tmpl.Compile (Item, Runaway, Status => Status);
+      Assert (E.Is_Ok (Status), "the template did not compile a second time");
+
+      Tmpl.Render (Item, Messages, "<s>", "</s>", True, Target, Last, Status);
+      Assert (E.Is_Ok (Status) or else Status.Code /= E.Template_Iteration_Limit,
+              "the default bound stopped a render that fits in it");
+
+      Tmpl.Close (Item);
+      Conv.Close (Messages);
+   end Render_Step_Bound_Is_A_Setting;
+
    --  Any template at all is answered, and a failed render writes nothing.
    --
    --  The engine's own bounds are checked by cases chosen to reach them. This
@@ -324,14 +381,17 @@ package body Tests.Template_Cases is
    --  that fails must report writing nothing, because the caller emits Last
    --  bytes and would otherwise emit whatever the buffer held.
    --
-   --  This is most of the suite's running time and it is worth knowing why
-   --  before shortening it. Of two thousand generated templates, about
-   --  fifteen hundred compile, roughly eight hundred and fifty render, and
-   --  some six hundred and eighty run away and are stopped -- nested loops
-   --  over a conversation, which is what a hostile template would be. The
-   --  time is the iteration bound doing its work six hundred and eighty
-   --  times over. Fewer cases, or shallower nesting, would buy the seconds
-   --  back by no longer generating the templates this exists to survive.
+   --  This is most of the suite's running time, and the reason is
+   --  compilation rather than anything about the templates: each one
+   --  allocates a program of four thousand instructions and initialises it,
+   --  which is around ten milliseconds and happens two thousand times.
+   --  Rendering all of them costs well under a second, measured by removing
+   --  it. Of the two thousand, about fifteen hundred compile and eight
+   --  hundred and fifty render.
+   --
+   --  So the seconds are the price of two thousand compilations, not of the
+   --  runaway renders. Cutting the case count is the only thing that would
+   --  buy them back, and it would buy less coverage with them.
    procedure Any_Template_Is_Answered
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -510,6 +570,9 @@ package body Tests.Template_Cases is
       Register_Routine
         (T, Malformed_Templates_Are_Refused'Access,
          "every documented compile-time refusal happens");
+      Register_Routine
+        (T, Render_Step_Bound_Is_A_Setting'Access,
+         "a caller can tighten the render step bound");
       Register_Routine
         (T, Rendering_Is_Bounded'Access,
          "rendering is bounded in output and in iterations");

@@ -790,6 +790,7 @@ package body Model_Runner.Templates is
          return;
       end if;
 
+      Item.Step_Limit := Bounds.Max_Render_Iterations;
       Item.Ready := True;
    exception
       when Occurrence : others =>
@@ -961,10 +962,11 @@ package body Model_Runner.Templates is
       --  only bound needed is on iterations.
       while Position <= Item.Program_Used loop
          Iterations := Iterations + 1;
-         if Iterations > Max_Iterations then
+         if Iterations > Item.Step_Limit then
             Last := 0;
             Status := E.Make (E.Template_Iteration_Limit);
-            E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Iterations));
+            E.Add_Integer
+              (Status, "limit", Long_Long_Integer (Item.Step_Limit));
             return;
          end if;
 

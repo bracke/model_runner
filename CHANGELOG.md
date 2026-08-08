@@ -7,6 +7,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The render step bound is a field in the model limits rather than a constant
+  in the engine, so a caller rendering untrusted templates can tighten it.
+
 - Release checks that no source in another language and no machine code enters
   the repository, and a test that `--backend` is refused rather than ignored.
 

@@ -63,6 +63,8 @@ package Model_Runner.Templates is
    --  thousand million during testing produced two thousand million steps and
    --  a render still in progress. A template arriving in a model file is not
    --  trusted to terminate, so rendering stops counting rather than waiting.
+   --  The default step bound. A caller changes it through Model_Limits, and
+   --  a compiled template carries whatever it was compiled with.
    Max_Iterations : constant := 100_000;
 
    --  A compiled template. Release with Close, which is idempotent.
@@ -203,6 +205,10 @@ private
       Program_Used : Natural := 0;
       Source       : Text_Access := null;
       Source_Used  : Natural := 0;
+
+      --  Taken from the bounds this was compiled with, so that rendering
+      --  needs no bounds of its own.
+      Step_Limit   : Positive := Max_Iterations;
    end record;
 
    overriding procedure Finalize (Item : in out Compiled);

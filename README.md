@@ -213,8 +213,9 @@ cd tests && ./bin/tests external-model --model /path/to/your.gguf [--expect FILE
 ```
 
 The suite takes about half a minute, three quarters of which is the chat
-template property test: of two thousand generated templates some six hundred
-and eighty are runaway nestings, and stopping each is what the time goes on.
+template property test — two thousand templates compiled, which is where that
+time goes: each compilation allocates a fixed program of four thousand
+instructions and initialises it.
 
 Every test is deterministic, offline, and needs no downloaded model. The
 checklist holds both: no test source may name a socket, a resolver or an

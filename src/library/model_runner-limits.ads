@@ -78,6 +78,14 @@ package Model_Runner.Limits is
       --  Largest chat template accepted, in bytes.
       Max_Template_Bytes : Natural := 262_144;
 
+      --  Most steps a single render of a chat template may take. A template
+      --  is a small program from a model file, and nested loops over a
+      --  conversation are how one runs away; this is what stops it. It is
+      --  here rather than fixed in the engine because every other bound is,
+      --  and because a caller that renders untrusted templates often may
+      --  want a tighter one than a caller that renders its own.
+      Max_Render_Iterations : Positive := 100_000;
+
       --  Whether bytes after the last tensor are accepted. Rejecting trailing
       --  data is the default because a well-formed writer never emits it and
       --  its presence usually means a truncated or concatenated file.
