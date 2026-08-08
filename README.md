@@ -428,10 +428,23 @@ Nothing is downloaded, and a missing file is a skip rather than a failure. See
 $ tests external-model --model /nowhere/x.gguf
 external-model: skipped (no model at /nowhere/x.gguf)
 
-$ tests external-model --model tiny-model.gguf --prompt "ab" --threads 4
-external-model: ok, architecture llama, 21 tensors, prompt 3 tokens,
-                generated 5, deterministic TRUE, thread-stable TRUE
+$ tests external-model --model fixtures/tiny-model.gguf --prompt "ab" \
+      --threads 4 --max-tokens 8
+external-model: ok, architecture llama, 21 tensors, no reference comparison,
+                prompt 3 tokens, generated 8, deterministic TRUE,
+                thread-stable TRUE
+
+$ tests external-model --model fixtures/tiny-model.gguf --prompt "ab"
+external-model: FAILED (generation failed: MR-GEN-0002)
 ```
+
+The third is worth showing. The committed fixture holds sixteen tokens of
+context and the runner asks for sixteen tokens by default, so a three-token
+prompt leaves no room and the engine refuses before generating anything. The
+failure names the code it refused with, which is how anyone reading it can
+tell an unusable request from a broken engine without reproducing the run by
+hand. It printed only "generation failed" until this was written down, and
+this example was published for two years as though it had succeeded.
 
 ### Repository checks
 

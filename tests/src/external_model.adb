@@ -90,6 +90,9 @@ package body External_Model is
       Engine    : L.Model;
       Status    : E.Error_Info;
 
+      --  The engine's own reason when a generation attempt gives up.
+      Refusal : E.Error_Info := E.Success;
+
       procedure Say (Detail : String) is
          Room : constant Natural :=
            Natural'Min (Detail'Length, Result.Detail'Length);
@@ -137,8 +140,11 @@ package body External_Model is
          Counted := 0;
          Ok := False;
 
+         Refusal := E.Success;
+
          L.Open (Session, Engine, Workers => Team, Status => Local);
          if E.Is_Error (Local) then
+            Refusal := Local;
             return;
          end if;
 
@@ -163,6 +169,13 @@ package body External_Model is
 
          Ok := Outcome.Reason /= Gen.Runtime_Error;
 
+         --  The run carries its own diagnostic. Reporting only that it failed
+         --  discards the sentence the engine wrote about why, and leaves
+         --  whoever reads the failure to reproduce it by hand to find out.
+         if not Ok then
+            Refusal := Outcome.Error;
+         end if;
+
          Model_Runner.Stops.Close (Stop);
          L.Close (Session);
          Gen.Release (Outcome);
@@ -181,6 +194,10 @@ package body External_Model is
          First_Logits  : out N.Real_Array;
          Ok            : out Boolean)
       is
+         --  Why it stopped, for the caller to report. Saying only that
+         --  generation failed throws away the one thing the engine had to
+         --  say about it, and then somebody has to run the engine by hand to
+         --  find out what this already knew.
          Session : L.Session;
          Sampler : Model_Runner.Sampling.Sampler;
          Words   : constant access constant Vocab.Vocabulary :=
@@ -190,6 +207,7 @@ package body External_Model is
            := [others => 0.0];
          Local   : E.Error_Info;
       begin
+         Refusal := E.Success;
          Prompt_Used := 0;
          Produced_Used := 0;
          Produced := [others => Vocab.No_Token];
@@ -200,11 +218,13 @@ package body External_Model is
            (Words.all, Effective_Prompt, True, False,
             Prompt_Tokens, Prompt_Used, Local);
          if E.Is_Error (Local) or else Prompt_Used = 0 then
+            Refusal := Local;
             return;
          end if;
 
          L.Open (Session, Engine, Status => Local);
          if E.Is_Error (Local) then
+            Refusal := Local;
             return;
          end if;
 
@@ -212,6 +232,7 @@ package body External_Model is
            (Sampler, Model_Runner.Sampling.Greedy_Configuration,
             Settings.Vocabulary, 0, Local);
          if E.Is_Error (Local) then
+            Refusal := Local;
             L.Close (Session);
             return;
          end if;
@@ -221,6 +242,7 @@ package body External_Model is
               (Session, Engine, Prompt_Tokens (Index), Logits,
                Status => Local);
             if E.Is_Error (Local) then
+               Refusal := Local;
                Model_Runner.Sampling.Close (Sampler);
                L.Close (Session);
                return;
@@ -304,7 +326,13 @@ package body External_Model is
       begin
          Generate (null, First, Last_1, Count_1, Ok_1);
          if not Ok_1 then
-            Give_Up (Failed, "generation failed");
+            if E.Is_Error (Refusal) then
+               Give_Up (Failed,
+                        "generation failed: "
+                        & E.Diagnostic_Code (Refusal.Code));
+            else
+               Give_Up (Failed, "generation failed");
+            end if;
             return;
          end if;
 

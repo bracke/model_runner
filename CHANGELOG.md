@@ -413,6 +413,13 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- The external-model runner reports the code a refused generation was refused
+  with, instead of "generation failed" and nothing else. The README published
+  an invocation of it that cannot succeed -- the committed fixture holds
+  sixteen tokens of context and the runner asks for sixteen by default -- and
+  the message said nothing worth chasing, so nobody chased it. The example is
+  corrected and a test holds the reporting.
+
 - `Model_Runner.CLI` described the command-line interface, the sampler, the
   generation coordinator, the template engine and the presentation layer as
   not implemented. All of them work. The rule against describing planned work

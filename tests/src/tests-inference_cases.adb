@@ -6,6 +6,7 @@ with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Cancellation;
 with Model_Runner.Limits;
 with Model_Runner.Progress;
+with External_Model;
 with Model_Runner.Platform.Signals;
 
 with Raise_Interrupt;
@@ -1089,6 +1090,81 @@ package body Tests.Inference_Cases is
    -- Register_Tests --
    --------------------
 
+   -------------------------------------------
+   -- Refused_Generation_Names_Its_Reason --
+   -------------------------------------------
+
+   --  A run the engine refuses says which refusal it was.
+   --
+   --  The external-model runner used to report "generation failed" and stop
+   --  there, discarding the diagnostic the engine had already written. The
+   --  README published an invocation of it that cannot succeed -- the
+   --  committed fixture holds sixteen tokens of context and the runner asks
+   --  for sixteen by default, so a prompt of any length leaves no room -- and
+   --  nobody noticed for two years, because the message said nothing worth
+   --  chasing.
+   --
+   --  This asks for that refusal on purpose and requires the code in the
+   --  answer. The fixture is the small one this repository owns, so the test
+   --  is mandatory rather than skipped.
+
+   procedure Refused_Generation_Names_Its_Reason
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      use type External_Model.Outcome;
+
+      Model : constant String := "fixtures/tiny-model.gguf";
+      Found : External_Model.Report;
+      Fits  : External_Model.Report;
+   begin
+      --  More tokens than the context can hold, which the engine refuses
+      --  before it generates anything.
+      External_Model.Run
+        (Path    => Model,
+         Prompt  => "ab",
+         Tokens  => 16,
+         Threads => 2,
+         Result  => Found);
+
+      if Found.Result = External_Model.Skipped then
+         --  Run from somewhere the fixture is not; nothing to hold.
+         return;
+      end if;
+
+      Assert (Found.Result = External_Model.Failed,
+              "a request larger than the context was not refused");
+      declare
+         Said  : constant String := External_Model.Detail_Text (Found);
+         Named : Boolean := False;
+      begin
+         for Index in Said'Range loop
+            if Index + 6 <= Said'Last
+              and then Said (Index .. Index + 6) = "MR-GEN-"
+            then
+               Named := True;
+            end if;
+         end loop;
+         Assert (Named,
+                 "the refusal does not name a diagnostic code: """
+                 & Said & """");
+      end;
+
+      --  And a request that fits still runs, so the check above is not
+      --  passing because this model cannot generate at all.
+      External_Model.Run
+        (Path    => Model,
+         Prompt  => "ab",
+         Tokens  => 8,
+         Threads => 2,
+         Result  => Fits);
+
+      Assert (Fits.Result = External_Model.Ran,
+              "a request that fits the context did not run: "
+              & External_Model.Detail_Text (Fits));
+   end Refused_Generation_Names_Its_Reason;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -1140,6 +1216,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Interrupt_Requests_Cancellation'Access,
          "an interrupt requests cancellation instead of killing the process");
-   end Register_Tests;
+
+      Register_Routine
+        (T, Refused_Generation_Names_Its_Reason'Access,
+         "a generation the engine refuses is reported with the code it "
+         & "refused with, not as a bare failure");   end Register_Tests;
 
 end Tests.Inference_Cases;
