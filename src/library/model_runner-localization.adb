@@ -198,7 +198,13 @@ package body Model_Runner.Localization is
           (Item.Runtime, To_String (Item.Resolved), Key, Values);
 
       if Result.Status = Messages.Result.Success then
-         return Messages.Result.Output_Text (Result.Text);
+         --  Escaped on the way out. The catalog is a file beside the
+         --  executable and the specification counts it among the untrusted
+         --  inputs, its text reaches a terminal, and a replaced catalog must
+         --  not be able to clear a screen or hide what follows any more than
+         --  a model file can. Parameters were escaped as they went in and
+         --  are plain ASCII by now, so this pass leaves them as they are.
+         return T.Escape_Controls (Messages.Result.Output_Text (Result.Text));
       else
          return Emergency;
       end if;

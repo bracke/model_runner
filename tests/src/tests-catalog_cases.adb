@@ -1,3 +1,5 @@
+with Ada.Directories;
+with Ada.Text_IO;
 with AUnit.Assertions;
 
 with Model_Runner.Errors;
@@ -87,6 +89,66 @@ package body Tests.Catalog_Cases is
    end Open;
 
    --  The catalog loads and resolves.
+   --  A catalog cannot steer the terminal either.
+   --
+   --  The message catalog is a file beside the executable, and the
+   --  specification counts it among the inputs to treat as untrusted --
+   --  alongside model files, prompts and terminal capability data. Its text
+   --  goes to a terminal. Values substituted into a message were escaped
+   --  because they come from a model file; the message itself was not,
+   --  because it comes from the program's own catalog, which is true right
+   --  up until somebody replaces the file.
+   procedure Catalog_Text_Cannot_Steer_The_Terminal
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Path : constant String := "obj/hostile-catalog.txt";
+      ESC  : constant Character := Character'Val (16#1B#);
+      BEL  : constant Character := Character'Val (16#07#);
+
+      Handle  : File_Type;
+      Catalog : Loc.Catalog;
+   begin
+      Create (Handle, Out_File, Path);
+      Put_Line (Handle, "default_locale = en");
+
+      --  A screen clear in one message and a bell in another, which is what
+      --  a hostile catalog would carry: enough to hide what a run reported.
+      Put_Line (Handle, "en.application.name = safe" & ESC & "[2Jgone");
+      Put_Line (Handle, "en.application.summary = ring" & BEL & "ring");
+      Close (Handle);
+
+      Loc.Open (Catalog, Path, "en");
+      Assert (Loc.Is_Ready (Catalog), "the hostile catalog did not load");
+
+      declare
+         Named   : constant String := Loc.Text (Catalog, "application.name");
+         Summary : constant String := Loc.Text (Catalog, "application.summary");
+
+         function Clean (Item : String) return Boolean is
+           (for all Char of Item =>
+              Character'Pos (Char) >= 16#20#
+                and then Character'Pos (Char) /= 16#7F#);
+      begin
+         Assert (Clean (Named),
+                 "an escape sequence from the catalog reached the caller");
+         Assert (Clean (Summary),
+                 "a bell from the catalog reached the caller");
+
+         --  Escaped rather than dropped, so the text still says what it said
+         --  and a reader can see what was in it.
+         Assert (Named = "safe\x1B[2Jgone",
+                 "the escape was not rendered visibly: " & Named);
+         Assert (Summary = "ring\x07ring",
+                 "the bell was not rendered visibly: " & Summary);
+      end;
+
+      Loc.Close (Catalog);
+      Ada.Directories.Delete_File (Path);
+   end Catalog_Text_Cannot_Steer_The_Terminal;
+
    procedure Catalog_Loads (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T2);
       Catalog : Loc.Catalog;
@@ -571,6 +633,9 @@ package body Tests.Catalog_Cases is
          "no two progress stages say the same thing");
       Register_Routine
         (T, Catalog_Loads'Access, "the repository catalog loads and resolves");
+      Register_Routine
+        (T, Catalog_Text_Cannot_Steer_The_Terminal'Access,
+         "a catalog cannot steer the terminal either");
       Register_Routine
         (T, Every_Code_Resolves'Access,
          "every diagnostic code has a catalog entry");

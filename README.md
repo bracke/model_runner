@@ -442,7 +442,9 @@ strings are validated as UTF-8; tensor ranges are checked against the file and
 against each other. Embedded chat templates are compiled into a bounded
 allowlisted form that has no operation capable of reaching a file, a process,
 the environment or the network. Metadata values are escaped before they reach a
-terminal. Model files are opened read-only and are never modified, which a
+terminal, and so is message text from the catalog, which is a file beside the
+executable rather than part of the program. Model files are opened read-only
+and are never modified, which a
 test holds by comparing the file's bytes and its modification time across a
 run. The units that interpret what a container holds -- the template engine,
 the tokenizer, the metadata accessors, the engine itself -- may not name a

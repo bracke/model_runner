@@ -318,6 +318,11 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- Message text from the catalog is escaped before it is returned. Values
+  substituted into a message were escaped because they come from a model file;
+  the message itself was not, so a replaced catalog could send an escape
+  sequence to the terminal.
+
 - The environment table in the README now lists `LC_ALL` and `LANG`, which the
   program reads to choose a locale and which it did not mention.
 
