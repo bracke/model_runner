@@ -1266,6 +1266,52 @@ package body Model_Runner.Tokenizer is
          return "";
       end if;
 
+      --  Byte-pair token text is written in stand-in characters, one for
+      --  each byte, so that a merge table written as text can describe
+      --  arbitrary bytes. Decoding has to undo that: without it a model's
+      --  output arrives as the stand-ins themselves, and a space reads as
+      --  the character that stands for one.
+      if Item.Model = Kind_BPE then
+         declare
+            Result : String (1 .. Raw'Length);
+            Filled : Natural := 0;
+            Index  : Natural := Raw'First;
+         begin
+            while Index <= Raw'Last loop
+               declare
+                  Code, Width : Natural;
+                  Found : Boolean := False;
+               begin
+                  Model_Runner.UTF8.Decode_First
+                    (Raw (Index .. Raw'Last), Code, Width);
+                  exit when Width = 0;
+
+                  for Value in BPE.Byte_Character'Range loop
+                     if BPE.Byte_Character (Value) = Code then
+                        Filled := Filled + 1;
+                        Result (Filled) := Character'Val (Value);
+                        Found := True;
+                        exit;
+                     end if;
+                  end loop;
+
+                  --  A character that stands for no byte is passed through
+                  --  as it was written, which is what an added token such as
+                  --  a marker is made of.
+                  if not Found then
+                     Result (Filled + 1 .. Filled + Width) :=
+                       Raw (Index .. Index + Width - 1);
+                     Filled := Filled + Width;
+                  end if;
+
+                  Index := Index + Width;
+               end;
+            end loop;
+
+            return Result (1 .. Filled);
+         end;
+      end if;
+
       --  A byte-fallback token contributes exactly one raw byte.
       if Class_Of (Item, Token) = Class_Byte
         and then Raw'Length = 6

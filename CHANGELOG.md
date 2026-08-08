@@ -521,6 +521,13 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- Byte-pair output is decoded back to bytes. A vocabulary of that kind writes
+  its token text in stand-in characters, one per byte, and the decoder was
+  passing them through, so a model's output arrived as those stand-ins -- a
+  space reading as the character that stands for one. Encoding, generation and
+  the tokens themselves were right; only the way back was wrong, and no
+  vocabulary-only fixture could show it because none of them generate.
+
 - A container with no tensors is read rather than refused as truncated. Such a
   file ends at its metadata, and the reader required room for the padding that
   would precede a data section which is not there. Every vocabulary-only
