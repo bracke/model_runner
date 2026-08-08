@@ -1,4 +1,13 @@
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
+with Ada.Streams;
+
+with Model_Runner.Bytes;
+with Model_Runner.Byte_Sources.Files;
+with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Limits;
+
+with Tiny_Model;
 with Ada.Text_IO;
 with AUnit.Assertions;
 
@@ -14,6 +23,10 @@ with Model_Runner.Text;
 package body Tests.Catalog_Cases is
 
    use AUnit.Assertions;
+
+   package B renames Model_Runner.Bytes;
+   use type B.Byte_Array_Access;
+   use type B.Byte_Count;
    use type Model_Runner.Errors.Error_Code;
 
    package E renames Model_Runner.Errors;
@@ -712,6 +725,133 @@ package body Tests.Catalog_Cases is
    -- Register_Tests --
    --------------------
 
+   ----------------------------------------
+   -- Real_Diagnostics_Render_In_Full --
+   ----------------------------------------
+
+   --  Every diagnostic a broken file produces must be a sentence.
+   --
+   --  When a message names a value nothing attaches, the catalog cannot
+   --  render it and the reader falls back to printing the key in angle
+   --  brackets. That is what a user saw for every truncated model file --
+   --  the commonest way a file is wrong -- because the message says "at
+   --  offset {offset}" and the reader recorded the offset as technical
+   --  context rather than as a value the message could name.
+   --
+   --  The repository check that was meant to catch it could not: it asks
+   --  whether anything anywhere attaches a value of that name, and the
+   --  reader does attach one, for a different diagnostic. So this asks the
+   --  question the other way round, by breaking a file in many places and
+   --  requiring that whatever comes back renders.
+
+   procedure Real_Diagnostics_Render_In_Full
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Whole : constant String := "obj/render-whole.gguf";
+      Cut   : constant String := "obj/render-cut.gguf";
+
+      Catalog : Loc.Catalog;
+      Checked : Natural := 0;
+
+      --  Read the fixture once, so the truncations are of a real container.
+      function Bytes_Of (Path : String) return B.Byte_Array_Access is
+         use Ada.Streams.Stream_IO;
+         Handle : File_Type;
+         Result : B.Byte_Array_Access;
+         Size   : Ada.Directories.File_Size;
+      begin
+         Size := Ada.Directories.Size (Path);
+         B.Allocate (B.Byte_Count (Size), Result);
+         if Result = null then
+            return null;
+         end if;
+         Open (Handle, In_File, Path);
+         declare
+            Buffer : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Size));
+            Last   : Ada.Streams.Stream_Element_Offset;
+         begin
+            Ada.Streams.Read (Stream (Handle).all, Buffer, Last);
+            for Index in 1 .. Last loop
+               Result.all (Result.all'First + B.Byte_Count (Index) - 1) :=
+                 B.Byte (Buffer (Index));
+            end loop;
+         end;
+         Close (Handle);
+         return Result;
+      end Bytes_Of;
+
+      Source : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Write (Whole);
+      Source := Bytes_Of (Whole);
+      Assert (Source /= null, "could not read the fixture");
+
+      Loc.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Assert (Loc.Is_Ready (Catalog), "the catalog did not open");
+
+      --  Cut the file at a spread of places. Each cut lands in a different
+      --  part of the container -- the header, the metadata, the tensor
+      --  descriptors -- so the refusals differ.
+      for Step in 1 .. 40 loop
+         declare
+            Keep : constant B.Byte_Count :=
+              B.Byte_Count (Step) * B.Byte_Count (Source.all'Length / 41);
+            use Ada.Streams.Stream_IO;
+            Handle : File_Type;
+         begin
+            Create (Handle, Out_File, Cut);
+            for Index in 0 .. Keep - 1 loop
+               Ada.Streams.Stream_Element'Write
+                 (Stream (Handle),
+                  Ada.Streams.Stream_Element
+                    (Source.all (Source.all'First + Index)));
+            end loop;
+            Close (Handle);
+
+            declare
+               Reader_Source : Model_Runner.Byte_Sources.Files.File_Source;
+               Item          : Model_Runner.GGUF.Containers.Container;
+               Status        : E.Error_Info;
+               Opening       : E.Error_Info;
+            begin
+               Model_Runner.Byte_Sources.Files.Open
+                 (Reader_Source, Cut, Status => Opening);
+               if not E.Is_Error (Opening) then
+                  Model_Runner.GGUF.Containers.Reader.Parse
+                    (Item, Reader_Source,
+                     Model_Runner.Limits.Default_Model_Limits,
+                     null, null, Status);
+
+                  if E.Is_Error (Status) then
+                     declare
+                        Said : constant String := Loc.Describe (Catalog, Status);
+                     begin
+                        Checked := Checked + 1;
+                        Assert (Said'Length > 0
+                                and then Said (Said'First) /= '<',
+                                "a truncation at" & B.Byte_Count'Image (Keep)
+                                & " bytes rendered as " & Said);
+                     end;
+                  else
+                     Model_Runner.GGUF.Containers.Close (Item);
+                  end if;
+                  Model_Runner.Byte_Sources.Files.Close (Reader_Source);
+               end if;
+            end;
+         end;
+      end loop;
+
+      B.Free (Source);
+      Loc.Close (Catalog);
+
+      Assert (Checked >= 20,
+              "only" & Natural'Image (Checked) & " truncations were refused, "
+              & "so this checked far less than it looks");
+   end Real_Diagnostics_Render_In_Full;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -756,6 +896,10 @@ package body Tests.Catalog_Cases is
       Register_Routine
         (T, Host_Locale_Normalized'Access,
          "a POSIX host locale resolves to its language");
-   end Register_Tests;
+
+      Register_Routine
+        (T, Real_Diagnostics_Render_In_Full'Access,
+         "a diagnostic from a broken file renders as a sentence rather than "
+         & "as its own message key");   end Register_Tests;
 
 end Tests.Catalog_Cases;

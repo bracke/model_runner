@@ -74,6 +74,17 @@ package body Model_Runner.GGUF.Containers.Reader is
       Result : E.Error_Info := E.Make (Code);
    begin
       E.Set_Location (Result, Interfaces.Unsigned_64 (Offset));
+
+      --  The location and the parameter are not the same thing, and both are
+      --  wanted. The location is technical context, printed on its own line
+      --  and only when asked for; the parameter is what a message may name.
+      --  Without it a message that says "at offset {offset}" cannot be
+      --  rendered at all, and the reader falls back to printing the message
+      --  key in angle brackets -- which is what a user saw for every
+      --  truncated file, the commonest way a model file is wrong.
+      E.Add_Integer
+        (Result, "offset",
+         Reportable (Interfaces.Unsigned_64 (Offset)), E.Param_Offset);
       return Result;
    end At_Offset;
 
@@ -1220,13 +1231,30 @@ package body Model_Runner.GGUF.Containers.Reader is
            A.Align_Up
              (A.To_Checked (Interfaces.Unsigned_64 (Cursor.Cursor)), Item.Align);
       begin
-         if not A.Is_Valid (Aligned)
-           or else A.Value (Aligned) > Item.Total_Size
+         if A.Is_Valid (Aligned)
+           and then A.Value (Aligned) <= Item.Total_Size
          then
+            Item.Data_Start := A.Value (Aligned);
+
+         elsif Tensor_Total = 0 then
+            --  No tensors and no room for the padding a data section would
+            --  begin after, which means there is no data section: the file
+            --  ends at its metadata. Such a file ends at its metadata,
+            --  and requiring room for the padding that would precede a data
+            --  section rejected every vocabulary-only container -- the ones
+            --  a tokenizer is tested against carry no tensors at all, and
+            --  each was refused as ending inside a field.
+            --
+            --  Nothing reads from Data_Start when there are no tensors: the
+            --  range validation walks the tensors, and with none it does not
+            --  run. The unaligned cursor is recorded so that the reported
+            --  data offset is where the file actually ends.
+            Item.Data_Start := Interfaces.Unsigned_64 (Cursor.Cursor);
+
+         else
             Fail (At_Offset (E.GGUF_Truncated, Cursor.Cursor));
             return;
          end if;
-         Item.Data_Start := A.Value (Aligned);
       end;
 
       if Cancelled then

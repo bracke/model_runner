@@ -493,6 +493,19 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- A container with no tensors is read rather than refused as truncated. Such a
+  file ends at its metadata, and the reader required room for the padding that
+  would precede a data section which is not there. Every vocabulary-only
+  container was rejected, which is every file a tokenizer would be tested
+  against.
+
+- A truncated model file says what is wrong instead of printing the name of
+  the message that would have said it. The message reads "ends inside a field
+  at offset {offset}" and the reader recorded the offset as technical context
+  rather than as a value the message could name, so the catalog could not
+  render it and fell back to `<error.gguf.truncated>`. That is the commonest
+  way a model file is wrong.
+
 - The external-model runner reports the code a refused generation was refused
   with, instead of "generation failed" and nothing else. The README published
   an invocation of it that cannot succeed -- the committed fixture holds
