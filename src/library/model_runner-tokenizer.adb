@@ -235,6 +235,8 @@ package body Model_Runner.Tokenizer is
 
          if Name = "llama" then
             Item.Model := Kind_SentencePiece;
+         elsif Name = "gpt2" then
+            Item.Model := Kind_BPE;
          else
             Item.Model := Kind_Unsupported;
             Status := E.Make (E.Tokenizer_Unsupported_Model);
@@ -486,6 +488,64 @@ package body Model_Runner.Tokenizer is
          end;
       end loop;
 
+      --  The merge table, for a vocabulary that has one.
+      --
+      --  Each entry is the two pieces with a space between them, and its
+      --  position is its rank: earlier entries are applied first. The file
+      --  writes them in that order, so the rank is the index and nothing has
+      --  to be sorted.
+      --
+      --  A byte-pair vocabulary without merges cannot tokenize anything but
+      --  single characters, so an absent or empty table is refused rather
+      --  than accepted into silently wrong output. For SentencePiece the
+      --  table is meaningless and is not read at all.
+      if Item.Model = Kind_BPE then
+         declare
+            Merge_Count : Natural := 0;
+         begin
+            Containers.Get_Array_Length
+              (Source, "tokenizer.ggml.merges",
+               Model_Runner.GGUF.Value_String, Merge_Count, Scratch);
+
+            if E.Is_Error (Scratch) or else Merge_Count = 0 then
+               Status := E.Make (E.Tokenizer_Invalid_Merges);
+               return;
+            end if;
+
+            if Merge_Count > Bounds.Max_Vocabulary then
+               Status := E.Make (E.Tokenizer_Vocabulary_Too_Large);
+               E.Add_Integer (Status, "size", Long_Long_Integer (Merge_Count));
+               E.Add_Integer
+                 (Status, "limit",
+                  Long_Long_Integer (Bounds.Max_Vocabulary));
+               return;
+            end if;
+
+            for Index in 1 .. Merge_Count loop
+               declare
+                  Buffer : String (1 .. Max_Token_Bytes * 2 + 1);
+                  Last   : Natural;
+               begin
+                  Containers.Get_String_Element
+                    (Source, "tokenizer.ggml.merges", Index,
+                     Buffer, Last, Scratch);
+                  if E.Is_Error (Scratch) or else Last = 0 then
+                     Status := E.Make (E.Tokenizer_Invalid_Merges);
+                     E.Add_Integer (Status, "index", Long_Long_Integer (Index));
+                     return;
+                  end if;
+
+                  --  Kept keyed exactly as written, so looking one up is
+                  --  joining the two pieces with a space rather than parsing
+                  --  anything. A repeated pair keeps its first, lower rank.
+                  if not Item.Merges.Contains (Buffer (1 .. Last)) then
+                     Item.Merges.Insert (Buffer (1 .. Last), Index);
+                  end if;
+               end;
+            end loop;
+         end;
+      end if;
+
       Item.Loaded := True;
       Status := E.Success;
    exception
@@ -500,6 +560,166 @@ package body Model_Runner.Tokenizer is
    ------------
    -- Encode --
    ------------
+
+   --  Byte-pair encoding.
+   --
+   --  Three steps, in this order, and the order is the whole of it. The text
+   --  is cut into pieces at boundaries the vocabulary's own rules define --
+   --  a run of letters, a run of digits, a run of neither, each allowed one
+   --  leading space -- so that no merge can ever join a word to the one after
+   --  it. Each piece is rewritten so that every byte becomes a printable
+   --  character, which is what lets a merge table written as text describe
+   --  arbitrary bytes. Then the pieces are merged, lowest rank first, until
+   --  no adjacent pair appears in the table.
+   --
+   --  What is not here is the whole of the first step. The vocabularies name
+   --  a pre-tokenizer -- gpt-2, llama3, qwen2 and others -- and they differ
+   --  in how they cut, chiefly around non-ASCII text, where a letter has to
+   --  be told from a symbol by its Unicode category. This implements the
+   --  ASCII rules exactly and treats every code point above 127 as a letter,
+   --  which is right for running text in most scripts and wrong for
+   --  punctuation and symbols outside ASCII. Encode says so by refusing
+   --  rather than guessing: see Pre_Token_Cut.
+   package BPE is
+
+      --  Each byte as the printable character that stands for it, as the
+      --  original byte-level vocabularies define. Bytes that are already
+      --  printable ASCII stand for themselves; the rest are moved into a
+      --  range where no byte value collides with a real character.
+      type Byte_Character_Table is array (0 .. 255) of Natural;
+
+      Byte_Character : constant Byte_Character_Table :=
+        [256, 257, 258, 259, 260, 261, 262, 263,
+         264, 265, 266, 267, 268, 269, 270, 271,
+         272, 273, 274, 275, 276, 277, 278, 279,
+         280, 281, 282, 283, 284, 285, 286, 287,
+         288,  33,  34,  35,  36,  37,  38,  39,
+          40,  41,  42,  43,  44,  45,  46,  47,
+          48,  49,  50,  51,  52,  53,  54,  55,
+          56,  57,  58,  59,  60,  61,  62,  63,
+          64,  65,  66,  67,  68,  69,  70,  71,
+          72,  73,  74,  75,  76,  77,  78,  79,
+          80,  81,  82,  83,  84,  85,  86,  87,
+          88,  89,  90,  91,  92,  93,  94,  95,
+          96,  97,  98,  99, 100, 101, 102, 103,
+         104, 105, 106, 107, 108, 109, 110, 111,
+         112, 113, 114, 115, 116, 117, 118, 119,
+         120, 121, 122, 123, 124, 125, 126, 289,
+         290, 291, 292, 293, 294, 295, 296, 297,
+         298, 299, 300, 301, 302, 303, 304, 305,
+         306, 307, 308, 309, 310, 311, 312, 313,
+         314, 315, 316, 317, 318, 319, 320, 321,
+         322, 161, 162, 163, 164, 165, 166, 167,
+         168, 169, 170, 171, 172, 323, 174, 175,
+         176, 177, 178, 179, 180, 181, 182, 183,
+         184, 185, 186, 187, 188, 189, 190, 191,
+         192, 193, 194, 195, 196, 197, 198, 199,
+         200, 201, 202, 203, 204, 205, 206, 207,
+         208, 209, 210, 211, 212, 213, 214, 215,
+         216, 217, 218, 219, 220, 221, 222, 223,
+         224, 225, 226, 227, 228, 229, 230, 231,
+         232, 233, 234, 235, 236, 237, 238, 239,
+         240, 241, 242, 243, 244, 245, 246, 247,
+         248, 249, 250, 251, 252, 253, 254, 255];
+
+      --  Where one pre-token ends, starting at From.
+      --
+      --  A run of letters, a run of digits, or a run of neither, each
+      --  allowed one leading space; a run of spaces on its own; and the
+      --  handful of English contractions the original tokenizer named. Every
+      --  vocabulary of this kind cuts roughly this way and they differ in the
+      --  details, which is why Understood below refuses the text this cannot
+      --  cut faithfully rather than cutting it wrongly.
+      function Cut_At (Text : String; From : Positive) return Natural;
+
+      --  Whether this can cut a text faithfully: ASCII only, because telling
+      --  a letter from a symbol above ASCII wants the Unicode categories and
+      --  this has none.
+      function Understood (Text : String) return Boolean
+      is (for all Letter of Text => Character'Pos (Letter) < 128);
+
+   end BPE;
+
+   package body BPE is
+
+      function Is_Letter (Item : Character) return Boolean
+      is (Item in 'a' .. 'z' | 'A' .. 'Z');
+
+      function Is_Digit (Item : Character) return Boolean
+      is (Item in '0' .. '9');
+
+      function Is_Space (Item : Character) return Boolean
+      is (Item in ' ' | Character'Val (9) | Character'Val (10)
+                | Character'Val (11) | Character'Val (12)
+                | Character'Val (13));
+
+      function Cut_At (Text : String; From : Positive) return Natural is
+         Index : Natural := From;
+
+         --  The contractions, which are cut off whole and before anything
+         --  else looks at them.
+         type Contraction is access constant String;
+         Ones : constant array (1 .. 7) of Contraction :=
+           [new String'("'s"), new String'("'t"), new String'("'re"),
+            new String'("'ve"), new String'("'m"), new String'("'ll"),
+            new String'("'d")];
+      begin
+         if Index > Text'Last then
+            return Text'Last;
+         end if;
+
+         for One of Ones loop
+            if Index + One'Length - 1 <= Text'Last
+              and then Text (Index .. Index + One'Length - 1) = One.all
+            then
+               return Index + One'Length - 1;
+            end if;
+         end loop;
+
+         --  One leading space belongs to the run that follows it, unless
+         --  what follows is more space, in which case the run is the space.
+         if Text (Index) = ' '
+           and then Index < Text'Last
+           and then not Is_Space (Text (Index + 1))
+         then
+            Index := Index + 1;
+         end if;
+
+         if Is_Letter (Text (Index)) then
+            while Index < Text'Last and then Is_Letter (Text (Index + 1)) loop
+               Index := Index + 1;
+            end loop;
+
+         elsif Is_Digit (Text (Index)) then
+            while Index < Text'Last and then Is_Digit (Text (Index + 1)) loop
+               Index := Index + 1;
+            end loop;
+
+         elsif Is_Space (Text (Index)) then
+            --  A run of spaces keeps its last one for the word that follows,
+            --  which is what makes " a" a single piece rather than " " and
+            --  "a".
+            while Index < Text'Last and then Is_Space (Text (Index + 1)) loop
+               Index := Index + 1;
+            end loop;
+            if Index < Text'Last and then Index > From then
+               Index := Index - 1;
+            end if;
+
+         else
+            while Index < Text'Last
+              and then not Is_Letter (Text (Index + 1))
+              and then not Is_Digit (Text (Index + 1))
+              and then not Is_Space (Text (Index + 1))
+            loop
+               Index := Index + 1;
+            end loop;
+         end if;
+
+         return Index;
+      end Cut_At;
+
+   end BPE;
 
    procedure Encode
      (Item          : Vocabulary;
@@ -647,6 +867,127 @@ package body Model_Runner.Tokenizer is
          Status := E.Make (E.Tokenizer_Input_Too_Long);
          E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Symbols));
          return;
+      end if;
+
+      --  Byte-pair vocabularies take a different road entirely: the text is
+      --  cut first, and each piece merged on its own.
+      if Item.Model = Kind_BPE then
+         if not BPE.Understood (Text) then
+            --  Refused rather than guessed. Cutting text above ASCII needs
+            --  the Unicode categories to tell a letter from a symbol, and
+            --  cutting it wrongly produces tokens that are not wrong in any
+            --  way a caller could see -- they decode back to the same
+            --  characters and mean something else to the model.
+            Status := E.Make (E.Tokenizer_Invalid_UTF8);
+            return;
+         end if;
+
+         declare
+            Produced : Natural := 0;
+            From     : Positive := Text'First;
+
+            procedure Emit (Piece : String) is
+               --  Every byte as its printable stand-in, which is the form
+               --  the vocabulary and the merge table are written in.
+               Mapped : String (1 .. Piece'Length * 3);
+               Filled : Natural := 0;
+
+               --  One symbol per stand-in character, merged in place.
+               Starts : array (1 .. Piece'Length + 1) of Natural;
+               Ends   : array (1 .. Piece'Length + 1) of Natural;
+               Count  : Natural := 0;
+            begin
+               for Letter of Piece loop
+                  declare
+                     One : constant String :=
+                       Model_Runner.UTF8.Encode
+                         (BPE.Byte_Character (Character'Pos (Letter)));
+                  begin
+                     Count := Count + 1;
+                     Starts (Count) := Filled + 1;
+                     Mapped (Filled + 1 .. Filled + One'Length) := One;
+                     Filled := Filled + One'Length;
+                     Ends (Count) := Filled;
+                  end;
+               end loop;
+
+               --  Merge the lowest-ranked adjacent pair until none is in the
+               --  table. Written plainly, a pass per merge: a vocabulary's
+               --  pieces are short, and the alternative is a heap for what is
+               --  usually fewer than ten symbols.
+               loop
+                  declare
+                     Best      : Natural := 0;
+                     Best_Rank : Natural := Natural'Last;
+                  begin
+                     for Index in 1 .. Count - 1 loop
+                        declare
+                           Key : constant String :=
+                             Mapped (Starts (Index) .. Ends (Index)) & " "
+                             & Mapped (Starts (Index + 1)
+                                       .. Ends (Index + 1));
+                           Found : constant Merge_Maps.Cursor :=
+                             Item.Merges.Find (Key);
+                        begin
+                           if Merge_Maps.Has_Element (Found)
+                             and then Merge_Maps.Element (Found) < Best_Rank
+                           then
+                              Best := Index;
+                              Best_Rank := Merge_Maps.Element (Found);
+                           end if;
+                        end;
+                     end loop;
+
+                     exit when Best = 0;
+
+                     --  The two become one slice, and the rest close up.
+                     Ends (Best) := Ends (Best + 1);
+                     for Index in Best + 1 .. Count - 1 loop
+                        Starts (Index) := Starts (Index + 1);
+                        Ends (Index) := Ends (Index + 1);
+                     end loop;
+                     Count := Count - 1;
+                  end;
+               end loop;
+
+               for Index in 1 .. Count loop
+                  declare
+                     Token : constant Token_Id :=
+                       Find (Item, Mapped (Starts (Index) .. Ends (Index)));
+                  begin
+                     if Token /= No_Token and then Produced < Target'Length then
+                        Produced := Produced + 1;
+                        Target (Target'First + Produced - 1) := Token;
+                     end if;
+                  end;
+               end loop;
+            end Emit;
+         begin
+            if Add_Beginning and then Item.Beginning /= No_Token then
+               Produced := Produced + 1;
+               Target (Target'First) := Item.Beginning;
+            end if;
+
+            while From <= Text'Last loop
+               declare
+                  Stop : constant Natural := BPE.Cut_At (Text, From);
+               begin
+                  exit when Stop < From;
+                  Emit (Text (From .. Stop));
+                  From := Stop + 1;
+               end;
+            end loop;
+
+            if Add_End and then Item.Ending /= No_Token
+              and then Produced < Target'Length
+            then
+               Produced := Produced + 1;
+               Target (Target'First + Produced - 1) := Item.Ending;
+            end if;
+
+            Last := Produced;
+            return;
+         end;
       end if;
 
       Build_Working (Working);

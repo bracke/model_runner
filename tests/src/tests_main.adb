@@ -20,6 +20,12 @@ with External_Model;
 with Docs_Generation;
 with Benchmarks;
 
+with Model_Runner.Byte_Sources.Files;
+with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Tokenizer;
+with Model_Runner.Limits;
+with Model_Runner.Text;
+with Model_Runner.Errors;
 with Project_Tools.Files;
 with Project_Tools.Text;
 with Packaging;
@@ -31,6 +37,7 @@ with Tiny_Model;
 --  The first argument selects a command. "test" runs every mandatory
 --  deterministic suite and is the default.
 procedure Tests_Main is
+   package E renames Model_Runner.Errors;
    use type AUnit.Status;
 
    function Run_Suite is
@@ -206,6 +213,95 @@ begin
                end loop;
             end if;
          end;
+      end;
+
+   elsif Command = "tokenize" then
+      --  Encode a prompt with a model's own vocabulary and print the
+      --  identifiers, which is what makes a tokenizer comparable with
+      --  another implementation. The counterpart in llama.cpp prints the
+      --  same list, so the two can be set beside each other.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         Path   : constant String := Option ("--model", "");
+         Prompt : constant String := Option ("--prompt", "Hello");
+
+         Source : Model_Runner.Byte_Sources.Files.File_Source;
+         Item   : Model_Runner.GGUF.Containers.Container;
+         Words  : Model_Runner.Tokenizer.Vocabulary;
+         Status : E.Error_Info;
+         Tokens : Model_Runner.Tokenizer.Token_Array (1 .. 4096);
+         Used   : Natural;
+      begin
+         if Path = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, "tokenize: --model is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         else
+            Model_Runner.Byte_Sources.Files.Open (Source, Path, Status => Status);
+            if E.Is_Error (Status) then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error, "tokenize: cannot open " & Path);
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            else
+               Model_Runner.GGUF.Containers.Reader.Parse
+                 (Item, Source, Model_Runner.Limits.Default_Model_Limits,
+                  null, null, Status);
+
+               if E.Is_Error (Status) then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "tokenize: " & E.Diagnostic_Code (Status.Code));
+                  Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               else
+                  Model_Runner.Tokenizer.Load
+                    (Words, Item, Model_Runner.Limits.Default_Model_Limits,
+                     Status);
+
+                  if E.Is_Error (Status) then
+                     Ada.Text_IO.Put_Line
+                       (Ada.Text_IO.Standard_Error,
+                        "tokenize: " & E.Diagnostic_Code (Status.Code));
+                     Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+                  else
+                     Model_Runner.Tokenizer.Encode
+                       (Words, Prompt, False, False, Tokens, Used, Status);
+
+                     if E.Is_Error (Status) then
+                        Ada.Text_IO.Put_Line
+                          (Ada.Text_IO.Standard_Error,
+                           "tokenize: " & E.Diagnostic_Code (Status.Code));
+                        Ada.Command_Line.Set_Exit_Status
+                          (Ada.Command_Line.Failure);
+                     else
+                        Ada.Text_IO.Put ("[");
+                        for Index in 1 .. Used loop
+                           if Index > 1 then
+                              Ada.Text_IO.Put (", ");
+                           end if;
+                           Ada.Text_IO.Put
+                             (Model_Runner.Text.Image
+                                (Long_Long_Integer (Tokens (Index))));
+                        end loop;
+                        Ada.Text_IO.Put_Line ("]");
+                     end if;
+                  end if;
+
+                  Model_Runner.Tokenizer.Close (Words);
+                  Model_Runner.GGUF.Containers.Close (Item);
+               end if;
+
+               Model_Runner.Byte_Sources.Files.Close (Source);
+            end if;
+         end if;
       end;
 
    elsif Command = "external-model" then

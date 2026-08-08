@@ -20,7 +20,6 @@ package body Reserved_Codes is
             | E.IO_Seek_Failed
             | E.GGUF_Unsupported_Tensor_Type
             | E.GGUF_File_Changed
-            | E.Tokenizer_Invalid_Merges
             | E.Tokenizer_Missing_Byte_Fallback
             | E.Template_Unsupported_Role
             | E.Arch_Missing_Metadata

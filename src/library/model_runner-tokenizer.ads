@@ -39,7 +39,13 @@ package Model_Runner.Tokenizer is
    type Token_Array is array (Positive range <>) of Token_Id;
 
    --  Tokenizer models this crate can name.
-   type Model_Kind is (Kind_SentencePiece, Kind_Unsupported);
+   --  Which algorithm a vocabulary is tokenized with.
+   --
+   --  SentencePiece merges by score and marks a space with a visible
+   --  character; byte-pair encoding merges by rank from a table the file
+   --  carries, and represents every byte as a printable character first so
+   --  that no merge ever straddles a partial character.
+   type Model_Kind is (Kind_SentencePiece, Kind_BPE, Kind_Unsupported);
 
    --  Per-token classification carried by the model.
    type Token_Class is
@@ -284,6 +290,17 @@ private
         Hash            => Ada.Strings.Hash,
         Equivalent_Keys => "=");
 
+   --  Byte-pair merges, keyed by the two pieces with a space between them,
+   --  which is how the file writes them. The value is the rank: the lower it
+   --  is the earlier the merge is applied, and a pair that is absent is one
+   --  the vocabulary never merges.
+   package Merge_Maps is
+     new Ada.Containers.Indefinite_Hashed_Maps
+       (Key_Type        => String,
+        Element_Type    => Natural,
+        Hash            => Ada.Strings.Hash,
+        Equivalent_Keys => "=");
+
    type Text_Pool is access String;
 
    type Byte_Token_Array is array (0 .. 255) of Token_Id;
@@ -304,6 +321,7 @@ private
       Add_End       : Boolean := False;
       Byte_Tokens   : Byte_Token_Array := [others => No_Token];
       Byte_Fallback : Boolean := False;
+      Merges        : Merge_Maps.Map;
    end record;
 
    overriding procedure Finalize (Item : in out Vocabulary);

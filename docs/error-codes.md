@@ -98,7 +98,7 @@ ordinal is never reused, not because they might appear.
 | `MR-TOK-0005` | `error.tokenizer.vocabulary_too_large` | recovery_none | 3 | raised |
 | `MR-TOK-0006` | `error.tokenizer.invalid_token_text` | recovery_none | 3 | raised |
 | `MR-TOK-0007` | `error.tokenizer.invalid_token_id` | recovery_none | 3 | raised |
-| `MR-TOK-0008` | `error.tokenizer.invalid_merges` | recovery_none | 3 | reserved |
+| `MR-TOK-0008` | `error.tokenizer.invalid_merges` | recovery_none | 3 | raised |
 | `MR-TOK-0009` | `error.tokenizer.invalid_scores` | recovery_none | 3 | raised |
 | `MR-TOK-0010` | `error.tokenizer.invalid_token_type` | recovery_none | 3 | raised |
 | `MR-TOK-0011` | `error.tokenizer.input_too_long` | recovery_resource_limited | 3 | raised |

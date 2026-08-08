@@ -45,6 +45,23 @@ Keep a Changelog and the project uses semantic versioning.
   against a 2.2 GB model requantized to BF16, which agrees with the reference
   runtime on tokens, greedy output and text.
 
+- Byte-pair tokenization, for vocabularies declaring the `gpt2` model. The
+  merge table is read from the file and applied by rank, every byte is
+  rewritten as the printable character that stands for it, and the text is cut
+  into pieces first so that no merge joins one word to the next. Checked
+  against `llama.cpp` on its own tokenizer fixtures: gpt-2, qwen2, falcon and
+  starcoder agree exactly on twenty-one strings, llama-bpe agrees on the
+  tokens and differs only by the beginning-of-text marker it adds.
+
+  Only ASCII. Cutting text above ASCII wants the Unicode categories, to tell a
+  letter from a symbol, and a wrong cut produces tokens that decode back to
+  the same characters while meaning something else to the model. Such text is
+  refused rather than guessed at.
+
+- `tests tokenize --model PATH --prompt TEXT` prints the identifiers a
+  vocabulary produces, which is what makes this comparable with another
+  implementation.
+
 - Frequency and presence penalties, as `--frequency-penalty` and
   `--presence-penalty`. Both act on the same recent-token window as the
   repetition penalty and compose with it. Frequency is subtracted once for

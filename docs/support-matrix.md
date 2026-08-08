@@ -65,7 +65,7 @@ asymmetric key and value widths, and rotary scaling other than `none` and
 | Special tokens: beginning, end, unknown | Implemented |
 | `add_bos_token` / `add_eos_token` policy | Implemented |
 | UTF-8-boundary-safe incremental decoding | Implemented |
-| BPE merge tables | Not implemented |
+| BPE merge tables | Implemented for ASCII text; text above ASCII is refused rather than cut by a rule that cannot tell a letter from a symbol |
 
 ## Chat-template constructs
 
