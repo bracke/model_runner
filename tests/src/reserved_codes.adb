@@ -29,7 +29,6 @@ package body Reserved_Codes is
             | E.Tensor_Rank_Too_High
             | E.Tensor_Invalid_Stride
             | E.Tensor_Read_Only
-            | E.Backend_Unknown
             | E.Backend_Unsupported_Format
             | E.Backend_Unsupported_Operation
             | E.Backend_Capability_Missing

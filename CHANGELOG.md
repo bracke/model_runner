@@ -62,6 +62,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `--backend NAME` names the backend to evaluate the model on. There is one,
+  `cpu`, and the option exists anyway: a name this build does not have is
+  refused by name and exits as the usage error it is, where before the option
+  itself was unknown and a caller learned nothing about what was available.
+  The names come from the backend enumeration, in the help as well as in the
+  matching, so neither can list one that is not there.
+
+  `Backend_Unknown` was on the list of diagnostics this program declares and
+  never produces, with the reason "there is no --backend to be invalid".
+
 - The chat template a current Llama-3 file ships with now renders. It needed
   variable assignment, list slicing, comments, `is defined`, `none`, the
   `trim` and `length` filters, parenthesised conditions and `'x' in message`,

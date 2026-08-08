@@ -439,7 +439,13 @@ package body Model_Runner.Errors is
             return Exit_Resource;
 
          when Domain_Backend =>
-            return Exit_Internal;
+            --  A backend that refuses a format or an operation is a fault in
+            --  this program. A backend nobody has is a name the caller
+            --  typed, and exits as the usage error it is.
+            return
+              (if Item.Code = Backend_Unknown
+               then Exit_Usage
+               else Exit_Internal);
 
          when Domain_Lifecycle =>
             return

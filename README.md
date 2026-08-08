@@ -507,8 +507,12 @@ Prompt text given with `--prompt` may be visible to other local processes. Use
 
 Named in the specification, absent here:
 
-- **`--backend`.** There is one backend and no way to select another, so the
-  option is **not accepted** rather than accepted as a no-op.
+- **A second backend.** `--backend` names the backend to evaluate on and
+  refuses one this build does not have, but there is only `cpu` to name. The
+  option exists because a caller who asks for a backend and is not told there
+  is only one has been told the wrong thing; it does not exist because there
+  is a choice to make.
+
 - **Hand-written vector code or intrinsics.** The kernels are ordinary Ada and
   the compiler vectorizes them; nothing is written in assembly, in intrinsics,
   or in a foreign language. The release checklist holds this: a source in

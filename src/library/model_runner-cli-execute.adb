@@ -365,6 +365,28 @@ package body Model_Runner.CLI.Execute is
      (Screen : in out Pres.Console;
       Topic  : String)
    is
+      --  The backends this build has, in the order they are declared.
+      function Backend_Names return String is
+         Room : String (1 .. 256);
+         Used : Natural := 0;
+
+         procedure Add (Text : String) is
+         begin
+            if Used + Text'Length <= Room'Length then
+               Room (Used + 1 .. Used + Text'Length) := Text;
+               Used := Used + Text'Length;
+            end if;
+         end Add;
+      begin
+         for Kind in Model_Runner.Backend.Backend_Kind loop
+            if Used > 0 then
+               Add (", ");
+            end if;
+            Add (Model_Runner.Backend.Backend_Name (Kind));
+         end loop;
+         return Room (1 .. Used);
+      end Backend_Names;
+
       --  Emit a block of help lines, each an independent catalog entry so
       --  that a translation can reflow a line without breaking the layout.
       procedure Block (Keys : Loc.Argument_List) is
@@ -412,6 +434,12 @@ package body Model_Runner.CLI.Execute is
              Loc.Named ("help.run.no_stats", ""),
              Loc.Named ("help.run.locale", ""),
              Loc.Named ("help.run.color", "")]);
+         --  Named apart from the block above because it carries a value:
+         --  the backends this build has, read from the enumeration so that
+         --  the help cannot list one that is not there or miss one that is.
+         Screen.Put_Message
+           ("help.run.backend", [Loc.Named ("value", Backend_Names)]);
+
          Screen.Put_Line ("");
          Screen.Put_Message ("help.run.streams");
          Screen.Put_Message ("help.run.privacy");

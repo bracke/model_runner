@@ -398,7 +398,7 @@ package body Model_Runner.CLI.Options is
          Flag_Chat_Template,
          Flag_Seed, Flag_Memory, Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
-         Flag_Threads);
+         Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
       procedure Fail (Code : E.Error_Code; Name : String; Detail : String := "")
@@ -688,6 +688,39 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
+
+                  elsif Name = "--backend" then
+                     declare
+                        Chosen : Model_Runner.Text.Bounded;
+                        Found  : Boolean := False;
+                     begin
+                        Bounded_Value (Flag_Backend, Chosen, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        --  Matched against the backends this build has,
+                        --  rather than a list written here that would go
+                        --  stale the first time one was added.
+                        for Kind in Model_Runner.Backend.Backend_Kind loop
+                           if Model_Runner.Backend.Backend_Name (Kind)
+                             = Model_Runner.Text.To_String (Chosen)
+                           then
+                              Result.Backend := Kind;
+                              Found := True;
+                           end if;
+                        end loop;
+
+                        if not Found then
+                           Status := E.Make (E.Backend_Unknown);
+                           E.Add_Text
+                             (Status, "value",
+                              Model_Runner.Text.To_String (Chosen),
+                              E.Param_Identifier);
+                           Good := False;
+                           return;
+                        end if;
+                     end;
 
                   elsif Name = "--threads" then
                      Natural_Value (Flag_Threads, 0, 64, Result.Threads, Good);

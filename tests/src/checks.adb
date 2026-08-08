@@ -599,8 +599,12 @@ package body Checks is
       --  and names the state, a vocabulary that does not match its embedding
       --  reports the tensor shape, an out-of-range --threads reports the
       --  option. Unreachable: the condition cannot arise -- there is no
-      --  --backend to be invalid, no merge table in a SentencePiece
-      --  vocabulary, and Conversation.Role is an enumeration.
+      --  merge table in a SentencePiece vocabulary, and Conversation.Role is
+      --  an enumeration.
+      --
+      --  Backend_Unknown was on that second list, with the reason "there is
+      --  no --backend to be invalid". There is now, and a name this build
+      --  does not have raises it.
       declare
          Produced : array (E.Error_Code) of Boolean := [others => False];
 

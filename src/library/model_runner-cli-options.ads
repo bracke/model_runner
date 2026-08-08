@@ -1,5 +1,6 @@
 with Interfaces;
 
+with Model_Runner.Backend;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Errors;
 with Model_Runner.Sampling;
@@ -113,6 +114,12 @@ package Model_Runner.CLI.Options is
       --  Worker count for matrix-vector products. Zero means "choose from the
       --  processor count"; one means serial execution on the calling task.
       Threads      : Natural := 0;
+
+      --  Which backend evaluates the model. There is one, and naming it is
+      --  still worth doing: a name this build does not have is refused by
+      --  name rather than running somewhere the caller did not ask for.
+      Backend      : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
 
       Sampling : Model_Runner.Sampling.Configuration;
       Seed     : Interfaces.Unsigned_64 := 0;

@@ -151,7 +151,7 @@ the choice.
 | Clean shutdown, rejection while closing | Implemented |
 | Batched prefill | Implemented, `--batch-size`, capped at 128 tokens |
 | Noncontiguous views | Not implemented |
-| Backend selection | Not implemented; there is one backend |
+| Backend selection | `--backend NAME`, matched against the backends this build has and refused by name otherwise. There is one, `cpu` |
 
 ## Locales
 

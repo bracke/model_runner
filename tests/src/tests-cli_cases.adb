@@ -2,6 +2,7 @@ with AUnit.Assertions;
 
 with Interfaces;
 
+with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Byte_Sources.Memory;
@@ -198,6 +199,78 @@ package body Tests.CLI_Cases is
       Opt.Release (Item);
    end Run_Command_Parses;
 
+   --  Every backend this build has can be named on the command line.
+   --
+   --  The option matches against the backend enumeration rather than a list
+   --  written beside it, and so does this: a backend added to the enumeration
+   --  and not to the parser fails here without anyone remembering to come and
+   --  add a case.
+   procedure Every_Backend_Can_Be_Named
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Back renames Model_Runner.Backend;
+      use type Back.Backend_Kind;
+
+      Item   : Opt.Command;
+      Status : E.Error_Info;
+
+      --  A fresh command line each time; Fixed_Arguments only grows.
+      procedure Ask (Name : String; Outcome : out E.Error_Info) is
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, "m.gguf");
+         Add (Source, "--prompt");
+         Add (Source, "hi");
+         Add (Source, "--backend");
+         Add (Source, Name);
+         Opt.Parse (Source, Item, Outcome);
+      end Ask;
+   begin
+      for Kind in Back.Backend_Kind loop
+         declare
+            Name : constant String := Back.Backend_Name (Kind);
+         begin
+            Assert (Name /= "",
+                    "a backend has no name: " & Back.Backend_Kind'Image (Kind));
+
+            Ask (Name, Status);
+            Assert (E.Is_Ok (Status),
+                    "the backend named " & Name & " was refused: "
+                    & E.Error_Code'Image (Status.Code));
+            Assert (Item.Backend = Kind,
+                    "the backend named " & Name & " selected "
+                    & Back.Backend_Kind'Image (Item.Backend));
+            Opt.Release (Item);
+         end;
+      end loop;
+
+      --  And a name no backend has is refused, rather than falling through to
+      --  whichever one happens to be first.
+      for Which in 1 .. 4 loop
+         declare
+            Wrong : constant String :=
+              (case Which is
+                 when 1 => "gpu",
+                 when 2 => "CPU",
+                 when 3 => "cpu ",
+                 when others => "");
+         begin
+            Ask (Wrong, Status);
+            Assert (E.Is_Error (Status),
+                    "the backend named '" & Wrong & "' was accepted");
+            Opt.Release (Item);
+         end;
+      end loop;
+
+      --  It exits as the usage error it is. A backend refusing a format is a
+      --  fault in this program and exits as one; a name the caller typed is
+      --  not, and reported the same way it would have crashed.
+      Assert (E.Exit_Status (E.Make (E.Backend_Unknown)) = E.Exit_Usage,
+              "an unknown backend does not exit as a usage error");
+   end Every_Backend_Can_Be_Named;
+
    --  Malformed command lines are rejected with the code that names the
    --  problem.
    procedure Usage_Errors_Reported (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -236,12 +309,17 @@ package body Tests.CLI_Cases is
       Expect (E.CLI_Missing_Model_Path, "run");
       Expect (E.CLI_Unknown_Option, "run m.gguf --nope");
 
-      --  The README names --backend among what is absent, and says it is
-      --  refused rather than accepted and ignored. An option accepted as a
-      --  no-op is worse than an absent one: a caller who asks for a backend
-      --  and is not told there is only one has been told the wrong thing.
-      Expect (E.CLI_Unknown_Option, "run m.gguf --prompt hi --backend cpu");
-      Expect (E.CLI_Unknown_Option, "run m.gguf --prompt hi --backend=cpu");
+      --  A backend this build has is accepted; one it does not have is
+      --  refused by name. An option accepted as a no-op would be worse than
+      --  an absent one: a caller who asks for a backend and is not told
+      --  there is only one has been told the wrong thing.
+      Expect (E.No_Error, "run m.gguf --prompt hi --backend cpu");
+      Expect (E.No_Error, "run m.gguf --prompt hi --backend=cpu");
+      Expect (E.Backend_Unknown, "run m.gguf --prompt hi --backend gpu");
+      Expect (E.Backend_Unknown, "run m.gguf --prompt hi --backend CPU");
+      Expect (E.CLI_Missing_Option_Value, "run m.gguf --prompt hi --backend");
+      Expect (E.CLI_Repeated_Option,
+              "run m.gguf --prompt hi --backend cpu --backend cpu");
       Expect (E.CLI_Missing_Option_Value, "run m.gguf --prompt");
       Expect (E.CLI_Invalid_Option_Value, "run m.gguf --max-tokens abc");
       Expect (E.CLI_Option_Out_Of_Range, "run m.gguf --max-tokens 0");
@@ -3561,6 +3639,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Conversation_Survives_Interactive_Edits'Access,
          "the conversation keeps its shape under the edits interactive makes");
+      Register_Routine
+        (T, Every_Backend_Can_Be_Named'Access,
+         "every backend this build has can be named on the command line");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");
