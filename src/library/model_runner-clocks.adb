@@ -49,6 +49,10 @@ package body Model_Runner.Clocks is
         Ada.Real_Time.Clock - Origin;
       Elapsed_Time : constant Duration := Ada.Real_Time.To_Duration (Span);
    begin
+      --  Ada.Real_Time is monotonic, so a reading before the origin cannot
+      --  happen and this branch is here for the host that disagrees. At
+      --  exactly zero the arithmetic below yields zero as well; deleting the
+      --  branch changes no answer, which is why no test holds it.
       if Elapsed_Time <= 0.0 then
          return 0;
       else
