@@ -205,6 +205,38 @@ package body Checks is
          Scan_Production ("src/platform/unsupported");
       end;
 
+      --  Ordinary Ada, all the way down.
+      --
+      --  The README names hand-written vector code among what is absent: the
+      --  kernels are Ada and the compiler vectorizes them, and nothing here
+      --  is assembly, an intrinsic, or another language. That claim is what
+      --  makes the speed figures mean what they say, and it is the kind that
+      --  erodes -- one intrinsic in one hot loop, for a good reason, and the
+      --  sentence in the README is quietly false.
+      --
+      --  Binding to a host call is not writing in another language: the
+      --  platform bodies reach mmap and isatty through Interfaces.C and stay
+      --  ordinary Ada. What is refused is code in another language living
+      --  here, and instructions written by hand.
+      declare
+         procedure Visit_Ada_Only (Relative : String) is
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if Holds (Contents (Relative), "Machine_Code") then
+               Fail (Relative & " writes instructions by hand");
+            end if;
+         end Visit_Ada_Only;
+
+         procedure Scan_Ada_Only is new For_Each_Source (Visit_Ada_Only);
+      begin
+         Scan_Ada_Only ("src/library");
+         Scan_Ada_Only ("src/main");
+         Scan_Ada_Only ("src/platform/posix");
+         Scan_Ada_Only ("src/platform/windows");
+         Scan_Ada_Only ("src/platform/unsupported");
+      end;
+
       --  Local inference only, checked rather than intended.
       --
       --  This is the promise the program makes that a reader cannot verify by
@@ -626,6 +658,26 @@ package body Checks is
                         Fail
                           (Child & " is larger than this repository accepts");
                      end if;
+
+                     --  And nothing written in another language. Only
+                     --  implementation files: the build system generates a
+                     --  C header for its own configuration, which compiles
+                     --  nothing here.
+                     declare
+                        Name : constant String := T.To_Lower (Simple);
+
+                        function Ends_With (Suffix : String) return Boolean is
+                          (Name'Length > Suffix'Length
+                             and then Name (Name'Last - Suffix'Length + 1
+                                            .. Name'Last) = Suffix);
+                     begin
+                        if Ends_With (".c") or else Ends_With (".cc")
+                          or else Ends_With (".cpp") or else Ends_With (".cxx")
+                          or else Ends_With (".s") or else Ends_With (".asm")
+                        then
+                           Fail (Child & " is not Ada");
+                        end if;
+                     end;
                   end if;
                end;
             end loop;

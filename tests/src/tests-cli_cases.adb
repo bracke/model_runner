@@ -229,6 +229,13 @@ package body Tests.CLI_Cases is
       Expect (E.CLI_Unknown_Command, "frobnicate");
       Expect (E.CLI_Missing_Model_Path, "run");
       Expect (E.CLI_Unknown_Option, "run m.gguf --nope");
+
+      --  The README names --backend among what is absent, and says it is
+      --  refused rather than accepted and ignored. An option accepted as a
+      --  no-op is worse than an absent one: a caller who asks for a backend
+      --  and is not told there is only one has been told the wrong thing.
+      Expect (E.CLI_Unknown_Option, "run m.gguf --prompt hi --backend cpu");
+      Expect (E.CLI_Unknown_Option, "run m.gguf --prompt hi --backend=cpu");
       Expect (E.CLI_Missing_Option_Value, "run m.gguf --prompt");
       Expect (E.CLI_Invalid_Option_Value, "run m.gguf --max-tokens abc");
       Expect (E.CLI_Option_Out_Of_Range, "run m.gguf --max-tokens 0");

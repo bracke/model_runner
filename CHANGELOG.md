@@ -7,6 +7,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Release checks that no source in another language and no machine code enters
+  the repository, and a test that `--backend` is refused rather than ignored.
+
 - The fuzzing campaign reports how many mutated files prepared a model and ran
   a forward pass, and fails if none did.
 

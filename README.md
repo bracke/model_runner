@@ -481,7 +481,11 @@ Named in the specification, absent here:
   option is **not accepted** rather than accepted as a no-op.
 - **Hand-written vector code or intrinsics.** The kernels are ordinary Ada and
   the compiler vectorizes them; nothing is written in assembly, in intrinsics,
-  or in a foreign language. See below for what that does and does not buy.
+  or in a foreign language. The release checklist holds this: a source in
+  another language anywhere in the repository fails it, and so does any use of
+  machine code. Binding to a host call through `Interfaces.C` is not writing in
+  another language and is allowed, which is how `mmap` and `isatty` are
+  reached. See below for what that does and does not buy.
 - **Repacking.** Weights are consumed in the layout the file stores them in.
 
 ## Speed
