@@ -1,6 +1,7 @@
 with Ada.Exceptions;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
+with Ada.Wide_Wide_Characters.Handling;
 
 with Model_Runner.Numerics;
 with Model_Runner.UTF8;
@@ -237,6 +238,33 @@ package body Model_Runner.Tokenizer is
             Item.Model := Kind_SentencePiece;
          elsif Name = "gpt2" then
             Item.Model := Kind_BPE;
+
+            --  Which rule cuts the text before any merging happens. The
+            --  vocabularies differ here and the difference is not small:
+            --  under the original rule only a space may lead a word, while
+            --  the later ones let any single character that is neither
+            --  letter nor digit do it, so "tab<TAB>and" is three pieces
+            --  under one and two under the other, and the models are
+            --  trained on one answer each.
+            --
+            --  Only the rule this implements is accepted. The others are
+            --  refused by name rather than cut by the wrong rule, because a
+            --  wrong cut yields tokens that decode back to the same text
+            --  and mean something else to the model -- there is nothing
+            --  downstream that would notice.
+            declare
+               Cutting : constant String :=
+                 Containers.String_Value (Source, "tokenizer.ggml.pre");
+            begin
+               if Cutting /= "" and then Cutting /= "gpt-2"
+                 and then Cutting /= "falcon" and then Cutting /= "starcoder"
+               then
+                  Item.Model := Kind_Unsupported;
+                  Status := E.Make (E.Tokenizer_Unsupported_Model);
+                  E.Add_Text (Status, "model", Cutting, E.Param_Identifier);
+                  return;
+               end if;
+            end;
          else
             Item.Model := Kind_Unsupported;
             Status := E.Make (E.Tokenizer_Unsupported_Model);
@@ -632,37 +660,89 @@ package body Model_Runner.Tokenizer is
       --  cut faithfully rather than cutting it wrongly.
       function Cut_At (Text : String; From : Positive) return Natural;
 
-      --  Whether this can cut a text faithfully: ASCII only, because telling
-      --  a letter from a symbol above ASCII wants the Unicode categories and
-      --  this has none.
-      function Understood (Text : String) return Boolean
-      is (for all Letter of Text => Character'Pos (Letter) < 128);
 
    end BPE;
 
    package body BPE is
 
-      function Is_Letter (Item : Character) return Boolean
-      is (Item in 'a' .. 'z' | 'A' .. 'Z');
+      --  Classified by the standard library, which knows the Unicode
+      --  categories: a letter is anything in L, a digit anything in Nd. That
+      --  is what tells a CJK ideograph, which is a letter, from a CJK comma,
+      --  which is not, and neither can be told apart by looking at bytes.
+      package Handling renames Ada.Wide_Wide_Characters.Handling;
 
-      function Is_Digit (Item : Character) return Boolean
-      is (Item in '0' .. '9');
+      function Wide (Code_Point : Natural) return Wide_Wide_Character
+      is (Wide_Wide_Character'Val (Code_Point));
 
-      function Is_Space (Item : Character) return Boolean
-      is (Item in ' ' | Character'Val (9) | Character'Val (10)
-                | Character'Val (11) | Character'Val (12)
-                | Character'Val (13));
+      function Is_Letter (Code_Point : Natural) return Boolean
+      is (Handling.Is_Letter (Wide (Code_Point)));
+
+      function Is_Digit (Code_Point : Natural) return Boolean
+      is (Handling.Is_Digit (Wide (Code_Point)));
+
+      function Is_Space (Code_Point : Natural) return Boolean
+      is (Code_Point in 32 | 9 | 10 | 11 | 12 | 13
+          or else Handling.Is_Space (Wide (Code_Point))
+          or else Handling.Is_Line_Terminator (Wide (Code_Point)));
 
       function Cut_At (Text : String; From : Positive) return Natural is
-         Index : Natural := From;
+         --  The code point at a byte position, and how many bytes it took.
+         procedure Look
+           (At_Byte : Positive; Value : out Natural; Width : out Natural) is
+         begin
+            if At_Byte > Text'Last then
+               Value := 0;
+               Width := 0;
+            else
+               Model_Runner.UTF8.Decode_First
+                 (Text (At_Byte .. Text'Last), Value, Width);
+               if Width = 0 then
+                  Width := 1;
+               end if;
+            end if;
+         end Look;
 
-         --  The contractions, which are cut off whole and before anything
-         --  else looks at them.
+         Index : Natural := From;
+         Here, Wide_Here : Natural;
+         Next, Wide_Next : Natural;
+
+         --  The contractions, cut off whole and before anything else looks.
          type Contraction is access constant String;
          Ones : constant array (1 .. 7) of Contraction :=
            [new String'("'s"), new String'("'t"), new String'("'re"),
             new String'("'ve"), new String'("'m"), new String'("'ll"),
             new String'("'d")];
+
+         --  True while the code point after Index is of the kind wanted.
+         function Runs_On (Kind : Natural) return Boolean is
+            Value, Width : Natural;
+         begin
+            if Index >= Text'Last then
+               return False;
+            end if;
+            Look (Index + Wide_Here, Value, Width);
+            if Width = 0 then
+               return False;
+            end if;
+            case Kind is
+               when 1 => return Is_Letter (Value);
+               when 2 => return Is_Digit (Value);
+               when 3 => return Is_Space (Value);
+               when others =>
+                  return not Is_Letter (Value) and then not Is_Digit (Value)
+                    and then not Is_Space (Value);
+            end case;
+         end Runs_On;
+
+         --  Step over the code point at Index.
+         procedure Step is
+            Value, Width : Natural;
+         begin
+            Look (Index + Wide_Here, Value, Width);
+            Index := Index + Wide_Here;
+            Here := Value;
+            Wide_Here := Width;
+         end Step;
       begin
          if Index > Text'Last then
             return Text'Last;
@@ -676,47 +756,42 @@ package body Model_Runner.Tokenizer is
             end if;
          end loop;
 
+         Look (Index, Here, Wide_Here);
+         Look (Index + Wide_Here, Next, Wide_Next);
+
          --  One leading space belongs to the run that follows it, unless
          --  what follows is more space, in which case the run is the space.
-         if Text (Index) = ' '
-           and then Index < Text'Last
-           and then not Is_Space (Text (Index + 1))
-         then
-            Index := Index + 1;
+         if Here = 32 and then Wide_Next > 0 and then not Is_Space (Next) then
+            Step;
          end if;
 
-         if Is_Letter (Text (Index)) then
-            while Index < Text'Last and then Is_Letter (Text (Index + 1)) loop
-               Index := Index + 1;
+         if Is_Letter (Here) then
+            while Runs_On (1) loop
+               Step;
             end loop;
 
-         elsif Is_Digit (Text (Index)) then
-            while Index < Text'Last and then Is_Digit (Text (Index + 1)) loop
-               Index := Index + 1;
+         elsif Is_Digit (Here) then
+            while Runs_On (2) loop
+               Step;
             end loop;
 
-         elsif Is_Space (Text (Index)) then
-            --  A run of spaces keeps its last one for the word that follows,
-            --  which is what makes " a" a single piece rather than " " and
-            --  "a".
-            while Index < Text'Last and then Is_Space (Text (Index + 1)) loop
-               Index := Index + 1;
+         elsif Is_Space (Here) then
+            --  A run of spaces keeps its last one for the word that follows.
+            while Runs_On (3) loop
+               Step;
             end loop;
             if Index < Text'Last and then Index > From then
                Index := Index - 1;
+               return Index + Wide_Here - 1 - (Wide_Here - 1);
             end if;
 
          else
-            while Index < Text'Last
-              and then not Is_Letter (Text (Index + 1))
-              and then not Is_Digit (Text (Index + 1))
-              and then not Is_Space (Text (Index + 1))
-            loop
-               Index := Index + 1;
+            while Runs_On (4) loop
+               Step;
             end loop;
          end if;
 
-         return Index;
+         return Index + Wide_Here - 1;
       end Cut_At;
 
    end BPE;
@@ -872,16 +947,6 @@ package body Model_Runner.Tokenizer is
       --  Byte-pair vocabularies take a different road entirely: the text is
       --  cut first, and each piece merged on its own.
       if Item.Model = Kind_BPE then
-         if not BPE.Understood (Text) then
-            --  Refused rather than guessed. Cutting text above ASCII needs
-            --  the Unicode categories to tell a letter from a symbol, and
-            --  cutting it wrongly produces tokens that are not wrong in any
-            --  way a caller could see -- they decode back to the same
-            --  characters and mean something else to the model.
-            Status := E.Make (E.Tokenizer_Invalid_UTF8);
-            return;
-         end if;
-
          declare
             Produced : Natural := 0;
             From     : Positive := Text'First;

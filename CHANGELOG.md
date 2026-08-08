@@ -53,10 +53,17 @@ Keep a Changelog and the project uses semantic versioning.
   starcoder agree exactly on twenty-one strings, llama-bpe agrees on the
   tokens and differs only by the beginning-of-text marker it adds.
 
-  Only ASCII. Cutting text above ASCII wants the Unicode categories, to tell a
-  letter from a symbol, and a wrong cut produces tokens that decode back to
-  the same characters while meaning something else to the model. Such text is
-  refused rather than guessed at.
+  Any script, not only ASCII: a letter is told from a symbol by its Unicode
+  category, which the standard library knows, so a CJK ideograph cuts as a
+  letter and a CJK comma does not. Twenty-seven strings across Latin,
+  Cyrillic, Greek, CJK, emoji and punctuation agree with the reference.
+
+  What is refused is a vocabulary naming a cutting rule this does not
+  implement. The later rules let any single character that is neither letter
+  nor digit lead a word, where the original lets only a space, so a tab
+  between two words is three pieces under one rule and two under the other.
+  `gpt-2`, `falcon` and `starcoder` are accepted and verified; `llama3` and
+  `qwen2` are refused by name rather than cut by the wrong rule.
 
 - `tests tokenize --model PATH --prompt TEXT` prints the identifiers a
   vocabulary produces, which is what makes this comparable with another
