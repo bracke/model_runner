@@ -37,6 +37,13 @@ package Model_Runner.Backend.CPU is
 
    subtype Worker_Count is Positive range 1 .. Max_Workers;
 
+   --  How many pieces a job is cut into.
+   --
+   --  One more than the worker count, because the task that submits a job
+   --  takes a piece of it rather than waiting for the workers to finish. It
+   --  has a core either way, and using it to wait was costing one.
+   subtype Share_Count is Positive range 1 .. Max_Workers + 1;
+
    --  Capabilities of the CPU backend at a given worker count.
    --
    --  @param Workers Number of workers the pool was opened with.
@@ -149,21 +156,21 @@ package Model_Runner.Backend.CPU is
       Target  : Model_Runner.Tensors.Real_Array_Access;
       Status  : out Model_Runner.Errors.Error_Info);
 
-   --  Row range a worker owns.
+   --  Row range one share of a job covers.
    --
    --  Exposed so that the tests can assert the partition is a disjoint cover
-   --  of the rows for every worker count.
+   --  of the rows for every share count.
    --
    --  @param Rows Total number of rows.
-   --  @param Workers Worker count.
-   --  @param Index Worker position in 1 .. Workers.
+   --  @param Workers Number of shares the rows are cut into.
+   --  @param Index Share position in 1 .. Workers.
    --  @param First First row, zero based.
    --  @param Last Last row, zero based; Last < First when the worker has no
    --    rows, which happens when there are fewer rows than workers.
    procedure Partition
      (Rows    : Element_Count;
-      Workers : Worker_Count;
-      Index   : Worker_Count;
+      Workers : Share_Count;
+      Index   : Share_Count;
       First   : out Element_Count;
       Last    : out Element_Count);
 
@@ -178,7 +185,7 @@ private
       Vector : Model_Runner.Tensors.Real_Array_Access := null;
       Target : Model_Runner.Tensors.Real_Array_Access := null;
       Rows   : Element_Count := 0;
-      Team   : Worker_Count := 1;
+      Team   : Share_Count := 1;
    end record;
 
    type Generation_Array is array (Worker_Count) of Natural;

@@ -1021,8 +1021,21 @@ package body Model_Runner.CLI.Execute is
          if Item.Threads > 0 then
             return Natural'Min (Item.Threads, Workers_CPU.Max_Workers);
          else
-            return Natural'Min
-              (Model_Runner.Platform.Core_Count, Workers_CPU.Max_Workers);
+            --  One fewer than the cores, because the task that submits a
+            --  matrix product now takes a share of it instead of waiting.
+            --  Workers plus that task is what has to fit, and it is one more
+            --  than the worker count.
+            --
+            --  Two cores are left alone: one worker there would take the
+            --  serial path below and give up half the machine, and the case
+            --  could not be measured here to justify treating it specially.
+            declare
+               Cores : constant Positive := Model_Runner.Platform.Core_Count;
+               Team  : constant Positive :=
+                 (if Cores <= 2 then Cores else Cores - 1);
+            begin
+               return Natural'Min (Team, Workers_CPU.Max_Workers);
+            end;
          end if;
       end Chosen_Workers;
 

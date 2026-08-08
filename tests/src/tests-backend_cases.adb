@@ -52,12 +52,15 @@ package body Tests.Backend_Cases is
       pragma Unreferenced (T2);
    begin
       for Total in N.Element_Count range 0 .. 40 loop
-         for Team in CPU.Worker_Count range 1 .. 9 loop
+         --  Share counts, not worker counts: a job is cut into one more
+         --  piece than there are workers, because the submitting task takes
+         --  one. The top of that range is one past the top of this one.
+         for Team in CPU.Share_Count range 1 .. 9 loop
             declare
                Seen : array (N.Element_Count range 0 .. 40) of Natural :=
                  [others => 0];
             begin
-               for Index in CPU.Worker_Count range 1 .. Team loop
+               for Index in CPU.Share_Count range 1 .. Team loop
                   declare
                      First, Last : N.Element_Count;
                   begin
@@ -76,12 +79,39 @@ package body Tests.Backend_Cases is
                   Assert (Seen (Row) = 1,
                           "row" & N.Element_Count'Image (Row)
                           & " was covered" & Natural'Image (Seen (Row))
-                          & " times with" & CPU.Worker_Count'Image (Team)
+                          & " times with" & CPU.Share_Count'Image (Team)
                           & " workers");
                end loop;
             end;
          end loop;
       end loop;
+
+      --  The largest share count there is, which is one past the largest
+      --  worker count and is reached whenever a pool is opened with the
+      --  maximum number of workers. Nothing else in this file goes near it.
+      declare
+         Total : constant N.Element_Count := 200;
+         Seen  : array (0 .. 199) of Natural := [others => 0];
+         First, Last : N.Element_Count;
+      begin
+         for Index in CPU.Share_Count'Range loop
+            CPU.Partition (Total, CPU.Share_Count'Last, Index, First, Last);
+            if First <= Last then
+               for Row in First .. Last loop
+                  Seen (Natural (Row)) := Seen (Natural (Row)) + 1;
+               end loop;
+            end if;
+         end loop;
+
+         for Row in Seen'Range loop
+            Assert (Seen (Row) = 1,
+                    "row" & Natural'Image (Row) & " covered"
+                    & Natural'Image (Seen (Row)) & " times with"
+                    & CPU.Share_Count'Image (CPU.Share_Count'Last)
+                    & " shares");
+         end loop;
+      end;
+
    end Partition_Covers_Rows;
 
    --  A parallel product equals the serial one exactly, for every worker

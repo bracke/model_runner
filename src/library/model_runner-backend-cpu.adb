@@ -42,8 +42,8 @@ package body Model_Runner.Backend.CPU is
 
    procedure Partition
      (Rows    : Element_Count;
-      Workers : Worker_Count;
-      Index   : Worker_Count;
+      Workers : Share_Count;
+      Index   : Share_Count;
       First   : out Element_Count;
       Last    : out Element_Count)
    is
@@ -251,9 +251,10 @@ package body Model_Runner.Backend.CPU is
       Target : T.Real_Array_Access;
       Status : out E.Error_Info)
    is
-      Work     : Job;
-      Accepted : Boolean;
-      Failed   : Boolean;
+      Work        : Job;
+      Accepted    : Boolean;
+      Failed      : Boolean;
+      Mine_Failed : Boolean := False;
    begin
       Status := E.Success;
 
@@ -272,19 +273,47 @@ package body Model_Runner.Backend.CPU is
          Vector => Vector,
          Target => Target,
          Rows   => Weight.Rows,
-         Team   => Item.Workers);
+         Team   => Item.Workers + 1);
 
+      --  Exactly one job is outstanding at a time, so the queue is bounded by
+      --  construction and there is nothing for a hostile input to grow.
       Item.Control.Post (Work, Accepted);
       if not Accepted then
          Status := E.Make (E.Backend_Closed);
          return;
       end if;
 
-      --  Exactly one job is outstanding at a time, so the queue is bounded by
-      --  construction and there is nothing for a hostile input to grow.
+      --  The submitting task takes the last share rather than waiting for
+      --  the workers to finish it. Waiting is what it used to do, and it
+      --  cost a core: with one worker per core, the waiting task and the
+      --  workers together are one more runnable task than there are cores,
+      --  so the operating system takes a core away from a worker and the
+      --  whole job waits for it. Pinned to one processor per core, eight
+      --  workers measured 3.7x where seven measured 5.0x, which is that
+      --  effect with nowhere to hide.
+      declare
+         First, Last : Element_Count;
+      begin
+         Partition (Work.Rows, Work.Team, Work.Team, First, Last);
+         if First <= Last
+           and then Work.Vector /= null
+           and then Work.Target /= null
+         then
+            T.Mat_Mul_Range
+              (Work.Weight, Work.Vector.all, Work.Count,
+               Work.Target.all, First, Last);
+         end if;
+      exception
+         --  Reported the way a worker's failure is, after the workers are
+         --  collected: leaving before they finish would free the vector and
+         --  the target under them.
+         when others =>
+            Mine_Failed := True;
+      end;
+
       Item.Control.Await (Failed);
 
-      if Failed then
+      if Failed or else Mine_Failed then
          Status := E.Make (E.Backend_Worker_Failed);
          E.Add_Integer (Status, "workers", Long_Long_Integer (Item.Workers));
       end if;
@@ -325,9 +354,10 @@ package body Model_Runner.Backend.CPU is
       Target  : T.Real_Array_Access;
       Status  : out E.Error_Info)
    is
-      Work     : Job;
-      Accepted : Boolean;
-      Failed   : Boolean;
+      Work        : Job;
+      Accepted    : Boolean;
+      Failed      : Boolean;
+      Mine_Failed : Boolean := False;
    begin
       Status := E.Success;
 
@@ -344,7 +374,7 @@ package body Model_Runner.Backend.CPU is
          Vector => Vectors,
          Target => Target,
          Rows   => Weight.Rows,
-         Team   => Item.Workers);
+         Team   => Item.Workers + 1);
 
       Item.Control.Post (Work, Accepted);
       if not Accepted then
@@ -352,9 +382,37 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
+      --  The submitting task takes the last share rather than waiting for
+      --  the workers to finish it. Waiting is what it used to do, and it
+      --  cost a core: with one worker per core, the waiting task and the
+      --  workers together are one more runnable task than there are cores,
+      --  so the operating system takes a core away from a worker and the
+      --  whole job waits for it. Pinned to one processor per core, eight
+      --  workers measured 3.7x where seven measured 5.0x, which is that
+      --  effect with nowhere to hide.
+      declare
+         First, Last : Element_Count;
+      begin
+         Partition (Work.Rows, Work.Team, Work.Team, First, Last);
+         if First <= Last
+           and then Work.Vector /= null
+           and then Work.Target /= null
+         then
+            T.Mat_Mul_Range
+              (Work.Weight, Work.Vector.all, Work.Count,
+               Work.Target.all, First, Last);
+         end if;
+      exception
+         --  Reported the way a worker's failure is, after the workers are
+         --  collected: leaving before they finish would free the vector and
+         --  the target under them.
+         when others =>
+            Mine_Failed := True;
+      end;
+
       Item.Control.Await (Failed);
 
-      if Failed then
+      if Failed or else Mine_Failed then
          Status := E.Make (E.Backend_Worker_Failed);
       end if;
    end Mat_Mul;

@@ -511,12 +511,29 @@ Fourteen threads is more than this work can use, and this machine has eight
 cores reported as sixteen processors. Eight workers take 2.20 s for 14.9 s of
 processor time and fourteen take 2.22 s for 26.7 s: the second worker on a
 core shares the first one's execution units, so it buys no wall and costs its
-own processor time. Scaling stops at about 4.6x on eight either way, which is
-the chip, not the pool -- there are only 2015 matrix products in this run, so
-handing each of them out costs milliseconds in total.
+own processor time. Scaling stops at about 4.6x on eight either way, and most
+of that is the chip rather than the pool: there are only 2015 matrix products
+in this run, so handing each of them out costs milliseconds in total. Not all
+of it, though -- see below for the core that was going to waste.
 
-The default therefore follows the core count rather than the processor count,
-where the host will say what that is. Linux publishes it and macOS answers
+One of those cores was being wasted, and finding out why took pinning the
+process to one processor per core so it had nowhere to hide. Pinned, seven
+workers reached 5.0x and eight fell to 3.7x -- adding a worker made it slower.
+The task that submits a matrix product used to wait for the workers to finish
+it, so with one worker per core there was always one more runnable task than
+there were cores, the operating system took a core from a worker, and the
+whole job waited for that worker because a job is not done until its slowest
+share is. It now takes the last share itself instead of waiting. Pinned, eight
+shares went from 9326 Me/s to 14132.
+
+Unpinned the gain is small, six per cent, because the spare task could take a
+processor on a core that already had one and that is cheap. Pinned is what a
+container with a processor budget looks like, so it is the case worth being
+right about.
+
+The default therefore asks for one worker fewer than the machine has cores --
+the submitting task is the last one -- and follows the core count rather than
+the processor count, where the host will say what that is. Linux publishes it and macOS answers
 sysctl; Windows would answer too, but through a walk over variable-length
 records that has not been written because it cannot be run here, so a Windows
 host still defaults to the processor count as every host did before. There is
