@@ -261,17 +261,33 @@ package body Model_Runner.GGUF.Containers.Reader is
             First : constant B.Byte_Count :=
               Item.Pool.all'First + Item.Pool_Used;
          begin
-            --  Straight into the pool, which Reserve has already grown to
-            --  hold it. Nothing is created for the run on the way, so its
-            --  length -- chosen by the file -- sizes no object at all, and
-            --  the bytes are copied once rather than twice.
-            Source.Read
-              (Cursor.Cursor, Item.Pool.all (First .. First + Length - 1),
-               Status);
+            if Length <= Copy_Chunk then
+               --  Into a buffer here, then placed. The buffer is sized by
+               --  the run but only on this side of the bound, so what sizes
+               --  it is the bound and not the file.
+               declare
+                  Buffer : B.Byte_Array (1 .. Length);
+               begin
+                  Source.Read (Cursor.Cursor, Buffer, Status);
 
-            if E.Is_Error (Status) then
-               Result := (0, 0);
-               return;
+                  if E.Is_Error (Status) then
+                     Result := (0, 0);
+                     return;
+                  end if;
+
+                  Item.Pool.all (First .. First + Length - 1) := Buffer;
+               end;
+            else
+               --  Past the bound, straight into the pool: nothing may be
+               --  sized by a length the file chose.
+               Source.Read
+                 (Cursor.Cursor, Item.Pool.all (First .. First + Length - 1),
+                  Status);
+
+               if E.Is_Error (Status) then
+                  Result := (0, 0);
+                  return;
+               end if;
             end if;
          end;
 

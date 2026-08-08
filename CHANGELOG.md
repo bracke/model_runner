@@ -328,6 +328,10 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- Most of the metadata parsing slowdown introduced with the truncation fix is
+  gone: a run within the copy bound is read into a buffer and placed, rather
+  than written through a slice of the pool.
+
 - Message text from the catalog is escaped before it is returned. Values
   substituted into a message were escaped because they come from a model file;
   the message itself was not, so a replaced catalog could send an escape
