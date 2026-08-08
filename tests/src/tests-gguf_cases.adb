@@ -30,6 +30,7 @@ package body Tests.GGUF_Cases is
    use type Model_Runner.GGUF.Tensor_Type;
    use type Model_Runner.GGUF.Value_Type;
    use type Interfaces.Integer_32;
+   use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Model_Runner.Bytes.Byte_Array;
    use type Model_Runner.Numerics.Real;
@@ -3545,6 +3546,129 @@ package body Tests.GGUF_Cases is
    -- Register_Tests --
    --------------------
 
+   ------------------------------------
+   -- Every_Half_Widens_To_Its_Value --
+   ------------------------------------
+
+   --  Half precision widening, against the definition rather than against
+   --  itself.
+   --
+   --  There are only 65536 of these, so there is no reason to sample. The
+   --  reference below reads the three fields and computes the value the way
+   --  the format is defined -- a power of two times one plus a fraction, or
+   --  for the smallest exponent a multiple of the smallest step -- in
+   --  binary64, which holds every binary16 value exactly. So does binary32,
+   --  which is why the comparison is exact equality and not a tolerance:
+   --  widening loses nothing, and any difference at all is a defect.
+
+   procedure Every_Half_Widens_To_Its_Value
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      --  Two thousand of these patterns are not-a-number and two are
+      --  infinite. Reading such a value is what the sweep is for, and the
+      --  compiler's validity checking would otherwise stop it at the first
+      --  one.
+      pragma Suppress (Validity_Check);
+
+      function Two_Power (Exponent : Integer) return N.Wide_Real is
+         Result : N.Wide_Real := 1.0;
+      begin
+         for Step in 1 .. abs Exponent loop
+            if Exponent > 0 then
+               Result := Result * 2.0;
+            else
+               Result := Result / 2.0;
+            end if;
+         end loop;
+         return Result;
+      end Two_Power;
+
+      Wrong       : Natural := 0;
+      First_Wrong : Interfaces.Unsigned_16 := 0;
+      Infinities  : Natural := 0;
+      Not_Numbers : Natural := 0;
+      Finites     : Natural := 0;
+   begin
+      for Pattern in Interfaces.Unsigned_16 loop
+         declare
+            Negative : constant Boolean := (Pattern and 16#8000#) /= 0;
+            Field    : constant Natural :=
+              Natural (Interfaces.Shift_Right (Pattern and 16#7C00#, 10));
+            Fraction : constant Natural := Natural (Pattern and 16#03FF#);
+            Actual   : constant N.Real := N.To_Real (N.Half (Pattern));
+            Wide     : constant N.Wide_Real := N.Wide_Real (Actual);
+            Expected : N.Wide_Real;
+            Agrees   : Boolean;
+         begin
+            if Field = 16#1F# then
+               --  No finite value to compare against: what matters is that
+               --  the widest exponent stays widest, with its sign, and that
+               --  a payload stays a payload.
+               if Fraction = 0 then
+                  Infinities := Infinities + 1;
+                  Agrees :=
+                    (if Negative
+                     then Actual < N.Real'First
+                     else Actual > N.Real'Last);
+               else
+                  Not_Numbers := Not_Numbers + 1;
+                  Agrees := not (Actual = Actual);
+               end if;
+            else
+               Finites := Finites + 1;
+
+               if Field = 0 then
+                  --  Subnormal, including zero: a whole number of the
+                  --  smallest steps, each two to the minus twenty-fourth.
+                  Expected := N.Wide_Real (Fraction) * Two_Power (-24);
+               else
+                  Expected :=
+                    (1.0 + N.Wide_Real (Fraction) / 1024.0)
+                    * Two_Power (Field - 15);
+               end if;
+
+               if Negative then
+                  Expected := -Expected;
+               end if;
+
+               Agrees := Wide = Expected;
+            end if;
+
+            if not Agrees then
+               if Wrong = 0 then
+                  First_Wrong := Pattern;
+               end if;
+               Wrong := Wrong + 1;
+            end if;
+         end;
+      end loop;
+
+      Assert (Wrong = 0,
+              "half precision widening disagrees with the definition for"
+              & Natural'Image (Wrong) & " of 65536 patterns, first at"
+              & Interfaces.Unsigned_16'Image (First_Wrong));
+
+      --  The sweep is only worth its runtime if it actually reached all
+      --  three kinds; a reference that quietly agreed everywhere because it
+      --  never left one branch would prove nothing.
+      Assert (Finites = 63488 and then Infinities = 2
+              and then Not_Numbers = 2046,
+              "the sweep did not cover the three kinds:"
+              & Natural'Image (Finites) & " finite,"
+              & Natural'Image (Infinities) & " infinite,"
+              & Natural'Image (Not_Numbers) & " not-a-number");
+
+      --  Equality does not separate the two zeros, so ask for the sign
+      --  directly. A widening that dropped it would pass everything above.
+      Assert (N.Wide_Bits (N.Wide_Real (N.To_Real (N.Half (16#0000#)))) = 0,
+              "positive zero did not widen to positive zero");
+      Assert (N.Wide_Bits (N.Wide_Real (N.To_Real (N.Half (16#8000#))))
+              = 16#8000_0000_0000_0000#,
+              "negative zero did not widen to negative zero");
+   end Every_Half_Widens_To_Its_Value;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3662,6 +3786,10 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Batch_Width_Does_Not_Change_Result'Access,
          "the number of vectors in a call does not change any of them");
-   end Register_Tests;
+
+      Register_Routine
+        (T, Every_Half_Widens_To_Its_Value'Access,
+         "every one of the 65536 half precision patterns widens to the "
+         & "value the format defines");   end Register_Tests;
 
 end Tests.GGUF_Cases;
