@@ -530,7 +530,7 @@ package body Model_Runner.Quantization is
 
    function Is_Decodable (Format : G.Tensor_Type) return Boolean
    is (Format in G.Type_F32 | G.Type_F16 | G.Type_BF16 | G.Type_Q4_0
-                | G.Type_Q8_0 | G.Type_Q2_K
+                | G.Type_Q8_0 | G.Type_Q2_K | G.Type_Q3_K
                 | G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K);
 
    -------------------
@@ -631,6 +631,101 @@ package body Model_Runner.Quantization is
                                               Shift)
                                            and 3))
                                 - Lowest;
+                           end loop;
+                        end;
+                     end loop;
+                  end loop;
+               end loop;
+               Ok := True;
+            end;
+
+         when G.Type_Q3_K =>
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               --  Three bits an element, in two pieces. The low two are
+               --  packed four to a byte as in the two-bit format; the third
+               --  lives in a mask of thirty-two bytes shared by the whole
+               --  block, one bit per element position per sub-block group,
+               --  and it is the bit's absence that lowers the value: set
+               --  leaves the two low bits alone, clear takes four away, which
+               --  is what makes the range minus four to three rather than
+               --  zero to seven.
+               High    : constant B.Byte_Count := Offset;
+               Quants  : constant B.Byte_Count := Offset + 32;
+               Scales  : constant B.Byte_Count := Offset + 96;
+               D       : constant Real := Scale (Data, Offset + 108);
+
+               --  The sixteen sub-block scales are six bits each, packed
+               --  across twelve bytes: four low bits in one of the first
+               --  eight bytes, two high bits in one of the last four. Which
+               --  of the four groups a sub-block falls in decides both where
+               --  its nibble comes from and how far its two bits are shifted.
+               function Sub_Scale (Which : Natural) return Integer is
+                  Group : constant Natural := Which / 4;
+                  Place : constant B.Byte_Count := B.Byte_Count (Which mod 4);
+
+                  Low_Byte : constant Interfaces.Unsigned_8 :=
+                    Data (Data'First + Scales
+                          + (if Group mod 2 = 0 then Place else Place + 4));
+                  Low : constant Interfaces.Unsigned_8 :=
+                    (if Group < 2
+                     then Low_Byte and 16#0F#
+                     else Interfaces.Shift_Right (Low_Byte, 4));
+
+                  Top : constant Interfaces.Unsigned_8 :=
+                    Interfaces.Shift_Right
+                      (Data (Data'First + Scales + Place + 8),
+                       2 * Group)
+                    and 3;
+               begin
+                  return Integer (Low) + 16 * Integer (Top) - 32;
+               end Sub_Scale;
+            begin
+               for Half in 0 .. 1 loop
+                  for Group in 0 .. 3 loop
+                     for Upper in 0 .. 1 loop
+                        declare
+                           Which : constant Natural :=
+                             Half * 8 + Group * 2 + Upper;
+                           Factor : constant Real :=
+                             D * Real (Sub_Scale (Which));
+
+                           From : constant B.Byte_Count :=
+                             Quants + B.Byte_Count (Half * 32 + Upper * 16);
+                           Mask_At : constant B.Byte_Count :=
+                             High + B.Byte_Count (Upper * 16);
+                           Into : constant Element_Count :=
+                             Element_Count (Half * 128 + Group * 32
+                                            + Upper * 16);
+                           Shift : constant Natural := 2 * Group;
+
+                           --  One bit of the mask serves one sub-block
+                           --  group, and the bit advances across the whole
+                           --  block rather than restarting at its middle.
+                           Bit : constant Interfaces.Unsigned_8 :=
+                             Interfaces.Shift_Left (1, Half * 4 + Group);
+                        begin
+                           for L in 0 .. 15 loop
+                              declare
+                                 Low : constant Integer :=
+                                   Integer
+                                     (Interfaces.Shift_Right
+                                        (Data (Data'First + From
+                                               + B.Byte_Count (L)),
+                                         Shift)
+                                      and 3);
+                                 Lifted : constant Boolean :=
+                                   (Data (Data'First + Mask_At
+                                          + B.Byte_Count (L)) and Bit) /= 0;
+                              begin
+                                 Target
+                                   (Target'First + Into + Element_Count (L)) :=
+                                   Factor
+                                   * Real (if Lifted then Low else Low - 4);
+                              end;
                            end loop;
                         end;
                      end loop;

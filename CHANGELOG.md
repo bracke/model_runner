@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Q3_K tensors are decoded rather than refused, at 0.48 nanoseconds an
+  element. Three bits in two pieces: the low two packed four to a byte, the
+  third in a mask shared by the whole block whose absence subtracts four, and
+  sixteen six-bit sub-block scales packed across twelve bytes. With this and
+  Q2_K, a model quantized to Q2_K by the usual mixed recipe -- F32, Q2_K,
+  Q3_K, Q4_K and Q6_K together -- loads and generates, and its greedy output
+  matches the reference runtime exactly.
+
 - Q2_K tensors are decoded rather than refused. Two bits an element, sixteen
   sub-blocks of sixteen, each with a four-bit scale and a four-bit minimum
   sharing one byte, and the two half-precision factors at the end rather than

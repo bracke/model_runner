@@ -103,6 +103,11 @@ package body Benchmarks is
                Data (Data'First + Block * Width + 209) := 16#30#;
             end loop;
 
+         when G.Type_Q3_K =>
+            for Block in 0 .. Blocks - 1 loop
+               Data (Data'First + Block * Width + 109) := 16#30#;
+            end loop;
+
          when G.Type_Q2_K =>
             for Block in 0 .. Blocks - 1 loop
                Data (Data'First + Block * Width + 81) := 16#30#;
@@ -650,6 +655,7 @@ package body Benchmarks is
       Measure ("q8_0 Row_Dot", G.Type_Q8_0, True);
       Measure ("q4_0 Row_Dot", G.Type_Q4_0, True);
       Measure ("q2_k Row_Dot", G.Type_Q2_K, True);
+      Measure ("q3_k Row_Dot", G.Type_Q3_K, True);
       Measure ("q4_k Row_Dot", G.Type_Q4_K, True);
       Measure ("q5_k Row_Dot", G.Type_Q5_K, True);
       Measure ("q6_k Row_Dot", G.Type_Q6_K, True);

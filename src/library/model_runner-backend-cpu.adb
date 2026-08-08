@@ -21,6 +21,7 @@ package body Model_Runner.Backend.CPU is
          Model_Runner.GGUF.Type_Q4_0 => True,
          Model_Runner.GGUF.Type_Q8_0 => True,
          Model_Runner.GGUF.Type_Q2_K => True,
+         Model_Runner.GGUF.Type_Q3_K => True,
          Model_Runner.GGUF.Type_Q4_K => True,
          Model_Runner.GGUF.Type_Q5_K => True,
          Model_Runner.GGUF.Type_Q6_K => True,

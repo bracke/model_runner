@@ -891,6 +891,9 @@ package body Tests.GGUF_Cases is
                Tame_Half (Block, 2);
             when Model_Runner.GGUF.Type_Q6_K =>
                Tame_Half (Block, 208);
+            when Model_Runner.GGUF.Type_Q3_K =>
+               --  One factor only, at the very end of the block.
+               Tame_Half (Block, 108);
             when Model_Runner.GGUF.Type_Q2_K =>
                --  Both factors sit at the end of this one, after the scales
                --  and the quants rather than before them.
@@ -933,9 +936,10 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 9) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 10) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
          Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
+         Model_Runner.GGUF.Type_Q3_K,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];
@@ -1006,7 +1010,7 @@ package body Tests.GGUF_Cases is
                Unsupported : Q.Block_Buffer := [others => 1.0];
             begin
                Q.Decode_Block
-                 (Model_Runner.GGUF.Type_Q3_K, Data, 0, Unsupported, Ok);
+                 (Model_Runner.GGUF.Type_Q8_K, Data, 0, Unsupported, Ok);
                Assert (not Ok, "an undecodable format was decoded");
                Assert ((for all Value of Unsupported => Value = 0.0),
                        "an undecodable format left the target as it was");
@@ -1105,9 +1109,10 @@ package body Tests.GGUF_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      Formats : constant array (1 .. 9) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 10) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
          Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
+         Model_Runner.GGUF.Type_Q3_K,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];
@@ -1199,7 +1204,7 @@ package body Tests.GGUF_Cases is
          end;
       end loop;
 
-      Assert (Checked_Rows = 9, "not every format was checked");
+      Assert (Checked_Rows = 10, "not every format was checked");
    end Fused_Dot_Matches_Decoder;
 
    --  Decoded values, against expectations worked out from the layout.
@@ -1321,6 +1326,68 @@ package body Tests.GGUF_Cases is
          Block (82) := One_Low;
          Block (83) := One_High;     --  dmin = 1
          Check (Model_Runner.GGUF.Type_Q2_K, Block, 0, 2.0);
+      end;
+
+      --  Q3_K: three bits an element, the low two packed four to a byte and
+      --  the third in a mask of its own. The mask bit set leaves the two low
+      --  bits as they are; clear takes four away, which is what puts the
+      --  range at minus four to three.
+      --
+      --  The sub-block scale is six bits in two pieces: a nibble among the
+      --  first eight scale bytes and two more bits among the last four. Here
+      --  they make 33, and the scale is that less 32.
+      declare
+         Block : B.Byte_Array (0 .. 109) := [others => 0];
+      begin
+         --  Four elements, chosen to reach all four ways a sub-block scale is
+         --  packed and both halves of the mask. Elements 0, 64, 128 and 192
+         --  take their scales from sub-blocks 0, 4, 8 and 12, which sit in
+         --  the first, second, third and fourth scale groups, and their mask
+         --  bits are 0, 2, 4 and 6.
+         Block (0) := 16#55#;       --  those four bits set, the rest clear
+         Block (32) := 16#33#;      --  quants for elements 0 and 64
+         Block (64) := 16#33#;      --  quants for elements 128 and 192
+         --  Four different scales, so that a nibble taken from the wrong
+         --  byte or the wrong half of one is a different number rather than
+         --  the same number by luck. Sub-blocks 0, 4, 8 and 12 get one, two,
+         --  three and four, each with two top bits making it 32 more.
+         Block (96) := 16#31#;      --  sub-block 0 gets 1, sub-block 8 gets 3
+         Block (100) := 16#42#;     --  sub-block 4 gets 2, sub-block 12 gets 4
+         Block (104) := 16#AA#;     --  two top bits for each of the four
+         Block (108) := One_Low;
+         Block (109) := One_High;   --  d = 1
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 0, 3.0);
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 64, 6.0);
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 128, 9.0);
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 192, 12.0);
+
+         --  And one from the second sub-block of a group rather than the
+         --  first. Every element above sits in an even-numbered sub-block,
+         --  so a decoder that ignored which of the pair it was in would
+         --  agree with all four of them.
+         --  Its quants and its mask bit are sixteen bytes along from the
+         --  ones above, and both are deliberately unlike what sits at the
+         --  place a decoder that forgot the sixteen would read: two low bits
+         --  rather than three, and presently lifted where clearing it below
+         --  is what proves the mask was read from the right byte.
+         Block (16) := 16#01#;
+         Block (48) := 16#02#;
+         Block (97) := 16#05#;      --  sub-block 1 gets 5
+         Block (105) := 16#02#;     --  and its two top bits
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 16, 10.0);
+
+         Block (16) := 16#00#;
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 16, -10.0);
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 0, 3.0);
+
+         --  Clear the bits of the second half only. Its two elements fall by
+         --  four and the first half's do not move, which is what separates a
+         --  mask bit that counts the half from one that counts the group.
+         Block (0) := 16#05#;
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 0, 3.0);
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 64, 6.0);
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 128, -3.0);
+         Check (Model_Runner.GGUF.Type_Q3_K, Block, 192, -4.0);
       end;
 
       --  Q4_K: value is d times the sub-block scale times the nibble, less
@@ -1476,9 +1543,10 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 9) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 10) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
          Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
+         Model_Runner.GGUF.Type_Q3_K,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];

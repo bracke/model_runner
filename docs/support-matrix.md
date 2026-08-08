@@ -25,7 +25,8 @@ validation, runtime execution, structured error handling and AUnit coverage.
 | Q6_K | 256 | 210 | Implemented |
 | BF16 | 1 | 2 | Implemented; the top half of a binary32 |
 | Q2_K | 256 | 84 | Implemented; two bits an element, sixteen sub-blocks |
-| Q4_1, Q5_0, Q5_1, Q8_1, Q3_K, Q8_K | — | — | Recognized by the parser, rejected before preparation |
+| Q3_K | 256 | 110 | Implemented; two bits and a shared mask of thirds |
+| Q4_1, Q5_0, Q5_1, Q8_1, Q8_K | — | — | Recognized by the parser, rejected before preparation |
 | Everything else | — | — | Rejected: `MR-GGUF-0017` |
 
 Recognized is not supported. A recognized-but-unimplemented format passes
