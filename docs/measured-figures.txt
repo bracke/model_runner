@@ -1,0 +1,28 @@
+# What the published performance figures were measured against.
+#
+# The README publishes numbers that were measured, not derived: how long a
+# row product takes per element, how long twelve tokens take, how the matrix
+# product scales. They cannot be checked the way the conformance figures can,
+# because they differ by half a per cent between runs and by much more between
+# machines, so no assertion about their value can hold anywhere but here.
+#
+# What can be checked is whether they still describe this code. Each group
+# below names the sources its numbers depend on and a fingerprint of those
+# sources as they stood when the numbers were taken. `tests check` recomputes
+# the fingerprint and fails when it differs, which means: these sources have
+# changed since the figures were published, so either re-measure and record
+# what you get, or say why the change cannot have moved them.
+#
+# That is a duty, and the point of putting it here is that it is a duty the
+# release checklist enforces rather than one somebody has to remember. Both
+# groups below have gone stale once already, by two to four times.
+#
+# Format, one group per line:
+#   <name> <fingerprint> <source> [<source> ...]
+#
+# On a mismatch the check prints the fingerprint it computed. Paste that in
+# after re-measuring -- not before.
+
+kernels 1A59968C7818FD5F src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+
+engine D935E8AE8BCFA966 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb

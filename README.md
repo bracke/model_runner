@@ -634,9 +634,15 @@ engine supports:
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
 | F32 | 0.26 | Q5_K | 0.40 |
-| Q4_K | 0.37 | F16 | 0.55 |
-| Q6_K | 0.38 | Q4_0 | 0.56 |
+| Q4_K | 0.38 | F16 | 0.55 |
+| Q6_K | 0.38 | Q4_0 | 0.57 |
 | Q8_0 | 0.38 | | |
+
+Medians of three runs. What they were measured against is recorded in
+[docs/measured-figures.txt](docs/measured-figures.txt), and `tests check`
+fails when the sources behind them change without the figures being taken
+again -- which is how this table came to be two to four times wrong once
+before.
 
 The benchmark forces every block scale to a modest normal exponent before it
 times anything. It used to fill its tensors with arbitrary bytes, and bytes

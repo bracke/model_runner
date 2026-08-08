@@ -1,5 +1,7 @@
 with Ada.Directories;
 with Ada.Text_IO;
+with Interfaces;
+use type Interfaces.Unsigned_64;
 
 with Hostkit.Fs;
 
@@ -46,6 +48,21 @@ package body Checks is
             Fail (Detail);
          end if;
       end Check;
+
+      --  Sixteen hex digits, upper case, of a 64-bit value.
+      function Hex (Value : Interfaces.Unsigned_64) return String is
+         Digits_Text : constant String := "0123456789ABCDEF";
+         Result_Text : String (1 .. 16);
+         Left        : Interfaces.Unsigned_64 := Value;
+      begin
+         for Index in reverse Result_Text'Range loop
+            Result_Text (Index) :=
+              Digits_Text
+                (Digits_Text'First + Natural (Left and 16#F#));
+            Left := Interfaces.Shift_Right (Left, 4);
+         end loop;
+         return Result_Text;
+      end Hex;
 
       function Path (Parts : String) return String
       is (Hostkit.Fs.Join (Root, Parts));
@@ -925,6 +942,125 @@ package body Checks is
          Scan_Environment ("src/platform/posix");
          Scan_Environment ("src/platform/windows");
          Scan_Environment ("src/platform/unsupported");
+      end;
+
+      --  The published performance figures still describe this code.
+      --
+      --  They cannot be checked by value: they move half a per cent between
+      --  runs on this machine and further on another, so an assertion about
+      --  the number would fail everywhere it was not taken. What can be
+      --  checked is whether the sources behind them have changed since, which
+      --  is the only way they have ever gone wrong here -- twice, by two to
+      --  four times, because a kernel changed and nobody re-measured.
+      --
+      --  A mismatch is not a defect in the code. It is a question that has to
+      --  be answered before release: re-measure, or say why the change cannot
+      --  have moved the number.
+      declare
+         Record_Path : constant String := "docs/measured-figures.txt";
+         Listing     : constant String := Contents (Record_Path);
+
+         --  The Nth space-separated word of a line, or the empty string.
+         function Word (Line : String; Wanted : Positive) return String is
+            Seen  : Natural := 0;
+            Start : Natural := 0;
+         begin
+            for Index in Line'Range loop
+               if Line (Index) /= ' ' then
+                  if Start = 0 then
+                     Start := Index;
+                     Seen := Seen + 1;
+                  end if;
+                  if Seen = Wanted and then
+                    (Index = Line'Last or else Line (Index + 1) = ' ')
+                  then
+                     return Line (Start .. Index);
+                  end if;
+               else
+                  Start := 0;
+               end if;
+            end loop;
+            return "";
+         end Word;
+
+         From : Positive := (if Listing'Length = 0 then 1 else Listing'First);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if Listing'Length = 0 then
+            Fail (Record_Path & " is missing, so nothing records what the "
+                  & "published figures were measured against");
+         else
+            while From <= Listing'Last loop
+               declare
+                  Stop : Natural := From;
+               begin
+                  while Stop <= Listing'Last
+                    and then Listing (Stop) /= Character'Val (10)
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  declare
+                     Line : constant String := Listing (From .. Stop - 1);
+                  begin
+                     if Line'Length > 0
+                       and then Word (Line, 1)'Length > 0
+                       and then Word (Line, 1) (Word (Line, 1)'First) /= '#'
+                     then
+                        declare
+                           Name  : constant String := Word (Line, 1);
+                           Known : constant String := Word (Line, 2);
+                           Sum   : Interfaces.Unsigned_64 :=
+                             16#CBF29CE484222325#;
+                           Whole : Boolean := Known'Length > 0;
+                           Which : Positive := 3;
+                        begin
+                           loop
+                              declare
+                                 Source : constant String :=
+                                   Word (Line, Which);
+                              begin
+                                 exit when Source'Length = 0;
+                                 declare
+                                    Text_Of : constant String :=
+                                      Contents (Source);
+                                 begin
+                                    if Text_Of'Length = 0 then
+                                       Fail (Record_Path & " names " & Source
+                                             & ", which is not there");
+                                       Whole := False;
+                                    else
+                                       for Letter of Text_Of loop
+                                          Sum :=
+                                            (Sum xor Interfaces.Unsigned_64
+                                               (Character'Pos (Letter)))
+                                            * 16#100000001B3#;
+                                       end loop;
+                                    end if;
+                                 end;
+                              end;
+                              Which := Which + 1;
+                           end loop;
+
+                           if Whole and then Which = 3 then
+                              Fail (Record_Path & " records " & Name
+                                    & " without naming a source");
+                           elsif Whole and then Hex (Sum) /= Known then
+                              Fail ("the sources behind the published "
+                                    & Name & " figures have changed since "
+                                    & "they were measured; re-measure, then "
+                                    & "record " & Hex (Sum) & " in "
+                                    & Record_Path);
+                           end if;
+                        end;
+                     end if;
+                  end;
+
+                  From := Stop + 1;
+               end;
+            end loop;
+         end if;
       end;
 
       Ada.Text_IO.Put_Line

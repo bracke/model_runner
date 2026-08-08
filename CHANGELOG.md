@@ -323,6 +323,12 @@ wall and 16.0 s of processor time.
   processors, twelve tokens took the same wall time for 14.6 s of processor
   time instead of 27.4 s. `--threads` overrides it as before.
 
+- `tests check` fails when the sources behind a published performance figure
+  change without the figure being measured again. The figures cannot be
+  checked by value -- they move between runs and further between machines --
+  so what is checked is a fingerprint of the sources each group depends on,
+  recorded in `docs/measured-figures.txt`.
+
 - `tests conformance` checks that the README still quotes the numbers it
   prints, and fails the release checklist when it does not. The counts there
   had drifted to 4 and 64 while the run had grown to 8 and 128, and the worst
