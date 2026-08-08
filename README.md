@@ -8,12 +8,7 @@ prompts, evaluates the model on the CPU, maintains an explicit KV cache, samples
 output tokens, decodes them incrementally and streams the generated text.
 
 Inference is local only: no network access, no daemon, no Ollama, no llama.cpp,
-no delegation to an external model runtime. The release checklist holds that
-one: it reads every production source and fails on a socket API, a name
-resolver, or an address to reach — and on process spawning, since a program
-that can start another can reach whatever that one reaches. It is the promise
-here that a reader cannot check by running the program, and the kind that would
-otherwise arrive one convenient dependency at a time.
+no delegation to an external model runtime.
 
 ## Status
 
@@ -217,9 +212,8 @@ template stopped allocating twenty-six megabytes: an instruction carried its
 operand and its condition inline, and the program is four thousand of them.
 
 Every test is deterministic, offline, and needs no downloaded model. The
-checklist holds both: no test source may name a socket, a resolver or an
-address, and nothing in the repository may exceed a megabyte, which is what a
-committed model would. What the suite covers:
+checklist holds the second of those: nothing in the repository may exceed a
+megabyte, which is what a committed model would. What the suite covers:
 
 - **GGUF** — truncation at *every* byte offset of a valid file, corrupt
   magic, unsupported versions, excessive counts, duplicate metadata keys,

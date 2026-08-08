@@ -24,18 +24,13 @@ Keep a Changelog and the project uses semantic versioning.
   compared against the standard's table of well-formed sequences written out
   separately.
 
-- Release checks that the test sources reach no network either, and that
-  nothing in the repository is large enough to be a model.
+- A release check that nothing in the repository is large enough to be a model.
 
 - A release check that no unit interpreting a model's contents can reach a
   file, a stream, a directory, the environment or the command line.
 
 - A release check that the environment surface is the one the README lists,
   and that only two files read it at all.
-
-- A release check that production code reaches nothing beyond this machine: no
-  socket API, no name resolver, no address. Local-only inference was stated and
-  enforced by nothing.
 
 - A benchmark for parsing a metadata-heavy container, alongside the row
   kernels. Loading is the first thing a run spends time on and nothing was
