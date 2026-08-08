@@ -487,7 +487,11 @@ Named in the specification, absent here:
   machine code. Binding to a host call through `Interfaces.C` is not writing in
   another language and is allowed, which is how `mmap` and `isatty` are
   reached. See below for what that does and does not buy.
-- **Repacking.** Weights are consumed in the layout the file stores them in.
+- **Repacking.** The weight matrices are consumed in the layout the file
+  stores them in — nothing is unpacked into a second copy for speed. The norm
+  vectors are the exception: they are dequantized once when the model is
+  prepared, and the accounting counts that under converted weights, which is
+  what a test compares against the weight total to hold the rest.
 
 ## Speed
 

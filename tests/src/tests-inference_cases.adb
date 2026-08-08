@@ -12,7 +12,9 @@ with Raise_Interrupt;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
+with Interfaces;
 with Model_Runner.Llama;
+with Model_Runner.Memory;
 with Model_Runner.Numerics;
 with Model_Runner.Tokenizer;
 
@@ -716,6 +718,67 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Reset_Leaves_No_Trace_Of_The_Previous_Turn;
 
+   --  Weights are used where the file put them, not repacked into a copy.
+   --
+   --  This is one of three things the README names as absent, and the only
+   --  one with a handle: the accounting has a category for converted weights,
+   --  so the program already counts what a repacking would produce. A runtime
+   --  that repacked would show a converted total near the weight total; one
+   --  that reads the file's layout shows almost nothing there.
+   --
+   --  Almost, rather than nothing. The norm vectors are dequantized once when
+   --  the model is prepared, which is a conversion and is counted as one.
+   --  What is held here is that the matrices are not: they are what the
+   --  weight total is made of, and converting any of them would move the
+   --  converted total by more than this allows.
+   procedure Weights_Are_Not_Repacked
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+
+      Image : B.Byte_Array_Access;
+   begin
+      --  Quantized, so that a repacking would have something to unpack into
+      --  and would show.
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+      begin
+         Start (Under);
+
+         declare
+            Books : constant Model_Runner.Memory.Account := L.Account (Under.Ready);
+
+            Weights   : constant Interfaces.Unsigned_64 :=
+              Books.By_Category (Model_Runner.Memory.Model_Weights);
+            Converted : constant Interfaces.Unsigned_64 :=
+              Books.By_Category (Model_Runner.Memory.Converted_Weights);
+         begin
+            Assert (Weights > 0,
+                    "no weights were accounted for, so this compares nothing");
+
+            --  The norms are converted, so the category is not empty and the
+            --  bound below is not satisfied by the feature being absent.
+            Assert (Converted > 0,
+                    "nothing was converted at all, which is not what this "
+                    & "model does");
+
+            --  And they are all that is: a matrix is at least an order of
+            --  magnitude larger than the norms beside it, so repacking one
+            --  could not fit under this.
+            Assert (Converted * 4 < Weights,
+                    "converted" & Interfaces.Unsigned_64'Image (Converted)
+                    & " bytes against" & Interfaces.Unsigned_64'Image (Weights)
+                    & " of weights: too much to be the norms alone");
+         end;
+      end;
+
+      B.Free (Image);
+   end Weights_Are_Not_Repacked;
+
    --  Evaluation refuses arguments it cannot serve.
    --
    --  These are the checks at the top of both evaluation entries: that the
@@ -1056,6 +1119,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Reset_Leaves_No_Trace_Of_The_Previous_Turn'Access,
          "a reset session answers exactly as a fresh one does");
+      Register_Routine
+        (T, Weights_Are_Not_Repacked'Access,
+         "weights are used where the file put them, not repacked");
       Register_Routine
         (T, Evaluation_Refuses_Arguments_It_Cannot_Serve'Access,
          "evaluation refuses arguments it cannot serve");
