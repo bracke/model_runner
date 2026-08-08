@@ -790,39 +790,69 @@ package body Tests.Sampling_Cases is
          Assert (not Tmpl.Is_Compiled (Item),
                  Why & " left a compiled template");
       end Reject;
+
+      --  Compiles, and then refuses when the value is asked for.
+      procedure Refuse (Source : String; Why : String) is
+         Talk : Conv.History;
+         Room : String (1 .. 1024);
+         Last : Natural;
+      begin
+         Tmpl.Compile (Item, Source, Status => Status);
+         Assert (not E.Is_Error (Status),
+                 Why & " was refused before anything asked for it");
+
+         Conv.Open (Talk, Status => Status);
+         Conv.Append (Talk, Conv.User_Role, "Hi", Status);
+         Tmpl.Render (Item, Talk, "<s>", "</s>", True, Room, Last, Status);
+         Assert (E.Is_Error (Status), Why & " rendered");
+         Assert (Last = 0, Why & " left output behind");
+         Conv.Close (Talk);
+         Tmpl.Close (Item);
+      end Refuse;
    begin
-      Reject ("{% set x = 1 %}", "set");
+      --  A statement whose shape the engine cannot read stops compilation:
+      --  everything after it is text of unknown meaning.
       Reject ("{% macro m() %}{% endmacro %}", "macro");
       Reject ("{% include 'other' %}", "include");
-      Reject ("{{ raise_exception('no') }}", "raise_exception");
-      Reject ("{{ message['content'] | trim }}", "a filter");
-      --  Indexing by position is supported now: templates use it to ask
-      --  whether a conversation already opens with a system message. What
-      --  stays outside is indexing by anything that is not a plain number,
-      --  which would need expressions this engine deliberately has none of.
-      Reject ("{{ messages[i]['role'] }}", "indexing by a variable");
-      Reject ("{{ messages[0]['tool_calls'] }}", "an unknown message field");
-      Reject ("{% for x in other %}{% endfor %}", "iteration over a non-list");
+      Reject ("{% import 'other' as o %}", "import");
       Reject ("{% if true %}", "an unbalanced if");
       Reject ("{% endfor %}", "a stray endfor");
-      Reject ("{{ unknown_variable }}", "an unknown variable");
       Reject ("{{ oops", "an unterminated tag");
+      Reject ("{# oops", "an unterminated comment");
 
-      --  And the construct that moved: a template naming a message by
-      --  position compiles, because the models that ship one need it.
+      --  A value the engine cannot compute stops the render instead, naming
+      --  itself. Nothing here is approximated: each of these ends generation
+      --  with an error, and none of them can reach a file or a process,
+      --  because the engine has no operation that does.
+      Refuse ("{{ raise_exception('no') }}", "raise_exception");
+      Refuse ("{{ messages[i]['role'] }}", "indexing by a variable");
+      Refuse ("{{ messages[0]['tool_calls'] }}", "an unknown message field");
+      Refuse ("{% for x in other %}x{% endfor %}", "iteration over a non-list");
+      Refuse ("{{ unknown_variable }}", "an unknown variable");
+      Refuse ("{% set p = open('/etc/passwd') %}{{ p }}", "a function call");
+      Refuse ("{{ message['content'] | tojson }}", "an unknown filter");
+
+      --  And the constructs that moved into the subset.
       declare
          Fine : Tmpl.Compiled;
          How  : E.Error_Info;
+
+         procedure Accept_It (Source : String; What : String) is
+         begin
+            Tmpl.Compile (Fine, Source, Status => How);
+            Assert (not E.Is_Error (How), What & " was refused: "
+                    & E.Error_Code'Image (How.Code));
+            Tmpl.Close (Fine);
+         end Accept_It;
       begin
-         Tmpl.Compile
-           (Fine,
-            "{% for message in messages %}"
+         Accept_It
+           ("{% for message in messages %}"
             & "{% if loop.first and messages[0]['role'] != 'system' %}S"
             & "{% endif %}{{ message['content'] }}{% endfor %}",
-            Status => How);
-         Assert (not E.Is_Error (How),
-                 "a template naming a message by position was refused");
-         Tmpl.Close (Fine);
+            "naming a message by position");
+         Accept_It ("{% set x = 'a' %}{{ x }}", "set");
+         Accept_It ("{{ message['content'] | trim }}", "the trim filter");
+         Accept_It ("{# a comment #}", "a comment");
       end;
 
       Tmpl.Close (Item);

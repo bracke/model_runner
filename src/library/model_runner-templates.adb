@@ -76,6 +76,12 @@ package body Model_Runner.Templates is
       Pending     : Natural := 0;   --  branch test whose target is unresolved
       Exit_Count  : Natural := 0;   --  number of recorded end-of-if jumps
       Exits       : Natural := 0;   --  first recorded jump; they chain
+
+      --  A loop over something this engine cannot iterate. Its body is
+      --  compiled so that the block structure stays readable, and is reached
+      --  only through the refusal that stands in its head, which is to say
+      --  never.
+      Dead        : Boolean := False;
    end record;
 
    type Frame_Array is array (1 .. Max_Depth) of Frame;
@@ -280,9 +286,74 @@ package body Model_Runner.Templates is
          end if;
       end Store_Literal;
 
-      --  Read one term. Terms are the only values the engine knows; anything
-      --  else is an unsupported construct.
-      procedure Read_Term
+      --  Whether a word is a name a template could have assigned. A dotted
+      --  word is a field of something, and this engine has no objects with
+      --  fields beyond the ones it names outright.
+      function Is_Plain_Name (Word : String) return Boolean is
+      begin
+         if Word'Length = 0 or else Word (Word'First) in '0' .. '9' then
+            return False;
+         end if;
+         for Letter of Word loop
+            if Letter = '.' then
+               return False;
+            end if;
+         end loop;
+         return True;
+      end Is_Plain_Name;
+
+      --  Position of a name in the variable table, adding it when it is new.
+      --  Zero when the table is full, which makes the term unsupported rather
+      --  than the template unusable.
+      function Slot_Of (Name : String) return Natural is
+         Offset, Length : Natural;
+         Stored         : Boolean;
+      begin
+         for Index in 1 .. Item.Name_Used loop
+            declare
+               Held : Variable_Name renames Item.Names (Index);
+            begin
+               if Item.Source.all (Held.Offset + 1 .. Held.Offset + Held.Length)
+                 = Name
+               then
+                  return Index;
+               end if;
+            end;
+         end loop;
+
+         if Item.Name_Used >= Max_Variables then
+            return 0;
+         end if;
+
+         Store_Literal (Name, Offset, Length, Stored);
+         if not Stored then
+            return 0;
+         end if;
+
+         Item.Name_Used := Item.Name_Used + 1;
+         Item.Names (Item.Name_Used) := (Offset => Offset, Length => Length);
+         return Item.Name_Used;
+      end Slot_Of;
+
+      --  A term the engine cannot evaluate, named so that the render which
+      --  reaches it can say what it was.
+      function Refused
+        (Name : String;
+         Why  : E.Error_Code := E.Template_Unsupported_Construct) return Term
+      is
+         Result : Term := (Kind => Term_Unsupported, Why => Why, others => <>);
+         Stored : Boolean;
+      begin
+         Store_Literal (Name, Result.Offset, Result.Length, Stored);
+         if not Stored then
+            Result.Length := 0;
+         end if;
+         return Result;
+      end Refused;
+
+      --  Read one term without its filter. Terms are the only values the
+      --  engine knows; anything else reads as unsupported.
+      procedure Read_Bare_Term
         (Text   : String;
          From   : in out Natural;
          Result : out Term;
@@ -330,6 +401,26 @@ package body Model_Runner.Templates is
                Result.Kind := Term_Literal;
                Store_Literal
                  (Decoded (1 .. Filled), Result.Offset, Result.Length, Stored);
+               Ok := Stored;
+               From := Index;
+               return;
+            end;
+         end if;
+
+         --  A number is only ever compared or emitted, never arithmetic, so
+         --  its text is all the engine needs of it.
+         if Text (Index) in '0' .. '9' then
+            declare
+               Start  : constant Natural := Index;
+               Stored : Boolean;
+            begin
+               while Index <= Text'Last and then Text (Index) in '0' .. '9' loop
+                  Index := Index + 1;
+               end loop;
+               Result.Kind := Term_Literal;
+               Store_Literal
+                 (Text (Start .. Index - 1), Result.Offset, Result.Length,
+                  Stored);
                Ok := Stored;
                From := Index;
                return;
@@ -391,7 +482,7 @@ package body Model_Runner.Templates is
                --  already opens with a system message before adding one,
                --  which is the only construct standing between this engine
                --  and the templates modern models ship.
-               if Word = "messages" and then From <= Text'Last
+               if Word /= "message" and then From <= Text'Last
                  and then Text (From) = '['
                then
                   declare
@@ -445,7 +536,13 @@ package body Model_Runner.Templates is
                               return;
                            end if;
                         end;
+                        --  Which list, so that a template that rebinds the
+                        --  name reads the rebound one.
                         Result.Offset := Index;
+                        Result.Length := Slot_Of (Word);
+                        if Result.Length = 0 then
+                           Result := Refused (Word);
+                        end if;
                         From := Shut + 1;
                         Ok := True;
                         return;
@@ -471,8 +568,28 @@ package body Model_Runner.Templates is
                   Result.Kind := Term_Loop_Index_Zero;
                elsif Word = "loop.index" then
                   Result.Kind := Term_Loop_Index_One;
+               elsif Word = "true" then
+                  Result.Kind := Term_True;
+               elsif Word = "false" then
+                  Result.Kind := Term_False;
+               elsif Word = "none" then
+                  Result.Kind := Term_None;
+               elsif Is_Plain_Name (Word) then
+                  --  A name the template gives itself. Reading one it never
+                  --  assigned is an error at the point of reading, not here:
+                  --  'is defined' exists precisely to ask about names that
+                  --  were never assigned, and answering it is not the same as
+                  --  answering what they hold.
+                  Result.Kind := Term_Variable;
+                  Result.Offset := Slot_Of (Word);
+                  if Result.Offset = 0 then
+                     Result := Refused (Word);
+                  end if;
                else
-                  return;
+                  --  A field of something, or a word this engine has never
+                  --  heard of. Either way it is a name that means nothing
+                  --  here, which is a different mistake from a construct.
+                  Result := Refused (Word, E.Template_Unknown_Variable);
                end if;
 
                Ok := True;
@@ -480,6 +597,42 @@ package body Model_Runner.Templates is
                pragma Unreferenced (Tail);
             end;
          end;
+      end Read_Bare_Term;
+
+      --  Read a term and whatever filter follows it.
+      procedure Read_Term
+        (Text   : String;
+         From   : in out Natural;
+         Result : out Term;
+         Ok     : out Boolean) is
+      begin
+         Read_Bare_Term (Text, From, Result, Ok);
+         if not Ok then
+            return;
+         end if;
+
+         while Skip_Spaces (Text, From) <= Text'Last
+           and then Text (Skip_Spaces (Text, From)) = '|'
+         loop
+            declare
+               Scan        : Natural := Skip_Spaces (Text, From) + 1;
+               First, Last : Natural;
+            begin
+               Read_Word (Text, Scan, First, Last);
+               From := Scan;
+
+               if Last < First or else Result.Filter /= Filter_None then
+                  Result := Refused ("filter", E.Template_Unknown_Filter);
+               elsif Text (First .. Last) = "trim" then
+                  Result.Filter := Filter_Trim;
+               elsif Text (First .. Last) = "length" then
+                  Result.Filter := Filter_Length;
+               else
+                  Result :=
+                    Refused (Text (First .. Last), E.Template_Unknown_Filter);
+               end if;
+            end;
+         end loop;
       end Read_Term;
 
       --  Read a '+'-joined run of terms.
@@ -516,13 +669,114 @@ package body Model_Runner.Templates is
          Ok := Result.Count > 0;
       end Read_Operand;
 
-      --  Read a condition: an or-list of and-lists of clauses.
+      --  Read whatever follows a clause's left operand: a comparison, an
+      --  'is' test, an 'in' test, or nothing at all.
+      procedure Read_Test
+        (Text    : String;
+         From    : in out Natural;
+         Current : in out Clause;
+         Ok      : out Boolean)
+      is
+         Probe : constant Natural := Skip_Spaces (Text, From);
+         Taken : Boolean;
+      begin
+         Ok := True;
+
+         if Probe + 1 <= Text'Last and then Text (Probe .. Probe + 1) = "==" then
+            Current.Operator := Compare_Equal;
+            From := Probe + 2;
+         elsif Probe + 1 <= Text'Last
+           and then Text (Probe .. Probe + 1) = "!="
+         then
+            Current.Operator := Compare_Not_Equal;
+            From := Probe + 2;
+         else
+            declare
+               Restore     : constant Natural := From;
+               Scan        : Natural := From;
+               First, Last : Natural;
+            begin
+               Read_Word (Text, Scan, First, Last);
+               if Last < First then
+                  return;
+               end if;
+
+               if Text (First .. Last) = "is" then
+                  declare
+                     Denied : Boolean := False;
+                  begin
+                     From := Scan;
+                     Read_Word (Text, Scan, First, Last);
+                     if Last >= First and then Text (First .. Last) = "not" then
+                        Denied := True;
+                        From := Scan;
+                        Read_Word (Text, Scan, First, Last);
+                     end if;
+
+                     if Last < First then
+                        return;
+                     end if;
+                     From := Scan;
+
+                     if Text (First .. Last) = "defined" then
+                        Current.Operator :=
+                          (if Denied then Compare_Not_Defined
+                           else Compare_Defined);
+                     elsif Text (First .. Last) = "none" then
+                        Current.Operator :=
+                          (if Denied then Compare_Is_Not_None
+                           else Compare_Is_None);
+                     else
+                        --  A test this engine has no answer for. The clause
+                        --  becomes one that refuses when it is evaluated,
+                        --  which is not the same as refusing the template.
+                        Current.Left :=
+                          (Terms => [1 => Refused (Text (First .. Last)),
+                                     others => <>],
+                           Count => 1);
+                        Current.Operator := Compare_None;
+                     end if;
+                  end;
+
+               elsif Text (First .. Last) = "in" then
+                  From := Scan;
+                  Read_Word (Text, Scan, First, Last);
+                  if Last < First then
+                     return;
+                  end if;
+                  From := Scan;
+
+                  if Text (First .. Last) = "message" then
+                     Current.Operator := Compare_In_Message;
+                  else
+                     Current.Left :=
+                       (Terms => [1 => Refused (Text (First .. Last)),
+                                  others => <>],
+                        Count => 1);
+                     Current.Operator := Compare_None;
+                  end if;
+
+               else
+                  From := Restore;
+               end if;
+            end;
+         end if;
+
+         if Current.Operator in Compare_Equal | Compare_Not_Equal then
+            Read_Operand (Text, From, Current.Right, Taken);
+            Ok := Taken;
+         end if;
+      end Read_Test;
+
+      --  Read a condition: an or-list of and-lists of clauses. Recurses on
+      --  parentheses, bounded by Level.
       procedure Read_Condition
         (Text   : String;
+         From   : in out Natural;
+         Level  : Natural;
          Result : out Condition;
          Ok     : out Boolean)
       is
-         From : Natural := Text'First;
       begin
          Result := (others => <>);
          Ok := False;
@@ -540,7 +794,8 @@ package body Model_Runner.Templates is
                if Probe + 2 <= Text'Last
                  and then Text (Probe .. Probe + 2) = "not"
                  and then (Probe + 3 > Text'Last
-                           or else Text (Probe + 3) = ' ')
+                           or else Text (Probe + 3) = ' '
+                           or else Text (Probe + 3) = '(')
                then
                   Current.Negated := True;
                   From := Probe + 3;
@@ -548,26 +803,42 @@ package body Model_Runner.Templates is
                   From := Probe;
                end if;
 
-               Read_Operand (Text, From, Current.Left, Taken);
-               if not Taken then
-                  return;
-               end if;
-
                Probe := Skip_Spaces (Text, From);
-               if Probe + 1 <= Text'Last
-                 and then Text (Probe .. Probe + 1) = "=="
-               then
-                  Current.Operator := Compare_Equal;
-                  From := Probe + 2;
-               elsif Probe + 1 <= Text'Last
-                 and then Text (Probe .. Probe + 1) = "!="
-               then
-                  Current.Operator := Compare_Not_Equal;
-                  From := Probe + 2;
-               end if;
+               if Probe <= Text'Last and then Text (Probe) = '(' then
+                  if Level >= Max_Depth then
+                     return;
+                  end if;
 
-               if Current.Operator /= Compare_None then
-                  Read_Operand (Text, From, Current.Right, Taken);
+                  declare
+                     Inner : Condition;
+                     Good  : Boolean;
+                     Held  : Natural;
+                  begin
+                     From := Probe + 1;
+                     Read_Condition (Text, From, Level + 1, Inner, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                     Probe := Skip_Spaces (Text, From);
+                     if Probe > Text'Last or else Text (Probe) /= ')' then
+                        return;
+                     end if;
+                     From := Probe + 1;
+
+                     Keep (Inner, Held);
+                     if Held = 0 then
+                        return;
+                     end if;
+                     Current.Sub_At := Held;
+                  end;
+               else
+                  Read_Operand (Text, From, Current.Left, Taken);
+                  if not Taken then
+                     return;
+                  end if;
+
+                  Read_Test (Text, From, Current, Taken);
                   if not Taken then
                      return;
                   end if;
@@ -605,7 +876,21 @@ package body Model_Runner.Templates is
             end;
          end loop;
 
-         Ok := Skip_Spaces (Text, From) > Text'Last;
+         Ok := True;
+      end Read_Condition;
+
+      --  Read a whole condition that must fill Text.
+      procedure Read_Condition
+        (Text   : String;
+         Result : out Condition;
+         Ok     : out Boolean)
+      is
+         From : Natural := Text'First;
+      begin
+         Read_Condition (Text, From, 0, Result, Ok);
+         if Ok then
+            Ok := Skip_Spaces (Text, From) > Text'Last;
+         end if;
       end Read_Condition;
 
       --  Record a jump that must be patched to the end of the current if.
@@ -630,6 +915,144 @@ package body Model_Runner.Templates is
          Exit_Chain (Depth) := 0;
       end Resolve_Exits;
 
+      --  Emit an instruction that refuses, naming what it refuses. The name
+      --  is kept short because it is a label, not a transcript.
+      procedure Refuse (What : String; Position : out Natural) is
+         Cut    : constant String :=
+           What (What'First .. Natural'Min (What'Last, What'First + 47));
+         Offset : Natural;
+         Length : Natural;
+         Stored : Boolean;
+      begin
+         Position := 0;
+         Store_Literal (Cut, Offset, Length, Stored);
+         if not Stored then
+            Fail (E.Template_Too_Large, "literal");
+            return;
+         end if;
+         Emit ((Op => Op_Unsupported, Offset => Offset, Length => Length,
+                others => <>), Position);
+      end Refuse;
+
+      --  Handle a set tag: the assignment forms this engine can carry out,
+      --  and a refusal standing in for the ones it cannot.
+      procedure Compile_Set (Text : String) is
+         Scan        : Natural := Text'First;
+         First, Last : Natural;
+         Target      : Natural := 0;
+         Where       : Natural;
+      begin
+         Read_Word (Text, Scan, First, Last);
+         if Last >= First and then Is_Plain_Name (Text (First .. Last)) then
+            Target := Slot_Of (Text (First .. Last));
+         end if;
+
+         declare
+            Equals : constant Natural := Skip_Spaces (Text, Scan);
+         begin
+            if Target = 0
+              or else Equals > Text'Last
+              or else Text (Equals) /= '='
+              or else (Equals < Text'Last and then Text (Equals + 1) = '=')
+            then
+               Refuse (Text, Where);
+               return;
+            end if;
+
+            declare
+               Rest : constant String :=
+                 Model_Runner.Text.Trim (Text (Equals + 1 .. Text'Last));
+               Head : Natural := Rest'First;
+               Name : Natural := 0;
+            begin
+               if Rest = "none" then
+                  Emit ((Op => Op_Set_None, Offset => Target, others => <>),
+                        Where);
+                  return;
+               end if;
+
+               --  The keywords are values, not names: taking true for a name
+               --  copies an undefined slot, and the template that set it then
+               --  looks like one reading a variable it never assigned.
+               Read_Word (Rest, Head, First, Last);
+               if Last >= First
+                 and then Is_Plain_Name (Rest (First .. Last))
+                 and then Rest (First .. Last) not in "true" | "false" | "none"
+               then
+                  Name := Slot_Of (Rest (First .. Last));
+               end if;
+
+               --  A whole list under a second name. Assigning the value
+               --  rather than its text is what lets a template rename the
+               --  message list and then loop over the new name.
+               if Name /= 0 and then Skip_Spaces (Rest, Head) > Rest'Last then
+                  Emit ((Op => Op_Set_Copy, Offset => Target, Target => Name,
+                         others => <>), Where);
+                  return;
+               end if;
+
+               --  A list with a leading slice removed: messages[1:] and its
+               --  like. Only a front slice is supported, because that is what
+               --  a template does when it lifts the system message out of the
+               --  conversation before looping over the rest.
+               if Name /= 0 and then Head <= Rest'Last
+                 and then Rest (Head) = '['
+               then
+                  declare
+                     Digits_At : Natural := Head + 1;
+                     Dropped   : Natural := 0;
+                  begin
+                     while Digits_At <= Rest'Last
+                       and then Rest (Digits_At) in '0' .. '9'
+                     loop
+                        Dropped := Dropped * 10
+                          + Character'Pos (Rest (Digits_At))
+                          - Character'Pos ('0');
+                        Digits_At := Digits_At + 1;
+                     end loop;
+
+                     --  Only a slice, and only a whole one. Anything else
+                     --  starting with a bracket -- messages[0]['content'],
+                     --  most of all -- is an expression, and falls through
+                     --  to be read as one.
+                     if Digits_At > Head + 1
+                       and then Digits_At + 1 <= Rest'Last
+                       and then Rest (Digits_At .. Digits_At + 1) = ":]"
+                       and then Skip_Spaces (Rest, Digits_At + 2) > Rest'Last
+                     then
+                        Emit ((Op => Op_Set_Slice, Offset => Target,
+                               Target => Name, Length => Dropped,
+                               others => <>), Where);
+                        return;
+                     end if;
+                  end;
+               end if;
+
+               declare
+                  Value : Operand;
+                  Valid : Boolean;
+                  From  : Natural := Rest'First;
+                  Kept  : Natural;
+               begin
+                  Read_Operand (Rest, From, Value, Valid);
+                  if not Valid
+                    or else Skip_Spaces (Rest, From) <= Rest'Last
+                  then
+                     Refuse (Text, Where);
+                     return;
+                  end if;
+
+                  Keep (Value, Kept);
+                  if Kept = 0 then
+                     return;
+                  end if;
+                  Emit ((Op => Op_Set_Text, Offset => Target,
+                         Value_At => Kept, others => <>), Where);
+               end;
+            end;
+         end;
+      end Compile_Set;
+
       --  Handle one {% ... %} tag.
       procedure Compile_Statement (Body_Text : String) is
          Trimmed : constant String := Model_Runner.Text.Trim (Body_Text);
@@ -644,12 +1067,25 @@ package body Model_Runner.Templates is
             declare
                Rest : constant String :=
                  Model_Runner.Text.Trim (Trimmed (Trimmed'First + 4 .. Trimmed'Last));
+               Over : Natural := 0;
+               Scan : Natural := Rest'First;
+               First, Last : Natural;
             begin
-               --  Only iteration over the message list is supported. Anything
-               --  else would need a general object model.
-               if Rest /= "message in messages" then
-                  Fail (E.Template_Unsupported_Construct, "for");
-                  return;
+               --  The loop variable is always named message, because the
+               --  fields this engine can read from an iterate are a message's
+               --  fields. Any other loop is compiled but refuses if reached.
+               Read_Word (Rest, Scan, First, Last);
+               if Last >= First and then Rest (First .. Last) = "message" then
+                  Read_Word (Rest, Scan, First, Last);
+                  if Last >= First and then Rest (First .. Last) = "in" then
+                     Read_Word (Rest, Scan, First, Last);
+                     if Last >= First
+                       and then Skip_Spaces (Rest, Scan) > Rest'Last
+                       and then Is_Plain_Name (Rest (First .. Last))
+                     then
+                        Over := Slot_Of (Rest (First .. Last));
+                     end if;
+                  end if;
                end if;
 
                if Depth >= Max_Depth then
@@ -657,13 +1093,20 @@ package body Model_Runner.Templates is
                   return;
                end if;
 
-               Emit ((Op => Op_For_Begin, others => <>), Where);
+               if Over = 0 then
+                  Refuse (Rest, Where);
+               else
+                  Emit ((Op => Op_For_Begin, Offset => Over, others => <>),
+                        Where);
+               end if;
                if Where = 0 then
                   return;
                end if;
 
                Depth := Depth + 1;
-               Frames (Depth) := (Kind => Block_For, Start => Where, others => <>);
+               Frames (Depth) :=
+                 (Kind => Block_For, Start => Where, Dead => Over = 0,
+                  others => <>);
                Exit_Chain (Depth) := 0;
             end;
 
@@ -673,13 +1116,20 @@ package body Model_Runner.Templates is
                return;
             end if;
 
-            Emit ((Op => Op_For_Next,
-                   Target => Frames (Depth).Start, others => <>), Where);
-            if Where = 0 then
-               return;
+            if not Frames (Depth).Dead then
+               Emit ((Op => Op_For_Next,
+                      Target => Frames (Depth).Start, others => <>), Where);
+               if Where = 0 then
+                  return;
+               end if;
+               Item.Program.all (Frames (Depth).Start).Target := Where + 1;
             end if;
-            Item.Program.all (Frames (Depth).Start).Target := Where + 1;
             Depth := Depth - 1;
+
+         elsif Model_Runner.Text.Starts_With (Trimmed, "set ") then
+            Compile_Set
+              (Model_Runner.Text.Trim
+                 (Trimmed (Trimmed'First + 4 .. Trimmed'Last)));
 
          elsif Model_Runner.Text.Starts_With (Trimmed, "if ") then
             declare
@@ -840,6 +1290,7 @@ package body Model_Runner.Templates is
       Cursor        : Natural := Source'First;
       Literal_Start : Natural := Source'First;
       Trim_Next     : Boolean := False;
+      Named         : Boolean := False;
 
       --  Emit the literal text accumulated since the last tag.
       procedure Flush_Literal (Upto : Natural; Trim_Right : Boolean) is
@@ -905,12 +1356,57 @@ package body Model_Runner.Templates is
       end if;
 
       Item.Program := new Instruction_Array;
-      --  The literal pool can never need more than the template itself, since
-      --  escape decoding only shortens.
-      Item.Source := new String (1 .. Source'Length);
+
+      --  The pool holds decoded literals, the names the template uses, and
+      --  the labels of the constructs it refuses. Decoding only shortens and
+      --  every label is a slice of a tag, so twice the template covers both,
+      --  with the name table's own worst case added outright.
+      Item.Source :=
+        new String (1 .. 2 * Source'Length + Max_Variables * 64 + 64);
+
+      Item.Name_Used := 1;
+      Store_Literal
+        ("messages", Item.Names (1).Offset, Item.Names (1).Length, Named);
+      if not Named then
+         Fail (E.Template_Too_Large, "literal");
+         return;
+      end if;
 
       while Cursor <= Source'Last loop
          if Cursor + 1 <= Source'Last
+           and then Source (Cursor .. Cursor + 1) = "{#"
+         then
+            --  A comment. It contributes nothing but its whitespace control,
+            --  which is the only reason it cannot simply be skipped.
+            declare
+               Scan      : Natural := Cursor + 2;
+               Trim_Left : constant Boolean :=
+                 Scan <= Source'Last and then Source (Scan) = '-';
+            begin
+               while Scan + 1 <= Source'Last
+                 and then Source (Scan .. Scan + 1) /= "#}"
+               loop
+                  Scan := Scan + 1;
+               end loop;
+
+               if Scan + 1 > Source'Last then
+                  Fail (E.Template_Syntax_Error, "unterminated_comment");
+                  return;
+               end if;
+
+               Trim_Next := Scan > Cursor + 2
+                 and then Source (Scan - 1) = '-';
+
+               Flush_Literal (Cursor - 1, Trim_Left);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Cursor := Scan + 2;
+               Literal_Start := Cursor;
+            end;
+
+         elsif Cursor + 1 <= Source'Last
            and then Source (Cursor) = '{'
            and then (Source (Cursor + 1) = '%' or else Source (Cursor + 1) = '{')
          then
@@ -972,39 +1468,34 @@ package body Model_Runner.Templates is
                      begin
                         From := Text_Slice'First;
                         Read_Operand (Text_Slice, From, Value, Valid);
-                        if not Valid then
-                           Fail (E.Template_Unknown_Variable, "output");
-                           return;
-                        end if;
-                        if Skip_Spaces (Text_Slice, From) <= Text_Slice'Last then
-                           --  A pipe here is a filter, and saying so is worth
-                           --  a code of its own: a reader can act on "this
-                           --  template uses a filter" where "unsupported
-                           --  expression" leaves them looking for the
-                           --  expression.
-                           if Text_Slice (Skip_Spaces (Text_Slice, From)) = '|'
-                           then
-                              Fail (E.Template_Unknown_Filter, "output");
-                           else
-                              Fail
-                                (E.Template_Unsupported_Construct, "expression");
-                           end if;
-                           return;
+
+                        --  An expression this engine cannot read becomes an
+                        --  instruction that refuses when it is reached. That
+                        --  is where raise_exception ends up, and where it
+                        --  belongs: the template asked for a failure there,
+                        --  and a template that never goes there asked for
+                        --  nothing.
+                        if not Valid
+                          or else Skip_Spaces (Text_Slice, From)
+                                  <= Text_Slice'Last
+                        then
+                           Refuse (Text_Slice, Where);
+                        else
+                           declare
+                              Kept : Natural;
+                           begin
+                              Keep (Value, Kept);
+
+                              if Kept = 0 then
+                                 Where := 0;
+                              else
+                                 Emit ((Op => Op_Output, Value_At => Kept,
+                                        others => <>),
+                                       Where);
+                              end if;
+                           end;
                         end if;
 
-                        declare
-                           Kept : Natural;
-                        begin
-                           Keep (Value, Kept);
-
-                           if Kept = 0 then
-                              Where := 0;
-                           else
-                              Emit ((Op => Op_Output, Value_At => Kept,
-                                     others => <>),
-                                    Where);
-                           end if;
-                        end;
                         if Where = 0 then
                            return;
                         end if;
@@ -1058,8 +1549,52 @@ package body Model_Runner.Templates is
       Count      : constant Natural := Conv.Length (Messages);
       Position   : Natural := 1;
       Current    : Natural := 0;
+      Loop_Start : Positive := 1;
       Iterations : Natural := 0;
       Overflow   : Boolean := False;
+
+      --  What a name holds. A list is held as the position it starts at,
+      --  because the only thing a template does to one is drop entries from
+      --  the front of it.
+      type Value_Kind is (Value_Undefined, Value_Text, Value_None, Value_List);
+
+      type Slot is record
+         Kind   : Value_Kind := Value_Undefined;
+         Offset : Natural := 0;
+         Length : Natural := 0;
+         Start  : Positive := 1;
+      end record;
+
+      Slots : array (1 .. Max_Variables) of Slot := [others => <>];
+
+      --  Text the template has assigned to names. Sized against the output
+      --  rather than fixed, because what goes in here is mostly message
+      --  content on its way out.
+      Pool_Size : constant Natural :=
+        Natural'Min (Max_Variable_Bytes, Natural'Max (Target'Length, 1024));
+      Pool      : String (1 .. Pool_Size) := [others => ' '];
+      Pool_Used : Natural := 0;
+
+      --  Set when the render reaches something the compiler carried through
+      --  rather than answered. Reported like overflow, after the step.
+      Refused     : Boolean := False;
+      Refused_At  : Natural := 0;
+      Refused_Len : Natural := 0;
+      Refused_Why : E.Error_Code := E.Template_Unsupported_Construct;
+
+      --  Refuse, naming a slice of the compiled source pool. The first
+      --  refusal is the one reported: a condition can hold several terms and
+      --  the reader wants the one that stopped it, not the last one looked at.
+      procedure Refuse
+        (Offset : Natural; Length : Natural; Why : E.Error_Code) is
+      begin
+         if not Refused then
+            Refused := True;
+            Refused_At := Offset;
+            Refused_Len := Length;
+            Refused_Why := Why;
+         end if;
+      end Refuse;
 
       --  Append text to the output, reporting overflow once.
       procedure Put (Value : String) is
@@ -1076,8 +1611,8 @@ package body Model_Runner.Templates is
          Last := Last + Value'Length;
       end Put;
 
-      --  Value of one term in the current context.
-      function Value_Of (Value : Term) return String is
+      --  Value of one term in the current context, before its filter.
+      function Raw_Of (Value : Term) return String is
       begin
          case Value.Kind is
             when Term_Literal =>
@@ -1094,14 +1629,21 @@ package body Model_Runner.Templates is
                return (if Current = 0 then ""
                        else Conv.Content_At (Messages, Current));
             when Term_Indexed_Role | Term_Indexed_Content =>
-               --  Counted from zero in the template and from one here. A
-               --  position the conversation does not reach is empty rather
-               --  than an error, which is what a template comparing it
-               --  against a role name expects.
+               --  Counted from zero in the template and from one here, and
+               --  from wherever the list it names begins, which a template
+               --  moves when it lifts the system message out. A position the
+               --  conversation does not reach is empty rather than an error,
+               --  which is what a template comparing it against a role name
+               --  expects.
                declare
-                  At_Message : constant Natural := Value.Offset + 1;
+                  Holder : Slot renames Slots (Value.Length);
+                  At_Message : constant Natural :=
+                    Holder.Start + Value.Offset;
                begin
-                  if At_Message > Conv.Length (Messages) then
+                  if Holder.Kind /= Value_List then
+                     Refuse (0, 0, E.Template_Unsupported_Construct);
+                     return "";
+                  elsif At_Message > Count then
                      return "";
                   elsif Value.Kind = Term_Indexed_Role then
                      return Conv.Role_Name
@@ -1113,13 +1655,74 @@ package body Model_Runner.Templates is
             when Term_Generation_Prompt =>
                return (if Add_Generation_Prompt then "true" else "");
             when Term_Loop_First =>
-               return (if Current = 1 then "true" else "");
+               return (if Current = Loop_Start then "true" else "");
             when Term_Loop_Last =>
                return (if Current = Count and then Count > 0 then "true" else "");
             when Term_Loop_Index_Zero =>
-               return Model_Runner.Text.Image (Long_Long_Integer (Current) - 1);
+               return Model_Runner.Text.Image
+                 (Long_Long_Integer (Current) - Long_Long_Integer (Loop_Start));
             when Term_Loop_Index_One =>
-               return Model_Runner.Text.Image (Long_Long_Integer (Current));
+               return Model_Runner.Text.Image
+                 (Long_Long_Integer (Current) - Long_Long_Integer (Loop_Start)
+                  + 1);
+            when Term_True =>
+               return "true";
+            when Term_False | Term_None =>
+               return "";
+            when Term_Variable =>
+               declare
+                  Holder : Slot renames Slots (Value.Offset);
+                  Name   : Variable_Name renames Item.Names (Value.Offset);
+               begin
+                  case Holder.Kind is
+                     when Value_Text =>
+                        return Pool (Holder.Offset + 1
+                                     .. Holder.Offset + Holder.Length);
+                     when Value_None =>
+                        return "";
+                     when Value_Undefined =>
+                        Refuse (Name.Offset, Name.Length,
+                                E.Template_Unknown_Variable);
+                        return "";
+                     when Value_List =>
+                        --  A list has no text. Asking for one is a template
+                        --  doing something this engine does not model, not a
+                        --  template asking for the empty string.
+                        Refuse (Name.Offset, Name.Length,
+                                E.Template_Unsupported_Construct);
+                        return "";
+                  end case;
+               end;
+            when Term_Unsupported =>
+               Refuse (Value.Offset, Value.Length, Value.Why);
+               return "";
+         end case;
+      end Raw_Of;
+
+      --  Value of one term with its filter applied.
+      function Value_Of (Value : Term) return String is
+      begin
+         case Value.Filter is
+            when Filter_None =>
+               return Raw_Of (Value);
+
+            when Filter_Trim =>
+               return Model_Runner.Text.Trim (Raw_Of (Value));
+
+            when Filter_Length =>
+               --  A list's length is the one thing about a list this engine
+               --  can answer, so it is answered before the value is asked
+               --  for as text.
+               if Value.Kind = Term_Variable
+                 and then Slots (Value.Offset).Kind = Value_List
+               then
+                  return Model_Runner.Text.Image
+                    (Long_Long_Integer
+                       (Integer'Max
+                          (Count - Slots (Value.Offset).Start + 1, 0)));
+               end if;
+               return Model_Runner.Text.Image
+                 (Long_Long_Integer (Raw_Of (Value)'Length));
          end case;
       end Value_Of;
 
@@ -1163,22 +1766,81 @@ package body Model_Runner.Templates is
 
       --  Truth of one clause. A bare operand is true when it is non-empty,
       --  which matches how the supported boolean terms are written.
+      function Truth_Of (Value : Condition) return Boolean;
+
+      --  Whether a name has been given a value on the path taken so far.
+      --  Asking is not reading: a name the template never assigns is a name
+      --  this answers False about, and reading it stays an error.
+      function Is_Defined (Value : Operand) return Boolean is
+      begin
+         if Value.Count /= 1 then
+            return False;
+         end if;
+         case Value.Terms (1).Kind is
+            when Term_Variable =>
+               return Slots (Value.Terms (1).Offset).Kind /= Value_Undefined;
+            when Term_Unsupported =>
+               return False;
+            when others =>
+               return True;
+         end case;
+      end Is_Defined;
+
+      --  Whether a name holds none.
+      function Is_None (Value : Operand) return Boolean is
+      begin
+         return Value.Count = 1
+           and then ((Value.Terms (1).Kind = Term_Variable
+                      and then Slots (Value.Terms (1).Offset).Kind = Value_None)
+                     or else Value.Terms (1).Kind = Term_None);
+      end Is_None;
+
       function Truth_Of (Value : Clause) return Boolean is
          Result : Boolean;
       begin
-         if Value.Operator = Compare_None then
-            Result := Value_Of (Value.Left) /= "";
-         else
-            declare
-               Left  : constant String := Value_Of (Value.Left);
-               Right : constant String := Value_Of (Value.Right);
-            begin
-               Result :=
-                 (if Value.Operator = Compare_Equal
-                  then Left = Right
-                  else Left /= Right);
-            end;
+         if Value.Sub_At /= 0 then
+            Result := Truth_Of (Item.Conditions.all (Value.Sub_At));
+            return (if Value.Negated then not Result else Result);
          end if;
+
+         case Value.Operator is
+            when Compare_None =>
+               Result := Value_Of (Value.Left) /= "";
+
+            when Compare_Equal | Compare_Not_Equal =>
+               declare
+                  Left  : constant String := Value_Of (Value.Left);
+                  Right : constant String := Value_Of (Value.Right);
+               begin
+                  Result :=
+                    (if Value.Operator = Compare_Equal
+                     then Left = Right
+                     else Left /= Right);
+               end;
+
+            when Compare_Defined =>
+               Result := Is_Defined (Value.Left);
+
+            when Compare_Not_Defined =>
+               Result := not Is_Defined (Value.Left);
+
+            when Compare_Is_None =>
+               Result := Is_None (Value.Left);
+
+            when Compare_Is_Not_None =>
+               Result := not Is_None (Value.Left);
+
+            when Compare_In_Message =>
+               --  The fields a message has here. A template asking after any
+               --  other one -- tool_calls, most often -- is asking about a
+               --  message this engine cannot hold, and the honest answer is
+               --  that this message does not have it.
+               declare
+                  Field : constant String := Value_Of (Value.Left);
+               begin
+                  Result := Field = "role" or else Field = "content";
+               end;
+         end case;
 
          return (if Value.Negated then not Result else Result);
       end Truth_Of;
@@ -1215,6 +1877,11 @@ package body Model_Runner.Templates is
          return;
       end if;
 
+      --  The name messages starts out meaning the whole conversation. A
+      --  template that never assigns anything sees exactly what it did
+      --  before this table existed.
+      Slots (1) := (Kind => Value_List, Start => 1, others => <>);
+
       --  A flat instruction list with jumps: rendering never recurses, so the
       --  only bound needed is on iterations.
       while Position <= Item.Program_Used loop
@@ -1241,12 +1908,22 @@ package body Model_Runner.Templates is
                   Position := Position + 1;
 
                when Op_For_Begin =>
-                  if Count = 0 then
-                     Position := Step.Target;
-                  else
-                     Current := 1;
-                     Position := Position + 1;
-                  end if;
+                  declare
+                     Holder : Slot renames Slots (Step.Offset);
+                  begin
+                     if Holder.Kind /= Value_List then
+                        Refuse (Item.Names (Step.Offset).Offset,
+                                Item.Names (Step.Offset).Length,
+                                E.Template_Unsupported_Construct);
+                        Position := Position + 1;
+                     elsif Holder.Start > Count then
+                        Position := Step.Target;
+                     else
+                        Loop_Start := Holder.Start;
+                        Current := Holder.Start;
+                        Position := Position + 1;
+                     end if;
+                  end;
 
                when Op_For_Next =>
                   if Current < Count then
@@ -1266,8 +1943,67 @@ package body Model_Runner.Templates is
 
                when Op_Jump =>
                   Position := Step.Target;
+
+               when Op_Set_Text =>
+                  declare
+                     Value : constant String :=
+                       Value_Of (Item.Operands.all (Step.Value_At));
+                  begin
+                     if Pool_Used + Value'Length > Pool'Length then
+                        Refuse (Item.Names (Step.Offset).Offset,
+                                Item.Names (Step.Offset).Length,
+                                E.Template_Output_Too_Large);
+                     else
+                        Pool (Pool_Used + 1 .. Pool_Used + Value'Length) :=
+                          Value;
+                        Slots (Step.Offset) :=
+                          (Kind => Value_Text, Offset => Pool_Used,
+                           Length => Value'Length, Start => 1);
+                        Pool_Used := Pool_Used + Value'Length;
+                     end if;
+                  end;
+                  Position := Position + 1;
+
+               when Op_Set_None =>
+                  Slots (Step.Offset) := (Kind => Value_None, others => <>);
+                  Position := Position + 1;
+
+               when Op_Set_Copy =>
+                  Slots (Step.Offset) := Slots (Step.Target);
+                  Position := Position + 1;
+
+               when Op_Set_Slice =>
+                  if Slots (Step.Target).Kind /= Value_List then
+                     Refuse (Item.Names (Step.Target).Offset,
+                             Item.Names (Step.Target).Length,
+                             E.Template_Unsupported_Construct);
+                  else
+                     Slots (Step.Offset) :=
+                       (Kind  => Value_List,
+                        Start => Slots (Step.Target).Start + Step.Length,
+                        others => <>);
+                  end if;
+                  Position := Position + 1;
+
+               when Op_Unsupported =>
+                  Refuse (Step.Offset, Step.Length,
+                          E.Template_Unsupported_Construct);
+                  Position := Position + 1;
             end case;
          end;
+
+         if Refused then
+            Last := 0;
+            Status := E.Make (Refused_Why);
+            if Refused_Len > 0 then
+               E.Add_Text
+                 (Status, "construct",
+                  Item.Source.all
+                    (Refused_At + 1 .. Refused_At + Refused_Len),
+                  E.Param_Identifier);
+            end if;
+            return;
+         end if;
 
          if Overflow then
             Last := 0;

@@ -203,6 +203,25 @@ after a prompt it is text the model produced. `Reset` now distinguishes the two
 cases. No amount of self-consistency checking would have surfaced this, because
 both sides of every internal check shared the same decoder.
 
+## Where the chat template parts company
+
+The template a Llama-3.2 file ships with renders here. It asks whether
+`strftime_now` is defined before using it, and this engine does not define it,
+so the template takes its own fallback and the system block reads
+`Today Date: 26 Jul 2024`. A reference runtime that provides `strftime_now`
+puts today's date there instead, so the two rendered prompts differ by that
+one field and tokenize differently because of it.
+
+This is a choice and not an oversight. Reading the clock would make the same
+conversation render differently on two days, which would put a moving part
+underneath every recorded prompt and every reproduction of a report. The
+template supplies the fallback itself, so taking it is the template's own
+answer to the question of what to do without a clock.
+
+Anything comparing rendered prompts against a reference for a model whose
+template asks after the date has to account for that field, or compare the
+tokens after the system block.
+
 ## What is already proven without one
 
 `tests conformance` compares the engine against `Reference_Transformer`, an

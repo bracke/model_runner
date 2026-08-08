@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The chat template a current Llama-3 file ships with now renders. It needed
+  variable assignment, list slicing, comments, `is defined`, `none`, the
+  `trim` and `length` filters, parenthesised conditions and `'x' in message`,
+  all of which are now in the supported subset -- and it also needed
+  `strftime_now`, `tojson` and `raise_exception`, which are not and will not
+  be.
+
+  The way both are true at once is where a construct is refused. A statement
+  whose shape cannot be read is still refused at compile time, because
+  nothing after it can be trusted to mean anything. A value that cannot be
+  computed is now carried through compilation and refused at the point it is
+  asked for. Every one of those templates describes tool calling in branches
+  that a conversation of plain messages never enters, so refusing the
+  template for them refused the model; refusing at the point of use refuses
+  only what was actually asked for. Nothing is approximated either way, and
+  a render that reaches one of them ends with `MR-TMPL-0002` naming the
+  construct rather than producing a prompt that is nearly right.
+
+  `--chat-template` stays, for the models this still cannot read.
+
+- Template errors that name a variable or a filter now say which one.
+
 - `--chat-template NAME` uses a chat format this build carries -- `llama3` or
   `chatml` -- in place of the model's own. Some models ship a template that
   assigns variables, slices lists, calls functions and formats dates, most of

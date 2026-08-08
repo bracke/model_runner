@@ -73,16 +73,40 @@ asymmetric key and value widths, and rotary scaling other than `none` and
 | --- | --- |
 | Literal text | Implemented |
 | `{{ terms }}` joined by `+` | Implemented |
-| `{% for message in messages %}` | Implemented |
+| `{% for message in LIST %}` | Implemented; the loop variable must be named `message` |
 | `{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}` | Implemented |
 | `==`, `!=`, `and`, `or`, `not` | Implemented |
 | `bos_token`, `eos_token`, `add_generation_prompt` | Implemented |
 | `message['role']`, `message['content']`, dotted forms | Implemented |
+| `messages[0]['role']` and its like | Implemented, relative to what `messages` names at that point |
+| `{# comments #}` | Implemented |
+| `{% set %}` | Implemented for a term expression, `none`, another name, and a front slice such as `messages[1:]` |
+| `true`, `false`, `none`, decimal numbers | Implemented |
+| `is defined`, `is none`, `is not ...` | Implemented |
+| `'field' in message` | Implemented; true for `role` and `content`, false for anything a message here cannot hold |
+| Parenthesised conditions | Implemented, to `Max_Depth` |
+| `\| trim`, `\| length` | Implemented |
 | `loop.first`, `loop.last`, `loop.index`, `loop.index0` | Implemented |
 | `{%- -%}` and `{{- -}}` whitespace control | Implemented |
-| `set`, `macro`, `include`, `import`, `raise_exception` | Rejected: `MR-TMPL-0002` |
-| Filters | Rejected: `MR-TMPL-0007` |
-| Slicing, message indexing, arithmetic, calls | Rejected: `MR-TMPL-0002` |
+| `macro`, `include`, `import` | Rejected at compile time: `MR-TMPL-0002` |
+| Other filters | Refused when evaluated: `MR-TMPL-0007` |
+| Function calls, `tojson`, `strftime_now`, `raise_exception`, arithmetic, indexing by anything but a number | Refused when evaluated: `MR-TMPL-0002` |
+| Reading a name the template never assigned | Refused when evaluated: `MR-TMPL-0006` |
+
+A statement whose shape cannot be read is refused at compile time, because
+nothing after it can be trusted to mean anything. A value that cannot be
+computed is refused when it is asked for. Every template shipped with a
+current Llama-3 model describes tool calling in branches that a conversation
+of plain messages never enters; refusing the template for those branches
+refuses the model, and refusing at the point of use refuses only what was
+actually asked for. Nothing is approximated either way.
+
+`strftime_now` is not provided, so a template that guards it with
+`is defined` -- as the Llama-3.2 template does -- takes its own fallback
+date. That is a visible difference from a reference runtime which does
+provide it: the rendered system block carries the template's built-in date
+rather than today's. Rendering stays reproducible, which is the reason for
+the choice.
 
 ## Sampling
 

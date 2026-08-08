@@ -28,6 +28,12 @@ package body Tests.Template_Cases is
       return Result;
    end Compile_Status;
 
+   --  Compile Source, render it over Messages messages, and report the
+   --  resulting code. A construct the compiler carries rather than answers
+   --  shows up here and not in Compile_Status.
+   function Render_Status
+     (Source : String; Messages : Natural := 2) return E.Error_Code;
+
    --  A conversation of Count alternating messages.
    procedure Fill (Item : in out Conv.History; Count : Natural) is
       Status : E.Error_Info;
@@ -40,6 +46,30 @@ package body Tests.Template_Cases is
             "m", Status);
       end loop;
    end Fill;
+
+   function Render_Status
+     (Source : String; Messages : Natural := 2) return E.Error_Code
+   is
+      Item    : Tmpl.Compiled;
+      Status  : E.Error_Info;
+      Talk    : Conv.History;
+      Room    : String (1 .. 8192);
+      Last    : Natural;
+      Result  : E.Error_Code;
+   begin
+      Tmpl.Compile (Item, Source, Status => Status);
+      if E.Is_Error (Status) then
+         Tmpl.Close (Item);
+         return Status.Code;
+      end if;
+
+      Fill (Talk, Messages);
+      Tmpl.Render (Item, Talk, "<s>", "</s>", True, Room, Last, Status);
+      Result := Status.Code;
+      Conv.Close (Talk);
+      Tmpl.Close (Item);
+      return Result;
+   end Render_Status;
 
    --  Nested "for message in messages" blocks, Levels deep.
    function Nested (Levels : Positive) return String is
@@ -117,6 +147,115 @@ package body Tests.Template_Cases is
 
       Conv.Close (Messages);
    end Ordinary_Template_Renders;
+
+   --  The shape of the template a current model actually ships.
+   --
+   --  A Llama-3 file opens with four blocks that ask whether names exist,
+   --  give them values when they do not, lift the system message out of the
+   --  conversation by slicing it off the front, and describe tool calling in
+   --  branches a conversation of plain messages never enters. None of that
+   --  is exotic; all of it was outside the subset, and a stock model could
+   --  not be chatted with until it was not.
+   --
+   --  This is written here rather than copied from a model file so that the
+   --  test owns what it tests. Every construct below is one that file uses.
+   procedure Model_Shaped_Template_Renders
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF : constant Character := Character'Val (10);
+
+      Source : constant String :=
+        "{{- bos_token }}"
+        & "{%- if custom_tools is defined %}"
+        & "{%- set tools = custom_tools %}"
+        & "{%- endif %}"
+        & "{%- if not date_string is defined %}"
+        & "{%- if strftime_now is defined %}"
+        & "{%- set date_string = strftime_now(""%d %b %Y"") %}"
+        & "{%- else %}"
+        & "{%- set date_string = ""26 Jul 2024"" %}"
+        & "{%- endif %}"
+        & "{%- endif %}"
+        & "{%- if not tools is defined %}"
+        & "{%- set tools = none %}"
+        & "{%- endif %}"
+        & "{#- lift the system message out so it can be slotted in #}"
+        & "{%- if messages[0]['role'] == 'system' %}"
+        & "{%- set system_message = messages[0]['content']|trim %}"
+        & "{%- set messages = messages[1:] %}"
+        & "{%- else %}"
+        & "{%- set system_message = """" %}"
+        & "{%- endif %}"
+        & "{{- ""<|system|>"" }}"
+        & "{%- if tools is not none %}"
+        & "{{- ""Environment: ipython"" }}"
+        & "{%- endif %}"
+        & "{{- ""Today: "" + date_string + "" "" }}"
+        & "{%- if tools is not none and not tools_in_user_message %}"
+        & "{{- raise_exception(""no tools here"") }}"
+        & "{%- endif %}"
+        & "{{- system_message }}"
+        & "{{- ""<|end|>"" }}"
+        & "{%- for message in messages %}"
+        & "{%- if not (message.role == 'ipython' or message.role == 'tool'"
+        & " or 'tool_calls' in message) %}"
+        & "{{- '<|' + message['role'] + '|>' + message['content'] | trim"
+        & " + '<|end|>' }}"
+        & "{%- elif 'tool_calls' in message %}"
+        & "{{- message.tool_calls[0] | tojson }}"
+        & "{%- endif %}"
+        & "{%- endfor %}"
+        & "{%- if add_generation_prompt %}"
+        & "{{- '<|assistant|>' }}"
+        & "{%- endif %}";
+
+      Item     : Tmpl.Compiled;
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Target   : String (1 .. 1024);
+      Last     : Natural;
+   begin
+      Tmpl.Compile (Item, Source, Status => Status);
+      Assert (E.Is_Ok (Status),
+              "a template shaped like a model's own did not compile: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  Without a system message. The name messages still means the whole
+      --  conversation, date_string falls to the value the template itself
+      --  supplies, and the tool branches are never entered.
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.User_Role, " Hi ", Status);
+      Tmpl.Render (Item, Messages, "<s>", "</s>", True, Target, Last, Status);
+      Assert (E.Is_Ok (Status),
+              "rendering failed: " & E.Error_Code'Image (Status.Code));
+      Assert (Target (1 .. Last)
+              = "<s><|system|>Today: 26 Jul 2024 <|end|>"
+                & "<|user|>Hi<|end|><|assistant|>",
+              "rendered the wrong text: " & Target (1 .. Last));
+      Conv.Close (Messages);
+
+      --  With one. The system message is lifted out of the conversation and
+      --  placed in the block the model expects it in, and the loop that
+      --  follows must not render it a second time -- which is exactly what
+      --  the slice is for, and exactly what breaks when it is ignored.
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.System_Role, "  Be brief.  ", Status);
+      Conv.Append (Messages, Conv.User_Role, "Hi", Status);
+      Conv.Append (Messages, Conv.Assistant_Role, "Yo", Status);
+      Tmpl.Render (Item, Messages, "<s>", "</s>", True, Target, Last, Status);
+      Assert (E.Is_Ok (Status),
+              "rendering with a system message failed: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Target (1 .. Last)
+              = "<s><|system|>Today: 26 Jul 2024 Be brief.<|end|>"
+                & "<|user|>Hi<|end|><|assistant|>Yo<|end|><|assistant|>",
+              "rendered the wrong text: " & Target (1 .. Last));
+      Conv.Close (Messages);
+
+      Tmpl.Close (Item);
+      pragma Unreferenced (LF);
+   end Model_Shaped_Template_Renders;
 
    --  Every documented compile-time refusal happens.
    procedure Malformed_Templates_Are_Refused
@@ -196,12 +335,36 @@ package body Tests.Template_Cases is
 
       --  Constructs the engine does not implement are refused rather than
       --  ignored. An ignored tag would silently change the prompt.
-      Assert (Compile_Status ("{% for item in tools %}{% endfor %}")
+      --
+      --  Where the refusal happens is the whole design. A statement whose
+      --  shape cannot be read is refused at compile time, because nothing
+      --  after it can be trusted to mean anything. A value that cannot be
+      --  computed is refused when it is asked for, because a template that
+      --  never asks for it has asked for nothing wrong -- and every template
+      --  shipped with a current model describes tool calling in branches a
+      --  conversation of plain messages never enters.
+      Assert (Render_Status ("{% for item in tools %}x{% endfor %}")
               = E.Template_Unsupported_Construct,
               "iteration over something other than messages was accepted");
-      Assert (Compile_Status ("{% set x = 1 %}")
+      Assert (Render_Status ("{{ raise_exception('no') }}")
               = E.Template_Unsupported_Construct,
-              "an unsupported statement was accepted");
+              "raise_exception rendered");
+      Assert (Render_Status ("{{ tool_call.arguments | tojson }}")
+              = E.Template_Unknown_Filter,
+              "an unknown filter rendered");
+      Assert (Render_Status ("{% set d = strftime_now('%d') %}{{ d }}")
+              = E.Template_Unsupported_Construct,
+              "a function call rendered");
+      Assert (Render_Status ("{{ never_assigned }}")
+              = E.Template_Unknown_Variable,
+              "reading a name the template never assigned rendered");
+
+      --  The same constructs inside a branch the conversation does not enter
+      --  cost nothing, which is the point of refusing late.
+      Assert (Render_Status
+                ("{% if tools is defined %}{{ raise_exception('no') }}"
+                 & "{% endif %}ok") = E.No_Error,
+              "a refusal in an untaken branch stopped the render");
 
       --  A template cannot name a file. Nothing embedded in a model may cause
       --  another read, so the construct that would do it has to be refused
@@ -213,20 +376,19 @@ package body Tests.Template_Cases is
               = E.Template_Unsupported_Construct,
               "an import was accepted");
 
-      --  A filter has a diagnostic of its own: a reader can act on "this
-      --  template uses a filter" where "unsupported expression" leaves them
-      --  looking for the expression.
-      Assert (Compile_Status ("{{ message.content | trim }}")
+      --  A filter keeps a diagnostic of its own: a reader can act on "this
+      --  template uses a filter I do not have" where "unsupported
+      --  expression" leaves them looking for the expression.
+      Assert (Render_Status ("{{ bos_token | upper }}")
               = E.Template_Unknown_Filter,
               "a filter was not reported as one");
-      Assert (Compile_Status ("{{ bos_token | upper }}")
-              = E.Template_Unknown_Filter,
-              "a filter on a token was not reported as one");
+      Assert (Render_Status ("{{ message.content | trim }}") = E.No_Error,
+              "the trim filter was refused");
 
       --  Names the engine does not know are refused, not rendered empty.
-      Assert (Compile_Status ("{{ nonsense }}") = E.Template_Unknown_Variable,
+      Assert (Render_Status ("{{ nonsense }}") = E.Template_Unknown_Variable,
               "an unknown variable was accepted");
-      Assert (Compile_Status ("{{ message.nonsense }}")
+      Assert (Render_Status ("{{ message.nonsense }}")
               = E.Template_Unknown_Variable,
               "an unknown message field was accepted");
 
@@ -601,6 +763,9 @@ package body Tests.Template_Cases is
       Register_Routine
         (T, Ordinary_Template_Renders'Access,
          "a template the program would meet compiles and renders");
+      Register_Routine
+        (T, Model_Shaped_Template_Renders'Access,
+         "a template shaped like the one a current model ships renders");
       Register_Routine
         (T, Malformed_Templates_Are_Refused'Access,
          "every documented compile-time refusal happens");

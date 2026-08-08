@@ -16,27 +16,51 @@ with Model_Runner.Limits;
 --
 --    literal text
 --    {{ terms }}             terms joined by '+', see below
---    {% for message in messages %} ... {% endfor %}
+--    {# comment #}
+--    {% for message in LIST %} ... {% endfor %}
 --    {% if cond %} ... {% elif cond %} ... {% else %} ... {% endif %}
+--    {% set name = value %}  value being a term expression, none, another
+--                            name, or a list with a leading slice removed
 --    {%- ... -%} and {{- ... -}}   whitespace control on either side
 --
 --  Terms usable in output and in comparisons
 --
 --    'literal'  "literal"      with \n, \t, \r, \\ and \' escapes
+--    123                       digits, as the text of the number
+--    true  false  none
 --    bos_token  eos_token
 --    message['role']    message.role
 --    message['content'] message.content
+--    messages[0]['role']       and its like, relative to what the name
+--                              messages refers to at that point
 --    add_generation_prompt
 --    loop.first  loop.last  loop.index0  loop.index
+--    any name the template has assigned
+--    | trim  and  | length
 --
 --  Conditions are an or-list of and-lists of clauses, each clause optionally
---  negated by 'not' and optionally comparing two terms with '==' or '!='.
+--  negated by 'not', optionally parenthesised, and optionally comparing two
+--  terms with '==' or '!=' or testing one with 'is defined', 'is none' or
+--  "'field' in message", any of which may be negated with 'is not'.
 --
---  Explicitly not supported, and rejected with Template_Unsupported_Construct:
---  set, macro, include, import, raise_exception, filters, slicing, indexing
---  into messages, arithmetic, and any function call. The engine cannot open a
---  file, read the environment, start a process, reach the network or load a
---  library, because it contains no operation that does any of those things.
+--  Structural constructs outside the subset -- macro, include, import,
+--  extends, filter blocks -- are rejected at compile time with
+--  Template_Unsupported_Construct, because a program whose shape cannot be
+--  read cannot be reasoned about at all.
+--
+--  Expressions outside the subset -- function calls, JSON encoding, date
+--  formatting, arithmetic, indexing into anything but messages -- compile to
+--  an instruction that refuses when it is reached. Templates shipped with
+--  current models describe tool calling in branches a conversation of plain
+--  messages never enters, and refusing the template for a branch nobody takes
+--  refuses the model. Refusing at the point of use refuses only what was
+--  actually asked for; nothing is approximated and nothing is guessed,
+--  because reaching one of these ends the render with
+--  Template_Unsupported_Construct naming the construct.
+--
+--  The engine cannot open a file, read the environment, start a process,
+--  reach the network or load a library, because it contains no operation that
+--  does any of those things.
 --
 --  Bounds. Template size, instruction count, nesting depth, loop iterations
 --  and output size are all bounded. Rendering cannot recurse: the compiled
@@ -54,6 +78,12 @@ package Model_Runner.Templates is
 
    --  Largest number of terms in one output expression or comparison side.
    Max_Terms : constant := 32;
+
+   --  Largest number of distinct names a template may read or assign.
+   Max_Variables : constant := 32;
+
+   --  Largest total text a template's variables may hold during one render.
+   Max_Variable_Bytes : constant := 65_536;
 
    --  Largest number of instruction steps one render may perform, across all
    --  loops. Bounds rendering time independently of the message count.
@@ -88,7 +118,6 @@ package Model_Runner.Templates is
    --  @return Template source, or the empty string when the name is unknown.
    function Built_In (Name : String) return String;
 
-
    --  Compile and validate a template.
    --
    --  @param Item Template to fill in; released first.
@@ -97,8 +126,6 @@ package Model_Runner.Templates is
    --  @param Status Success, Template_Too_Large, Template_Syntax_Error,
    --    Template_Unsupported_Construct, Template_Unknown_Variable,
    --    Template_Nesting_Too_Deep or Template_Unbalanced_Block.
-
-
    procedure Compile
      (Item   : in out Compiled;
       Source : String;
@@ -155,14 +182,48 @@ private
 
       --  A named message rather than the one being looped over:
       --  messages[0]['role'] and its like. Offset carries the index, counted
-      --  from zero as the template writes it.
+      --  from zero as the template writes it, relative to whatever the name
+      --  messages refers to at that point.
       Term_Indexed_Role,
-      Term_Indexed_Content);
+      Term_Indexed_Content,
+
+      --  A name the template assigns to, or one it is given. Offset carries
+      --  the position in the variable table.
+      Term_Variable,
+
+      Term_True,
+      Term_False,
+      Term_None,
+
+      --  Something this engine cannot evaluate, carried through compilation
+      --  so that a template is refused for what it does rather than for what
+      --  it contains. Offset and Length name the construct, for the error
+      --  raised if rendering ever reaches it.
+      --
+      --  Templates arriving in model files describe tool calling, date
+      --  formatting and JSON encoding in branches that a conversation of
+      --  plain messages never enters. Refusing the whole template at compile
+      --  time for those branches refuses the template outright; refusing at
+      --  the point of use refuses only what is actually asked for, and still
+      --  cannot answer wrongly, because reaching one is an error and not a
+      --  guess.
+      Term_Unsupported);
+
+   --  The filters this engine applies. Any other filter makes the term
+   --  unsupported rather than the template unusable.
+   type Filter_Kind is (Filter_None, Filter_Trim, Filter_Length);
 
    type Term is record
       Kind   : Term_Kind := Term_Literal;
       Offset : Natural := 0;
       Length : Natural := 0;
+      Filter : Filter_Kind := Filter_None;
+
+      --  What an unsupported term is unsupported for. A filter and a name
+      --  are different things to have got wrong, and the reader can act on
+      --  the difference.
+      Why    : Model_Runner.Errors.Error_Code :=
+        Model_Runner.Errors.Template_Unsupported_Construct;
    end record;
 
    type Term_Array is array (1 .. Max_Terms) of Term;
@@ -173,13 +234,30 @@ private
       Count : Natural := 0;
    end record;
 
-   type Comparison_Kind is (Compare_None, Compare_Equal, Compare_Not_Equal);
+   type Comparison_Kind is
+     (Compare_None,
+      Compare_Equal,
+      Compare_Not_Equal,
+
+      --  Jinja's "is" tests. Only the two this engine can answer are here;
+      --  every other test makes the clause unsupported.
+      Compare_Defined,
+      Compare_Not_Defined,
+      Compare_Is_None,
+      Compare_Is_Not_None,
+
+      --  'name' in message: whether a message carries that field.
+      Compare_In_Message);
 
    type Clause is record
       Negated : Boolean := False;
       Left    : Operand;
       Operator : Comparison_Kind := Compare_None;
       Right   : Operand;
+
+      --  A parenthesised condition, held in the same table as the condition
+      --  this clause belongs to. Zero when the clause is a plain comparison.
+      Sub_At  : Natural := 0;
    end record;
 
    Max_Clauses : constant := 8;
@@ -207,10 +285,15 @@ private
    type Opcode is
      (Op_Text,          --  emit a literal slice
       Op_Output,        --  emit an evaluated operand
-      Op_For_Begin,     --  start iterating messages
+      Op_For_Begin,     --  start iterating the list named by Offset
       Op_For_Next,      --  advance, jumping back while more remain
       Op_Jump_If_False, --  skip a branch
-      Op_Jump);         --  unconditional jump
+      Op_Jump,          --  unconditional jump
+      Op_Set_Text,      --  assign an evaluated operand to a variable
+      Op_Set_None,      --  assign none
+      Op_Set_Copy,      --  assign another variable's value, whatever it is
+      Op_Set_Slice,     --  assign a list with its first Length entries gone
+      Op_Unsupported);  --  refuse, naming the construct, if ever reached
 
    --  An instruction names its operand and its condition rather than
    --  carrying them.
@@ -245,6 +328,16 @@ private
 
    type Text_Access is access String;
 
+   --  A name the template uses, as a slice of the compiled source pool. The
+   --  first entry is always messages, so that a template which never assigns
+   --  anything still has a list to iterate.
+   type Variable_Name is record
+      Offset : Natural := 0;
+      Length : Natural := 0;
+   end record;
+
+   type Variable_Name_Array is array (1 .. Max_Variables) of Variable_Name;
+
    type Compiled is limited new Ada.Finalization.Limited_Controlled with record
       Ready        : Boolean := False;
       Program      : Instruction_Access := null;
@@ -258,6 +351,9 @@ private
       Operand_Used  : Natural := 0;
       Conditions    : Condition_Array_Access := null;
       Condition_Used : Natural := 0;
+
+      Names     : Variable_Name_Array := [others => <>];
+      Name_Used : Natural := 0;
 
       --  Taken from the bounds this was compiled with, so that rendering
       --  needs no bounds of its own.
