@@ -103,53 +103,48 @@ package body Model_Runner.Numerics is
    --  an exception instead of a diagnostic. Same reason as From_Bits below.
    function To_Real (Item : Half) return Real is
       pragma Suppress (Validity_Check);
-      Raw       : constant Interfaces.Unsigned_16 :=
-        Interfaces.Unsigned_16 (Item);
-      Sign      : constant Interfaces.Unsigned_32 :=
-        Interfaces.Unsigned_32 (Interfaces.Shift_Right (Raw, 15)) * 2 ** 31;
-      Exponent  : constant Interfaces.Unsigned_32 :=
-        Interfaces.Unsigned_32 (Interfaces.Shift_Right (Raw, 10) and 16#1F#);
-      Mantissa  : constant Interfaces.Unsigned_32 :=
-        Interfaces.Unsigned_32 (Raw and 16#03FF#);
+
+      --  Widening without deciding anything.
+      --
+      --  The old form asked which kind of value it had -- zero, subnormal,
+      --  infinity, normal -- and normalised a subnormal by shifting one bit
+      --  at a time until the leading bit appeared. A loop whose length
+      --  depends on the value cannot be vectorised, and that is why this
+      --  format decoded slower than the quantized ones.
+      --
+      --  This computes both answers and takes one. The normal case is the
+      --  exponent and mantissa shifted into binary32 places and scaled by
+      --  the difference in bias; the subnormal case is the mantissa read as
+      --  the fraction of a number just above one, less that one. Infinity
+      --  and not-a-number come out of the normal case unchanged, because
+      --  scaling by a power of two leaves the widest exponent widest.
+      Raw   : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32 (Interfaces.Unsigned_16 (Item));
+      Wide  : constant Interfaces.Unsigned_32 := Interfaces.Shift_Left (Raw, 16);
+      Sign  : constant Interfaces.Unsigned_32 := Wide and 16#8000_0000#;
+      Twice : constant Interfaces.Unsigned_32 := Wide + Wide;
+
+      --  2.0**(-112), the bias correction, as a binary32.
+      Bias_Scale : constant Real := To_Value (Interfaces.Shift_Left (15, 23));
+
+      Normal : constant Real :=
+        To_Value (Interfaces.Shift_Right (Twice, 4)
+                  + Interfaces.Shift_Left (16#E0#, 23))
+        * Bias_Scale;
+
+      Small : constant Real :=
+        To_Value (Interfaces.Shift_Right (Twice, 17)
+                  or Interfaces.Shift_Left (126, 23))
+        - 0.5;
+
+      --  Below this, the exponent was zero and the value is subnormal.
+      Cutoff : constant Interfaces.Unsigned_32 :=
+        Interfaces.Shift_Left (1, 27);
    begin
-      if Exponent = 0 then
-         if Mantissa = 0 then
-            --  Signed zero.
-            return To_Value (Sign);
-         end if;
-
-         --  Subnormal. Shift the mantissa left until the implicit leading bit
-         --  appears, decrementing the binary32 exponent to match. binary32 has
-         --  ample exponent range, so the result is normal and exact.
-         declare
-            Shifted  : Interfaces.Unsigned_32 := Mantissa;
-            Adjusted : Interfaces.Unsigned_32 := 127 - 15 + 1;
-         begin
-            while (Shifted and 16#0000_0400#) = 0 loop
-               Shifted := Interfaces.Shift_Left (Shifted, 1);
-               Adjusted := Adjusted - 1;
-            end loop;
-            Shifted := Shifted and 16#0000_03FF#;
-            return
-              To_Value
-                (Sign
-                 or Interfaces.Shift_Left (Adjusted, 23)
-                 or Interfaces.Shift_Left (Shifted, 13));
-         end;
-
-      elsif Exponent = 16#1F# then
-         --  Infinity or NaN. The payload's leading bits are preserved.
-         return
-           To_Value
-             (Sign or Exponent_Mask or Interfaces.Shift_Left (Mantissa, 13));
-
-      else
-         return
-           To_Value
-             (Sign
-              or Interfaces.Shift_Left (Exponent + (127 - 15), 23)
-              or Interfaces.Shift_Left (Mantissa, 13));
-      end if;
+      return
+        To_Value
+          (Sign
+           or To_Bits (if Twice < Cutoff then Small else Normal));
    end To_Real;
 
    -------------
