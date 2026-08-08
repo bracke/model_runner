@@ -59,6 +59,11 @@ comparison about the types rather than about the model.
 Do not use it to judge what a model says. It answers `The capital of France
 is` with ` Paris.`, as the Q8_0 file does, and that is all it is asked.
 
+It is also no longer faster than the Q8_0 file end to end. It was, by three to
+five per cent, until the worker pool stopped leaving a core idle; the smaller
+weights were relieving a contention that no longer exists. The README says so
+where the figures are.
+
 ## Reference runtime
 
 Recordings under `tests/fixtures/*.expect` state which runtime produced them in

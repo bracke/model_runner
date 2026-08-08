@@ -507,18 +507,20 @@ the commit that published it and running it again gives 24.8 s, the same as
 this build does, so nothing regressed between then and now and the number was
 mis-recorded when it was written down. The 2.19 s stands as published.
 
-Fourteen threads is more than this work can use, and this machine has eight
-cores reported as sixteen processors. Eight workers take 2.20 s for 14.9 s of
-processor time and fourteen take 2.22 s for 26.7 s: the second worker on a
-core shares the first one's execution units, so it buys no wall and costs its
-own processor time. Scaling stops at about 4.6x on eight either way, and most
-of that is the chip rather than the pool: there are only 2015 matrix products
-in this run, so handing each of them out costs milliseconds in total. Not all
-of it, though -- see below for the core that was going to waste.
+A job is cut into one more piece than the pool has workers, because the task
+that submits it takes the last piece rather than waiting; the figures below
+count those pieces, and so does the benchmark. Eight of them is this machine
+fully occupied, since it has eight cores -- reported as sixteen processors,
+which is not the same thing. Eight shares take 2.21 s for 14.6 s of processor
+time and sixteen take 2.20 s for 27.4 s: the second worker on a core shares
+the first one's execution units, so it buys no wall and costs its own
+processor time. There are only 2015 matrix products in a run this size, so
+handing each of them out costs milliseconds in total; what the pool does with
+them, however, mattered a great deal, and is the next paragraph.
 
-One of those cores was being wasted, and finding out why took pinning the
-process to one processor per core so it had nowhere to hide. Pinned, seven
-workers reached 5.0x and eight fell to 3.7x -- adding a worker made it slower.
+One core was being wasted, and finding out why took pinning the process to one
+processor per core so it had nowhere to hide. Pinned, seven shares reached
+5.0x and eight fell to 3.7x -- adding a worker made it slower.
 The task that submits a matrix product used to wait for the workers to finish
 it, so with one worker per core there was always one more runnable task than
 there were cores, the operating system took a core from a worker, and the
@@ -541,29 +543,36 @@ one body per host for this, beside the ones for mapping and signals, and a
 host that cannot answer says so rather than guessing. `--threads` overrides it
 everywhere and still accepts any number the backend allows.
 
-The 4.6x is not the memory. Measured on its own, away from the model, the
-matrix product reaches 4.8x on seven workers and falls back at eight, and it
-does that whether one vector is passed or thirty-two -- if memory were the
-wall, the thirty-two case would be well clear of it, since it reads each
-weight byte once for thirty-two multiplies instead of one. At eight workers
-the product moves 11.5 GB/s, which this machine is not troubled by. What does
-change is the clock: 4898 MHz with one worker and 3748 with eight, sampled
-while running. That alone caps eight workers at 6.1x, and the rest is cache
-and hand-off. It is a 15 W part doing what a 15 W part does.
+What is left over is not the memory. Measured on its own, away from the model,
+the matrix product reaches 5.3x on eight shares against its own serial rate,
+and reaches it whether one vector is passed or thirty-two -- 2577 to 13481
+Me/s in the first case and 4734 to 25393 in the second, medians of three runs.
+If memory were the wall those two would part company, because the second reads
+each weight byte once for thirty-two multiplies and the first reads it once
+for one. At eight shares the product moves 14.3 GB/s, which this machine is
+not troubled by. What does change is the clock: 4927 MHz with one core busy
+and 3926 with eight, sampled from the host while running. That ratio alone
+caps eight cores at 6.4x, and the rest is cache and hand-off. It is a 15 W
+part doing what a 15 W part does.
 
-Nor is there redundant traffic to remove. Each worker reads only its own rows,
+Nor is there redundant traffic to remove. Each share reads only its own rows,
 each weight byte is read once per pass, and the span buffer that looks like
 waste when one vector is passed is what makes the loops vectorizable --
 decoding straight into the sum was written and measured at 44 per cent slower.
 
-What is left is to move fewer bytes per weight, and that was measured too.
-Away from the model the four-bit format is sixteen per cent faster than the
-eight-bit one at eight workers, and level with it at one -- the gap is
-contention, not arithmetic. End to end it is smaller: the same model at Q4_K,
-669 MB against 1171, generates twelve tokens in 1.19 s against 1.21 and uses
-14.4 s of processor time against 14.9. Three to five per cent, because a run
-is more than its widest matrix product and because the ceiling is the clock
-rather than the bytes. Real, and small.
+Moving fewer bytes per weight was the last idea, and measuring it twice is
+what settled it. Before the submitting task took a share, the four-bit format
+ran sixteen per cent faster than the eight-bit one at eight-way parallelism
+while being level with it serially, and three to five per cent faster end to
+end. That gap was the contention, not the bytes: with the contention gone the
+four-bit format is about five per cent faster in the kernel at any share
+count -- 14241 Me/s against 13481 at eight shares, 2679 against 2577 serially
+-- and end to end the two are indistinguishable, 2.06 and 2.18 s against 2.06
+and 2.26.
+
+It is worth keeping as a lesson rather than a result. A measurement taken
+while something else is the bottleneck measures that other thing, and the way
+to find out is to fix the bottleneck and measure again.
 
 (That file was requantized from the eight-bit one rather than built from the
 original weights, which is not how a model should be made. It is here to move
