@@ -528,4 +528,38 @@ package body External_Model is
          Say ("an exception escaped while validating the model");
    end Run;
 
+   -------------
+   -- Summary --
+   -------------
+
+   function Summary (Item : Report) return String is
+   begin
+      case Item.Result is
+         when Skipped =>
+            return "external-model: skipped (" & Detail_Text (Item) & ")";
+
+         when Rejected =>
+            return "external-model: rejected (" & Detail_Text (Item) & ")";
+
+         when Failed =>
+            return "external-model: FAILED (" & Detail_Text (Item) & ")";
+
+         when Ran =>
+            return
+              "external-model: ok, " & Detail_Text (Item)
+              & ", prompt" & Natural'Image (Item.Prompt_Tokens)
+              & " tokens, generated" & Natural'Image (Item.Generated)
+              & ", deterministic " & Boolean'Image (Item.Deterministic)
+              & (if Item.Thread_Checked
+                 then ", thread-stable " & Boolean'Image (Item.Thread_Stable)
+                 else ", thread-stability not checked: one worker")
+              & (if Item.Reference_Run
+                 then ", tokens-match " & Boolean'Image (Item.Tokens_Match)
+                      & ", greedy-match " & Boolean'Image (Item.Greedy_Match)
+                      & ", text-match " & Boolean'Image (Item.Text_Match)
+                      & ", logits compared" & Natural'Image (Item.Compared)
+                 else "");
+      end case;
+   end Summary;
+
 end External_Model;

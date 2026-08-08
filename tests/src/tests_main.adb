@@ -241,52 +241,13 @@ begin
             Expect  => Option ("--expect", ""),
             Result  => Result);
 
-         case Result.Result is
-            when External_Model.Skipped =>
-               Ada.Text_IO.Put_Line
-                 (Ada.Text_IO.Standard_Error,
-                  "external-model: skipped ("
-                  & External_Model.Detail_Text (Result) & ")");
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, External_Model.Summary (Result));
 
-            when External_Model.Rejected =>
-               Ada.Text_IO.Put_Line
-                 (Ada.Text_IO.Standard_Error,
-                  "external-model: rejected ("
-                  & External_Model.Detail_Text (Result) & ")");
-               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-
-            when External_Model.Failed =>
-               Ada.Text_IO.Put_Line
-                 (Ada.Text_IO.Standard_Error,
-                  "external-model: FAILED ("
-                  & External_Model.Detail_Text (Result) & ")");
-               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-
-            when External_Model.Ran =>
-               Ada.Text_IO.Put_Line
-                 (Ada.Text_IO.Standard_Error,
-                  "external-model: ok, "
-                  & External_Model.Detail_Text (Result)
-                  & ", prompt" & Natural'Image (Result.Prompt_Tokens)
-                  & " tokens, generated"
-                  & Natural'Image (Result.Generated)
-                  & ", deterministic "
-                  & Boolean'Image (Result.Deterministic)
-                  & (if Result.Thread_Checked
-                     then ", thread-stable "
-                          & Boolean'Image (Result.Thread_Stable)
-                     else ", thread-stability not checked: one worker")
-                  & (if Result.Reference_Run
-                     then ", tokens-match "
-                          & Boolean'Image (Result.Tokens_Match)
-                          & ", greedy-match "
-                          & Boolean'Image (Result.Greedy_Match)
-                          & ", text-match "
-                          & Boolean'Image (Result.Text_Match)
-                          & ", logits compared"
-                          & Natural'Image (Result.Compared)
-                     else ""));
-         end case;
+         if Result.Result in External_Model.Rejected | External_Model.Failed
+         then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
       end;
 
    elsif Command = "docs" then

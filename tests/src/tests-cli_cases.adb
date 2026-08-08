@@ -2913,6 +2913,108 @@ package body Tests.CLI_Cases is
                      "the Danish locale", Complete => True);
       end;
 
+      --  The runner's summaries, which the README wraps across lines. Joining
+      --  the published lines and requiring the whole line back is stricter
+      --  than looking for its parts: a summary that lost a field, gained one,
+      --  or had one altered all differ from the joined text, and only an
+      --  exact match passes.
+      declare
+         procedure Must_Read_As (Anchor, Produced, What : String) is
+            Block  : constant String := Block_Holding (Anchor);
+            Joined : String (1 .. 2_048) := [others => ' '];
+            Used   : Natural := 0;
+            From   : Natural := Block'First;
+            Seen   : Boolean := False;
+         begin
+            Assert (Block'Length > 0,
+                    "no published block holds """ & Anchor & """");
+
+            for Index in Block'First .. Block'Last - Anchor'Length + 1 loop
+               if Block (Index .. Index + Anchor'Length - 1) = Anchor then
+                  From := Index;
+                  while From <= Block'Last
+                    and then Block (From) /= Character'Val (10)
+                  loop
+                     From := From + 1;
+                  end loop;
+                  From := From + 1;
+                  Seen := True;
+                  exit;
+               end if;
+            end loop;
+            Assert (Seen, "no command """ & Anchor & """ in its block");
+
+            while From <= Block'Last loop
+               declare
+                  Stop : Natural := From;
+               begin
+                  while Stop <= Block'Last
+                    and then Block (Stop) /= Character'Val (10)
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  declare
+                     Line  : constant String := Block (From .. Stop - 1);
+                     Head  : Natural := Line'First;
+                     Tail  : Natural := Line'Last;
+                  begin
+                     while Head <= Tail and then Line (Head) = ' ' loop
+                        Head := Head + 1;
+                     end loop;
+                     while Tail >= Head and then Line (Tail) = ' ' loop
+                        Tail := Tail - 1;
+                     end loop;
+
+                     exit when Head <= Tail and then Line (Head) = '$';
+
+                     if Head <= Tail then
+                        if Used > 0 then
+                           Used := Used + 1;
+                           Joined (Used) := ' ';
+                        end if;
+                        Joined (Used + 1 .. Used + (Tail - Head + 1)) :=
+                          Line (Head .. Tail);
+                        Used := Used + (Tail - Head + 1);
+                     end if;
+                  end;
+
+                  From := Stop + 1;
+               end;
+            end loop;
+
+            Assert (Joined (1 .. Used) = Produced,
+                    What & " prints" & ASCII.LF & "  " & Produced & ASCII.LF
+                    & "where the README publishes" & ASCII.LF & "  "
+                    & Joined (1 .. Used));
+         end Must_Read_As;
+
+         Absent : External_Model.Report;
+         Fits   : External_Model.Report;
+         Over   : External_Model.Report;
+      begin
+         External_Model.Run
+           (Path => "/nowhere/x.gguf", Prompt => "Hello", Tokens => 16,
+            Threads => 4, Result => Absent);
+         Must_Read_As ("$ tests external-model --model /nowhere",
+                       External_Model.Summary (Absent), "a missing model");
+
+         External_Model.Run
+           (Path => "fixtures/tiny-model.gguf", Prompt => "ab", Tokens => 8,
+            Threads => 4, Result => Fits);
+         Must_Read_As
+           ("--threads 4 --max-tokens 8",
+            External_Model.Summary (Fits), "a run that fits the context");
+
+         External_Model.Run
+           (Path => "fixtures/tiny-model.gguf", Prompt => "ab", Tokens => 16,
+            Threads => 4, Result => Over);
+         Must_Read_As
+           ("$ tests external-model --model fixtures/tiny-model.gguf"
+            & " --prompt ""ab""" & ASCII.LF,
+            External_Model.Summary (Over), "a run the engine refuses");
+      end;
+
       declare
          Source : Fixed_Arguments;
       begin

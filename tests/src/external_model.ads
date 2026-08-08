@@ -79,4 +79,14 @@ package External_Model is
    function Detail_Text (Item : Report) return String
    is (Item.Detail (1 .. Item.Detail_Last));
 
+   --  The one-line summary of a run, as the runner prints it.
+   --
+   --  Here rather than at the call site because the README publishes it, and
+   --  a test replays a run and compares. Two copies of this format would let
+   --  the published one agree with a copy while disagreeing with the runner.
+   --
+   --  @param Item Report to describe.
+   --  @return Summary line, without a trailing newline.
+   function Summary (Item : Report) return String;
+
 end External_Model;

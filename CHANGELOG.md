@@ -324,9 +324,14 @@ wall and 16.0 s of processor time.
   time instead of 27.4 s. `--threads` overrides it as before.
 
 - A test replays the transcripts the README publishes and compares them with
-  what the program prints: the inspection of the committed fixture, and the
-  two locale examples, which are held to showing every line the program wrote
-  and not merely lines it wrote.
+  what the program prints: the inspection of the committed fixture, the two
+  locale examples, which are held to showing every line the program wrote and
+  not merely lines it wrote, and the three external-model runs, whose wrapped
+  summaries are joined and required back exactly.
+
+- The external-model summary line is formatted in one place, `Summary`, rather
+  than at the point it is printed, so that the published copy of it cannot
+  agree with a second copy while disagreeing with the runner.
 
 - `tests check` fails when the sources behind a published performance figure
   change without the figure being measured again. The figures cannot be
