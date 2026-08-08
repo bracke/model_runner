@@ -54,6 +54,20 @@ package Model_Runner.Numerics is
    --  the compiler emitted one call per element and the format decoded at a
    --  fifth of the speed of the others until this aspect was added.
    --
+   --  The rest of this package is deliberately not inlined. Every call the
+   --  compiler emits inside a loop, anywhere in the library, was found by
+   --  reading the generated code, and the candidates that reached a hot loop
+   --  were measured: the bit reinterpretations here and the two block-shape
+   --  lookups in Model_Runner.GGUF moved the kernels by under one percent and
+   --  won three of five paired runs, which is nothing, and inlining the
+   --  guards around Exp and its neighbours made the activation five percent
+   --  slower, because the guard is not the cost -- the library function
+   --  behind it is, and that call remains either way.
+   --
+   --  So an aspect here is worth adding only where the call is per element
+   --  and the body is smaller than the call. That is true twice in this
+   --  package: here, and for Is_Finite on Real.
+   --
    --  @param Item Half-precision bit pattern.
    --  @return Exactly equal single-precision value.
    function To_Real (Item : Half) return Real
