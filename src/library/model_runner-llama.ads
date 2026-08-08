@@ -69,6 +69,22 @@ package Model_Runner.Llama is
 
    --  A prepared, immutable model.
    type Model is tagged limited private;
+   --  Replace the model's chat template with one the caller supplies.
+   --
+   --  For models whose own template this build will not compile. The source
+   --  is compiled and validated exactly as an embedded one is, so an
+   --  unusable replacement is refused rather than stored.
+   --
+   --  @param Item Prepared model.
+   --  @param Source Template source.
+   --  @param Bounds Limits applied while compiling.
+   --  @param Status Success, or why the source was refused.
+   procedure Use_Template
+     (Item   : in out Model;
+      Source : String;
+      Bounds : Model_Runner.Limits.Model_Limits;
+      Status : out Model_Runner.Errors.Error_Info);
+
 
    --  Load, validate and prepare a model from an open byte source.
    --
@@ -81,6 +97,7 @@ package Model_Runner.Llama is
    --  @param Cancel Cancellation token, or null.
    --  @param Observer Progress observer, or null.
    --  @param Status Success, or the first diagnostic that stopped preparation.
+
    procedure Prepare
      (Item     : in out Model;
       Source   : Model_Runner.GGUF.Containers.Container;

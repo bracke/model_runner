@@ -526,8 +526,8 @@ Named in the specification, absent here:
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
-chooses for itself. From a short prompt, twelve tokens take **2.09 s** --
-about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.3 s of
+chooses for itself. From a short prompt, twelve tokens take **2.07 s** --
+about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.2 s of
 processor time, the median of three runs. Loading the model costs a further
 0.8 s of wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
@@ -649,14 +649,14 @@ model says.
 
 | `--batch-size` | prompt evaluation | rate | output |
 |---|---|---|---|
-| 1 (one token at a time) | 12.64 s | 10.4 tokens/s | `7066666208f6fbe6` |
+| 1 (one token at a time) | 13.16 s | 10.0 tokens/s | `7066666208f6fbe6` |
 | 2 | 10.34 s | 12.7 tokens/s | `7066666208f6fbe6` |
 | 4 | 8.66 s | 15.1 tokens/s | `7066666208f6fbe6` |
-| 8 | 7.79 s | 16.8 tokens/s | `7066666208f6fbe6` |
+| 8 | 7.53 s | 17.4 tokens/s | `7066666208f6fbe6` |
 | 16 | 7.20 s | 18.2 tokens/s | `7066666208f6fbe6` |
-| 32 (default) | 6.82 s | 19.2 tokens/s | `7066666208f6fbe6` |
+| 32 (default) | 6.92 s | 18.9 tokens/s | `7066666208f6fbe6` |
 | 64 | 6.36 s | 20.6 tokens/s | `7066666208f6fbe6` |
-| 128 (cap) | 6.63 s | 19.8 tokens/s | `7066666208f6fbe6` |
+| 128 (cap) | 6.45 s | 20.3 tokens/s | `7066666208f6fbe6` |
 
 Most of the benefit arrives by a batch of eight, and it flattens after
 thirty-two. Batching amortizes the cost of decoding the weights across the

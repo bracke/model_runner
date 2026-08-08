@@ -80,6 +80,39 @@ package body Model_Runner.Templates is
 
    type Frame_Array is array (1 .. Max_Depth) of Frame;
 
+   --------------
+   -- Built_In --
+   --------------
+
+   function Built_In (Name : String) return String is
+      LF : constant Character := Character'Val (10);
+   begin
+      if Name = "llama3" then
+         return
+           "{{ bos_token }}"
+           & "{% for message in messages %}"
+           & "<|start_header_id|>{{ message['role'] }}<|end_header_id|>"
+           & LF & LF
+           & "{{ message['content'] }}<|eot_id|>"
+           & "{% endfor %}"
+           & "{% if add_generation_prompt %}"
+           & "<|start_header_id|>assistant<|end_header_id|>" & LF & LF
+           & "{% endif %}";
+
+      elsif Name = "chatml" then
+         return
+           "{% for message in messages %}"
+           & "<|im_start|>{{ message['role'] }}" & LF
+           & "{{ message['content'] }}<|im_end|>" & LF
+           & "{% endfor %}"
+           & "{% if add_generation_prompt %}"
+           & "<|im_start|>assistant" & LF
+           & "{% endif %}";
+      else
+         return "";
+      end if;
+   end Built_In;
+
    procedure Compile
      (Item   : in out Compiled;
       Source : String;

@@ -69,6 +69,25 @@ package Model_Runner.Templates is
 
    --  A compiled template. Release with Close, which is idempotent.
    type Compiled is tagged limited private;
+   --  A chat format this build carries, by name.
+   --
+   --  Some models ship a template that this engine will not compile: it
+   --  assigns variables, slices lists, calls functions and formats dates,
+   --  most of it to describe tool calling, and interpreting all of that on
+   --  text taken from a model file is a larger and more exposed thing than
+   --  formatting a conversation. The reference implementation answers the
+   --  same problem the same way, by carrying the well-known formats itself.
+   --
+   --  These are written in the subset this engine already compiles, so they
+   --  are ordinary templates and not a second mechanism. A caller asks for
+   --  one by name; nothing chooses one on a model's behalf, because a chat
+   --  format applied to the wrong model is wrong in a way the output does
+   --  not show.
+   --
+   --  @param Name Format name, such as "llama3" or "chatml".
+   --  @return Template source, or the empty string when the name is unknown.
+   function Built_In (Name : String) return String;
+
 
    --  Compile and validate a template.
    --
@@ -78,6 +97,8 @@ package Model_Runner.Templates is
    --  @param Status Success, Template_Too_Large, Template_Syntax_Error,
    --    Template_Unsupported_Construct, Template_Unknown_Variable,
    --    Template_Nesting_Too_Deep or Template_Unbalanced_Block.
+
+
    procedure Compile
      (Item   : in out Compiled;
       Source : String;

@@ -394,6 +394,7 @@ package body Model_Runner.CLI.Options is
          Flag_Max_Tokens, Flag_Context, Flag_Batch, Flag_Temperature,
          Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Repeat_Penalty,
          Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
+         Flag_Chat_Template,
          Flag_Seed, Flag_Memory, Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Threads);
@@ -722,6 +723,13 @@ package body Model_Runner.CLI.Options is
 
                   elsif Name = "--min-p" then
                      Real_Value (Flag_Min_P, Result.Sampling.Min_P, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--chat-template" then
+                     Bounded_Value
+                       (Flag_Chat_Template, Result.Chat_Template, Good);
                      if not Good then
                         return;
                      end if;

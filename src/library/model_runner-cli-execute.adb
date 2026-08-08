@@ -326,6 +326,23 @@ package body Model_Runner.CLI.Execute is
       if Full then
          L.Prepare
            (Prepared, Container, Source, Bounds, Cancel, Observer, Status);
+
+         --  A chat format named on the command line replaces the model's
+         --  own. Models whose template this build will not compile are
+         --  otherwise usable only in raw mode, and naming the format is a
+         --  decision a reader can check -- nothing here guesses one from the
+         --  model, because a chat format applied to the wrong model produces
+         --  output that looks entirely reasonable and is not what the model
+         --  was trained on.
+         if E.Is_Ok (Status)
+           and then not Model_Runner.Text.Is_Empty (Item.Chat_Template)
+         then
+            L.Use_Template
+              (Prepared,
+               Model_Runner.Templates.Built_In
+                 (Model_Runner.Text.To_String (Item.Chat_Template)),
+               Bounds, Status);
+         end if;
       end if;
    end Load;
 
@@ -378,6 +395,7 @@ package body Model_Runner.CLI.Execute is
              Loc.Named ("help.run.top_k", ""),
              Loc.Named ("help.run.top_p", ""),
              Loc.Named ("help.run.min_p", ""),
+             Loc.Named ("help.run.chat_template", ""),
              Loc.Named ("help.run.repeat_penalty", ""),
              Loc.Named ("help.run.frequency_penalty", ""),
              Loc.Named ("help.run.presence_penalty", ""),

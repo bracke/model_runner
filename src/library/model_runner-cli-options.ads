@@ -102,6 +102,10 @@ package Model_Runner.CLI.Options is
       --  Bypass the chat template and tokenize the prompt directly.
       Raw : Boolean := False;
 
+      --  A chat format named on the command line, replacing the model's own.
+      --  Empty means the model's template is used.
+      Chat_Template : Model_Runner.Text.Bounded;
+
       Max_Tokens   : Natural := 256;
       Context_Size : Natural := 0;
       Batch_Size   : Natural := 32;

@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `--chat-template NAME` uses a chat format this build carries -- `llama3` or
+  `chatml` -- in place of the model's own. Some models ship a template that
+  assigns variables, slices lists, calls functions and formats dates, most of
+  it to describe tool calling, and interpreting that on text from a model file
+  is a larger and more exposed thing than formatting a conversation. The
+  reference implementation carries named formats for the same reason. Nothing
+  is chosen on a model's behalf: a chat format applied to the wrong model
+  produces output that looks entirely reasonable and is not what the model was
+  trained on.
+
 - Chat templates may name a message by position -- `messages[0]['role']` --
   which is how a template asks whether a conversation already opens with a
   system message before adding one. It was the only construct standing

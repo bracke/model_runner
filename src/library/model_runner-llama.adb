@@ -442,6 +442,22 @@ package body Model_Runner.Llama is
    -- Prepare --
    -------------
 
+   ------------------
+   -- Use_Template --
+   ------------------
+
+   procedure Use_Template
+     (Item   : in out Model;
+      Source : String;
+      Bounds : Model_Runner.Limits.Model_Limits;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Model_Runner.Templates.Close (Item.Chat);
+      Model_Runner.Templates.Compile (Item.Chat, Source, Bounds, Status);
+      Item.Chat_Present := E.Is_Ok (Status);
+      Item.Chat_Status := Status;
+   end Use_Template;
+
    procedure Prepare
      (Item     : in out Model;
       Source   : Containers.Container;
