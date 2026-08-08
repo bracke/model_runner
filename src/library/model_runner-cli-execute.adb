@@ -325,7 +325,8 @@ package body Model_Runner.CLI.Execute is
 
       if Full then
          L.Prepare
-           (Prepared, Container, Source, Bounds, Cancel, Observer, Status);
+           (Prepared, Container, Source, Bounds, Cancel, Observer,
+            Item.Backend, Status);
 
          --  A chat format named on the command line replaces the model's
          --  own. Models whose template this build will not compile are

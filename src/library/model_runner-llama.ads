@@ -96,6 +96,10 @@ package Model_Runner.Llama is
    --  @param Bounds Limits applied to the configuration and to allocation.
    --  @param Cancel Cancellation token, or null.
    --  @param Observer Progress observer, or null.
+   --  @param Backend Backend the model will be evaluated on. Every tensor is
+   --    checked against what that backend can read, so a model carrying a
+   --    format it cannot take is refused here with
+   --    Backend_Unsupported_Format naming the tensor and the format.
    --  @param Status Success, or the first diagnostic that stopped preparation.
 
    procedure Prepare
@@ -106,6 +110,8 @@ package Model_Runner.Llama is
         Model_Runner.Limits.Default_Model_Limits;
       Cancel   : Model_Runner.Cancellation.Token_Reference := null;
       Observer : Model_Runner.Progress.Observer_Reference := null;
+      Backend  : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
       Status   : out Model_Runner.Errors.Error_Info);
 
    --  Release a model. Idempotent.
@@ -394,6 +400,12 @@ private
       Chat_Present : Boolean := False;
       Chat_Status : Model_Runner.Errors.Error_Info;
       Accounting  : Model_Runner.Memory.Account;
+
+      --  What the backend this model was prepared for can read. Every tensor
+      --  is checked against it while the model loads, so that a format the
+      --  backend cannot take is refused with the model rather than found by
+      --  a matrix product part way through the first token.
+      Able        : Model_Runner.Backend.Capabilities;
    end record;
 
    overriding procedure Finalize (Item : in out Model);

@@ -325,7 +325,8 @@ package body Fuzzing is
                   Closing  : E.Error_Info;
                begin
                   Model_Runner.Llama.Prepare
-                    (Prepared, Item, Source, Bounds, null, null, Outcome);
+                    (Prepared, Item, Source, Bounds, null, null,
+                     Status => Outcome);
                   Note_Internal (Outcome);
 
                   if E.Is_Ok (Outcome) then

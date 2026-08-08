@@ -151,6 +151,7 @@ the choice.
 | Clean shutdown, rejection while closing | Implemented |
 | Batched prefill | Implemented, `--batch-size`, capped at 128 tokens |
 | Noncontiguous views | Not implemented |
+| Capability checking | Every tensor is checked against the backend's own account of what it can read, while the model loads. No shipped configuration refuses anything: the one backend claims exactly the formats the decoder decodes. It is the seam a narrower backend plugs into, and narrowing the claim does refuse the model, naming the backend, the format and the tensor |
 | Backend selection | `--backend NAME`, matched against the backends this build has and refused by name otherwise. There is one, `cpu`, and running dispatches on the choice so that adding another cannot leave the flag inert |
 
 ## Locales

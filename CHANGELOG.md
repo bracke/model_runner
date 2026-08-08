@@ -84,6 +84,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Model preparation asks the backend, per tensor, whether it can read the
+  format, and refuses the model with `MR-BACKEND-0002` naming the backend,
+  the format and the tensor when it cannot. `--backend` reaches this too, so
+  the choice decides what will load and not only what will run.
+
+  No shipped configuration refuses anything: the one backend claims exactly
+  the formats the decoder decodes. The point is the seam. `Capabilities` was
+  a record the code published about the code that nothing read -- `Supports`
+  had no caller anywhere -- and a description nobody consults is one that can
+  be wrong for a year, which is what happened to `Supports_Batched`.
+
 - `--backend NAME` names the backend to evaluate the model on. There is one,
   `cpu`, and the option exists anyway: a name this build does not have is
   refused by name and exits as the usage error it is, where before the option

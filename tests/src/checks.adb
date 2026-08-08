@@ -849,6 +849,7 @@ package body Checks is
       --  option. Unreachable: the condition cannot arise -- there is no
       --  merge table in a SentencePiece vocabulary, and Conversation.Role is
       --  an enumeration.
+
       --
       --  Backend_Unknown was on that second list, with the reason "there is
       --  no --backend to be invalid". There is now, and a name this build

@@ -362,6 +362,35 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  And what the backend can read, which is a different question from
+      --  what the container can describe. Asked here, per tensor, while the
+      --  model loads: a backend that cannot take a format should refuse the
+      --  model that carries it, not meet it in the middle of a token.
+      --
+      --  No shipped configuration reaches this. The one backend claims
+      --  exactly the formats the decoder decodes, and a format outside that
+      --  set is refused by the check above. It is written anyway, because it
+      --  is the seam a narrower backend plugs into, and because a capability
+      --  record nothing consults is one that can be wrong for a year --
+      --  which is how Supports_Batched came to say False while every prefill
+      --  batched. Supports had no caller at all before this.
+      if not Model_Runner.Backend.Supports
+               (Item.Able, Containers.Tensor_Format (Source, Index))
+      then
+         Status := E.Make (E.Backend_Unsupported_Format);
+         E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+         E.Add_Text
+           (Status, "format",
+            Model_Runner.GGUF.Type_Name
+              (Containers.Tensor_Format (Source, Index)),
+            E.Param_Identifier);
+         E.Add_Text
+           (Status, "backend",
+            Model_Runner.Backend.Backend_Name (Item.Able.Kind),
+            E.Param_Identifier);
+         return;
+      end if;
+
       declare
          Rank      : constant Positive := Containers.Tensor_Rank (Source, Index);
          Contiguous : constant Element_Count :=
@@ -466,6 +495,8 @@ package body Model_Runner.Llama is
         Model_Runner.Limits.Default_Model_Limits;
       Cancel   : Model_Runner.Cancellation.Token_Reference := null;
       Observer : Model_Runner.Progress.Observer_Reference := null;
+      Backend  : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
       Status   : out E.Error_Info)
    is
       Ignored : E.Error_Info;
@@ -487,6 +518,15 @@ package body Model_Runner.Llama is
       end if;
 
       Mem.Initialize (Item.Accounting, Bounds, Bounds.Max_Model_Bytes);
+
+      --  The backend's own account of what it can do, taken once and kept
+      --  with the model. The case has no others: a backend added to the
+      --  enumeration stops this compiling until it says what it can read,
+      --  which is the point of asking rather than assuming.
+      case Backend is
+         when Model_Runner.Backend.Backend_CPU =>
+            Item.Able := Workers_CPU.Describe;
+      end case;
 
       P.Publish (Observer, P.Load_Progress (P.Selecting_Architecture));
       Read_Configuration (Source, Bounds, Item.Settings, Status);

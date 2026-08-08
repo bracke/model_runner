@@ -30,19 +30,34 @@
 # On a mismatch the check prints the fingerprint it computed. Paste that in
 # after re-measuring -- not before.
 #
-# The engine and scaling groups were last moved without re-measuring, which
-# the rule above allows only with a reason. The reason: the change set
-# Supports_Batched in Backend.CPU.Describe, and Describe has no caller in the
-# program at all -- the whole capability record is published and consulted by
-# nothing, so a field in it is not on any path these figures measure. That
-# was checked by searching the tree for callers, not assumed. Anything
-# touching these files that is not in that position gets a re-measure.
+# These groups have twice been moved without re-measuring, which the rule
+# above allows only with a reason. Both reasons are recorded here, because a
+# reason that is not written down is a re-measure that was skipped.
+#
+# Supports_Batched in Backend.CPU.Describe: Describe had no caller in the
+# program at all, so a field in it was not on any path these figures measure.
+# Checked by searching the tree for callers, not assumed.
+#
+# The backend format check in Llama.Resolve: this one does run, once per
+# resolved tensor. It runs during Prepare, and neither figure this group
+# covers includes Prepare. The twelve-token figure says so outright -- load
+# is quoted separately, "because the two are worth separating" -- and the
+# batch-size table times prompt evaluation. The change is outside the window
+# both figures measure, by their own definitions, which is a better answer
+# than a number taken on a machine that at the time was on the powersave
+# governor with other work on it.
+#
+# An A-B build against the previous commit was attempted and abandoned: a git
+# worktree cannot resolve this crate's relative path pins.
+#
+# Anything touching these files that is not outside the measured window gets
+# a re-measure.
 
 # covers: the row-product table under "Kernels"
 kernels EAF68F33E8E77C31 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure and the batch-size table under "Speed"
-engine 7B0A5C6F265BA079 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine 420505615BE3A970 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 267B915715541414 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
