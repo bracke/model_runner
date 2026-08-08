@@ -25,7 +25,8 @@ TinyLlama-1.1B-Chat-v1.0 Q8_0 (Apache-2.0; see
 external-model: ok, architecture llama, 201 tensors,
   checked against llama.cpp b1-717dad5, prompt 6 tokens, generated 2,
   deterministic TRUE, thread-stable TRUE,
-  tokens-match TRUE, greedy-match TRUE, text-match TRUE
+  tokens-match TRUE, greedy-match TRUE, text-match TRUE,
+  logits compared 0
 ```
 
 It has since been done a second time, against the same model requantized to
@@ -35,7 +36,8 @@ Q4_K_M, recorded in `tests/fixtures/tinyllama-q4_k.expect`:
 external-model: ok, architecture llama, 201 tensors,
   checked against llama.cpp b1-717dad5, prompt 6 tokens, generated 2,
   deterministic TRUE, thread-stable TRUE,
-  tokens-match TRUE, greedy-match TRUE, text-match TRUE
+  tokens-match TRUE, greedy-match TRUE, text-match TRUE,
+  logits compared 0
 ```
 
 That one exists because every recording before it was of a file whose tensors
@@ -43,6 +45,19 @@ were all one type. A Q4_K_M file carries Q4_K, Q6_K and F32 tensors together
 and the type is read per tensor, which nothing had compared against another
 runtime. It agreed on the first attempt, so it found nothing -- which is worth
 having written down, because the alternative was not knowing.
+
+`logits compared 0` is not a failure. Neither recording carries a `logit`
+directive, because getting logits out of the reference means more than reading
+what it prints, and the tokenization and the greedy continuation were what
+these were for. The runner reports the count so that a recording with no logit
+comparison cannot be mistaken for one that made it.
+
+These two blocks are copied by hand and nothing checks them, unlike the
+conformance figures in the README, which the run itself now verifies. They
+cannot be: reproducing them needs a model that is not in this repository and
+should not be. Both had already drifted from what the runner prints -- they
+omitted the last field -- which is the argument for keeping the hand-copied
+ones few.
 
 One trap is worth naming, since it cost an hour here. Recent `llama.cpp`
 wraps the prompt in the model's chat template unless told not to: pass
