@@ -495,17 +495,23 @@ Named in the specification, absent here:
 
 ## Speed
 
-All figures below are from the release build, on a Ryzen 7 7840U, against
-TinyLlama-1.1B-Chat Q8_0. From a short prompt, twelve tokens with 14 threads
-take **2.19 s** -- about 1.1 s evaluating the prompt and 1.1 s generating --
-and 24.5 s of processor time. Loading the model costs a further 0.8 s of wall
-that this figure does not include, because the two are worth separating: one
-is the model, the other is the disk.
+All figures below are from the release build, on a Ryzen 7 7840U -- eight
+cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
+chooses for itself. From a short prompt, twelve tokens take **2.14 s** --
+about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.4 s of
+processor time, the median of three runs. Loading the model costs a further
+0.8 s of wall that this figure does not include, because the two are worth
+separating: one is the model, the other is the disk.
 
-That processor figure was published here as 16.0 s, which was wrong. Building
-the commit that published it and running it again gives 24.8 s, the same as
-this build does, so nothing regressed between then and now and the number was
-mis-recorded when it was written down. The 2.19 s stands as published.
+These used to be quoted at fourteen threads, which was more than this machine
+can use and is no longer what it chooses; at that setting the wall figure was
+the same and the processor figure was 24.5 s. The wall figure has been 2.2 s
+throughout, and was published as such.
+
+The processor figure was published as 16.0 s, which was wrong when it was
+written -- not a regression since. Building the commit that published it and
+running it again gives 24.8 s at fourteen threads, which is what this build
+gives at fourteen threads. What made it 14.4 s was choosing eight instead.
 
 A job is cut into one more piece than the pool has workers, because the task
 that submits it takes the last piece rather than waiting; the figures below
@@ -520,8 +526,8 @@ them, however, mattered a great deal, and is the next paragraph.
 
 One core was being wasted, and finding out why took pinning the process to one
 processor per core so it had nowhere to hide. Pinned, seven shares reached
-5.0x and eight fell to 3.7x -- adding a worker made it slower.
-The task that submits a matrix product used to wait for the workers to finish
+5.0x and eight fell to 3.7x -- adding a worker made it slower. The task that
+submits a matrix product used to wait for the workers to finish
 it, so with one worker per core there was always one more runnable task than
 there were cores, the operating system took a core from a worker, and the
 whole job waited for that worker because a job is not done until its slowest
@@ -535,10 +541,11 @@ right about.
 
 The default therefore asks for one worker fewer than the machine has cores --
 the submitting task is the last one -- and follows the core count rather than
-the processor count, where the host will say what that is. Linux publishes it and macOS answers
-sysctl; Windows would answer too, but through a walk over variable-length
-records that has not been written because it cannot be run here, so a Windows
-host still defaults to the processor count as every host did before. There is
+the processor count, where the host will say what that is. Linux publishes it
+and macOS answers sysctl; Windows would answer too, but through a walk over
+variable-length
+records that has not been written because it cannot be run here, so a
+Windows host still defaults to the processor count as every host did before. There is
 one body per host for this, beside the ones for mapping and signals, and a
 host that cannot answer says so rather than guessing. `--threads` overrides it
 everywhere and still accepts any number the backend allows.
@@ -589,26 +596,27 @@ a time — a test asserts exactly that, on the logits and on the cache left
 behind, and another asserts it at the kernel level for every quantization
 format.
 
-131-token prompt, 14 threads. The last column is a hash of the generated
-text, which is the point: `--batch-size` is a performance control and must not
-change what the model says.
+The 131-token prompt in `tests/fixtures/speed-prompt.txt`, at the chosen
+worker count. The last column is a hash of the generated text, which is the
+point: `--batch-size` is a performance control and must not change what the
+model says.
 
 | `--batch-size` | prompt evaluation | rate | output |
 |---|---|---|---|
-| 1 (one token at a time) | 12.43 s | 10.5 tokens/s | `e4b53a82d2838b20` |
-| 2 | 10.05 s | 13.0 tokens/s | `e4b53a82d2838b20` |
-| 4 | 8.49 s | 15.4 tokens/s | `e4b53a82d2838b20` |
-| 8 | 7.75 s | 16.9 tokens/s | `e4b53a82d2838b20` |
-| 16 | 7.33 s | 17.9 tokens/s | `e4b53a82d2838b20` |
-| 32 (default) | 6.93 s | 18.9 tokens/s | `e4b53a82d2838b20` |
-| 64 | 6.71 s | 19.5 tokens/s | `e4b53a82d2838b20` |
-| 128 (cap) | 6.61 s | 19.8 tokens/s | `e4b53a82d2838b20` |
+| 1 (one token at a time) | 13.46 s | 9.7 tokens/s | `7066666208f6fbe6` |
+| 2 | 9.91 s | 13.2 tokens/s | `7066666208f6fbe6` |
+| 4 | 8.05 s | 16.3 tokens/s | `7066666208f6fbe6` |
+| 8 | 7.27 s | 18.0 tokens/s | `7066666208f6fbe6` |
+| 16 | 7.07 s | 18.5 tokens/s | `7066666208f6fbe6` |
+| 32 (default) | 6.97 s | 18.8 tokens/s | `7066666208f6fbe6` |
+| 64 | 6.60 s | 19.9 tokens/s | `7066666208f6fbe6` |
+| 128 (cap) | 6.56 s | 20.0 tokens/s | `7066666208f6fbe6` |
 
 Most of the benefit arrives by a batch of eight, and it flattens after
 thirty-two. Batching amortizes the cost of decoding the weights across the
 tokens that share them, so the faster the decode gets the less there is to
 amortize: on the unoptimized build the same sweep spanned 3.7x, and here it
-spans 1.9x. That is the batching working exactly as described, on a smaller
+spans 2.1x. That is the batching working exactly as described, on a smaller
 share of a much smaller total.
 
 ### Kernels

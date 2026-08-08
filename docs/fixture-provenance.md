@@ -16,6 +16,17 @@ it outright.
 Shape: 16 vocabulary entries, 8 embedding width, 12 feed-forward width, 2
 layers, 2 attention heads, 1 key-value head, head size 4, context 16.
 
+### `tests/fixtures/speed-prompt.txt`
+
+Written for this repository, and committed so that the batch-size table in the
+README can be reproduced rather than believed. It is 131 tokens under the
+TinyLlama tokenizer, which is what makes the numbers in that table comparable
+to each other and to whatever a reader measures.
+
+No test reads it. It is not a fixture in the sense the file above is; it is
+the input to a published measurement, and a published measurement whose input
+is not written down is an anecdote.
+
 ## Models that are **not** committed
 
 The following model is used for the optional `tests external-model` comparison.

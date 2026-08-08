@@ -323,6 +323,12 @@ wall and 16.0 s of processor time.
   processors, twelve tokens took the same wall time for 14.6 s of processor
   time instead of 27.4 s. `--threads` overrides it as before.
 
+- The speed figures in the README are quoted at the worker count the program
+  chooses rather than at fourteen threads, which is more than this machine can
+  use and is no longer what it picks. The batch-size sweep is re-measured at
+  that setting and its prompt is committed, so the table can be reproduced
+  rather than believed.
+
 - Kernel figures in the README are re-measured and were between two and four
   times too slow. The support matrix names the README as their only home,
   which makes keeping them current a duty rather than a courtesy.
