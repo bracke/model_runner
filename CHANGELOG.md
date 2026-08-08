@@ -62,8 +62,9 @@ Keep a Changelog and the project uses semantic versioning.
   implement. The later rules let any single character that is neither letter
   nor digit lead a word, where the original lets only a space, so a tab
   between two words is three pieces under one rule and two under the other.
-  Five rules are implemented and verified against the reference on
-  forty-five strings: `gpt-2`, `falcon`, `starcoder`, `llama3` and `qwen2`.
+  Six rules are implemented and verified against the reference on
+  fifty-six strings: `gpt-2`, `falcon`, `starcoder`, `smollm`, `llama3` and
+  `qwen2`.
   They differ in what may lead a run -- a space under the first, any
   non-letter under the last two, nothing at all before digits there -- and in
   how digits group: without limit, in threes, or one at a time. A vocabulary
@@ -520,6 +521,14 @@ wall and 16.0 s of processor time.
   tokenizer was discarding that distinction.
 
 ### Fixed
+
+- A beginning-of-text marker is added only when the vocabulary asks for one.
+  A request could ask for one and get it regardless, so every model declaring
+  that it wants none was fed a sequence no other implementation would produce.
+  On such a model it moved a logit by nearly two -- against the hundredths
+  that separate two honest implementations -- and ended generation after two
+  tokens where the reference ran on. With it fixed the two agree token for
+  token.
 
 - Byte-pair output is decoded back to bytes. A vocabulary of that kind writes
   its token text in stand-in characters, one per byte, and the decoder was

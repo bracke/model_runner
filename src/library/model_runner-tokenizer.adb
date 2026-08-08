@@ -269,6 +269,11 @@ package body Model_Runner.Tokenizer is
                   Item.Cutting := Rule_Llama3;
                elsif Cutting = "qwen2" then
                   Item.Cutting := Rule_Qwen2;
+               elsif Cutting = "smollm" then
+                  --  Leads a run as the original does -- a space may, a tab
+                  --  may not -- and takes digits one at a time with nothing
+                  --  before them, as qwen2 does.
+                  Item.Cutting := Rule_SmolLM;
                else
                   Item.Model := Kind_Unsupported;
                   Status := E.Make (E.Tokenizer_Unsupported_Model);
@@ -787,7 +792,7 @@ package body Model_Runner.Tokenizer is
          --  what keeps their groups of three from starting with one.
          if Wide_Next > 0 and then not Is_Space (Next) then
             if Is_Letter (Next) then
-               if (if Rule in Rule_GPT2 | Rule_Falcon
+               if (if Rule in Rule_GPT2 | Rule_Falcon | Rule_SmolLM
                    then Here = 32
                    else not Is_Letter (Here) and then not Is_Digit (Here)
                         and then Here /= 13 and then Here /= 10)
@@ -819,7 +824,7 @@ package body Model_Runner.Tokenizer is
                      when Rule_GPT2 => Natural'Last,
                      when Rule_Falcon => 3,
                      when Rule_Llama3 => 3,
-                     when Rule_Qwen2 => 1);
+                     when Rule_SmolLM | Rule_Qwen2 => 1);
             begin
                Room := Room - 1;
                while Room > 0 and then Runs_On (2) loop

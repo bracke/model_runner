@@ -214,9 +214,15 @@ package body External_Model is
          First_Logits := [others => 0.0];
          Ok := False;
 
+         --  Whether a beginning marker belongs in front is the vocabulary's
+         --  business, not this runner's. Adding one to a model that says it
+         --  does not want one feeds a different sequence than any other
+         --  implementation would, and the logits then differ by enough --
+         --  nearly two, against the hundredths that separate two honest
+         --  implementations -- to look like an engine fault.
          Vocab.Encode
-           (Words.all, Effective_Prompt, True, False,
-            Prompt_Tokens, Prompt_Used, Local);
+           (Words.all, Effective_Prompt, Vocab.Adds_Beginning (Words.all),
+            False, Prompt_Tokens, Prompt_Used, Local);
          if E.Is_Error (Local) or else Prompt_Used = 0 then
             Refusal := Local;
             return;

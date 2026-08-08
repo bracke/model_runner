@@ -285,9 +285,16 @@ package body Model_Runner.Generation is
 
       --  Tokenize. The count used for the context check below is exactly the
       --  sequence that will be evaluated.
+      --  A request asks for a beginning marker; the vocabulary decides
+      --  whether it wants one. Some models declare that they do not, and
+      --  putting one in front anyway feeds a sequence no other
+      --  implementation would: measured on such a model, a logit moved by
+      --  nearly two, where two honest implementations of the same
+      --  arithmetic differ by hundredths.
       Vocab.Encode
-        (Words.all, Prompt, Item.Add_Beginning, False,
-         Tokens.all, Prompt_Count, Status);
+        (Words.all, Prompt,
+         Item.Add_Beginning and then Vocab.Adds_Beginning (Words.all),
+         False, Tokens.all, Prompt_Count, Status);
       if E.Is_Error (Status) then
          Conclude (Runtime_Error, Status);
          Cleanup;
