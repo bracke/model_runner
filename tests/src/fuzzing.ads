@@ -79,6 +79,13 @@ package Fuzzing is
       Escaped   : Natural := 0;
       Invalid   : Natural := 0;
       Slow      : Natural := 0;
+
+      --  How deep the corpus actually reached. A campaign whose files all
+      --  stop at the parser exercises none of the engine, and would say so
+      --  with the same clean totals as one that drove every layer.
+      Prepared  : Natural := 0;
+      Ran       : Natural := 0;
+
       First_Bad : Natural := 0;
    end record;
 
@@ -90,6 +97,16 @@ package Fuzzing is
    function Is_Clean (Item : Report) return Boolean
    is (Item.Escaped = 0 and then Item.Invalid = 0 and then Item.Slow = 0);
 
+   --  Report whether a run reached the engine at all.
+   --
+   --  Clean totals mean nothing if every case stopped at the parser: the
+   --  checks past that point would be untested rather than satisfied.
+   --
+   --  @param Item Report to classify.
+   --  @return True when at least one mutated file prepared and one ran.
+   function Reached_The_Engine (Item : Report) return Boolean
+   is (Item.Prepared > 0 and then Item.Ran > 0);
+
    --  Run one mutated case.
    --
    --  @param Seed Run seed.
@@ -98,6 +115,14 @@ package Fuzzing is
    function Run_Case
      (Seed        : Interfaces.Unsigned_64;
       Case_Number : Positive) return Outcome;
+
+   --  What the last case reached, for the campaign to total up.
+   --
+   --  @return True when that case prepared a model.
+   function Last_Case_Prepared return Boolean;
+
+   --  @return True when that case ran a forward pass.
+   function Last_Case_Ran return Boolean;
 
    --  Run a whole campaign.
    --

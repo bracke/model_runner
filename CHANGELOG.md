@@ -7,6 +7,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The fuzzing campaign reports how many mutated files prepared a model and ran
+  a forward pass, and fails if none did.
+
 - The container fuzzer now renders every accepted container the way `inspect`
   does and requires that nothing a terminal would act on comes back, and it
   writes control bytes into the image on purpose so that the case arises.

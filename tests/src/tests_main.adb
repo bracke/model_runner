@@ -84,12 +84,27 @@ begin
             & ", bounded" & Natural'Image (Result.Bounded)
             & ", escaped" & Natural'Image (Result.Escaped)
             & ", invalid" & Natural'Image (Result.Invalid)
-            & ", slow" & Natural'Image (Result.Slow));
+            & ", slow" & Natural'Image (Result.Slow)
+            & ", prepared" & Natural'Image (Result.Prepared)
+            & ", ran" & Natural'Image (Result.Ran));
 
          if not Fuzzing.Is_Clean (Result) then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "first offending case:" & Natural'Image (Result.First_Bad));
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+
+         --  A campaign whose files all stopped at the parser would report
+         --  the same clean totals as one that drove the whole engine, and
+         --  everything past the parser would be untested rather than
+         --  satisfied. Failing here says which it was.
+         if not Fuzzing.Reached_The_Engine (Result) then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "no mutated file reached the engine: prepared"
+               & Natural'Image (Result.Prepared)
+               & ", ran" & Natural'Image (Result.Ran));
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;

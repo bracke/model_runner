@@ -14,6 +14,12 @@ with Tiny_Model;
 
 package body Fuzzing is
 
+   --  What the case now running reached. Held here rather than returned so
+   --  that the outcome of a case stays one value; the campaign reads these
+   --  straight after each call.
+   Prepared_Last : Boolean := False;
+   Ran_Last      : Boolean := False;
+
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Bytes.Byte;
    use type Model_Runner.Bytes.Byte_Count;
@@ -82,6 +88,8 @@ package body Fuzzing is
       Image  : B.Byte_Array_Access;
       Result : Outcome := Rejected;
    begin
+      Prepared_Last := False;
+      Ran_Last := False;
       --  Half the campaign works on quantized weights. The suppressed index,
       --  range and overflow checks are in the quantized decode loops, so a
       --  campaign that only ever mutates a model of binary32 weights never
@@ -306,6 +314,10 @@ package body Fuzzing is
                   Model_Runner.Llama.Prepare
                     (Prepared, Item, Source, Bounds, null, null, Outcome);
 
+                  if E.Is_Ok (Outcome) then
+                     Prepared_Last := True;
+                  end if;
+
                   --  A model that prepared is a model the engine would run,
                   --  so run it. Until now the campaign stopped here, which
                   --  left the forward pass -- and with it the quantization
@@ -342,6 +354,10 @@ package body Fuzzing is
                                    (Live, Prepared,
                                     Model_Runner.Tokenizer.Token_Id (0),
                                     Logits, Status => Ran);
+
+                                 if E.Is_Ok (Ran) then
+                                    Ran_Last := True;
+                                 end if;
                               end if;
 
                               Model_Runner.Llama.Close (Live);
@@ -383,6 +399,10 @@ package body Fuzzing is
    -- Run --
    ---------
 
+   function Last_Case_Prepared return Boolean is (Prepared_Last);
+
+   function Last_Case_Ran return Boolean is (Ran_Last);
+
    procedure Run
      (Seed   : Interfaces.Unsigned_64;
       Cases  : Positive;
@@ -404,6 +424,14 @@ package body Fuzzing is
                if Result.First_Bad = 0 then
                   Result.First_Bad := Index;
                end if;
+            end if;
+
+            if Last_Case_Prepared then
+               Result.Prepared := Result.Prepared + 1;
+            end if;
+
+            if Last_Case_Ran then
+               Result.Ran := Result.Ran + 1;
             end if;
 
             case What is

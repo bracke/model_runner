@@ -377,6 +377,12 @@ that could steer a terminal has been accepted into a state it should not have
 reached. One of the mutations writes control bytes deliberately, because a bit
 flip reaches one only by chance.
 
+Each campaign also reports how far its files got: of two thousand mutated
+files, about twelve hundred prepare a model and nearly as many run a forward
+pass. A campaign where none reached the engine fails, because clean totals
+from files that all stopped at the parser would say nothing about everything
+past it.
+
 An escaped exception or an invalid container accepted into a usable state is a
 failure. Each case is derived from the seed and the case number alone, so a
 failure replays exactly.
