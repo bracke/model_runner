@@ -354,10 +354,19 @@ string, a lost placeholder or a truncated line is visible at a glance.
 ```
 $ model_runner --locale da run x.gguf --bogus
 model_runner: fejl: MR-CLI-0003: ukendt tilvalg: --bogus
+model_runner: kør 'model_runner help' for at se brugen
 
 $ model_runner --locale qps run x.gguf --bogus
 ⟦model_runner: ⟦éŕŕóŕ⟧: MR-CLI-0003: ⟦úñkñówñ ópŧíóñ: --bogus⟧⟧
+⟦model_runner: ⟦ŕúñ 'model_runner héĺp' fóŕ úßágé⟧⟧
 ```
+
+Two lines, not one: the diagnostic and the hint that follows it. Both are
+translated, and the second is the one that shows a locale is complete enough
+to be useful rather than merely present -- a run that told a Danish reader
+what went wrong and then advised them in English would be the interesting
+failure, and would not have been visible here while the example showed only
+the first line.
 
 ### Fuzzing
 
