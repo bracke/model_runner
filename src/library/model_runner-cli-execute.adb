@@ -1004,16 +1004,25 @@ package body Model_Runner.CLI.Execute is
       Cleanup;
       end Run_With;
 
-      --  Worker count: an explicit --threads wins, otherwise the processor
-      --  count bounded by what the backend accepts. One worker means serial
+      --  Worker count: an explicit --threads wins, otherwise the core count
+      --  bounded by what the backend accepts. One worker means serial
       --  execution, and produces the same output as any other count.
+      --
+      --  Cores rather than processors, because on a machine with two
+      --  processors per core the second of each pair shares the first's
+      --  execution units. Measured on an eight-core Ryzen 7 7840U that
+      --  reports sixteen: twelve tokens take 2.20 s of wall with eight
+      --  workers and 2.22 s with fourteen, and 14.9 s of processor time
+      --  against 26.7 s. The extra workers buy nothing and cost nearly twice
+      --  the energy, which matters most on the battery this is likeliest to
+      --  run on. --threads still takes any number the backend accepts.
       function Chosen_Workers return Natural is
       begin
          if Item.Threads > 0 then
             return Natural'Min (Item.Threads, Workers_CPU.Max_Workers);
          else
             return Natural'Min
-              (Model_Runner.Platform.Processor_Count, Workers_CPU.Max_Workers);
+              (Model_Runner.Platform.Core_Count, Workers_CPU.Max_Workers);
          end if;
       end Chosen_Workers;
 

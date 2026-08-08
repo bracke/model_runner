@@ -61,6 +61,18 @@ package Model_Runner.Platform is
    --  @return Processor count, at least 1.
    function Processor_Count return Positive;
 
+   --  Number of physical cores, where the host says how its processors share
+   --  them, and the processor count where it does not.
+   --
+   --  The two differ on a machine with simultaneous multithreading, where the
+   --  operating system reports two processors for each core and they share one
+   --  set of execution units. A worker on each of the two runs no faster than
+   --  one worker on the core and costs twice the processor time, which is why
+   --  the default worker count follows this rather than Processor_Count.
+   --
+   --  @return Core count, at least 1 and never above Processor_Count.
+   function Core_Count return Positive;
+
    --  The host this build targets, as hostkit reports it.
    --
    --  Asked rather than inferred. The engine has one behaviour that differs

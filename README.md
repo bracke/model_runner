@@ -507,11 +507,16 @@ the commit that published it and running it again gives 24.8 s, the same as
 this build does, so nothing regressed between then and now and the number was
 mis-recorded when it was written down. The 2.19 s stands as published.
 
-Fourteen threads is more than this work can use. Eight take 2.22 s for 13.5 s
-of processor time, so the last six buy about one per cent of wall for eighty
-per cent more processor time. `--threads` is how to choose; the default
-chooses a number near the core count, which is the right default for a machine
-doing nothing else and the wrong one for a machine that is not.
+Fourteen threads is more than this work can use, and this machine has eight
+cores reported as sixteen processors. Eight workers take 2.20 s for 14.9 s of
+processor time and fourteen take 2.22 s for 26.7 s: the second worker on a
+core shares the first one's execution units, so it buys no wall and costs its
+own processor time. Scaling stops at about 4.6x on eight either way, which is
+the chip, not the pool -- there are only 2015 matrix products in this run, so
+handing each of them out costs milliseconds in total.
+
+The default therefore follows the core count rather than the processor count.
+`--threads` overrides it and still accepts any number the backend allows.
 
 ### Batched prefill
 

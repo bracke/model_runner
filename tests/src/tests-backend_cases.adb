@@ -6,6 +6,7 @@ with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.Numerics;
+with Model_Runner.Platform;
 with Model_Runner.Tensors;
 
 with Fixtures;
@@ -324,6 +325,38 @@ package body Tests.Backend_Cases is
    -- Register_Tests --
    --------------------
 
+   ------------------------------------
+   -- Cores_Are_Not_Above_Processors --
+   ------------------------------------
+
+   --  The default worker count follows the core count, so what that function
+   --  may return is worth pinning even on a host whose answer this test
+   --  cannot know.
+   --
+   --  It has one interesting failure: a host that describes its topology in a
+   --  way the reading does not understand, which must produce the processor
+   --  count rather than zero, a negative, or a number above it. Any of those
+   --  would reach the pool as a worker count and either run serially without
+   --  saying so or ask for more workers than the backend accepts.
+
+   procedure Cores_Are_Not_Above_Processors
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Processors : constant Positive := Model_Runner.Platform.Processor_Count;
+      Cores      : constant Positive := Model_Runner.Platform.Core_Count;
+   begin
+      Assert (Cores <= Processors,
+              "core count" & Positive'Image (Cores)
+              & " is above the processor count" & Positive'Image (Processors));
+
+      --  Repeated because it reads the host each time rather than caching,
+      --  and a reading that changed between calls would make the default
+      --  depend on when it was asked.
+      Assert (Model_Runner.Platform.Core_Count = Cores,
+              "the core count changed between two readings");
+   end Cores_Are_Not_Above_Processors;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -348,6 +381,10 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Capabilities_Reported'Access,
          "capabilities report only what the backend implements");
-   end Register_Tests;
+
+      Register_Routine
+        (T, Cores_Are_Not_Above_Processors'Access,
+         "the core count is at least one and never above the processor "
+         & "count, whatever the host reports");   end Register_Tests;
 
 end Tests.Backend_Cases;
