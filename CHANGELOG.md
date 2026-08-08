@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The README said the engine decodes seven formats. It decodes thirteen: the
+  row had not been touched since BF16, Q4_1, Q5_0, Q5_1, Q2_K and Q3_K were
+  implemented. The support matrix still said the multiply was folded into the
+  decode for Q4_0, after that had been measured 1.79 times slower and taken
+  out -- a claim about performance that the source's own note contradicts.
+
+  The release checklist now asks the code which formats it decodes, through
+  `Is_Decodable`, and fails when the matrix or the README's quantization row
+  does not name one. The README is checked against that row and not the whole
+  file, because every one of the six missing formats was named somewhere else
+  in it, and a check that reads the whole file would have passed.
+
 - The support matrix said the tokenizer accepts `llama` and rejects
   everything else, which stopped being true when byte-pair encoding was
   implemented. A row further down the same file described its six cutting

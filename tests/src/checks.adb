@@ -16,6 +16,8 @@ with Reserved_Codes;
 
 with Model_Runner;
 with Model_Runner.Errors;
+with Model_Runner.GGUF;
+with Model_Runner.Quantization;
 with Model_Runner.Text;
 
 package body Checks is
@@ -398,6 +400,101 @@ package body Checks is
          if Matrix'Length = 0 then
             Fail ("docs/support-matrix.md is missing");
          end if;
+      end;
+
+      --  Every format the engine decodes is named where a reader looks.
+      --
+      --  The README's quantization row listed seven formats for as long as
+      --  thirteen were implemented, and the support matrix said the multiply
+      --  was folded into the decode for Q4_0 after that had been measured
+      --  1.79 times slower and taken out. Both are tables a reader consults
+      --  to find out whether their file will open, and both had drifted.
+      --
+      --  Asked of the code rather than of a list kept beside it: a format
+      --  added to Is_Decodable and not to the documents fails here.
+      declare
+         Matrix : constant String := Contents ("docs/support-matrix.md");
+         Readme : constant String := Contents ("README.md");
+
+         --  Whether Text holds Token with nothing alphanumeric on either
+         --  side. A plain search would find F16 inside BF16 and report a
+         --  format as documented because a longer one was.
+         function Holds_Word (Text, Token : String) return Boolean is
+            function Part_Of_A_Word (Letter : Character) return Boolean
+            is (Letter in 'A' .. 'Z' or else Letter in 'a' .. 'z'
+                or else Letter in '0' .. '9' or else Letter = '_');
+         begin
+            if Text'Length < Token'Length then
+               return False;
+            end if;
+            for Index in Text'First .. Text'Last - Token'Length + 1 loop
+               if Text (Index .. Index + Token'Length - 1) = Token
+                 and then (Index = Text'First
+                           or else not Part_Of_A_Word (Text (Index - 1)))
+                 and then (Index + Token'Length > Text'Last
+                           or else not Part_Of_A_Word
+                                        (Text (Index + Token'Length)))
+               then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Holds_Word;
+         --  The one line of a table, from its leading bar to the end of the
+         --  line. The README names formats in several places, so searching
+         --  the whole file would have found every one of the six the
+         --  quantization row was missing somewhere else and passed.
+         function Row (Text, Opening : String) return String is
+         begin
+            if Text'Length < Opening'Length then
+               return "";
+            end if;
+            for Index in Text'First .. Text'Last - Opening'Length + 1 loop
+               if Text (Index .. Index + Opening'Length - 1) = Opening then
+                  declare
+                     Stop : Natural := Index;
+                  begin
+                     while Stop <= Text'Last
+                       and then Text (Stop) /= Character'Val (10)
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+                     return Text (Index .. Stop - 1);
+                  end;
+               end if;
+            end loop;
+            return "";
+         end Row;
+
+         Listed : constant String := Row (Readme, "| Quantization |");
+      begin
+         Result.Performed := Result.Performed + 1;
+         if Listed = "" then
+            Fail ("README.md has no quantization row; the check no longer "
+                  & "matches the document it reads");
+         end if;
+
+         for Format in Model_Runner.GGUF.Tensor_Type loop
+            if Model_Runner.Quantization.Is_Decodable (Format) then
+               declare
+                  Name : constant String :=
+                    Model_Runner.GGUF.Type_Name (Format);
+               begin
+                  Result.Performed := Result.Performed + 1;
+                  if not Holds_Word (Matrix, Name) then
+                     Fail ("the engine decodes " & Name
+                           & " but docs/support-matrix.md does not name it");
+                  end if;
+
+                  Result.Performed := Result.Performed + 1;
+                  if not Holds_Word (Listed, Name) then
+                     Fail ("the engine decodes " & Name
+                           & " but the README's quantization row does not "
+                           & "name it");
+                  end if;
+               end;
+            end if;
+         end loop;
       end;
 
       --  Every vocabulary the tokenizer accepts is named in the matrix.

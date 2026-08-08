@@ -166,9 +166,16 @@ the choice.
 Nothing remains from the specification's tooling list: the release checklist is
 `tools/bin/check_all` and the archive is `tests package`.
 
-The multiply is folded into the decode for Q4_0, where it measured faster.
-Q8_0, F32, F16 and the k-quant formats decode a span and then multiply, because
-fusing them measured slower; see the README. The kernels are vectorized by the compiler from ordinary Ada, with no
+Every format decodes a span and then multiplies it. Nothing is fused. The
+multiply was folded into the decode for Q4_0, which was the last format that
+did it, and that path is gone rather than left switched off: fusing breaks the
+sum at every block so the scale can be applied there, and that costs the flat
+inner loop more than the saved multiply is worth. Q4_0 now carries the same
+per-element rounding every other format already had. The measurement that
+reversed the earlier decision is in the README, with the rest of the kernel
+figures.
+
+The kernels are vectorized by the compiler from ordinary Ada, with no
 intrinsics, no assembly and no target-specific flags; `-march=native` and
 `-march=x86-64-v3` both measured slower than the baseline build, so neither is
 used. Weights are not repacked.
