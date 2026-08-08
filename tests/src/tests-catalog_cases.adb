@@ -2,10 +2,12 @@ with Ada.Directories;
 with Ada.Text_IO;
 with AUnit.Assertions;
 
+with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
 with Model_Runner.Generation;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
+with Model_Runner.Presentation;
 with Model_Runner.Progress;
 with Model_Runner.Text;
 
@@ -162,6 +164,91 @@ package body Tests.Catalog_Cases is
               "application.name did not render");
       Loc.Close (Catalog);
    end Catalog_Loads;
+
+   --  Quiet suppresses progress, and the other levels do not.
+   --
+   --  Three guards implement quiet -- on notes, on warnings and on progress
+   --  events -- and deleting any of them left every test passing. Two of the
+   --  three are only reachable from interactive mode or from a host that
+   --  cannot map a file. This one is reachable, and it is the one a run
+   --  actually meets: progress is published on every load.
+   procedure Quiet_Suppresses_Progress
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      package Opt renames Model_Runner.CLI.Options;
+      package P renames Model_Runner.Progress;
+      package Pres renames Model_Runner.Presentation;
+
+      Path : constant String := "obj/quiet-progress.txt";
+
+      --  Publish one load event at the given level and return what reached
+      --  standard error.
+      function Written (Level : Opt.Verbosity) return Natural is
+         Catalog  : aliased Loc.Catalog;
+         Screen   : aliased Pres.Console;
+         Handle   : File_Type;
+         Produced : Natural := 0;
+      begin
+         Loc.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+
+         --  A terminal on standard error, so that the only thing deciding
+         --  whether progress appears is the level.
+         Pres.Open
+           (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+            (Output_Is_Terminal => True,
+             Error_Is_Terminal  => True,
+             Input_Is_Terminal  => True,
+             Colour_Suppressed  => False),
+            Level);
+
+         Create (Handle, Out_File, Path);
+         Set_Error (Handle);
+
+         declare
+            Reporter : aliased Pres.Progress_Reporter (Screen'Unchecked_Access);
+         begin
+            P.Publish
+              (Reporter'Unchecked_Access,
+               P.Load_Progress (P.Reading_Metadata, 1, 2));
+         end;
+
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Open (Handle, In_File, Path);
+         while not End_Of_File (Handle) loop
+            declare
+               Line : String (1 .. 400);
+               Last : Natural;
+            begin
+               Get_Line (Handle, Line, Last);
+               Produced := Produced + Last + 1;
+            end;
+         end loop;
+         Close (Handle);
+
+         Loc.Close (Catalog);
+         return Produced;
+      end Written;
+
+      Quietly : constant Natural := Written (Opt.Quiet);
+      Plainly : constant Natural := Written (Opt.Normal);
+   begin
+      Assert (Quietly = 0,
+              "quiet wrote" & Natural'Image (Quietly)
+              & " bytes of progress");
+
+      --  And the level is what did it: the same event at the ordinary level
+      --  is reported, so the check above cannot pass by nothing working.
+      Assert (Plainly > 0,
+              "the ordinary level wrote no progress, so the quiet case "
+              & "proves nothing");
+
+      Ada.Directories.Delete_File (Path);
+   end Quiet_Suppresses_Progress;
 
    --  Every diagnostic code has a message. A code without one would surface as
    --  the emergency form, which is exactly the failure this checks for.
@@ -633,6 +720,9 @@ package body Tests.Catalog_Cases is
          "no two progress stages say the same thing");
       Register_Routine
         (T, Catalog_Loads'Access, "the repository catalog loads and resolves");
+      Register_Routine
+        (T, Quiet_Suppresses_Progress'Access,
+         "quiet suppresses progress and the ordinary level does not");
       Register_Routine
         (T, Catalog_Text_Cannot_Steer_The_Terminal'Access,
          "a catalog cannot steer the terminal either");
