@@ -1,0 +1,34 @@
+# Recorded by hand from a reference runtime; see docs/reference-runtime.md.
+# The model this refers to is NOT committed -- see docs/fixture-provenance.md
+# for where to obtain it. No mandatory test reads this file.
+#
+# This one is here because every recording before it was of a model whose
+# tokenizer merges by score. This one merges by rank from a table the file
+# carries, cuts its text by the llama3 rule, and writes every byte as a
+# printable stand-in -- a different road from the prompt to the tokens, and
+# none of it was covered by a model that could actually generate.
+#
+# Tokenization came from:
+#   llama-tokenize -m Llama-3.2-1B-Instruct-Q4_K_M.gguf
+#     -p "The capital of France is" --ids
+#     -> [128000, 791, 6864, 315, 9822, 374]
+#   where 128000 is the beginning marker this vocabulary asks for.
+#
+# Greedy continuation came from llama-completion with --temp 0 --top-k 1
+# --no-conversation, which printed " Paris." for the same prompt.
+#
+# The logits are the first three values of result_output from
+# llama-eval-callback at the position after the prompt. The tolerance is 0.2
+# because that is what these two implementations agree to on a four-bit
+# quantization of a model this size; see the sizes recorded in
+# docs/reference-runtime.md before reading anything into it.
+
+runtime llama.cpp b1-717dad5
+model Llama-3.2-1B-Instruct-Q4_K_M.gguf
+prompt The capital of France is
+tokens 128000 791 6864 315 9822 374
+greedy_text \sParis.
+logit 0 7.1842
+logit 1 4.2274
+logit 2 3.1886
+tolerance 0.2

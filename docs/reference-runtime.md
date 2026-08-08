@@ -40,6 +40,23 @@ external-model: ok, architecture llama, 201 tensors,
   logits compared 0
 ```
 
+A third is `tests/fixtures/llama32-1b.expect`, against Llama-3.2-1B at
+Q4_K_M, which is the first recording of a model whose tokenizer merges by
+rank rather than by score:
+
+```
+external-model: ok, architecture llama, 147 tensors,
+  checked against llama.cpp b1-717dad5, prompt 6 tokens, generated 2,
+  deterministic TRUE, thread-stable TRUE,
+  tokens-match TRUE, greedy-match TRUE, text-match TRUE,
+  logits compared 3
+```
+
+The vocabulary-only fixtures could check the tokens and nothing after them,
+and two defects lived in that gap: output arriving in the stand-in alphabet
+the merges are written in, and a beginning marker being given to a model that
+declines one.
+
 That one exists because every recording before it was of a file whose tensors
 were all one type. A Q4_K_M file carries Q4_K, Q6_K and F32 tensors together
 and the type is read per tensor, which nothing had compared against another

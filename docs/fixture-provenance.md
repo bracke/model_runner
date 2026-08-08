@@ -75,6 +75,21 @@ five per cent, until the worker pool stopped leaving a core idle; the smaller
 weights were relieving a contention that no longer exists. The README says so
 where the figures are.
 
+### Llama-3.2-1B-Instruct, Q4_K_M
+
+| | |
+|---|---|
+| File | `Llama-3.2-1B-Instruct-Q4_K_M.gguf` |
+| Size | 807 694 464 bytes |
+| Source | `bartowski/Llama-3.2-1B-Instruct-GGUF` on Hugging Face |
+| Upstream model | `meta-llama/Llama-3.2-1B-Instruct` |
+| Licence | Llama 3.2 Community License |
+
+Obtained to check byte-pair tokenization against a model that can generate,
+which no vocabulary-only fixture can. It is not committed and its licence is
+not one that would allow it to be. Its recording is
+`tests/fixtures/llama32-1b.expect`.
+
 ## Reference runtime
 
 Recordings under `tests/fixtures/*.expect` state which runtime produced them in
