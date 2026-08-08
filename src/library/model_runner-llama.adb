@@ -9,6 +9,17 @@ with Model_Runner.Text;
 
 package body Model_Runner.Llama is
 
+   --  The same reason the kernels give. Every activation and weight here
+   --  came out of a model file, so a not-a-number or an infinity is possible
+   --  input, and this package guards against it explicitly: a non-finite
+   --  value found in a tensor is a diagnostic, and so is a non-finite logit.
+   --  Validity checking raises when such a value is read, which is before
+   --  any of those guards can run, so it would replace each diagnostic with
+   --  an exception -- reported, since nothing may escape, as the engine
+   --  finding a defect in itself. Bounds and range checking are untouched.
+   pragma Suppress (Validity_Check);
+
+
    use type Model_Runner.Errors.Error_Code;
 
    use type Interfaces.Unsigned_64;

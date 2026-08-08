@@ -2,6 +2,16 @@ with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.Bytes is
 
+   --  Decoding a float here means turning bytes a file supplied into a
+   --  value, and any bit pattern is possible: a not-a-number or an infinity
+   --  is ordinary input rather than a fault. Validity checking raises on the
+   --  read, before any caller's finiteness guard can look at it, which turns
+   --  a diagnostic about a bad weight into the program reporting a defect in
+   --  itself. The same reason the kernels give. Bounds and range checking
+   --  are untouched.
+   pragma Suppress (Validity_Check);
+
+
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;

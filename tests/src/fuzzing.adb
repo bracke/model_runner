@@ -19,6 +19,7 @@ package body Fuzzing is
    --  straight after each call.
    Prepared_Last : Boolean := False;
    Ran_Last      : Boolean := False;
+   Internal_Last : Boolean := False;
 
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Bytes.Byte;
@@ -79,6 +80,15 @@ package body Fuzzing is
    -- Run_Case --
    --------------
 
+   --  Remember that something reported a defect in itself.
+   procedure Note_Internal (Status : E.Error_Info) is
+      use type E.Error_Code;
+   begin
+      if Status.Code = E.Internal_Invariant_Violated then
+         Internal_Last := True;
+      end if;
+   end Note_Internal;
+
    function Run_Case
      (Seed        : Interfaces.Unsigned_64;
       Case_Number : Positive) return Outcome
@@ -90,6 +100,7 @@ package body Fuzzing is
    begin
       Prepared_Last := False;
       Ran_Last := False;
+      Internal_Last := False;
       --  Half the campaign works on quantized weights. The suppressed index,
       --  range and overflow checks are in the quantized decode loops, so a
       --  campaign that only ever mutates a model of binary32 weights never
@@ -202,6 +213,7 @@ package body Fuzzing is
             Status : E.Error_Info;
          begin
             Containers.Reader.Parse (Item, Source, Bounds, null, null, Status);
+            Note_Internal (Status);
 
             if E.Is_Ok (Status) then
                --  An accepted container must be internally consistent: the
@@ -270,6 +282,7 @@ package body Fuzzing is
                   Load  : E.Error_Info;
                begin
                   Model_Runner.Tokenizer.Load (Words, Item, Bounds, Load);
+                  Note_Internal (Load);
                   if E.Is_Ok (Load) then
                      for Token in 0 .. Model_Runner.Tokenizer.Size (Words) - 1
                      loop
@@ -313,6 +326,7 @@ package body Fuzzing is
                begin
                   Model_Runner.Llama.Prepare
                     (Prepared, Item, Source, Bounds, null, null, Outcome);
+                  Note_Internal (Outcome);
 
                   if E.Is_Ok (Outcome) then
                      Prepared_Last := True;
@@ -354,6 +368,7 @@ package body Fuzzing is
                                    (Live, Prepared,
                                     Model_Runner.Tokenizer.Token_Id (0),
                                     Logits, Status => Ran);
+                                 Note_Internal (Ran);
 
                                  if E.Is_Ok (Ran) then
                                     Ran_Last := True;
@@ -386,6 +401,12 @@ package body Fuzzing is
       end;
 
       B.Free (Image);
+
+      --  Whatever else the case did, this is what it is.
+      if Internal_Last then
+         return Internal_Fault;
+      end if;
+
       return Result;
    exception
       --  Anything that reaches here escaped the parser, which is exactly the
@@ -435,6 +456,12 @@ package body Fuzzing is
             end if;
 
             case What is
+               when Internal_Fault =>
+                  Result.Internal := Result.Internal + 1;
+                  if Result.First_Bad = 0 then
+                     Result.First_Bad := Index;
+                  end if;
+
                when Accepted =>
                   Result.Accepted := Result.Accepted + 1;
                when Rejected =>

@@ -3,6 +3,15 @@ with Model_Runner.UTF8;
 
 package body Model_Runner.GGUF.Containers is
 
+   --  A float in metadata is whatever bytes the file put there, so a
+   --  not-a-number or an infinity is possible input and a caller's range
+   --  check is what refuses it. Validity checking raises on the read
+   --  instead, before that check runs, turning a diagnostic about a bad
+   --  value into the program reporting a defect in itself. The same reason
+   --  the kernels give. Bounds and range checking are untouched.
+   pragma Suppress (Validity_Check);
+
+
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Bytes.Byte_Count;
    use type Model_Runner.Bytes.Byte_Array_Access;

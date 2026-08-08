@@ -68,6 +68,11 @@ package Fuzzing is
       Resource_Limited,
       Escaped_Exception,
       Accepted_But_Invalid,
+
+      --  The program reported a defect in itself. A mutated file deciding
+      --  when that happens is a fault whatever else the file did, and it is
+      --  not a refusal even though it arrives as one.
+      Internal_Fault,
       Took_Too_Long);
 
    --  Totals for a run.
@@ -83,6 +88,7 @@ package Fuzzing is
       --  How deep the corpus actually reached. A campaign whose files all
       --  stop at the parser exercises none of the engine, and would say so
       --  with the same clean totals as one that drove every layer.
+      Internal  : Natural := 0;
       Prepared  : Natural := 0;
       Ran       : Natural := 0;
 
@@ -95,7 +101,8 @@ package Fuzzing is
    --  @return True when nothing escaped, nothing invalid was accepted and no
    --    case ran past the time limit.
    function Is_Clean (Item : Report) return Boolean
-   is (Item.Escaped = 0 and then Item.Invalid = 0 and then Item.Slow = 0);
+   is (Item.Escaped = 0 and then Item.Invalid = 0 and then Item.Slow = 0
+       and then Item.Internal = 0);
 
    --  Report whether a run reached the engine at all.
    --

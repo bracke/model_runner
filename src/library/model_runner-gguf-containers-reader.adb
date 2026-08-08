@@ -13,6 +13,23 @@ package body Model_Runner.GGUF.Containers.Reader is
    package A renames Model_Runner.Arithmetic;
    package B renames Model_Runner.Bytes;
    package C renames Model_Runner.Cancellation;
+
+   --  A file's own number, as something a diagnostic can carry.
+   --
+   --  A count or a length comes out of the file unsigned and a diagnostic
+   --  carries signed values, so converting one is a range check the file
+   --  decides -- and it fired: a declared string length or tensor count
+   --  above Long_Long_Integer'Last was refused correctly and then raised
+   --  while saying so, which arrived as the program reporting a defect in
+   --  itself. Saturating leaves the refusal as it was; a message about a
+   --  number being too large is not made worse by naming a bound instead of
+   --  the number.
+   function Reportable
+     (Value : Interfaces.Unsigned_64) return Long_Long_Integer
+   is (if Value > Interfaces.Unsigned_64 (Long_Long_Integer'Last)
+       then Long_Long_Integer'Last
+       else Long_Long_Integer (Value));
+
    package E renames Model_Runner.Errors;
    package N renames Model_Runner.Numerics;
    package P renames Model_Runner.Progress;
@@ -85,7 +102,7 @@ package body Model_Runner.GGUF.Containers.Reader is
          Status := E.Make (E.Memory_Limit_Exceeded);
          E.Add_Text (Status, "category", "metadata_storage", E.Param_Identifier);
          E.Add_Integer
-           (Status, "requested", Long_Long_Integer (A.Value (Needed)),
+           (Status, "requested", Reportable (A.Value (Needed)),
             E.Param_Bytes);
          E.Add_Integer
            (Status, "limit",
@@ -396,7 +413,7 @@ package body Model_Runner.GGUF.Containers.Reader is
       if Length > Item.Bounds.Max_String_Bytes then
          Status := At_Offset (E.GGUF_Invalid_String_Length, Origin);
          E.Add_Integer
-           (Status, "length", Long_Long_Integer (Length), E.Param_Bytes);
+           (Status, "length", Reportable (Length), E.Param_Bytes);
          E.Add_Integer
            (Status, "limit",
             Long_Long_Integer (Item.Bounds.Max_String_Bytes), E.Param_Bytes);
@@ -527,7 +544,7 @@ package body Model_Runner.GGUF.Containers.Reader is
 
       if Count > Interfaces.Unsigned_64 (Item.Bounds.Max_Array_Elements) then
          Status := At_Offset (E.GGUF_Array_Too_Large, Origin);
-         E.Add_Integer (Status, "count", Long_Long_Integer (Count));
+         E.Add_Integer (Status, "count", Reportable (Count));
          E.Add_Integer
            (Status, "limit", Long_Long_Integer (Item.Bounds.Max_Array_Elements));
          return;
@@ -720,7 +737,7 @@ package body Model_Runner.GGUF.Containers.Reader is
             Status := At_Offset (E.GGUF_Invalid_Tensor_Dimension, Origin);
             E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
             E.Add_Integer
-              (Status, "elements", Long_Long_Integer (Element.Elements));
+              (Status, "elements", Reportable (Element.Elements));
             E.Add_Integer
               (Status, "limit",
                Long_Long_Integer (Item.Bounds.Max_Tensor_Elements));
@@ -750,7 +767,7 @@ package body Model_Runner.GGUF.Containers.Reader is
               (Status, "format", Type_Name (Element.Format), E.Param_Identifier);
             E.Add_Integer
               (Status, "dimension",
-               Long_Long_Integer (Element.Dimensions (1)));
+               Reportable (Element.Dimensions (1)));
             E.Add_Integer
               (Status, "block",
                Long_Long_Integer (Block_Elements (Element.Format)));
@@ -776,7 +793,7 @@ package body Model_Runner.GGUF.Containers.Reader is
                Status := At_Offset (E.GGUF_Invalid_Tensor_Dimension, Origin);
                E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
                E.Add_Integer
-                 (Status, "size", Long_Long_Integer (Element.Size),
+                 (Status, "size", Reportable (Element.Size),
                   E.Param_Bytes);
                return;
             end if;
@@ -870,7 +887,7 @@ package body Model_Runner.GGUF.Containers.Reader is
                  (Status, "tensor", Pool_Text (Item, Element.Name),
                   E.Param_Identifier);
                E.Add_Integer
-                 (Status, "offset", Long_Long_Integer (Element.Relative),
+                 (Status, "offset", Reportable (Element.Relative),
                   E.Param_Offset);
                E.Add_Integer
                  (Status, "alignment", Long_Long_Integer (Item.Align));
@@ -883,13 +900,13 @@ package body Model_Runner.GGUF.Containers.Reader is
                  (Status, "tensor", Pool_Text (Item, Element.Name),
                   E.Param_Identifier);
                E.Add_Integer
-                 (Status, "offset", Long_Long_Integer (A.Value (Start)),
+                 (Status, "offset", Reportable (A.Value (Start)),
                   E.Param_Offset);
                E.Add_Integer
-                 (Status, "size", Long_Long_Integer (Element.Size),
+                 (Status, "size", Reportable (Element.Size),
                   E.Param_Bytes);
                E.Add_Integer
-                 (Status, "file_size", Long_Long_Integer (Item.Total_Size),
+                 (Status, "file_size", Reportable (Item.Total_Size),
                   E.Param_Bytes);
                return;
             end if;
@@ -941,7 +958,7 @@ package body Model_Runner.GGUF.Containers.Reader is
                  (Status, "other", Pool_Text (Item, Previous.Name),
                   E.Param_Identifier);
                E.Add_Integer
-                 (Status, "offset", Long_Long_Integer (Current.Absolute),
+                 (Status, "offset", Reportable (Current.Absolute),
                   E.Param_Offset);
                return;
             end if;
@@ -956,9 +973,9 @@ package body Model_Runner.GGUF.Containers.Reader is
       then
          Status := E.Make (E.GGUF_Trailing_Data);
          E.Add_Integer
-           (Status, "offset", Long_Long_Integer (Highest), E.Param_Offset);
+           (Status, "offset", Reportable (Highest), E.Param_Offset);
          E.Add_Integer
-           (Status, "extra", Long_Long_Integer (Item.Total_Size - Highest),
+           (Status, "extra", Reportable (Item.Total_Size - Highest),
             E.Param_Bytes);
       end if;
    end Validate_Ranges;
@@ -1053,7 +1070,7 @@ package body Model_Runner.GGUF.Containers.Reader is
             Reason : E.Error_Info :=
               At_Offset (E.GGUF_Tensor_Count_Too_Large, 8);
          begin
-            E.Add_Integer (Reason, "count", Long_Long_Integer (Tensor_Total));
+            E.Add_Integer (Reason, "count", Reportable (Tensor_Total));
             E.Add_Integer
               (Reason, "limit", Long_Long_Integer (Bounds.Max_Tensors));
             Fail (Reason);
@@ -1068,7 +1085,7 @@ package body Model_Runner.GGUF.Containers.Reader is
             Reason : E.Error_Info :=
               At_Offset (E.GGUF_Metadata_Count_Too_Large, 16);
          begin
-            E.Add_Integer (Reason, "count", Long_Long_Integer (Metadata_Total));
+            E.Add_Integer (Reason, "count", Reportable (Metadata_Total));
             E.Add_Integer
               (Reason, "limit",
                Long_Long_Integer (Bounds.Max_Metadata_Entries));

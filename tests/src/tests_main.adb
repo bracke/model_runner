@@ -85,6 +85,7 @@ begin
             & ", escaped" & Natural'Image (Result.Escaped)
             & ", invalid" & Natural'Image (Result.Invalid)
             & ", slow" & Natural'Image (Result.Slow)
+            & ", internal" & Natural'Image (Result.Internal)
             & ", prepared" & Natural'Image (Result.Prepared)
             & ", ran" & Natural'Image (Result.Ran));
 

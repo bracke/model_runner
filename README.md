@@ -384,6 +384,12 @@ pass. A campaign where none reached the engine fails, because clean totals
 from files that all stopped at the parser would say nothing about everything
 past it.
 
+A campaign also fails on an internal invariant violation. That code means the
+program found a state it believes impossible, and a file deciding when that
+happens is a fault however it arrives — but it arrives as a refusal, so a
+campaign counting refusals will not notice. Twenty-six cases in two thousand
+were doing exactly that.
+
 An escaped exception or an invalid container accepted into a usable state is a
 failure. Each case is derived from the seed and the case number alone, so a
 failure replays exactly.

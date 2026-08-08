@@ -331,6 +331,15 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- A container declaring a length or count above `Long_Long_Integer'Last` was
+  refused correctly and then raised while saying so, because the diagnostic
+  carried the number as a signed value. The value saturates now.
+
+- Reading a float a file supplied no longer raises under validity checking in
+  the development build. A not-a-number is possible input, and the finiteness
+  guards are what refuse it; the checks fired first and reported the program
+  as having a defect in itself.
+
 - A chat template with a second `else`, or an `elif` after an `else`, crashed
   the compiler into an internal invariant violation instead of being refused.
   Both close a branch that has already been closed, and the code that patches

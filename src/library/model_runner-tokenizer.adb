@@ -7,6 +7,15 @@ with Model_Runner.UTF8;
 
 package body Model_Runner.Tokenizer is
 
+   --  A token score comes out of the file as a float and any bit pattern is
+   --  possible, so a not-a-number is ordinary input here rather than a
+   --  fault. Validity checking raises when one is read, before anything can
+   --  decide what to do about it, which turns a vocabulary with a strange
+   --  score into the program reporting a defect in itself. The same reason
+   --  the kernels give. Bounds and range checking are untouched.
+   pragma Suppress (Validity_Check);
+
+
    use type Model_Runner.Errors.Error_Code;
 
    package E renames Model_Runner.Errors;
