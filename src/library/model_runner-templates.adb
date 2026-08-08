@@ -643,6 +643,14 @@ package body Model_Runner.Templates is
                   return;
                end if;
 
+               --  There is a jump to patch only while the block still has an
+               --  untaken branch. After an else there is none, and an elif
+               --  following one is a template that does not mean anything.
+               if Frames (Depth).Pending = 0 then
+                  Fail (E.Template_Unbalanced_Block, "elif");
+                  return;
+               end if;
+
                Emit ((Op => Op_Jump, others => <>), Jump);
                if Jump = 0 then
                   return;
@@ -678,6 +686,12 @@ package body Model_Runner.Templates is
                Jump : Natural;
             begin
                if Depth = 0 or else Frames (Depth).Kind /= Block_If then
+                  Fail (E.Template_Unbalanced_Block, "else");
+                  return;
+               end if;
+
+               --  A second else has no branch left to close.
+               if Frames (Depth).Pending = 0 then
                   Fail (E.Template_Unbalanced_Block, "else");
                   return;
                end if;

@@ -149,6 +149,22 @@ package body Tests.Template_Cases is
                  "a template past the instruction limit was accepted");
       end;
 
+      --  A branch that has already been closed cannot be closed again. Both
+      --  of these reached the code that patches the pending jump with
+      --  nothing pending, and indexed instruction zero: a template from a
+      --  model file crashing the compiler into an internal invariant
+      --  violation, which the property sweep counted as an ordinary refusal
+      --  and nobody looked at.
+      Assert (Compile_Status
+                ("{% if add_generation_prompt %}a{% else %}b{% else %}c"
+                 & "{% endif %}") = E.Template_Unbalanced_Block,
+              "a second else was accepted");
+      Assert (Compile_Status
+                ("{% if add_generation_prompt %}a{% else %}b"
+                 & "{% elif add_generation_prompt %}c{% endif %}")
+                = E.Template_Unbalanced_Block,
+              "an elif after an else was accepted");
+
       --  Nesting. At the limit it compiles; one deeper it does not.
       --  Nothing to compile. A model whose template metadata is present and
       --  empty has said nothing, and rendering from it would produce a
@@ -428,6 +444,7 @@ package body Tests.Template_Cases is
       Compiled : Natural := 0;
       Rendered : Natural := 0;
       Refused  : Natural := 0;
+      Internal : Natural := 0;
    begin
       for Case_Number in 1 .. 2_000 loop
          declare
@@ -505,6 +522,10 @@ package body Tests.Template_Cases is
                Tmpl.Compile (Item, Source (1 .. Filled), Status => Status);
                Answered := Answered + 1;
 
+               if Status.Code = E.Internal_Invariant_Violated then
+                  Internal := Internal + 1;
+               end if;
+
                if E.Is_Ok (Status) then
                   Compiled := Compiled + 1;
                   Fill (Messages, 1 + Draw (4));
@@ -512,6 +533,10 @@ package body Tests.Template_Cases is
                   Tmpl.Render
                     (Item, Messages, "<s>", "</s>",
                      Draw (2) = 0, Target, Last, Outcome);
+
+                  if Outcome.Code = E.Internal_Invariant_Violated then
+                     Internal := Internal + 1;
+                  end if;
 
                   if E.Is_Ok (Outcome) then
                      Rendered := Rendered + 1;
@@ -542,6 +567,15 @@ package body Tests.Template_Cases is
       --  Both paths must be reached, or this passes by never rendering.
       --  Measured when written: about fifteen hundred of two thousand
       --  compile, of which roughly half render and half overrun their buffer.
+      --  No generated template may reach an internal invariant violation.
+      --  That code means the engine found a state it believes impossible,
+      --  and a file deciding when that happens is the thing this sweep is
+      --  for. Twenty-three of two thousand did, counted as refusals.
+      Assert (Internal = 0,
+              Natural'Image (Internal)
+              & " generated templates reached an internal invariant "
+              & "violation");
+
       Assert (Compiled > 500,
               "too few templates compiled to be testing rendering:"
               & Natural'Image (Compiled));

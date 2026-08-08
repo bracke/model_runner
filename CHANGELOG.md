@@ -331,6 +331,11 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- A chat template with a second `else`, or an `elif` after an `else`, crashed
+  the compiler into an internal invariant violation instead of being refused.
+  Both close a branch that has already been closed, and the code that patches
+  the pending jump indexed instruction zero.
+
 - Compiling a chat template no longer allocates twenty-six megabytes. An
   instruction named its operand and condition rather than carrying them, so a
   compiled program is about a hundred kilobytes and the tables holding the
