@@ -36,7 +36,7 @@ package body Model_Runner.GGUF is
       Type_Q5_K    => (13, Super_Block,  176, True),
       Type_Q6_K    => (14, Super_Block,  210, True),
       Type_Q8_K    => (15, Super_Block,  292, False),
-      Type_BF16    => (30, 1,            2,   False),
+      Type_BF16    => (30, 1,            2,   True),
       Type_Unknown => (U32'Last, 0,      0,   False)];
 
    -------------------

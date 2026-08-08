@@ -337,8 +337,8 @@ package body Tests.Backend_Cases is
       Assert (Model_Runner.Backend.Supports (Single, G.Type_Q6_K), "Q6_K");
       Assert (not Model_Runner.Backend.Supports (Single, G.Type_Q2_K),
               "Q2_K is advertised but not implemented");
-      Assert (not Model_Runner.Backend.Supports (Single, G.Type_BF16),
-              "BF16 is advertised but not implemented");
+      Assert (Model_Runner.Backend.Supports (Single, G.Type_BF16),
+              "BF16 is implemented but not advertised");
    end Capabilities_Reported;
 
    ----------

@@ -526,8 +526,8 @@ Named in the specification, absent here:
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
-chooses for itself. From a short prompt, twelve tokens take **2.25 s** --
-about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.6 s of
+chooses for itself. From a short prompt, twelve tokens take **2.22 s** --
+about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.5 s of
 processor time, the median of three runs. Loading the model costs a further
 0.8 s of wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
@@ -561,7 +561,7 @@ it, so with one worker per core there was always one more runnable task than
 there were cores, the operating system took a core from a worker, and the
 whole job waited for that worker because a job is not done until its slowest
 share is. It now takes the last share itself instead of waiting. Pinned, eight
-shares went from 9326 Me/s to 13787.
+shares went from 9326 Me/s to 13722.
 
 Unpinned the gain is small, six per cent, because the spare task could take a
 processor on a core that already had one and that is cheap. Pinned is what a
@@ -581,8 +581,8 @@ everywhere and still accepts any number the backend allows.
 
 What is left over is not the memory. Measured on its own, away from the model,
 the matrix product reaches about 4.8x on eight shares against its own serial
-rate, and reaches it whether one vector is passed or thirty-two -- 2533 to
-12664 Me/s in the first case and 4738 to 21668 in the second, medians of three
+rate, and reaches it whether one vector is passed or thirty-two -- 2547 to
+12675 Me/s in the first case and 4800 to 23609 in the second, medians of three
 runs.
 If memory were the wall those two would part company, because the second reads
 each weight byte once for thirty-two multiplies and the first reads it once
@@ -603,8 +603,8 @@ ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
 end. That gap was the contention, not the bytes: with the contention gone the
 four-bit format is within a few per cent of the eight-bit one either way --
-11697 Me/s against 12664 at eight shares with one vector, 23281 against 21668
-with thirty-two, 2676 against 2533 serially -- and end to end the two are
+12703 Me/s against 12675 at eight shares with one vector, 23342 against 23609
+with thirty-two, 2693 against 2547 serially -- and end to end the two are
 indistinguishable, 2.06 and 2.18 s against 2.06 and 2.26.
 
 It is worth keeping as a lesson rather than a result. A measurement taken
@@ -649,14 +649,14 @@ model says.
 
 | `--batch-size` | prompt evaluation | rate | output |
 |---|---|---|---|
-| 1 (one token at a time) | 12.57 s | 10.4 tokens/s | `7066666208f6fbe6` |
-| 2 | 9.95 s | 13.2 tokens/s | `7066666208f6fbe6` |
-| 4 | 8.20 s | 16.0 tokens/s | `7066666208f6fbe6` |
-| 8 | 7.67 s | 17.1 tokens/s | `7066666208f6fbe6` |
-| 16 | 7.20 s | 18.2 tokens/s | `7066666208f6fbe6` |
-| 32 (default) | 6.72 s | 19.5 tokens/s | `7066666208f6fbe6` |
-| 64 | 6.15 s | 21.3 tokens/s | `7066666208f6fbe6` |
-| 128 (cap) | 6.39 s | 20.5 tokens/s | `7066666208f6fbe6` |
+| 1 (one token at a time) | 13.24 s | 9.9 tokens/s | `7066666208f6fbe6` |
+| 2 | 10.68 s | 12.3 tokens/s | `7066666208f6fbe6` |
+| 4 | 9.28 s | 14.1 tokens/s | `7066666208f6fbe6` |
+| 8 | 7.36 s | 17.8 tokens/s | `7066666208f6fbe6` |
+| 16 | 7.03 s | 18.6 tokens/s | `7066666208f6fbe6` |
+| 32 (default) | 7.18 s | 18.2 tokens/s | `7066666208f6fbe6` |
+| 64 | 6.56 s | 20.0 tokens/s | `7066666208f6fbe6` |
+| 128 (cap) | 6.54 s | 20.1 tokens/s | `7066666208f6fbe6` |
 
 Most of the benefit arrives by a batch of eight, and it flattens after
 thirty-two. Batching amortizes the cost of decoding the weights across the
@@ -673,9 +673,9 @@ engine supports:
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
 | F32 | 0.26 | Q6_K | 0.38 |
-| Q4_0 | 0.31 | Q5_K | 0.40 |
+| Q4_0 | 0.31 | Q8_0 | 0.38 |
+| BF16 | 0.32 | Q5_K | 0.40 |
 | Q4_K | 0.37 | F16 | 0.56 |
-| Q8_0 | 0.38 | | |
 
 Medians of three runs. What every measured figure in this section was taken
 against is recorded in

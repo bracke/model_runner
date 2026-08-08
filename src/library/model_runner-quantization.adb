@@ -280,6 +280,35 @@ package body Model_Runner.Quantization is
                Ok := True;
             end;
 
+         when G.Type_BF16 =>
+            --  A brain float is the top half of a binary32: the same sign and
+            --  the same eight exponent bits, with the mantissa cut from
+            --  twenty-three bits to seven. Widening it is therefore a shift
+            --  and nothing else -- no exponent to rebias, and no case for
+            --  infinity or not-a-number, because those patterns are already
+            --  in the place binary32 keeps them. It is the one format here
+            --  that cannot round.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               At_Byte : B.Byte_Index := Data'First + Offset;
+            begin
+               for Index in 0 .. Count - 1 loop
+                  Target (Target'First + Index) :=
+                    N.From_Bits
+                      (Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Data (At_Byte))
+                          or Interfaces.Shift_Left
+                               (Interfaces.Unsigned_32 (Data (At_Byte + 1)),
+                                8),
+                          16));
+                  At_Byte := At_Byte + 2;
+               end loop;
+               Ok := True;
+            end;
+
          when G.Type_F32 =>
             --  A single element per block, so this format suffered most from
             --  a per-block decision: every float paid for one.
@@ -500,7 +529,8 @@ package body Model_Runner.Quantization is
    -------------------
 
    function Is_Decodable (Format : G.Tensor_Type) return Boolean
-   is (Format in G.Type_F32 | G.Type_F16 | G.Type_Q4_0 | G.Type_Q8_0
+   is (Format in G.Type_F32 | G.Type_F16 | G.Type_BF16 | G.Type_Q4_0
+                | G.Type_Q8_0
                 | G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K);
 
    -------------------

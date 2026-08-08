@@ -77,6 +77,16 @@ package body Benchmarks is
                Data (Data'First + Block * Width + 3) := 16#3E#;
             end loop;
 
+         when G.Type_BF16 =>
+            --  The top half of a binary32, so the byte that carries the sign
+            --  and the exponent is the second of two rather than the fourth
+            --  of four. Left alone, arbitrary bytes are as often infinite or
+            --  not-a-number here as they are in any other float format, and
+            --  the benchmark would be timing those.
+            for Block in 0 .. Blocks - 1 loop
+               Data (Data'First + Block * Width + 1) := 16#3E#;
+            end loop;
+
          when G.Type_Q4_0 | G.Type_Q8_0 =>
             for Block in 0 .. Blocks - 1 loop
                Data (Data'First + Block * Width + 1) := 16#30#;
@@ -637,6 +647,7 @@ package body Benchmarks is
       Measure ("q5_k Row_Dot", G.Type_Q5_K, True);
       Measure ("q6_k Row_Dot", G.Type_Q6_K, True);
       Measure ("f16  Row_Dot", G.Type_F16, True);
+      Measure ("bf16 Row_Dot", G.Type_BF16, True);
       Measure ("f32  Row_Dot", G.Type_F32, True);
       IO.New_Line;
 

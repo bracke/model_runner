@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- BF16 tensors are decoded rather than refused. A brain float is the top half
+  of a binary32 -- same sign, same eight exponent bits, mantissa cut to seven
+  -- so widening one is a shift with no bias to undo and no case for infinity
+  or not-a-number, and it is the only format here that cannot round. Verified
+  against a 2.2 GB model requantized to BF16, which agrees with the reference
+  runtime on tokens, greedy output and text.
+
 - Frequency and presence penalties, as `--frequency-penalty` and
   `--presence-penalty`. Both act on the same recent-token window as the
   repetition penalty and compose with it. Frequency is subtracted once for
@@ -223,6 +230,11 @@ Keep a Changelog and the project uses semantic versioning.
   written and measures slower now that the loop it competes with has been
   improved. The fused path is removed rather than switched off, so every
   format takes one route.
+
+- Brain floats decode 3.9 times faster than they first did, at 0.32
+  nanoseconds an element, which puts them second in the table. Decoding one is
+  a shift and a reinterpretation, and the reinterpretation was a call across a
+  unit boundary until it was inlined.
 
 - Six-bit blocks decode about four times faster. The inner loop produced four
   elements per iteration and wrote them thirty-two apart; split into four runs

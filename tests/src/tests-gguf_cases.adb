@@ -878,6 +878,11 @@ package body Tests.GGUF_Cases is
                Data (Data'First + B.Byte_Count (Block) * Width + 3) := 16#3E#;
             when Model_Runner.GGUF.Type_F16 =>
                Tame_Half (Block, 0);
+            when Model_Runner.GGUF.Type_BF16 =>
+               --  The top half of a binary32, so its second byte carries the
+               --  sign and the exponent and this is the same taming the
+               --  four-byte format gets, one byte lower.
+               Data (Data'First + B.Byte_Count (Block) * Width + 1) := 16#3E#;
             when Model_Runner.GGUF.Type_Q4_0 | Model_Runner.GGUF.Type_Q8_0 =>
                Tame_Half (Block, 0);
             when Model_Runner.GGUF.Type_Q4_K | Model_Runner.GGUF.Type_Q5_K =>
@@ -923,8 +928,9 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 7) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 8) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
+         Model_Runner.GGUF.Type_BF16,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];
@@ -1089,8 +1095,9 @@ package body Tests.GGUF_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      Formats : constant array (1 .. 7) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 8) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
+         Model_Runner.GGUF.Type_BF16,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];
@@ -1182,7 +1189,7 @@ package body Tests.GGUF_Cases is
          end;
       end loop;
 
-      Assert (Checked_Rows = 7, "not every format was checked");
+      Assert (Checked_Rows = 8, "not every format was checked");
    end Fused_Dot_Matches_Decoder;
 
    --  Decoded values, against expectations worked out from the layout.
@@ -1247,6 +1254,27 @@ package body Tests.GGUF_Cases is
          Check (Model_Runner.GGUF.Type_Q8_0, Block, 0, 7.0);
          Check (Model_Runner.GGUF.Type_Q8_0, Block, 1, -1.0);
          Check (Model_Runner.GGUF.Type_Q8_0, Block, 31, 100.0);
+      end;
+
+      --  BF16: the top sixteen bits of a binary32, so 16#3F80# is one and
+      --  16#C000# is minus two, with nothing to round and no bias to undo.
+      --  One element to a block, so each pattern is its own block.
+      declare
+         Block : B.Byte_Array (0 .. 1) := [others => 0];
+      begin
+         Block (0) := 16#80#;
+         Block (1) := 16#3F#;
+         Check (Model_Runner.GGUF.Type_BF16, Block, 0, 1.0);
+
+         Block (0) := 16#00#;
+         Block (1) := 16#C0#;
+         Check (Model_Runner.GGUF.Type_BF16, Block, 0, -2.0);
+
+         --  The pattern a half would call a subnormal is an ordinary small
+         --  number here, because the exponent field is the wide one.
+         Block (0) := 16#80#;
+         Block (1) := 16#00#;
+         Check (Model_Runner.GGUF.Type_BF16, Block, 0, 1.17549435E-38);
       end;
 
       --  Q4_0: sixteen bytes of two nibbles, both biased by eight. The low
@@ -1414,8 +1442,9 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 7) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 8) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
+         Model_Runner.GGUF.Type_BF16,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];

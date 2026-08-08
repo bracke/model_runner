@@ -57,16 +57,20 @@ package Model_Runner.Numerics is
    --  The rest of this package is deliberately not inlined. Every call the
    --  compiler emits inside a loop, anywhere in the library, was found by
    --  reading the generated code, and the candidates that reached a hot loop
-   --  were measured: the bit reinterpretations here and the two block-shape
-   --  lookups in Model_Runner.GGUF moved the kernels by under one percent and
-   --  won three of five paired runs, which is nothing, and inlining the
-   --  guards around Exp and its neighbours made the activation five percent
-   --  slower, because the guard is not the cost -- the library function
-   --  behind it is, and that call remains either way.
+   --  were measured: inlining the guards around Exp and its neighbours made
+   --  the activation five percent slower, because the guard is not the cost
+   --  -- the library function behind it is, and that call remains either way.
    --
    --  So an aspect here is worth adding only where the call is per element
-   --  and the body is smaller than the call. That is true twice in this
-   --  package: here, and for Is_Finite on Real.
+   --  and the body is smaller than the call, which is true three times in
+   --  this package: here, From_Bits, and Is_Finite on Real.
+   --
+   --  From_Bits is the one to learn from. It was measured with the others
+   --  and moved the kernels by under one percent, because at the time nothing
+   --  called it per element. Brain floats do -- decoding one is a shift and a
+   --  reinterpretation and nothing else -- and the same aspect that was worth
+   --  nothing then is worth 3.9 times now. The measurement was right and it
+   --  aged; what changed was the caller, not the callee.
    --
    --  @param Item Half-precision bit pattern.
    --  @return Exactly equal single-precision value.
@@ -94,7 +98,11 @@ package Model_Runner.Numerics is
    --
    --  @param Item Raw 32-bit encoding.
    --  @return Encoded value.
-   function From_Bits (Item : Interfaces.Unsigned_32) return Real;
+   --  Inlined for the same reason To_Real is: a brain-float tensor is
+   --  decoded by calling this once per element, and a call across a unit
+   --  boundary costs several times the shift it carries.
+   function From_Bits (Item : Interfaces.Unsigned_32) return Real
+     with Inline;
 
    --  Reinterpret a wide value as its IEEE bit pattern.
    --

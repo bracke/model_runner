@@ -17,6 +17,7 @@ package body Model_Runner.Backend.CPU is
       Result.Formats :=
         [Model_Runner.GGUF.Type_F32  => True,
          Model_Runner.GGUF.Type_F16  => True,
+         Model_Runner.GGUF.Type_BF16 => True,
          Model_Runner.GGUF.Type_Q4_0 => True,
          Model_Runner.GGUF.Type_Q8_0 => True,
          Model_Runner.GGUF.Type_Q4_K => True,
