@@ -139,6 +139,26 @@ package body Benchmarks is
 
       --  Time a kernel until at least Seconds have passed, then report the
       --  cost per element over everything actually done.
+      --
+      --  These rates are comparable within one sitting and not across two.
+      --  Repeated on an idle machine, the same binary reports each kernel to
+      --  within about half a percent; hours apart, on a laptop that has
+      --  changed thermal and clock state, the same binary has reported 785
+      --  and 598 Me/s for the same kernel. So a change is worth believing
+      --  only when the two versions were run against each other in one
+      --  sitting, alternating -- old, new, old -- and it survived.
+      --
+      --  Two attempts to make a single run mean something on its own were
+      --  measured and dropped. Dividing by a memory copy timed in the same
+      --  round, which is what makes the parse figure below comparable, was
+      --  worse than the plain rate for nine of the twelve kernels: a copy is
+      --  bound by memory and these are bound by arithmetic, so the two do
+      --  not move together and the division adds the copy's noise instead of
+      --  removing the kernel's. Dividing by the f32 dot product, which is
+      --  bound by the same thing, was worse still. Timing five short rounds
+      --  and keeping the best was worse than one long one, because each
+      --  round then measures a fifth as much work and the best of five short
+      --  rounds is an optimistic one rather than an undisturbed one.
       procedure Measure
         (Name        : String;
          Format      : G.Tensor_Type;
