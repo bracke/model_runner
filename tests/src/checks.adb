@@ -4,6 +4,7 @@ with Ada.Text_IO;
 with Hostkit.Fs;
 
 with Ada.Strings.Unbounded;
+with Project_Tools.Ada_Source;
 with Project_Tools.Files;
 with Project_Tools.Text;
 with Project_Tools.Tree_Checks;
@@ -163,16 +164,33 @@ package body Checks is
       --  Layering: production code must not reach the test crate or its
       --  dependencies.
       declare
-         procedure Visit_Production (Relative : String) is
+         None : constant Project_Tools.Ada_Source.String_List (1 .. 0) :=
+           [others => Ada.Strings.Unbounded.Null_Unbounded_String];
+
+         --  Nothing under these prefixes is allowed, which is what an empty
+         --  allowlist says. project_tools parses the with clauses rather than
+         --  looking for the text of one, so a limited with, a private with or
+         --  two units on one line are read as clauses instead of missed.
+         procedure Forbid_Prefix (Relative, Prefix, Detail : String) is
          begin
             Result.Performed := Result.Performed + 1;
-            if Mentions (Relative, "with AUnit") then
-               Fail (Relative & " depends on AUnit");
-            elsif Mentions (Relative, "with Project_Tools") then
-               Fail (Relative & " depends on project_tools");
-            elsif Mentions (Relative, "with Tests") then
-               Fail (Relative & " depends on the tests crate");
-            end if;
+
+            begin
+               Project_Tools.Ada_Source.Require_Only_Allowed_With_Clauses
+                 (Source_Path => Path (Relative),
+                  Prefix      => Prefix,
+                  Allowed     => None);
+            exception
+               when others =>
+                  Fail (Relative & " depends on " & Detail);
+            end;
+         end Forbid_Prefix;
+
+         procedure Visit_Production (Relative : String) is
+         begin
+            Forbid_Prefix (Relative, "AUnit", "AUnit");
+            Forbid_Prefix (Relative, "Project_Tools", "project_tools");
+            Forbid_Prefix (Relative, "Tests", "the tests crate");
          end Visit_Production;
 
          procedure Scan_Production is
@@ -294,7 +312,6 @@ package body Checks is
       --  Documentation: every public specification opens with a comment.
       declare
          procedure Visit_Doc (Relative : String) is
-            Text : constant String := Contents (Relative);
          begin
             if not T.Ends_With (Relative, ".ads") then
                return;
@@ -302,12 +319,23 @@ package body Checks is
 
             Result.Performed := Result.Performed + 1;
 
-            --  A specification must carry at least one comment before its
-            --  package declaration; the GNATdoc tags themselves are checked by
-            --  the documentation build.
-            if Text'Length = 0 or else not Mentions (Relative, "--") then
-               Fail (Relative & " has no specification comment");
-            end if;
+            --  project_tools reads the declarations and requires a tag for
+            --  each part of a public profile, which is more than this file
+            --  used to ask -- it wanted a comment, anywhere.
+            --
+            --  It reports by naming the declaration and then raising, which
+            --  would end the run at the first spec with a gap and hide every
+            --  check after it. Caught here so the run finishes and the total
+            --  counts this like anything else; the exit status it has already
+            --  set stands whatever this file goes on to find.
+            begin
+               Project_Tools.Ada_Source.Require_Public_GNATdoc_Tags
+                 (Spec_Path => Path (Relative));
+            exception
+               when others =>
+                  Fail (Relative & " has a public declaration without its "
+                        & "GNATdoc tags");
+            end;
          end Visit_Doc;
 
          procedure Scan_Doc is new For_Each_Source (Visit_Doc);

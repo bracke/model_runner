@@ -309,6 +309,10 @@ package Model_Runner.GGUF.Containers is
       Index : Positive;
       Width : Natural := 120) return String;
 
+   --  Number of tensor descriptors the container holds.
+   --
+   --  @param Item Container to inspect.
+   --  @return Descriptor count.
    function Tensor_Count (Item : Container) return Natural;
 
    --  Position of a tensor by name.
