@@ -1,4 +1,6 @@
 with Interfaces;
+with System;
+with System.Storage_Elements;
 
 package body Model_Runner.Quantization is
 
@@ -16,6 +18,10 @@ package body Model_Runner.Quantization is
    --  what running it says, and it says this package needs nothing.
 
 
+   package Storage renames System.Storage_Elements;
+
+   use type System.Bit_Order;
+   use type Storage.Integer_Address;
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
@@ -282,20 +288,49 @@ package body Model_Runner.Quantization is
                pragma Suppress (Range_Check);
                pragma Suppress (Overflow_Check);
 
-               At_Byte : B.Byte_Index := Data'First + Offset;
+               Start : constant B.Byte_Index := Data'First + Offset;
+
+               --  A binary32 in the file is a binary32 in memory here: the
+               --  format stores them little-endian, Real is IEEE_Float_32 by
+               --  its own assertion, and this host agrees about byte order.
+               --  Where that holds and the bytes are aligned, the run is the
+               --  values already and is read as such.
+               --
+               --  Assembling each float from its four bytes cost this format
+               --  more per element than Q8_0 pays to decode one, which made
+               --  the unquantized path the slowest of them: 696 against 2602
+               --  Me/s in a row dot product. Read directly it is 3885, and
+               --  the fastest, which is what it should have been.
+               Direct : constant Boolean :=
+                 System.Default_Bit_Order = System.Low_Order_First
+                 and then Storage.To_Integer (Data (Start)'Address)
+                          mod Storage.Integer_Address (4) = 0;
+
+               At_Byte : B.Byte_Index := Start;
             begin
-               for Index in 0 .. Count - 1 loop
-                  Target (Target'First + Index) :=
-                    N.From_Bits
-                      (Interfaces.Unsigned_32 (Data (At_Byte))
-                       or Interfaces.Shift_Left
-                             (Interfaces.Unsigned_32 (Data (At_Byte + 1)), 8)
-                       or Interfaces.Shift_Left
-                             (Interfaces.Unsigned_32 (Data (At_Byte + 2)), 16)
-                       or Interfaces.Shift_Left
-                             (Interfaces.Unsigned_32 (Data (At_Byte + 3)), 24));
-                  At_Byte := At_Byte + 4;
-               end loop;
+               if Direct then
+                  declare
+                     Words : constant Real_Array (0 .. Count - 1)
+                       with Import, Address => Data (Start)'Address;
+                  begin
+                     Target (Target'First .. Target'First + Count - 1) := Words;
+                  end;
+               else
+                  --  A host that orders bytes the other way, or a run the
+                  --  alignment does not allow, takes them one at a time.
+                  for Index in 0 .. Count - 1 loop
+                     Target (Target'First + Index) :=
+                       N.From_Bits
+                         (Interfaces.Unsigned_32 (Data (At_Byte))
+                          or Interfaces.Shift_Left
+                                (Interfaces.Unsigned_32 (Data (At_Byte + 1)), 8)
+                          or Interfaces.Shift_Left
+                                (Interfaces.Unsigned_32 (Data (At_Byte + 2)), 16)
+                          or Interfaces.Shift_Left
+                                (Interfaces.Unsigned_32 (Data (At_Byte + 3)), 24));
+                     At_Byte := At_Byte + 4;
+                  end loop;
+               end if;
                Ok := True;
             end;
 

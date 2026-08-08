@@ -617,7 +617,10 @@ vectors in a call never changes any of them. Deliberately swapping the two
 nibbles of the fused Q4_0 path fails the suite.
 
 `tests benchmark` measures the row kernels directly, on synthetic tensors, with
-no model file and no network. It exists because reading the code produced two
+no model file and no network. The tests crate builds the library at the release
+profile so that it measures what ships: at the development profile the same
+kernels read three times slower, and tuning against those numbers would tune
+the wrong compilation. It exists because reading the code produced two
 confident wrong answers about where the time went.
 
 It also measures parsing a metadata-heavy container, because loading is the

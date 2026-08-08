@@ -369,8 +369,16 @@ package body Tests.Accounting_Cases is
       --  Narrowing to Natural reports whether it fits rather than raising.
       --  The result is zeroed on failure, which the spec promises and a
       --  caller that forgets to check the answer depends on.
-      Assert (A.To_Natural (Modest, Room) and then Room = 100,
-              "a value inside Natural did not convert");
+      --  Split for the same reason as the refusal below: joined by and then,
+      --  the assignment to Room might never be read, and at -O3 the compiler
+      --  says so.
+      declare
+         Fits : Boolean;
+      begin
+         Fits := A.To_Natural (Modest, Room);
+         Assert (Fits and then Room = 100,
+                 "a value inside Natural did not convert");
+      end;
       declare
          Fits : Boolean;
       begin

@@ -81,3 +81,4 @@ regexp = { path = "../../regexp" }
 # Development is what you build during development; release is for a release.
 [build-profiles]
 "*" = "development"
+model_runner = "release"
