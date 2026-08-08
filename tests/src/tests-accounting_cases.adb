@@ -564,6 +564,48 @@ package body Tests.Accounting_Cases is
       Found   : Boolean;
       Mode    : Tarlib.Entries.File_Mode;
 
+      --  Everything the archive holds, in one string, so that what is in it
+      --  can be compared with what belongs in it.
+      function Listing (Archive : String) return String is
+         Source  : aliased Tarlib.Files.File_Input_Source;
+         Reader  : Tarlib.Readers.Reader;
+         Info    : Tarlib.Readers.Entry_Info;
+         Present : Boolean;
+         Result  : Tarlib.Errors.Status;
+
+         Room : String (1 .. 4_096);
+         Used : Natural := 0;
+      begin
+         Tarlib.Files.Open_Read (Source, Archive, Result);
+         Assert (Tarlib.Errors.Is_Success (Result),
+                 "the archive could not be opened for listing");
+
+         Tarlib.Readers.Initialize (Reader, Source, Result);
+         Assert (Tarlib.Errors.Is_Success (Result),
+                 "the archive could not be read for listing");
+
+         loop
+            Tarlib.Readers.Next_Entry (Reader, Info, Present, Result);
+            exit when not Present or else not Tarlib.Errors.Is_Success (Result);
+
+            declare
+               Path : constant String := Tarlib.Readers.Path (Info);
+            begin
+               if Used + Path'Length + 1 <= Room'Length then
+                  Room (Used + 1 .. Used + Path'Length) := Path;
+                  Used := Used + Path'Length + 1;
+                  Room (Used) := '|';
+               end if;
+            end;
+
+            Tarlib.Readers.Skip_Entry (Reader, Result);
+            exit when not Tarlib.Errors.Is_Success (Result);
+         end loop;
+
+         Tarlib.Files.Close (Source, Result);
+         return Room (1 .. Used);
+      end Listing;
+
       --  Every member the archive is supposed to carry.
       procedure Must_Hold (Wanted : String) is
          Present : Boolean;
@@ -599,6 +641,30 @@ package body Tests.Accounting_Cases is
       Must_Hold (Prefix & "/README.md");
       Must_Hold (Prefix & "/CHANGELOG.md");
       Must_Hold (Prefix & "/SECURITY.md");
+
+      --  And nothing else. Every check above asks whether something is
+      --  there; none of them asks what else is, and a distribution is as
+      --  much about what it does not carry -- a model file it found in the
+      --  tree, a build artefact, a key -- as about what it does. The
+      --  specification forbids redistributing a model, and an archive is
+      --  where one would leave without anyone deciding to send it.
+      declare
+         Held : constant String := Listing (Archive);
+
+         Expected : constant String :=
+           Prefix & "/bin/" & Model_Runner.Program_Name & "|"
+           & Prefix & "/share/" & Model_Runner.Program_Name
+           & "/messages/catalog.txt|"
+           & Prefix & "/LICENSE|"
+           & Prefix & "/README.md|"
+           & Prefix & "/CHANGELOG.md|"
+           & Prefix & "/SECURITY.md|";
+      begin
+         Assert (Held = Expected,
+                 "the archive carries something other than its six members:"
+                 & ASCII.LF & "  holds    " & Held
+                 & ASCII.LF & "  expected " & Expected);
+      end;
 
       --  The program is executable and the documents are not. An archive
       --  whose program unpacks without its execute bit is not a distribution.
