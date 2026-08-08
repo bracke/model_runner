@@ -221,7 +221,8 @@ package body Tests.Sampling_Cases is
       pragma Unreferenced (T);
       Config : constant S.Configuration :=
         (Temperature => 1.0, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
-         Repeat_Penalty => 1.0, Repeat_Window => 0);
+         Repeat_Penalty => 1.0, Repeat_Window => 0,
+         others => <>);
       Logits : constant Logit_Vector :=
         [0 => 0.1, 1 => 0.9, 2 => 0.4, 3 => 0.7,
          4 => 0.2, 5 => 0.6, 6 => 0.3, 7 => 0.8];
@@ -282,7 +283,8 @@ package body Tests.Sampling_Cases is
       pragma Unreferenced (T);
       Config : constant S.Configuration :=
         (Temperature => 1.0, Top_K => 2, Top_P => 1.0, Min_P => 0.0,
-         Repeat_Penalty => 1.0, Repeat_Window => 0);
+         Repeat_Penalty => 1.0, Repeat_Window => 0,
+         others => <>);
       Logits : constant Logit_Vector :=
         [0 => 0.0, 1 => 0.0, 2 => 10.0, 3 => 0.0,
          4 => 0.0, 5 => 9.0, 6 => 0.0, 7 => 0.0];
@@ -309,7 +311,8 @@ package body Tests.Sampling_Cases is
       pragma Unreferenced (T);
       Config : constant S.Configuration :=
         (Temperature => 1.0, Top_K => 0, Top_P => 1.0, Min_P => 0.5,
-         Repeat_Penalty => 1.0, Repeat_Window => 0);
+         Repeat_Penalty => 1.0, Repeat_Window => 0,
+         others => <>);
       Logits : constant Logit_Vector :=
         [0 => 5.0, 1 => 4.9, others => -20.0];
       Sampler : S.Sampler;
@@ -337,7 +340,8 @@ package body Tests.Sampling_Cases is
       pragma Unreferenced (T);
       Config : constant S.Configuration :=
         (Temperature => 0.01, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
-         Repeat_Penalty => 10.0, Repeat_Window => 8);
+         Repeat_Penalty => 10.0, Repeat_Window => 8,
+         others => <>);
       Logits : constant Logit_Vector :=
         [0 => 4.0, 1 => 3.0, others => -10.0];
       Sampler : S.Sampler;
@@ -360,6 +364,103 @@ package body Tests.Sampling_Cases is
 
       S.Close (Sampler);
    end Repetition_Penalty_Applies;
+
+   --  Presence subtracts once however often; frequency subtracts every time.
+   --
+   --  The two are told apart by counting. A token said twice must be pushed
+   --  down twice as far by a frequency penalty and no further by a presence
+   --  one, which is the whole difference between them and the only thing that
+   --  can go wrong in a way the compiler will not catch.
+   procedure Frequency_And_Presence_Differ
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  Half a point apart, so one subtraction of one point flips them and
+      --  a second changes nothing that the first did not.
+      Logits : constant Logit_Vector :=
+        [0 => 2.0, 1 => 1.5, others => -10.0];
+
+      Sampler : S.Sampler;
+      Status  : E.Error_Info;
+      Token   : Vocab.Token_Id;
+
+      procedure Say_Zero_Twice (Config : S.Configuration; Expect : Vocab.Token_Id;
+                                What : String) is
+      begin
+         S.Open (Sampler, Config, Vocabulary, 11, Status);
+         Assert (E.Is_Ok (Status), "sampler did not open for " & What);
+
+         S.Record_Token (Sampler, 0);
+         S.Record_Token (Sampler, 0);
+         S.Sample (Sampler, Logits, Token, Status);
+
+         Assert (E.Is_Ok (Status) and then Token = Expect,
+                 What & " selected" & Vocab.Token_Id'Image (Token)
+                 & " rather than" & Vocab.Token_Id'Image (Expect));
+         S.Close (Sampler);
+      end Say_Zero_Twice;
+   begin
+      --  Presence, once: token 0 falls to 1.4 and token 1 wins.
+      Say_Zero_Twice
+        ((Temperature => 0.01, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
+          Repeat_Penalty => 1.0, Repeat_Window => 8,
+          Presence_Penalty => 0.6, others => <>),
+         1, "a presence penalty");
+
+      --  Presence again, larger than one repetition but applied only once:
+      --  it is subtracted a single time whatever the count, so a penalty of
+      --  0.4 leaves token 0 at 1.6 and it still wins.
+      Say_Zero_Twice
+        ((Temperature => 0.01, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
+          Repeat_Penalty => 1.0, Repeat_Window => 8,
+          Presence_Penalty => 0.4, others => <>),
+         0, "a presence penalty below the gap");
+
+      --  Frequency, twice: the same 0.4 is subtracted once per occurrence,
+      --  so token 0 falls to 1.2 and loses. This is the case that separates
+      --  the two, and it fails if the count is treated as a flag.
+      Say_Zero_Twice
+        ((Temperature => 0.01, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
+          Repeat_Penalty => 1.0, Repeat_Window => 8,
+          Frequency_Penalty => 0.4, others => <>),
+         1, "a frequency penalty counted twice");
+
+      --  And a token never said is untouched by either.
+      Say_Zero_Twice
+        ((Temperature => 0.01, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
+          Repeat_Penalty => 1.0, Repeat_Window => 8,
+          Frequency_Penalty => 5.0, Presence_Penalty => 5.0),
+         1, "penalties that spare an unsaid token");
+   end Frequency_And_Presence_Differ;
+
+   --  A penalty large enough to make every logit infinite is refused.
+   procedure Penalty_Range_Rejected
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Status : E.Error_Info;
+   begin
+      S.Validate
+        ((Temperature => 1.0, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
+          Repeat_Penalty => 1.0, Repeat_Window => 8,
+          Frequency_Penalty => 1.0E6, others => <>), Status);
+      Assert (E.Is_Error (Status), "an enormous frequency penalty was accepted");
+
+      S.Validate
+        ((Temperature => 1.0, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
+          Repeat_Penalty => 1.0, Repeat_Window => 8,
+          Presence_Penalty => -1.0E6, others => <>), Status);
+      Assert (E.Is_Error (Status), "an enormous presence penalty was accepted");
+
+      --  A negative value of ordinary size is meaningful: it encourages
+      --  repetition rather than discouraging it, and is accepted.
+      S.Validate
+        ((Temperature => 1.0, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
+          Repeat_Penalty => 1.0, Repeat_Window => 8,
+          Frequency_Penalty => -0.5, others => <>), Status);
+      Assert (E.Is_Ok (Status), "a negative frequency penalty was refused");
+   end Penalty_Range_Rejected;
 
    --  Non-finite logits and impossible configurations are rejected.
    procedure Invalid_Inputs_Rejected
@@ -1127,6 +1228,14 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Automatic_Seed_Works'Access,
          "the default seeding path produces varying seeds without raising");
-   end Register_Tests;
+
+      Register_Routine
+        (T, Frequency_And_Presence_Differ'Access,
+         "a frequency penalty counts repetitions and a presence penalty "
+         & "does not");
+      Register_Routine
+        (T, Penalty_Range_Rejected'Access,
+         "a penalty large enough to make every logit infinite is refused, "
+         & "and an ordinary negative one is not");   end Register_Tests;
 
 end Tests.Sampling_Cases;

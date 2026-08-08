@@ -86,9 +86,9 @@ asymmetric key and value widths, and rotary scaling other than `none` and
 | Temperature | Implemented |
 | Top-k, top-p, minimum-p | Implemented |
 | Repetition penalty with a configurable window | Implemented |
+| Frequency and presence penalties | Implemented |
 | Fixed 64-bit seed and entropy-chosen seed reporting | Implemented |
 | Forbidden-token masking | Implemented |
-| Frequency and presence penalties | Not implemented |
 
 ## Backend
 

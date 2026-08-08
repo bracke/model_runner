@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Frequency and presence penalties, as `--frequency-penalty` and
+  `--presence-penalty`. Both act on the same recent-token window as the
+  repetition penalty and compose with it. Frequency is subtracted once for
+  every occurrence of a token in the window, presence once for a token that
+  occurs at all; a negative value is accepted and encourages repetition, and a
+  magnitude large enough to make every logit in the window infinite is
+  refused. Neither applies to greedy selection, which no penalty does.
+
 - A benchmark for the vector kernels each token passes through -- softmax,
   normalization, the activation and the plain dot product -- which nothing had
   been measuring, and one for how the matrix product scales across shares,

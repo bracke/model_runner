@@ -393,7 +393,8 @@ package body Model_Runner.CLI.Options is
         (Flag_Prompt, Flag_Prompt_File, Flag_System, Flag_System_File,
          Flag_Max_Tokens, Flag_Context, Flag_Batch, Flag_Temperature,
          Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Repeat_Penalty,
-         Flag_Repeat_Window, Flag_Seed, Flag_Memory, Flag_Locale,
+         Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
+         Flag_Seed, Flag_Memory, Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Threads);
       Seen : array (Option_Flag) of Boolean := [others => False];
@@ -728,6 +729,20 @@ package body Model_Runner.CLI.Options is
                   elsif Name = "--repeat-penalty" then
                      Real_Value (Flag_Repeat_Penalty,
                                  Result.Sampling.Repeat_Penalty, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--frequency-penalty" then
+                     Real_Value (Flag_Frequency_Penalty,
+                                 Result.Sampling.Frequency_Penalty, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--presence-penalty" then
+                     Real_Value (Flag_Presence_Penalty,
+                                 Result.Sampling.Presence_Penalty, Good);
                      if not Good then
                         return;
                      end if;

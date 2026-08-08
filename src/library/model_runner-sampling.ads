@@ -69,16 +69,36 @@ package Model_Runner.Sampling is
 
       --  How many of the most recent tokens the penalty considers.
       Repeat_Window : Natural := 64;
+
+      --  Subtracted from the logit of a token once for each time it appears
+      --  in the window, so a token said four times is discouraged four times
+      --  as much as one said once. Zero disables it. A negative value
+      --  encourages repetition, which is why the range is not restricted to
+      --  the positive side.
+      Frequency_Penalty : Real := 0.0;
+
+      --  Subtracted from the logit of a token that appears in the window at
+      --  all, however often. Zero disables it.
+      --
+      --  The two differ in what they discourage. Frequency answers "how much
+      --  has this been said", presence answers "has this been said", and a
+      --  model that has fallen into a loop is usually better served by the
+      --  first while one that keeps returning to a subject is served by the
+      --  second. Both act on the same window as Repeat_Penalty, and all three
+      --  compose: they are applied in turn to the same logit.
+      Presence_Penalty : Real := 0.0;
    end record;
 
    --  A configuration that always selects the most probable token.
    Greedy_Configuration : constant Configuration :=
-     (Temperature    => 0.0,
-      Top_K          => 0,
-      Top_P          => 1.0,
-      Min_P          => 0.0,
-      Repeat_Penalty => 1.0,
-      Repeat_Window  => 0);
+     (Temperature       => 0.0,
+      Top_K             => 0,
+      Top_P             => 1.0,
+      Min_P             => 0.0,
+      Repeat_Penalty    => 1.0,
+      Repeat_Window     => 0,
+      Frequency_Penalty => 0.0,
+      Presence_Penalty  => 0.0);
 
    --  Report whether a configuration selects greedily.
    --

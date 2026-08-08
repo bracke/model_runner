@@ -151,6 +151,23 @@ package body Model_Runner.Sampling is
          Reject ("repeat_penalty", Item.Repeat_Penalty);
          return;
       end if;
+
+      --  Bounded on both sides rather than required positive: a negative
+      --  value is meaningful here, and what has to be refused is a magnitude
+      --  large enough to make every logit in the window infinite.
+      if not N.Is_Finite (Item.Frequency_Penalty)
+        or else abs Item.Frequency_Penalty > 100.0
+      then
+         Reject ("frequency_penalty", Item.Frequency_Penalty);
+         return;
+      end if;
+
+      if not N.Is_Finite (Item.Presence_Penalty)
+        or else abs Item.Presence_Penalty > 100.0
+      then
+         Reject ("presence_penalty", Item.Presence_Penalty);
+         return;
+      end if;
    end Validate;
 
    ----------
@@ -292,6 +309,22 @@ package body Model_Runner.Sampling is
       end if;
    end Record_Token;
 
+   --  How many times a token appears in the recent history.
+   function Occurrences (Item : Sampler; Token : Token_Id) return Natural is
+      Seen : Natural := 0;
+   begin
+      if Item.History = null then
+         return 0;
+      end if;
+
+      for Index in 0 .. Item.Used - 1 loop
+         if Item.History.all (Index) = Token then
+            Seen := Seen + 1;
+         end if;
+      end loop;
+      return Seen;
+   end Occurrences;
+
    --  Report whether a token appears in the recent history.
    function In_History (Item : Sampler; Token : Token_Id) return Boolean is
    begin
@@ -417,6 +450,25 @@ package body Model_Runner.Sampling is
                     (if Value > 0.0
                      then Value / Item.Settings.Repeat_Penalty
                      else Value * Item.Settings.Repeat_Penalty);
+               end if;
+
+               --  Counted once, and used by both penalties. Asking the
+               --  history twice for the same token would double the cost of
+               --  a loop that already walks the window for every candidate.
+               if Item.Settings.Frequency_Penalty /= 0.0
+                 or else Item.Settings.Presence_Penalty /= 0.0
+               then
+                  declare
+                     Seen : constant Natural :=
+                       Occurrences (Item, Token_Id (Index));
+                  begin
+                     if Seen > 0 then
+                        Value :=
+                          Value
+                          - Item.Settings.Frequency_Penalty * Real (Seen)
+                          - Item.Settings.Presence_Penalty;
+                     end if;
+                  end;
                end if;
 
                --  5  temperature

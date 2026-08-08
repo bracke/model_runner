@@ -379,6 +379,8 @@ package body Model_Runner.CLI.Execute is
              Loc.Named ("help.run.top_p", ""),
              Loc.Named ("help.run.min_p", ""),
              Loc.Named ("help.run.repeat_penalty", ""),
+             Loc.Named ("help.run.frequency_penalty", ""),
+             Loc.Named ("help.run.presence_penalty", ""),
              Loc.Named ("help.run.repeat_window", ""),
              Loc.Named ("help.run.seed", ""),
              Loc.Named ("help.run.stop", ""),

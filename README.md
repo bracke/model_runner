@@ -117,7 +117,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Llama profile | Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, rejection of mixture-of-experts / sliding-window / asymmetric key-value widths / unsupported rotary scaling, tensor resolution and shape validation, tied-output aliasing |
 | Execution | Embedding lookup, per-layer RMS norm, Q/K/V projection, rotary encoding, grouped-query causal attention without duplicating key or value heads, output projection, SiLU-gated feed-forward, residuals, raw logits |
 | KV cache and session | Explicit cache sized with checked arithmetic, transactional commit, state machine, reset preserving allocations, committed-prefix reuse |
-| Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, repetition penalty, temperature, top-k, top-p, min-p, renormalize, select. Greedy is tie-broken to the lowest token and consumes no random state; xoshiro256++ seeded per session |
+| Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, repetition penalty, frequency and presence penalties, temperature, top-k, top-p, min-p, renormalize, select. Greedy is tie-broken to the lowest token and consumes no random state; xoshiro256++ seeded per session |
 | Stops | End-of-sequence, stop tokens, stop strings matched across token boundaries with earliest-then-longest resolution and no leaked bytes |
 | Generation | Prefill, decode loop, streaming to an output sink, eight completion reasons, statistics against a monotonic clock, bounded text retention |
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback |
