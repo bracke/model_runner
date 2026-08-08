@@ -107,17 +107,15 @@ package Model_Runner.Quantization is
    --  just a buffer. A Q8_0 value is its scale times a small integer, so the
    --  sum over a block is the scale times the sum of integer times input --
    --  one multiply by the scale for each block instead of one for each of its
-   --  thirty-two elements. The result is also slightly more accurate, because
-   --  the scaled weight is never rounded to single precision on the way past.
+   --  thirty-two elements, and one rounding fewer per element.
    --
-   --  Fused for Q4_0 and Q8_0, which is where it measured faster. The
-   --  k-quant formats carry a scale, and two of them an offset, for every
-   --  sixteen or thirty-two element sub-block, so there is far less to fold
-   --  and much more layout to read twice. F32 and F16 have no scale to fold
-   --  at all, and fusing them measured slower than decoding a span and
-   --  multiplying it. Both take the span path. Which formats take which is
-   --  not observable in the result: Fused_Formats reports it, and a test
-   --  checks every format against decode-then-multiply.
+   --  No format is decoded that way any more. Q4_0 was the last, and folding
+   --  the multiply into its decode measured 1.79 times slower than decoding a
+   --  span and multiplying it: 1746 against 3128 million elements a second,
+   --  alternating. Fusing breaks the sum at every block so the scale can be
+   --  applied there, and that costs the flat inner loop more than the saved
+   --  multiply is worth. Every format now takes one path, and the rounding
+   --  every other format already had is what Q4_0 has too.
    --
    --  Each vector is accumulated independently, so a span shared between
    --  several vectors gives each one the value it would have had alone. The
@@ -153,13 +151,6 @@ package Model_Runner.Quantization is
       Sums    : in out Model_Runner.Numerics.Wide_Real_Array;
       Ok      : out Boolean);
 
-   --  Report whether Accumulate_Dot folds the multiply into the decode for a
-   --  format, rather than decoding a block and then multiplying.
-   --
-   --  @param Format Format to test.
-   --  @return True when the format takes the fused path.
-   function Fused_Formats
-     (Format : Model_Runner.GGUF.Tensor_Type) return Boolean;
 
    --  Report whether this package decodes a format.
    --

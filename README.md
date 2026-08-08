@@ -526,8 +526,8 @@ Named in the specification, absent here:
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
-chooses for itself. From a short prompt, twelve tokens take **2.14 s** --
-about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.4 s of
+chooses for itself. From a short prompt, twelve tokens take **2.25 s** --
+about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.6 s of
 processor time, the median of three runs. Loading the model costs a further
 0.8 s of wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
@@ -561,7 +561,7 @@ it, so with one worker per core there was always one more runnable task than
 there were cores, the operating system took a core from a worker, and the
 whole job waited for that worker because a job is not done until its slowest
 share is. It now takes the last share itself instead of waiting. Pinned, eight
-shares went from 9326 Me/s to 14132.
+shares went from 9326 Me/s to 13787.
 
 Unpinned the gain is small, six per cent, because the spare task could take a
 processor on a core that already had one and that is cheap. Pinned is what a
@@ -580,12 +580,13 @@ host that cannot answer says so rather than guessing. `--threads` overrides it
 everywhere and still accepts any number the backend allows.
 
 What is left over is not the memory. Measured on its own, away from the model,
-the matrix product reaches 5.3x on eight shares against its own serial rate,
-and reaches it whether one vector is passed or thirty-two -- 2577 to 13481
-Me/s in the first case and 4734 to 25393 in the second, medians of three runs.
+the matrix product reaches about 4.8x on eight shares against its own serial
+rate, and reaches it whether one vector is passed or thirty-two -- 2533 to
+12664 Me/s in the first case and 4738 to 21668 in the second, medians of three
+runs.
 If memory were the wall those two would part company, because the second reads
 each weight byte once for thirty-two multiplies and the first reads it once
-for one. At eight shares the product moves 14.3 GB/s, which this machine is
+for one. At eight shares the product moves 13.5 GB/s, which this machine is
 not troubled by. What does change is the clock: 4927 MHz with one core busy
 and 3926 with eight, sampled from the host while running. That ratio alone
 caps eight cores at 6.4x, and the rest is cache and hand-off. It is a 15 W
@@ -601,10 +602,10 @@ what settled it. Before the submitting task took a share, the four-bit format
 ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
 end. That gap was the contention, not the bytes: with the contention gone the
-four-bit format is about five per cent faster in the kernel at any share
-count -- 14241 Me/s against 13481 at eight shares, 2679 against 2577 serially
--- and end to end the two are indistinguishable, 2.06 and 2.18 s against 2.06
-and 2.26.
+four-bit format is within a few per cent of the eight-bit one either way --
+11697 Me/s against 12664 at eight shares with one vector, 23281 against 21668
+with thirty-two, 2676 against 2533 serially -- and end to end the two are
+indistinguishable, 2.06 and 2.18 s against 2.06 and 2.26.
 
 It is worth keeping as a lesson rather than a result. A measurement taken
 while something else is the bottleneck measures that other thing, and the way
@@ -648,20 +649,20 @@ model says.
 
 | `--batch-size` | prompt evaluation | rate | output |
 |---|---|---|---|
-| 1 (one token at a time) | 13.46 s | 9.7 tokens/s | `7066666208f6fbe6` |
-| 2 | 9.91 s | 13.2 tokens/s | `7066666208f6fbe6` |
-| 4 | 8.05 s | 16.3 tokens/s | `7066666208f6fbe6` |
-| 8 | 7.27 s | 18.0 tokens/s | `7066666208f6fbe6` |
-| 16 | 7.07 s | 18.5 tokens/s | `7066666208f6fbe6` |
-| 32 (default) | 6.97 s | 18.8 tokens/s | `7066666208f6fbe6` |
-| 64 | 6.60 s | 19.9 tokens/s | `7066666208f6fbe6` |
-| 128 (cap) | 6.56 s | 20.0 tokens/s | `7066666208f6fbe6` |
+| 1 (one token at a time) | 12.57 s | 10.4 tokens/s | `7066666208f6fbe6` |
+| 2 | 9.95 s | 13.2 tokens/s | `7066666208f6fbe6` |
+| 4 | 8.20 s | 16.0 tokens/s | `7066666208f6fbe6` |
+| 8 | 7.67 s | 17.1 tokens/s | `7066666208f6fbe6` |
+| 16 | 7.20 s | 18.2 tokens/s | `7066666208f6fbe6` |
+| 32 (default) | 6.72 s | 19.5 tokens/s | `7066666208f6fbe6` |
+| 64 | 6.15 s | 21.3 tokens/s | `7066666208f6fbe6` |
+| 128 (cap) | 6.39 s | 20.5 tokens/s | `7066666208f6fbe6` |
 
 Most of the benefit arrives by a batch of eight, and it flattens after
 thirty-two. Batching amortizes the cost of decoding the weights across the
 tokens that share them, so the faster the decode gets the less there is to
 amortize: on the unoptimized build the same sweep spanned 3.7x, and here it
-spans 2.1x. That is the batching working exactly as described, on a smaller
+spans 2.0x. That is the batching working exactly as described, on a smaller
 share of a much smaller total.
 
 ### Kernels
@@ -671,9 +672,9 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.26 | Q5_K | 0.40 |
-| Q4_K | 0.38 | F16 | 0.55 |
-| Q6_K | 0.38 | Q4_0 | 0.57 |
+| F32 | 0.26 | Q6_K | 0.38 |
+| Q4_0 | 0.31 | Q5_K | 0.40 |
+| Q4_K | 0.37 | F16 | 0.56 |
 | Q8_0 | 0.38 | | |
 
 Medians of three runs. What every measured figure in this section was taken
@@ -758,26 +759,28 @@ found in an afternoon what three attempts at vector width did not.
 
 The binary runs on any x86-64.
 
-### Fusing the multiply into the decode
+### Fusing the multiply into the decode, and unfusing it again
 
-Q4_0 skips the decoded copy: its value is a block scale times a small integer,
-so a block's contribution is the scale times the sum of integer times input —
-one multiply by the scale per block instead of one per element, and one
-rounding fewer per element.
+Q4_0 used to skip the decoded copy: its value is a block scale times a small
+integer, so a block's contribution is the scale times the sum of integer times
+input — one multiply by the scale per block instead of one per element, and one
+rounding fewer per element. It was the only format that did, and it measured
+faster that way when it was written.
 
-Whether that wins is a per-format question, settled by measuring. Folding the
-scale out forces the sum to break at every block, which costs the flat inner
-loop the other formats get. It won clearly for Q4_0 and lost for Q8_0, whose
-element is already a byte, and for F32, which has no scale to fold at all. The
-k-quant formats carry a scale, and two of them an offset, for every sixteen or
-thirty-two element sub-block — far more layout to read twice for a saving
-spread over 256 elements rather than 32.
+It does not any more. Folding the scale out forces the sum to break at every
+block, which costs the flat inner loop the other formats get, and that inner
+loop has been improved since — the per-element checks lifted out, the packed
+bytes read once, the half-precision conversion inlined. Measured now,
+alternating, fusing costs Q4_0 **1.79 times**: 1746 against 3128 million
+elements a second. Unfused it decodes at 0.31 ns an element, which makes it
+the fastest format in the table above rather than the slowest.
 
-So only Q4_0 is fused. `Quantization.Fused_Formats` reports which formats take
-which path; it is not otherwise observable, because one test checks every
-format against the reference decoder and another checks that the number of
-vectors in a call never changes any of them. Deliberately swapping the two
-nibbles of the fused Q4_0 path fails the suite.
+So nothing is fused now, and the fused path is gone rather than left switched
+off. Every format takes one route, and Q4_0 gained the rounding per element
+that every other format already had. What is left of the idea is this section
+and the note above `Accumulate_Dot`, because a measurement that reversed is
+worth more written down than deleted: it did win once, and what changed was
+not the arithmetic but everything around it.
 
 `tests benchmark` measures the row kernels directly, on synthetic tensors, with
 no model file and no network. The tests crate builds the library at the release

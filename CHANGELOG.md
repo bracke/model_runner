@@ -209,6 +209,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Performance
 
+- Q4_0 decodes 1.79 times faster, and is now the fastest format rather than
+  the slowest: 0.31 nanoseconds an element against 0.57. It was the one format
+  whose multiply was folded into its decode, which measured faster when it was
+  written and measures slower now that the loop it competes with has been
+  improved. The fused path is removed rather than switched off, so every
+  format takes one route.
+
 - Six-bit blocks decode about four times faster. The inner loop produced four
   elements per iteration and wrote them thirty-two apart; split into four runs
   that each read sixteen adjacent bytes and write sixteen adjacent elements,
@@ -316,6 +323,11 @@ wall and 16.0 s of processor time.
   ones did not.
 
 ### Changed
+
+- Q4_0 rounds each weight to single precision on the way past, as every other
+  format already did. Folding its scale into the sum avoided that rounding and
+  is no longer worth what it costs. Results for Q4_0 models change in the last
+  bits.
 
 - The default worker count follows the number of cores rather than the number
   of processors, and asks for one fewer than that because the submitting task
