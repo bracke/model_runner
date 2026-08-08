@@ -32,7 +32,14 @@ package body Model_Runner.Backend.CPU is
       Result.Wide_Accumulation := True;
       Result.Alignment := 4;
       Result.Supports_Matrix_Vector := True;
-      Result.Supports_Batched := False;
+      --  Dispatch_Batch is how prefill evaluates several tokens against one
+      --  reading of the weights, and Llama calls it. This said False for as
+      --  long as that had been true; nothing consults it, which is why the
+      --  two could disagree without anything going wrong -- but Supports is
+      --  public, and a caller asking whether this backend batches was told
+      --  the wrong thing.
+      Result.Supports_Batched := True;
+
       Result.Supports_Noncontiguous := False;
       Result.Supports_Mapping := True;
       Result.Supports_Quantized := True;

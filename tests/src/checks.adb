@@ -17,6 +17,8 @@ with Template_Registry;
 
 with Model_Runner;
 with Model_Runner.Errors;
+with Model_Runner.Backend;
+with Model_Runner.Backend.CPU;
 with Model_Runner.GGUF;
 with Model_Runner.Quantization;
 with Model_Runner.Text;
@@ -24,6 +26,7 @@ with Model_Runner.Text;
 package body Checks is
 
    use type Model_Runner.Errors.Error_Code;
+   use type Model_Runner.Backend.Backend_Kind;
    use type Template_Registry.Outcome;
    use type Template_Registry.Text_Access;
 
@@ -498,6 +501,50 @@ package body Checks is
                end;
             end if;
          end loop;
+      end;
+
+      --  The backend's description of itself matches what it does.
+      --
+      --  Capabilities is a table the code publishes about the code, and
+      --  nothing in this program consults it, so the two could disagree
+      --  indefinitely without anything going wrong. Supports_Batched said
+      --  False while Llama was calling Dispatch_Batch on every prefill.
+      --
+      --  It is checked against the same source the documents are: a format
+      --  the engine decodes is a format the backend that runs it reads.
+      declare
+         Able : constant Model_Runner.Backend.Capabilities :=
+           Model_Runner.Backend.CPU.Describe;
+      begin
+         for Format in Model_Runner.GGUF.Tensor_Type loop
+            Result.Performed := Result.Performed + 1;
+            if Model_Runner.Quantization.Is_Decodable (Format)
+              /= Model_Runner.Backend.Supports (Able, Format)
+            then
+               Fail ("the CPU backend and the decoder disagree about "
+                     & Model_Runner.GGUF.Type_Name (Format)
+                     & ": decodable is "
+                     & Boolean'Image
+                         (Model_Runner.Quantization.Is_Decodable (Format))
+                     & " and supported is "
+                     & Boolean'Image
+                         (Model_Runner.Backend.Supports (Able, Format)));
+            end if;
+         end loop;
+
+         --  And the flags that name an operation, against whether the
+         --  operation is there to call.
+         Check (Able.Supports_Batched,
+                "the CPU backend says it does not batch, and Llama batches "
+                & "through it");
+         Check (Able.Kind = Model_Runner.Backend.Backend_CPU,
+                "the CPU backend describes itself as another one");
+         Check (Able.Max_Workers = Model_Runner.Backend.CPU.Max_Workers,
+                "the CPU backend reports a worker cap it does not have");
+         Check (not Model_Runner.Backend.CPU.Describe (1).Supports_Parallel,
+                "a one-worker pool says it runs in parallel");
+         Check (Model_Runner.Backend.CPU.Describe (2).Supports_Parallel,
+                "a two-worker pool says it does not run in parallel");
       end;
 
       --  Every chat-template row says what running it actually does.

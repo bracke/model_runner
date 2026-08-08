@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The CPU backend said it does not batch, while every prefill went through
+  its `Dispatch_Batch`. `Capabilities` is a table the code publishes about
+  the code and nothing in the program consults it -- `Describe` has no caller
+  outside the checklist -- so the two could disagree indefinitely without
+  anything going wrong. It is now checked: the formats it claims must be the
+  formats the decoder decodes, and the flags that name an operation must
+  match whether the operation is there.
+
 - The chat-template section of the support matrix is checked against the
   code. It was the last hand-maintained registry -- a table of claims beside
   the engine rather than about it -- and it said `set` and the filters were
