@@ -891,6 +891,11 @@ package body Tests.GGUF_Cases is
                Tame_Half (Block, 2);
             when Model_Runner.GGUF.Type_Q6_K =>
                Tame_Half (Block, 208);
+            when Model_Runner.GGUF.Type_Q2_K =>
+               --  Both factors sit at the end of this one, after the scales
+               --  and the quants rather than before them.
+               Tame_Half (Block, 80);
+               Tame_Half (Block, 82);
             when others =>
                null;
          end case;
@@ -928,9 +933,9 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 8) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 9) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
-         Model_Runner.GGUF.Type_BF16,
+         Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];
@@ -990,13 +995,18 @@ package body Tests.GGUF_Cases is
             Assert (not Ok, Name & ": a span of no blocks reported success");
 
             --  A format this package does not decode, through the same
-            --  entry. Its block holds no elements, so there is nothing to
-            --  write and nothing to read: saying so is the only answer.
+            --  entry. Refusing is the only answer it can give, and it must
+            --  leave nothing of the caller's behind.
+            --
+            --  Q2_K stood here until it was implemented, which is the way
+            --  this check wears out: the example has to be a format that is
+            --  still refused, and every one of them is a candidate for being
+            --  implemented later.
             declare
                Unsupported : Q.Block_Buffer := [others => 1.0];
             begin
                Q.Decode_Block
-                 (Model_Runner.GGUF.Type_Q2_K, Data, 0, Unsupported, Ok);
+                 (Model_Runner.GGUF.Type_Q3_K, Data, 0, Unsupported, Ok);
                Assert (not Ok, "an undecodable format was decoded");
                Assert ((for all Value of Unsupported => Value = 0.0),
                        "an undecodable format left the target as it was");
@@ -1095,9 +1105,9 @@ package body Tests.GGUF_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      Formats : constant array (1 .. 8) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 9) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
-         Model_Runner.GGUF.Type_BF16,
+         Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];
@@ -1189,7 +1199,7 @@ package body Tests.GGUF_Cases is
          end;
       end loop;
 
-      Assert (Checked_Rows = 8, "not every format was checked");
+      Assert (Checked_Rows = 9, "not every format was checked");
    end Fused_Dot_Matches_Decoder;
 
    --  Decoded values, against expectations worked out from the layout.
@@ -1287,6 +1297,30 @@ package body Tests.GGUF_Cases is
          Block (2) := 16#F1#;   --  low 1, high 15
          Check (Model_Runner.GGUF.Type_Q4_0, Block, 0, 1.0 - 8.0);
          Check (Model_Runner.GGUF.Type_Q4_0, Block, 16, 15.0 - 8.0);
+      end;
+
+      --  Q2_K: two bits an element, sixteen sub-blocks each with a four-bit
+      --  scale and a four-bit minimum in one byte. With d one, the first
+      --  scale one and the minimum zero, an element is its own two bits.
+      declare
+         Block : B.Byte_Array (0 .. 83) := [others => 0];
+      begin
+         Block (0) := 16#01#;        --  sub-block 0: scale 1, minimum 0
+         Block (16) := 16#0B#;       --  quants: 3, 2, 0, 0 at two bits each
+         Block (80) := One_Low;
+         Block (81) := One_High;     --  d = 1
+         Block (82) := 0;
+         Block (83) := 0;            --  dmin = 0
+         Check (Model_Runner.GGUF.Type_Q2_K, Block, 0, 3.0);
+         Check (Model_Runner.GGUF.Type_Q2_K, Block, 1, 0.0);
+
+         --  A minimum of one is subtracted from every element of its
+         --  sub-block, which is what tells the two halves of the scale byte
+         --  apart.
+         Block (0) := 16#11#;        --  scale 1, minimum 1
+         Block (82) := One_Low;
+         Block (83) := One_High;     --  dmin = 1
+         Check (Model_Runner.GGUF.Type_Q2_K, Block, 0, 2.0);
       end;
 
       --  Q4_K: value is d times the sub-block scale times the nibble, less
@@ -1442,9 +1476,9 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 8) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 9) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
-         Model_Runner.GGUF.Type_BF16,
+         Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];

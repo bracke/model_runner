@@ -30,7 +30,7 @@ package body Model_Runner.GGUF is
       Type_Q5_1    => (7,  Legacy_Block, 24,  False),
       Type_Q8_0    => (8,  Legacy_Block, 34,  True),
       Type_Q8_1    => (9,  Legacy_Block, 40,  False),
-      Type_Q2_K    => (10, Super_Block,  84,  False),
+      Type_Q2_K    => (10, Super_Block,  84,  True),
       Type_Q3_K    => (11, Super_Block,  110, False),
       Type_Q4_K    => (12, Super_Block,  144, True),
       Type_Q5_K    => (13, Super_Block,  176, True),

@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Q2_K tensors are decoded rather than refused. Two bits an element, sixteen
+  sub-blocks of sixteen, each with a four-bit scale and a four-bit minimum
+  sharing one byte, and the two half-precision factors at the end rather than
+  the start. It is the slowest format in the table at 0.72 nanoseconds an
+  element, which is what carrying sixteen sub-blocks per 256 elements costs.
+  Verified against a model requantized to pure Q2_K, whose greedy output
+  matches the reference runtime exactly.
+
 - BF16 tensors are decoded rather than refused. A brain float is the top half
   of a binary32 -- same sign, same eight exponent bits, mantissa cut to seven
   -- so widening one is a shift with no bias to undo and no case for infinity

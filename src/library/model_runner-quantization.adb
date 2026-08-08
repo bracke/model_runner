@@ -530,7 +530,7 @@ package body Model_Runner.Quantization is
 
    function Is_Decodable (Format : G.Tensor_Type) return Boolean
    is (Format in G.Type_F32 | G.Type_F16 | G.Type_BF16 | G.Type_Q4_0
-                | G.Type_Q8_0
+                | G.Type_Q8_0 | G.Type_Q2_K
                 | G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K);
 
    -------------------
@@ -574,6 +574,71 @@ package body Model_Runner.Quantization is
       --  simple layouts lived here and nothing called it, so nothing tested
       --  it either.
       case Format is
+         when G.Type_Q2_K =>
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               --  Sixteen bytes of packed scales, then sixty-four bytes of
+               --  quants at two bits each, then the two half-precision
+               --  factors. Every element is one of four levels, so the format
+               --  leans harder on its scales than any other here: sixteen
+               --  sub-blocks of sixteen elements, each with a four-bit scale
+               --  and a four-bit minimum sharing one byte.
+               Scales  : constant B.Byte_Count := Offset;
+               Quants  : constant B.Byte_Count := Offset + 16;
+               D       : constant Real := Scale (Data, Offset + 80);
+               Minimum : constant Real := Scale (Data, Offset + 82);
+            begin
+               for Half in 0 .. 1 loop
+                  for Group in 0 .. 3 loop
+                     for Upper in 0 .. 1 loop
+                        declare
+                           --  The scales are consumed in the order the
+                           --  sub-blocks are written, which is why this is a
+                           --  running index rather than an offset computed
+                           --  from the element number.
+                           Which : constant B.Byte_Count :=
+                             B.Byte_Count (Half * 8 + Group * 2 + Upper);
+                           Packed : constant Interfaces.Unsigned_8 :=
+                             Data (Data'First + Scales + Which);
+
+                           Factor : constant Real :=
+                             D * Real (Integer (Packed and 16#0F#));
+                           Lowest : constant Real :=
+                             Minimum
+                             * Real (Integer
+                                       (Interfaces.Shift_Right (Packed, 4)));
+
+                           --  Sixteen adjacent bytes to sixteen adjacent
+                           --  elements, as everywhere else here.
+                           From : constant B.Byte_Count :=
+                             Quants + B.Byte_Count (Half * 32 + Upper * 16);
+                           Into : constant Element_Count :=
+                             Element_Count (Half * 128 + Group * 32
+                                            + Upper * 16);
+                           Shift : constant Natural := 2 * Group;
+                        begin
+                           for L in 0 .. 15 loop
+                              Target
+                                (Target'First + Into + Element_Count (L)) :=
+                                Factor
+                                * Real (Integer
+                                          (Interfaces.Shift_Right
+                                             (Data (Data'First + From
+                                                    + B.Byte_Count (L)),
+                                              Shift)
+                                           and 3))
+                                - Lowest;
+                           end loop;
+                        end;
+                     end loop;
+                  end loop;
+               end loop;
+               Ok := True;
+            end;
+
          when G.Type_Q4_K =>
             declare
                --  The block was bounds-checked at entry, so every index below
