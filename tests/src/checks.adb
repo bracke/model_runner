@@ -542,6 +542,161 @@ package body Checks is
          Agrees ("CHANGELOG.md", "diagnostic");
       end;
 
+      --  Every value a diagnostic message names is attached somewhere.
+      --
+      --  A message saying "{limit} bytes" needs a parameter called limit, and
+      --  without one the renderer cannot fill the message: it hands back the
+      --  emergency form, and the reader sees <gguf.string_too_long> where the
+      --  sentence belonged. Visible, which is the good part, and invisible to
+      --  everybody until the day that code is first raised, which is not.
+      --
+      --  What this catches is a name nothing attaches anywhere -- a message
+      --  inventing a value, or an attachment renamed on every side but the
+      --  catalog. What it does not catch is the same name attached by some
+      --  other diagnostic than the one whose message asks: "option" is added
+      --  in two places, and renaming it in one leaves this quiet. Tying each
+      --  name to the code that raises it would need to know which Make each
+      --  Add belongs to, which is more than reading the text can say.
+      --
+      --  Reserved codes are skipped: nothing raises them, so nothing can
+      --  attach anything to them.
+      declare
+         Catalog : constant String := Contents ("resources/messages/catalog.txt");
+
+         Max_Names : constant := 128;
+         Max_Name  : constant := 48;
+
+         type Name_Record is record
+            Text  : String (1 .. Max_Name) := [others => ' '];
+            Last  : Natural := 0;
+            Owner : String (1 .. 64) := [others => ' '];
+            Owner_Last : Natural := 0;
+            Found : Boolean := False;
+         end record;
+
+         Names : array (1 .. Max_Names) of Name_Record;
+         Used  : Natural := 0;
+
+         --  Remember a placeholder and which message asked for it.
+         procedure Note (Name, Key : String) is
+         begin
+            if Name'Length = 0 or else Name'Length > Max_Name
+              or else Key'Length > 64
+            then
+               return;
+            end if;
+
+            for Index in 1 .. Used loop
+               if Names (Index).Text (1 .. Names (Index).Last) = Name then
+                  return;
+               end if;
+            end loop;
+
+            if Used < Max_Names then
+               Used := Used + 1;
+               Names (Used).Text (1 .. Name'Length) := Name;
+               Names (Used).Last := Name'Length;
+               Names (Used).Owner (1 .. Key'Length) := Key;
+               Names (Used).Owner_Last := Key'Length;
+            end if;
+         end Note;
+
+         --  Collect the placeholders of one message.
+         procedure Collect (Key : String) is
+            Marker : constant String := "en." & Key & " =";
+            Start  : Natural := 0;
+            Stop   : Natural;
+         begin
+            for Index in Catalog'First
+              .. Catalog'Last - Marker'Length + 1
+            loop
+               if Catalog (Index .. Index + Marker'Length - 1) = Marker then
+                  Start := Index;
+                  exit;
+               end if;
+            end loop;
+
+            if Start = 0 then
+               return;
+            end if;
+
+            Stop := Start;
+            while Stop <= Catalog'Last
+              and then Catalog (Stop) /= Character'Val (10)
+            loop
+               Stop := Stop + 1;
+            end loop;
+
+            declare
+               Line  : constant String := Catalog (Start .. Stop - 1);
+               Index : Natural := Line'First;
+            begin
+               while Index < Line'Last loop
+                  if Line (Index) = '{' then
+                     declare
+                        Close : Natural := Index + 1;
+                     begin
+                        while Close <= Line'Last
+                          and then Line (Close) /= '}'
+                        loop
+                           Close := Close + 1;
+                        end loop;
+
+                        if Close <= Line'Last then
+                           Note (Line (Index + 1 .. Close - 1), Key);
+                           Index := Close;
+                        end if;
+                     end;
+                  end if;
+
+                  Index := Index + 1;
+               end loop;
+            end;
+         end Collect;
+
+         --  Mark the ones a source attaches.
+         procedure Visit_Supplier (Relative : String) is
+            Text : constant String := Contents (Relative);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            for Index in 1 .. Used loop
+               if not Names (Index).Found
+                 and then Holds
+                            (Text,
+                             """" & Names (Index).Text (1 .. Names (Index).Last)
+                             & """")
+               then
+                  Names (Index).Found := True;
+               end if;
+            end loop;
+         end Visit_Supplier;
+
+         procedure Scan_Suppliers is new For_Each_Source (Visit_Supplier);
+      begin
+         for Code in E.Error_Code loop
+            if Code /= E.No_Error and then not Reserved_Codes.Is_Reserved (Code)
+            then
+               Collect (E.Message_Key (Code));
+            end if;
+         end loop;
+
+         Scan_Suppliers ("src/library");
+         Scan_Suppliers ("src/main");
+
+         for Index in 1 .. Used loop
+            Result.Performed := Result.Performed + 1;
+
+            if not Names (Index).Found then
+               Fail
+                 (Names (Index).Owner (1 .. Names (Index).Owner_Last)
+                  & " asks for "
+                  & Names (Index).Text (1 .. Names (Index).Last)
+                  & ", which nothing attaches");
+            end if;
+         end loop;
+      end;
+
       --  Nothing large is committed here.
       --
       --  No mandatory test may need a large model, and no model may be
