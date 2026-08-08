@@ -120,8 +120,9 @@ Nothing remains from the specification's tooling list: the release checklist is
 The multiply is folded into the decode for Q4_0, where it measured faster.
 Q8_0, F32, F16 and the k-quant formats decode a span and then multiply, because
 fusing them measured slower; see the README. The kernels are vectorized by the compiler from ordinary Ada, with no
-intrinsics, no assembly and no target-specific flags; `-march=native` measured
-no difference, so none is used. Weights are not repacked.
+intrinsics, no assembly and no target-specific flags; `-march=native` and
+`-march=x86-64-v3` both measured slower than the baseline build, so neither is
+used. Weights are not repacked.
 
 Kernel measurements are in the README and only there. They were carried in both
 places, and when a measuring fault was found and corrected -- the benchmark was

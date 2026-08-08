@@ -536,32 +536,41 @@ share of a much smaller total.
 Row dot product, nanoseconds per element, release build, every format the
 engine supports:
 
-| | | | |
+| Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| Q4_0 | 0.91 | Q5_K | 1.35 |
-| Q8_0 | 1.02 | Q6_K | 1.37 |
-| Q4_K | 1.11 | F32 | 1.59 |
-| | | F16 | 1.79 |
+| F32 | 0.26 | Q5_K | 0.40 |
+| Q4_K | 0.37 | F16 | 0.55 |
+| Q6_K | 0.38 | Q4_0 | 0.56 |
+| Q8_0 | 0.38 | | |
 
-Those figures replace lower ones published earlier, which were wrong. The
-benchmark filled its tensors with arbitrary bytes, and bytes read as half
-precision are frequently denormal, infinite or not-a-number -- values no real
-model contains. It now forces every block scale to a modest normal exponent.
-The corrected numbers agree with the end-to-end measurement, which implies
-about 1.65 ns per element once attention, normalization and thread hand-off
-are counted; the earlier ones never did, and that disagreement should have
-been noticed sooner.
+The benchmark forces every block scale to a modest normal exponent before it
+times anything. It used to fill its tensors with arbitrary bytes, and bytes
+read as half precision are frequently denormal, infinite or not-a-number --
+values no real model contains, and ones the processor is slow with. Figures
+published before that was noticed were wrong and were replaced.
 
-The k-quant formats used to sit between five and seven times slower than this,
-which mattered because they are what most real models use. Three things fixed
-that, in the order they mattered: a sub-block's scale and offset formed once
-instead of once per element; the per-element checks suppressed after the block
-is bounds-checked at entry; and packed bytes read directly rather than through
-a call that read each one three times to decide its sign.
+These agree with the end-to-end measurement. Evaluating the 131-token prompt
+above at a batch of 128 takes about sixty seconds of processor time, and the
+prompt puts 131 tokens through 1.10e9 parameters, which is 1.44e11 element
+products, or about 0.42 ns each against the 0.38 measured here for the format
+that model uses. That check is the reason to publish both.
 
-Three things got them there.
+The figures hold to about half a percent when repeated in one sitting and
+drift much further between sittings, so a change is worth believing only when
+the two versions were run against each other, alternating, in one of them.
 
-Three things got them there.
+The k-quant formats used to decode several times slower than the others, which
+mattered because they are what most real models use. Three things fixed that,
+in the order they mattered: a sub-block's scale and offset formed once instead
+of once per element; the per-element checks suppressed after the block is
+bounds-checked at entry; and packed bytes read directly rather than through a
+call that read each one three times to decide its sign.
+
+Q6_K needed a fourth, later. Its inner loop produced four elements per
+iteration and wrote them thirty-two apart, so sixteen iterations touched four
+separate places in the output; split into four runs that each read sixteen
+adjacent bytes and write sixteen adjacent elements, the same arithmetic against
+contiguous memory decodes four times faster.
 
 Three things got them there.
 
@@ -589,11 +598,24 @@ compiler packs them into vectors without reassociating anything. Conformance
 against the independent reference implementation is unchanged to the last
 digit, and generated text is byte-identical.
 
-**No target-specific flags.** `-march=native` was measured on a machine with
-AVX-512 and made no difference — these loops are limited by the
-single-to-double conversions, not by vector width. Shipping `-mavx2`, or the
-runtime dispatch needed to use it safely, would have bought nothing and cost
-portability. The binary runs on any x86-64.
+**No target-specific flags.** `-march=native` and `-march=x86-64-v3` were both
+measured on a machine with AVX-512, alternating against the baseline build in
+one sitting, and both are **slower**: the f32 row product loses 37 per cent and
+Q8_0 14 per cent. Whatever the wider instructions buy, the code the compiler
+generates around them costs more. Shipping `-mavx2`, or the runtime dispatch
+needed to use it safely, would cost portability to buy a regression.
+
+Reaching a specific instruction was tried as well, and the same answer came
+back. GNAT will import a compiler builtin as an intrinsic against a vector
+type, which is neither assembly nor a foreign language, and the processor's own
+half-precision conversion widens eight values in one instruction. Wired into
+the F16 decode it moved that kernel by about one per cent, because the
+conversion was never what the loop was spending its time on: the compiler was
+emitting a call per element to a conversion function in another unit, and an
+`Inline` aspect on that function was worth 2.6x. Reading the generated code
+found in an afternoon what three attempts at vector width did not.
+
+The binary runs on any x86-64.
 
 ### Fusing the multiply into the decode
 

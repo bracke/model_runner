@@ -1,14 +1,21 @@
 --  Command-line interface.
 --
---  Status: not implemented in this build. The engine below this layer is
---  usable as a library -- Model_Runner.GGUF.Containers.Reader,
---  Model_Runner.Llama and Model_Runner.Tokenizer are complete and tested --
---  but no command has been implemented, and neither has the sampler, the
---  generation coordinator, the chat-template engine or the localized
---  presentation layer they depend on.
+--  The root of the command-line layer. It declares nothing itself; the work
+--  is in its children.
 --
---  The driver therefore reports Internal_Not_Implemented rather than
---  succeeding silently, so that nothing in this repository behaves as though a
---  planned command already worked.
+--  Model_Runner.CLI.Options parses the command line, Model_Runner.CLI.Driver
+--  decides what was asked for and reports failures, Model_Runner.CLI.Execute
+--  carries out run and inspect, and Model_Runner.CLI.Interactive holds a
+--  conversation on the terminal. Between them they implement the three
+--  commands the program offers: run, inspect and help.
+--
+--  This comment said for a long time that none of that existed, and that the
+--  driver answered Internal_Not_Implemented so nothing would behave as though
+--  a planned command already worked. That was true when it was written and
+--  stopped being true without the comment changing. The rule against
+--  describing planned work as finished cuts the other way too: a comment that
+--  disowns working code is as wrong as one that claims code that is not
+--  there, and it is likelier to be believed, because nobody doubts a
+--  disclaimer.
 package Model_Runner.CLI is
 end Model_Runner.CLI;
