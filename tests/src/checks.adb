@@ -3,7 +3,10 @@ with Ada.Text_IO;
 
 with Hostkit.Fs;
 
+with Ada.Strings.Unbounded;
 with Project_Tools.Files;
+with Project_Tools.Text;
+with Project_Tools.Tree_Checks;
 
 with Docs_Generation;
 with Reserved_Codes;
@@ -56,33 +59,14 @@ package body Checks is
          end if;
       end Contents;
 
-      --  Report whether a file mentions a token.
-      function Holds (Text, Token : String) return Boolean is
-      begin
-         if Text'Length < Token'Length then
-            return False;
-         end if;
-         for Index in Text'First .. Text'Last - Token'Length + 1 loop
-            if Text (Index .. Index + Token'Length - 1) = Token then
-               return True;
-            end if;
-         end loop;
-         return False;
-      end Holds;
+      --  Report whether text holds a token.
+      function Holds (Text, Token : String) return Boolean
+      is (Project_Tools.Text.Contains (Text, Token));
 
-      function Mentions (Relative, Token : String) return Boolean is
-         Text : constant String := Contents (Relative);
-      begin
-         if Text'Length < Token'Length then
-            return False;
-         end if;
-         for Index in Text'First .. Text'Last - Token'Length + 1 loop
-            if Text (Index .. Index + Token'Length - 1) = Token then
-               return True;
-            end if;
-         end loop;
-         return False;
-      end Mentions;
+      --  Report whether a file mentions a token. A file that is not there
+      --  mentions nothing, which is what Contents already says.
+      function Mentions (Relative, Token : String) return Boolean
+      is (Project_Tools.Text.Contains (Contents (Relative), Token));
 
       --  Visit every Ada source under a directory.
       generic
@@ -218,24 +202,21 @@ package body Checks is
       --  platform bodies reach mmap and isatty through Interfaces.C and stay
       --  ordinary Ada. What is refused is code in another language living
       --  here, and instructions written by hand.
-      declare
-         procedure Visit_Ada_Only (Relative : String) is
-         begin
-            Result.Performed := Result.Performed + 1;
+      --
+      --  The token sweep is project_tools': it walks the tree itself and
+      --  counts what it finds into the same total as everything else here,
+      --  which is what a check written twice would have had to agree with.
+      --  It counts its own failures into the same total and names the file
+      --  itself, so there is nothing to add here: reporting again would count
+      --  one occurrence twice.
+      Result.Performed := Result.Performed + 1;
 
-            if Holds (Contents (Relative), "Machine_Code") then
-               Fail (Relative & " writes instructions by hand");
-            end if;
-         end Visit_Ada_Only;
-
-         procedure Scan_Ada_Only is new For_Each_Source (Visit_Ada_Only);
-      begin
-         Scan_Ada_Only ("src/library");
-         Scan_Ada_Only ("src/main");
-         Scan_Ada_Only ("src/platform/posix");
-         Scan_Ada_Only ("src/platform/windows");
-         Scan_Ada_Only ("src/platform/unsupported");
-      end;
+      Project_Tools.Tree_Checks.Check_No_Forbidden_Tokens
+        (Errors           => Result.Failed,
+         Dir              => Path ("src"),
+         Forbidden_Tokens =>
+           [1 => Ada.Strings.Unbounded.To_Unbounded_String ("Machine_Code")],
+         Purpose          => "instructions written by hand");
 
       --  Layering: nothing below the presentation layer may reach the message
       --  catalog, terminal styling or the command line.
