@@ -331,6 +331,10 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- The rest of the metadata parsing slowdown is gone. A run within the copy
+  bound is read into a buffer and placed, and a string's encoding is checked
+  from that buffer rather than from the pool.
+
 - A container declaring a length or count above `Long_Long_Integer'Last` was
   refused correctly and then raised while saying so, because the diagnostic
   carried the number as a signed value. The value saturates now.
