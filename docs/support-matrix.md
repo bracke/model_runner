@@ -52,6 +52,23 @@ asymmetric key and value widths, and rotary scaling other than `none` and
 | `tokenizer.ggml.model` | State |
 | --- | --- |
 | `llama` (SentencePiece) | Implemented, with byte fallback |
+| `gpt2` (byte-pair encoding) | Implemented, for the cutting rules below |
+| Everything else | Rejected: `MR-TOK-0002` |
+
+A `gpt2` vocabulary also names the rule that cuts text before any merging
+happens, in `tokenizer.ggml.pre`. The rules differ in ways that do not show
+in the decoded text -- under the original only a space may lead a word, under
+the later ones any character that is neither letter nor digit may -- so a
+vocabulary naming a rule this does not implement is refused by name rather
+than cut by the wrong one.
+
+| `tokenizer.ggml.pre` | State |
+| --- | --- |
+| absent, `gpt-2`, `starcoder` | Implemented |
+| `falcon` | Implemented; leads a run as the original does, groups digits in threes |
+| `llama3`, `llama-bpe` | Implemented |
+| `qwen2` | Implemented |
+| `smollm` | Implemented |
 | Everything else | Rejected: `MR-TOK-0002` |
 
 ## Tokenizer capabilities

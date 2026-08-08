@@ -400,6 +400,89 @@ package body Checks is
          end if;
       end;
 
+      --  Every vocabulary the tokenizer accepts is named in the matrix.
+      --
+      --  The matrix said `llama` and "everything else rejected" for as long
+      --  as byte-pair encoding had been implemented, with a row further down
+      --  the same file describing its six cutting rules. Nothing could have
+      --  caught that, because nothing tied the table to the code: a reader
+      --  who trusted it would have concluded their model was unsupported.
+      --
+      --  So the names are read out of the source rather than listed here.
+      --  Listing them here would be the same table again, going stale in the
+      --  same way, one file further from the code.
+      declare
+         Matrix : constant String := Contents ("docs/support-matrix.md");
+         Source : constant String :=
+           Contents ("src/library/model_runner-tokenizer.adb");
+
+         --  Report whether Text holds Token.
+         function Holds (Text, Token : String) return Boolean is
+         begin
+            if Text'Length < Token'Length then
+               return False;
+            end if;
+            for Index in Text'First .. Text'Last - Token'Length + 1 loop
+               if Text (Index .. Index + Token'Length - 1) = Token then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Holds;
+
+         --  Each literal compared against Variable, checked against the
+         --  matrix. A comparison against the empty string is the "absent"
+         --  case, which has no name to print.
+         procedure Accepted_Names (Variable : String) is
+            Needle : constant String := Variable & " = """;
+            Index  : Natural := Source'First;
+            Found  : Natural := 0;
+         begin
+            while Index <= Source'Last - Needle'Length loop
+               if Source (Index .. Index + Needle'Length - 1) = Needle then
+                  declare
+                     From : constant Natural := Index + Needle'Length;
+                     Stop : Natural := From;
+                  begin
+                     while Stop <= Source'Last
+                       and then Source (Stop) /= '"'
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+
+                     if Stop > From then
+                        Found := Found + 1;
+                        Result.Performed := Result.Performed + 1;
+                        if not Holds (Matrix,
+                                      "`" & Source (From .. Stop - 1) & "`")
+                        then
+                           Fail ("the tokenizer accepts "
+                                 & Source (From .. Stop - 1)
+                                 & " but docs/support-matrix.md does not "
+                                 & "name it");
+                        end if;
+                     end if;
+                     Index := Stop + 1;
+                  end;
+               else
+                  Index := Index + 1;
+               end if;
+            end loop;
+
+            --  A rename in the source that this stopped matching would
+            --  otherwise pass by finding nothing at all.
+            Result.Performed := Result.Performed + 1;
+            if Found = 0 then
+               Fail ("no vocabulary names found for " & Variable
+                     & " in the tokenizer; the check no longer matches the "
+                     & "source it reads");
+            end if;
+         end Accepted_Names;
+      begin
+         Accepted_Names ("Name");
+         Accepted_Names ("Cutting");
+      end;
+
       --  The generated error-code reference must be current: a stale committed
       --  file is a failure, not a surprise at release time.
       Check (Docs_Generation.Error_Reference_Is_Current (Root),

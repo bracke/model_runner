@@ -5,6 +5,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The support matrix said the tokenizer accepts `llama` and rejects
+  everything else, which stopped being true when byte-pair encoding was
+  implemented. A row further down the same file described its six cutting
+  rules. A reader who trusted the table would have concluded their model was
+  unsupported. It now names `gpt2` and every `tokenizer.ggml.pre` rule,
+  including `llama-bpe`, which was written nowhere at all.
+
+  The release checklist now reads those names out of the tokenizer and fails
+  when the matrix does not carry one. Listing them in the check instead would
+  be the same table again, going stale the same way, one file further from
+  the code.
+
 ### Added
 
 - The chat template a current Llama-3 file ships with now renders. It needed
