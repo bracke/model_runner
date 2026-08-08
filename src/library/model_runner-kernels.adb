@@ -177,6 +177,26 @@ package body Model_Runner.Kernels is
    -- SiLU --
    ----------
 
+   --  Both of these spend nearly all their time in Exp, and replacing it with
+   --  arithmetic was tried and measured slower. A branchless series in
+   --  binary64 -- the usual one, a power of two from the exponent field times
+   --  a polynomial in what is left -- cost softmax about ten per cent and the
+   --  activation about ten, and the same in binary32, which halves the work
+   --  and doubles the lanes, still lost.
+   --
+   --  The reason is that the call is not what it looks like. The mathematics
+   --  library resolves Exp at load time to an implementation chosen for the
+   --  processor it finds, so on this machine it runs an AVX2 one, while this
+   --  crate is compiled for baseline x86-64 and cannot emit those
+   --  instructions -- and compiling it for the host measured slower
+   --  everywhere else, which is in the README. A call into hand-written wide
+   --  code beats inline narrow code, even counting the call.
+   --
+   --  So the cost stands, and it is the largest one left in these kernels:
+   --  five nanoseconds an element against half a nanosecond for a quantized
+   --  row product. Anyone attacking it again needs either wider instructions
+   --  than the build allows or an approximation loose enough to change what
+   --  models say, and the second is a decision rather than an optimization.
    procedure SiLU (Target : in out Real_Array) is
    begin
       for Index in Target'Range loop

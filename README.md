@@ -615,6 +615,22 @@ original weights, which is not how a model should be made. It is here to move
 fewer bytes, not to answer well, though it answers "Name three colours"
 exactly as the eight-bit one does.)
 
+The largest cost left is not in the row product at all. Softmax costs about
+five nanoseconds an element and the feed-forward activation about four, nearly
+all of it the exponential, against half a nanosecond for a quantized row
+product -- and both run once per layer per token. Replacing that exponential
+with arithmetic was tried and is slower. The usual branchless series, a power
+of two taken from the exponent field times a polynomial in what is left, cost
+softmax about ten per cent, and the same in single precision, which halves the
+work and doubles the lanes, still lost. The call is not what it looks like:
+the mathematics library resolves it at load time to an implementation chosen
+for the processor it finds, so it runs AVX2 code, while this crate is compiled
+for baseline x86-64 and measured slower when it was not. A call into
+hand-written wide code beats inline narrow code, even counting the call.
+Getting past it needs either wider instructions than the build allows or an
+approximation loose enough to change what models say, and the second is a
+decision rather than an optimization.
+
 ### Batched prefill
 
 A prompt is evaluated in batches: every token in a batch shares one pass over
