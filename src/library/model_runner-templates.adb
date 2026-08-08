@@ -8,6 +8,8 @@ package body Model_Runner.Templates is
    package E renames Model_Runner.Errors;
    package Conv renames Model_Runner.Conversation;
 
+   use type E.Error_Code;
+
    procedure Free_Program is
      new Ada.Unchecked_Deallocation (Instruction_Array, Instruction_Access);
 
@@ -1948,11 +1950,24 @@ package body Model_Runner.Templates is
                   declare
                      Value : constant String :=
                        Value_Of (Item.Operands.all (Step.Value_At));
+                     Held  : Slot renames Slots (Step.Offset);
                   begin
+                     --  A name reassigned in a loop -- which is how a
+                     --  template builds one message's text before emitting
+                     --  it -- is almost always the newest thing in the pool.
+                     --  Taking its room back makes that loop cost what one
+                     --  iteration costs instead of what all of them do.
+                     --  Value is already a copy, so the old text may go.
+                     if Held.Kind = Value_Text
+                       and then Held.Offset + Held.Length = Pool_Used
+                     then
+                        Pool_Used := Held.Offset;
+                     end if;
+
                      if Pool_Used + Value'Length > Pool'Length then
                         Refuse (Item.Names (Step.Offset).Offset,
                                 Item.Names (Step.Offset).Length,
-                                E.Template_Output_Too_Large);
+                                E.Template_Variables_Too_Large);
                      else
                         Pool (Pool_Used + 1 .. Pool_Used + Value'Length) :=
                           Value;
@@ -1995,6 +2010,11 @@ package body Model_Runner.Templates is
          if Refused then
             Last := 0;
             Status := E.Make (Refused_Why);
+            if Refused_Why = E.Template_Variables_Too_Large then
+               E.Add_Integer
+                 (Status, "limit", Long_Long_Integer (Pool'Length),
+                  E.Param_Bytes);
+            end if;
             if Refused_Len > 0 then
                E.Add_Text
                  (Status, "construct",

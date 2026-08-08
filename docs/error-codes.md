@@ -121,6 +121,7 @@ ordinal is never reused, not because they might appear.
 | `MR-TMPL-0009` | `error.template.iteration_limit` | recovery_none | 3 | raised |
 | `MR-TMPL-0010` | `error.template.unbalanced_block` | recovery_none | 3 | raised |
 | `MR-TMPL-0011` | `error.template.unsupported_role` | recovery_unsupported | 4 | reserved |
+| `MR-TMPL-0012` | `error.template.variables_too_large` | recovery_resource_limited | 3 | raised |
 
 ## ARCH
 

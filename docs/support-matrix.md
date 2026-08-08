@@ -92,6 +92,7 @@ asymmetric key and value widths, and rotary scaling other than `none` and
 | Other filters | Refused when evaluated: `MR-TMPL-0007` |
 | Function calls, `tojson`, `strftime_now`, `raise_exception`, arithmetic, indexing by anything but a number | Refused when evaluated: `MR-TMPL-0002` |
 | Reading a name the template never assigned | Refused when evaluated: `MR-TMPL-0006` |
+| More than 32 names, or more variable text than the pool holds | Refused when evaluated: `MR-TMPL-0002` and `MR-TMPL-0011`. A name reassigned in a loop takes its own room back, so building one message's text per turn costs one turn's room |
 
 A statement whose shape cannot be read is refused at compile time, because
 nothing after it can be trusted to mean anything. A value that cannot be

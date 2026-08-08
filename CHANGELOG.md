@@ -29,6 +29,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 - Template errors that name a variable or a filter now say which one.
 
+- `MR-TMPL-0011` reports a template whose variables need more room than the
+  render has for them. It was reported as the rendered prompt being too
+  large, which is a true sentence about the wrong subject.
+
 - `--chat-template NAME` uses a chat format this build carries -- `llama3` or
   `chatml` -- in place of the model's own. Some models ship a template that
   assigns variables, slices lists, calls functions and formats dates, most of
@@ -250,7 +254,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 148 diagnostic
+- Localization through `messages`, with a catalog entry for all 149 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

@@ -158,6 +158,7 @@ package Model_Runner.Errors is
       Template_Iteration_Limit,
       Template_Unbalanced_Block,
       Template_Unsupported_Role,
+      Template_Variables_Too_Large,
 
       --  Architecture profile.
       Arch_Missing_Identifier,

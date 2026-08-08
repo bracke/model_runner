@@ -222,6 +222,7 @@ package body Model_Runner.Errors is
             | Tokenizer_Input_Too_Long
             | Conversation_Too_Long
             | Template_Output_Too_Large
+            | Template_Variables_Too_Large
             | IO_File_Too_Large =>
             return Recovery_Resource_Limited;
 

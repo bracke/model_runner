@@ -6,6 +6,7 @@ with Model_Runner.Conversation;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
 with Model_Runner.Templates;
+with Model_Runner.Text;
 
 package body Tests.Template_Cases is
 
@@ -256,6 +257,77 @@ package body Tests.Template_Cases is
       Tmpl.Close (Item);
       pragma Unreferenced (LF);
    end Model_Shaped_Template_Renders;
+
+   --  The bounds that came with variables are bounds, and they are reached.
+   --
+   --  A template that assigns names is a template that can be written to
+   --  assign too many of them, or to hold too much text in them. Neither may
+   --  end in an exception or in a prompt built from a name whose value was
+   --  quietly dropped.
+   procedure Variable_Bounds_Hold
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  One assignment per name, one more than the table holds.
+      function Many_Names (Count : Positive) return String is
+         Room : String (1 .. Count * 32);
+         Used : Natural := 0;
+
+         procedure Put (Text : String) is
+         begin
+            Room (Used + 1 .. Used + Text'Length) := Text;
+            Used := Used + Text'Length;
+         end Put;
+      begin
+         for Index in 1 .. Count loop
+            Put ("{% set n" & Model_Runner.Text.Image
+                   (Long_Long_Integer (Index)) & " = 'x' %}");
+         end loop;
+         return Room (1 .. Used);
+      end Many_Names;
+   begin
+      --  The table holds messages plus what the template names, so one short
+      --  of the bound compiles and renders.
+      Assert (Render_Status (Many_Names (Tmpl.Max_Variables - 1)) = E.No_Error,
+              "a template naming as many as the table holds was refused");
+
+      --  Past it, the assignment is refused rather than silently dropped.
+      Assert (Render_Status (Many_Names (Tmpl.Max_Variables + 4))
+              = E.Template_Unsupported_Construct,
+              "a template naming more than the table holds was accepted");
+
+      --  Text. A name reassigned in a loop costs one iteration's room, not
+      --  every iteration's, which is what a template building a message's
+      --  text before emitting it does on every turn.
+      declare
+         Long : constant String (1 .. 4000) := [others => 'y'];
+      begin
+         Assert (Render_Status
+                   ("{% for message in messages %}"
+                    & "{% set c = '" & Long & "' %}{% endfor %}",
+                    Messages => 40) = E.No_Error,
+                 "a name reassigned in a loop ran out of room");
+      end;
+
+      --  And when it genuinely does not fit, the error says so, rather than
+      --  reporting the rendered prompt as too large -- which would be a true
+      --  sentence about the wrong subject.
+      declare
+         Long : constant String (1 .. 4000) := [others => 'y'];
+      begin
+         Assert (Render_Status
+                   ("{% for message in messages %}"
+                    & "{% set a = '" & Long & "' %}"
+                    & "{% set b = a + a %}{% set c = b + b %}"
+                    & "{% set d = c + c %}{% set e = d + d %}{{ e }}"
+                    & "{% endfor %}",
+                    Messages => 8)
+                 = E.Template_Variables_Too_Large,
+                 "a template holding more text than the pool has was "
+                 & "accepted, or refused as something else");
+      end;
+   end Variable_Bounds_Hold;
 
    --  Every documented compile-time refusal happens.
    procedure Malformed_Templates_Are_Refused
@@ -766,6 +838,9 @@ package body Tests.Template_Cases is
       Register_Routine
         (T, Model_Shaped_Template_Renders'Access,
          "a template shaped like the one a current model ships renders");
+      Register_Routine
+        (T, Variable_Bounds_Hold'Access,
+         "the bounds on a template's variables are reached and reported");
       Register_Routine
         (T, Malformed_Templates_Are_Refused'Access,
          "every documented compile-time refusal happens");
