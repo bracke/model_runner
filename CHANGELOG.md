@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The container fuzzer now renders every accepted container the way `inspect`
+  does and requires that nothing a terminal would act on comes back, and it
+  writes control bytes into the image on purpose so that the case arises.
+
 - A differential test for UTF-8 validation: every string of up to three bytes,
   compared against the standard's table of well-formed sequences written out
   separately.

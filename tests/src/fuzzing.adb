@@ -5,6 +5,7 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
 with Model_Runner.Numerics;
+with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.Llama;
 with Model_Runner.Templates;
@@ -94,7 +95,7 @@ package body Fuzzing is
                     else Tiny_Model.Float32));
 
       declare
-         Kind   : constant Interfaces.Unsigned_64 := Draw (Stream, 6);
+         Kind   : constant Interfaces.Unsigned_64 := Draw (Stream, 7);
          Length : B.Byte_Count := Image.all'Length;
       begin
          case Kind is
@@ -161,6 +162,24 @@ package body Fuzzing is
                   end loop;
                end;
 
+            when 5 =>
+               --  Write a control byte into the image. A bit flip reaches
+               --  one only by chance, and it is worth reaching on purpose:
+               --  a control character inside a string is still valid UTF-8,
+               --  so a file carrying one parses and then has to be rendered
+               --  by something that will not act on it.
+               declare
+                  Where : constant B.Byte_Count :=
+                    B.Byte_Count (Draw (Stream, Interfaces.Unsigned_64 (Length)));
+                  Codes : constant array (0 .. 3) of B.Byte :=
+                    [16#1B#, 16#07#, 16#7F#, 16#00#];
+               begin
+                  if Where + 1 <= Length then
+                     Image.all (Where + 1) :=
+                       Codes (Natural (Draw (Stream, 4)));
+                  end if;
+               end;
+
             when others =>
                --  Append trailing bytes.
                null;
@@ -190,6 +209,47 @@ package body Fuzzing is
                        Containers.Tensor_Bytes (Item, Index);
                   begin
                      if Start + Size > Interfaces.Unsigned_64 (Length) then
+                        Result := Accepted_But_Invalid;
+                     end if;
+                  end;
+               end loop;
+
+               --  Whatever it says, it must be sayable. Every metadata
+               --  value and key is rendered the way inspect renders them,
+               --  and nothing a terminal would act on may come back: a file
+               --  that steers a screen is a file accepted into a state it
+               --  should not have reached, whatever else is consistent about
+               --  it. One hand-built file held this; these are thousands.
+               for Index in 1 .. Containers.Metadata_Count (Item) loop
+                  declare
+                     Shown : constant String :=
+                       Containers.Value_Image (Item, Index);
+                     Named : constant String :=
+                       Model_Runner.Text.Escape_Controls
+                         (Containers.Metadata_Key (Item, Index));
+                  begin
+                     if (for some Char of Shown =>
+                           Character'Pos (Char) < 16#20#
+                             or else Character'Pos (Char) = 16#7F#)
+                       or else (for some Char of Named =>
+                                  Character'Pos (Char) < 16#20#
+                                    or else Character'Pos (Char) = 16#7F#)
+                     then
+                        Result := Accepted_But_Invalid;
+                     end if;
+                  end;
+               end loop;
+
+               for Index in 1 .. Containers.Tensor_Count (Item) loop
+                  declare
+                     Named : constant String :=
+                       Model_Runner.Text.Escape_Controls
+                         (Containers.Tensor_Name (Item, Index));
+                  begin
+                     if (for some Char of Named =>
+                           Character'Pos (Char) < 16#20#
+                             or else Character'Pos (Char) = 16#7F#)
+                     then
                         Result := Accepted_But_Invalid;
                      end if;
                   end;

@@ -371,6 +371,12 @@ offset, single-bit flips, 64-bit and 32-bit field overwrites, and byte-run
 splices — and feeds it to the whole load path: the parser, the tokenizer, the
 chat-template compiler and model preparation. Only four outcomes are accepted:
 loaded, structurally rejected, rejected against a resource limit, or cancelled.
+Every accepted container is also rendered as `inspect` would render it, and a
+control character surviving that is counted as an invalid acceptance: a file
+that could steer a terminal has been accepted into a state it should not have
+reached. One of the mutations writes control bytes deliberately, because a bit
+flip reaches one only by chance.
+
 An escaped exception or an invalid container accepted into a usable state is a
 failure. Each case is derived from the seed and the case number alone, so a
 failure replays exactly.
