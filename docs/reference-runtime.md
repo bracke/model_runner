@@ -107,6 +107,25 @@ itself moves a logit far further than either: llama.cpp's own first logit goes
 from -7.369 at BF16 to -7.046 at Q4_K, a shift of 0.32, and both
 implementations take that shift together.
 
+A fourth size is what makes the other three useful. Measuring SmolLM2 the
+same way gave 1.87, two orders of magnitude beyond anything arithmetic
+explains, and that was a defect: a beginning-of-text marker was being put in
+front of a model that declares it wants none, so the engine was answering a
+different question than the reference. It had been showing up as generation
+ending after two tokens, which is exactly what a close call between an
+end-of-sequence token and a newline would look like, and it was not that at
+all. With the marker left out the two agree token for token.
+
+Llama-3.2 at Q4_K_M, measured after the fix and at the position where its
+greedy output parts company, differs by 0.016, 0.090 and 0.084, with both
+implementations feeding nine prompt tokens. That is the quantized range, so
+that divergence is what it appears to be.
+
+The moral is not about markers. Two implementations that differ by hundredths
+are doing the same thing differently; two that differ by units are doing
+different things, and no amount of comparing tokens will tell you which you
+have. Tokens agreed for six steps in one case and two in the other.
+
 So there are three sizes, and it is worth keeping them apart. About 0.006 is
 two implementations of the same arithmetic. About 0.06 is two implementations
 of the same quantized format. About 0.3 is the format itself. Greedy decoding
