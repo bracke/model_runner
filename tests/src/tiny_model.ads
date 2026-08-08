@@ -33,6 +33,9 @@ package Tiny_Model is
    --  Write the fixture.
    --
    --  @param Path Where to write it.
+   --  @param Room Context length the model declares. The default is small
+   --    on purpose, so that tests reach the context bound without a large
+   --    conversation; a test that needs a turn to complete asks for more.
    --  @param Adds_Beginning Whether the vocabulary declares that it wants a
    --    beginning-of-text marker. False is not a curiosity: real models
    --    declare it, and putting a marker in front of one that does not want
@@ -70,6 +73,7 @@ package Tiny_Model is
      (Result    : out Model_Runner.Bytes.Byte_Array_Access;
       Format    : Weight_Format := Float32;
       End_Token : Natural := 2;
-      Adds_Beginning : Boolean := True);
+      Adds_Beginning : Boolean := True;
+      Room      : Positive := Context);
 
 end Tiny_Model;

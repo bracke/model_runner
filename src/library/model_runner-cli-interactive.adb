@@ -29,11 +29,106 @@ package body Model_Runner.CLI.Interactive is
    package T renames Model_Runner.Text;
    package Vocab renames Model_Runner.Tokenizer;
 
-   type Text_Access is access String;
    procedure Free_Text is new Ada.Unchecked_Deallocation (String, Text_Access);
 
-   --  Largest prompt one turn may accumulate before it is submitted.
-   Max_Turn_Bytes : constant := 65_536;
+   ----------
+   -- Open --
+   ----------
+
+   procedure Open (Item : in out Turn; Ok : out Boolean) is
+   begin
+      Close (Item);
+      Item.Room := new String (1 .. Max_Turn_Bytes);
+      Item.Used := 0;
+      Ok := True;
+   exception
+      when others =>
+         Ok := False;
+   end Open;
+
+   -----------
+   -- Close --
+   -----------
+
+   procedure Close (Item : in out Turn) is
+   begin
+      if Item.Room /= null then
+         Free_Text (Item.Room);
+      end if;
+      Item.Used := 0;
+   end Close;
+
+   -----------
+   -- Offer --
+   -----------
+
+   procedure Offer
+     (Item   : in out Turn;
+      Line   : String;
+      Effect : out Line_Effect)
+   is
+      Trimmed : constant String := T.Trim (Line);
+   begin
+      if Item.Room = null then
+         Effect := Too_Long;
+         return;
+      end if;
+
+      --  A command only when nothing is pending. A slash on the second line
+      --  of a prompt is the text it looks like: someone typing "and then
+      --  run" and "/usr/bin/ls" means the path, and reading it as a command
+      --  would drop the half they had already typed.
+      if Item.Used = 0
+        and then Parse (Trimmed).Kind /= Not_A_Command
+      then
+         Effect := Is_Command;
+         return;
+      end if;
+
+      if Trimmed = "" then
+         Effect := Submits;
+         return;
+      end if;
+
+      --  The separator is counted before the line, because the check has to
+      --  be the one the copy below performs.
+      if Item.Used + Line'Length + (if Item.Used > 0 then 1 else 0)
+         > Item.Room.all'Length
+      then
+         Item.Used := 0;
+         Effect := Too_Long;
+         return;
+      end if;
+
+      if Item.Used > 0 then
+         Item.Used := Item.Used + 1;
+         Item.Room.all (Item.Used) := ASCII.LF;
+      end if;
+      Item.Room.all (Item.Used + 1 .. Item.Used + Line'Length) := Line;
+      Item.Used := Item.Used + Line'Length;
+      Effect := Held;
+   end Offer;
+
+   -------------
+   -- Pending --
+   -------------
+
+   function Pending (Item : Turn) return String is
+   begin
+      if Item.Room = null then
+         return "";
+      end if;
+      return Item.Room.all (1 .. Item.Used);
+   end Pending;
+
+   -----------
+   -- Taken --
+   -----------
+
+   procedure Taken (Item : in out Turn) is
+   begin
+      Item.Used := 0;
+   end Taken;
 
    -----------
    -- Parse --
@@ -117,8 +212,7 @@ package body Model_Runner.CLI.Interactive is
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
 
-      Pending      : String (1 .. Max_Turn_Bytes);
-      Pending_Used : Natural := 0;
+      Typing       : Turn;
       Have_Stats   : Boolean := False;
       Last_Result  : Gen.Result;
       Condition    : E.Error_Info;
@@ -340,14 +434,14 @@ package body Model_Runner.CLI.Interactive is
       --  Submit whatever has accumulated, if anything.
       procedure Submit is
       begin
-         if Pending_Used = 0 then
+         if Pending (Typing) = "" then
             return;
          end if;
 
          declare
-            Prompt : constant String := Pending (1 .. Pending_Used);
+            Prompt : constant String := Pending (Typing);
          begin
-            Pending_Used := 0;
+            Taken (Typing);
             if Model_Runner.UTF8.Is_Valid (Prompt) then
                Take_Turn (Prompt);
             else
@@ -391,6 +485,19 @@ package body Model_Runner.CLI.Interactive is
          end if;
       end if;
 
+      declare
+         Ready : Boolean;
+      begin
+         Open (Typing, Ready);
+         if not Ready then
+            Pres.Report (Screen, E.Make (E.Memory_Allocation_Failed));
+            Model_Runner.Stops.Close (Stop_Set);
+            Conv.Close (Messages);
+            Status := E.Exit_Resource;
+            return;
+         end if;
+      end;
+
       Pres.Put_Note (Screen, "cli.interactive.banner");
 
       Read_Loop :
@@ -399,44 +506,67 @@ package body Model_Runner.CLI.Interactive is
          --  standard output still receives only generated text.
          Pres.Put_Prompt
            (Screen,
-            (if Pending_Used = 0
+            (if Pending (Typing) = ""
              then "cli.interactive.prompt"
              else "cli.interactive.continuation"));
 
-         exit Read_Loop when Ada.Text_IO.End_Of_File (Ada.Text_IO.Standard_Input);
+         exit Read_Loop when Ada.Text_IO.End_Of_File (Ada.Text_IO.Current_Input);
 
          declare
-            --  The function form returns the line as a String, which for an
-            --  unbounded line would put all of it on the stack; the prompt
-            --  file and standard input are both read into a fixed buffer for
-            --  that reason. Here the source is a terminal -- interactive mode
-            --  requires one on standard input and refuses to start otherwise
-            --  -- and a terminal in canonical mode delivers at most a line
-            --  discipline's worth at a time, measured at about four kilobytes
-            --  against this program. That is far below Max_Turn_Bytes, so the
-            --  length check below is what bounds a turn. Should interactive
-            --  mode ever accept input that is not a terminal, this has to be
-            --  read into a buffer like the others.
-            Line : constant String := Ada.Text_IO.Get_Line (Ada.Text_IO.Standard_Input);
+            --  Read into a fixed buffer rather than as a String: the function
+            --  form puts a whole line on the stack, and a line has no length
+            --  this program chooses. The prompt file and standard input are
+            --  read this way for the same reason.
+            --
+            --  Current_Input rather than Standard_Input, so that a caller can
+            --  redirect it. The program never does -- the driver refuses
+            --  interactive mode unless both descriptors are terminals, and
+            --  Current_Input is Standard_Input until something says otherwise
+            --  -- but a test can, and until it could, nothing exercised this
+            --  loop at all.
+            Room : String (1 .. 8192);
+            Stop : Natural;
+
+            Effect  : Line_Effect;
+            Handled : Boolean;
+            pragma Unreferenced (Handled);
          begin
-            if Pending_Used = 0 and then Handle_Command (T.Trim (Line)) then
-               null;
+            Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
 
-            elsif T.Trim (Line) = "" then
-               --  A blank line submits; an empty submission is ignored.
-               Submit;
-
-            elsif Pending_Used + Line'Length + 1 > Pending'Length then
+            --  A line longer than the buffer arrives in pieces. Joining them
+            --  would be the same turn; treating each as a line would put line
+            --  feeds inside what the user typed as one. Neither is worth the
+            --  code, so a line this long ends the turn it is part of.
+            if Stop = Room'Length
+              and then not Ada.Text_IO.End_Of_Line (Ada.Text_IO.Current_Input)
+            then
+               Ada.Text_IO.Skip_Line (Ada.Text_IO.Current_Input);
+               Taken (Typing);
                Pres.Report (Screen, E.Make (E.Conversation_Too_Long));
-               Pending_Used := 0;
-
             else
-               if Pending_Used > 0 then
-                  Pending_Used := Pending_Used + 1;
-                  Pending (Pending_Used) := ASCII.LF;
-               end if;
-               Pending (Pending_Used + 1 .. Pending_Used + Line'Length) := Line;
-               Pending_Used := Pending_Used + Line'Length;
+               declare
+                  Line : constant String := Room (1 .. Stop);
+               begin
+                  Offer (Typing, Line, Effect);
+                  case Effect is
+                     when Is_Command =>
+                        --  Offer says so only for a line Parse reads as one,
+                        --  so the answer here is always True and is not
+                        --  consulted.
+                        Handled := Handle_Command (T.Trim (Line));
+
+                     when Submits =>
+                        --  A blank line submits; an empty submission is
+                        --  ignored.
+                        Submit;
+
+                     when Too_Long =>
+                        Pres.Report (Screen, E.Make (E.Conversation_Too_Long));
+
+                     when Held =>
+                        null;
+                  end case;
+               end;
             end if;
          end;
       end loop Read_Loop;
@@ -449,11 +579,13 @@ package body Model_Runner.CLI.Interactive is
       Gen.Release (Last_Result);
       Model_Runner.Stops.Close (Stop_Set);
       Conv.Close (Messages);
+      Close (Typing);
    exception
       when others =>
          Gen.Release (Last_Result);
          Model_Runner.Stops.Close (Stop_Set);
          Conv.Close (Messages);
+         Close (Typing);
          Pres.Report (Screen, E.Make (E.Internal_Unexpected_Exception));
          Status := E.Exit_Internal;
    end Run;

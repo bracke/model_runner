@@ -26,7 +26,8 @@ package body Tiny_Model is
      (Result    : out Model_Runner.Bytes.Byte_Array_Access;
       Format    : Weight_Format := Float32;
       End_Token : Natural := 2;
-      Adds_Beginning : Boolean := True)
+      Adds_Beginning : Boolean := True;
+      Room      : Positive := Context)
    is
       Quantized : constant Boolean := Format = Q8_0;
 
@@ -102,7 +103,8 @@ package body Tiny_Model is
 
       Fixtures.Add_String (Builder, "general.architecture", "llama");
       Fixtures.Add_String (Builder, "general.name", "tiny");
-      Fixtures.Add_U32 (Builder, "llama.context_length", Context);
+      Fixtures.Add_U32
+        (Builder, "llama.context_length", Interfaces.Unsigned_32 (Room));
       Fixtures.Add_U32
         (Builder, "llama.embedding_length", Interfaces.Unsigned_32 (Embedding));
       Fixtures.Add_U32 (Builder, "llama.block_count", Layers);

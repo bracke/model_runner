@@ -67,6 +67,61 @@ package Model_Runner.CLI.Interactive is
    --    begin with a slash is Not_A_Command, which is ordinary text.
    function Parse (Line : String) return Parsed_Command;
 
+   --  Largest prompt one turn may accumulate before it is submitted.
+   Max_Turn_Bytes : constant := 65_536;
+
+   --  What one line of input did to the turn being built.
+   type Line_Effect is
+     (Held,        --  added to the turn, which is not finished
+      Submits,     --  a blank line: the turn, if any, is complete
+      Is_Command,  --  a slash command, to be read with Parse
+      Too_Long);   --  the line would push the turn past Max_Turn_Bytes
+
+   --  A turn being typed. Release with Close, which is idempotent.
+   type Turn is tagged limited private;
+
+   --  Begin an empty turn.
+   --
+   --  @param Item Turn to open; released first.
+   --  @param Ok False when the buffer could not be allocated.
+   procedure Open (Item : in out Turn; Ok : out Boolean);
+
+   --  Release a turn.
+   --
+   --  @param Item Turn to release.
+   procedure Close (Item : in out Turn);
+
+   --  Offer one line of input to the turn.
+   --
+   --  This is the whole input policy: non-empty lines accumulate, separated
+   --  by line feeds; a blank line submits; and a line is read as a command
+   --  only when nothing is pending, so that a slash on the second line of a
+   --  prompt is the text it looks like rather than a command interrupting a
+   --  half-typed thought.
+   --
+   --  A line that would push the turn past Max_Turn_Bytes is refused and the
+   --  turn is emptied, because a turn that kept the part that fit would send
+   --  the model half a sentence.
+   --
+   --  @param Item Turn to add to.
+   --  @param Line One line of input, already stripped of its terminator.
+   --  @param Effect What the line did.
+   procedure Offer
+     (Item   : in out Turn;
+      Line   : String;
+      Effect : out Line_Effect);
+
+   --  The prompt accumulated so far, empty when there is none.
+   --
+   --  @param Item Turn to read.
+   --  @return The accumulated text.
+   function Pending (Item : Turn) return String;
+
+   --  Empty the turn, after its prompt has been taken.
+   --
+   --  @param Item Turn to empty.
+   procedure Taken (Item : in out Turn);
+
    --  Hold a conversation until the user leaves or input ends.
    --
    --  @param Item Typed command supplying the sampling and stop settings.
@@ -80,5 +135,16 @@ package Model_Runner.CLI.Interactive is
       Prepared : in out Model_Runner.Llama.Model;
       Session  : in out Model_Runner.Llama.Session;
       Status   : out Natural);
+
+private
+
+   type Text_Access is access String;
+
+   --  Held on the heap rather than inline: a turn is sixty-four kilobytes,
+   --  and the loop that owns one runs on the calling task.
+   type Turn is tagged limited record
+      Room : Text_Access := null;
+      Used : Natural := 0;
+   end record;
 
 end Model_Runner.CLI.Interactive;

@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The interactive loop is tested. Nothing drove it for as long as it existed:
+  the driver refuses interactive mode unless both descriptors are terminals,
+  so the loop could only be reached by hand, and everything it decides went
+  unchecked. That is how a command word came to be compared with its argument
+  still attached.
+
+  What a line of input does to a turn is now a unit of its own -- accumulate,
+  submit, refuse, or run a command -- and the loop itself runs over redirected
+  input against a fixture model. A line is read into a fixed buffer rather
+  than onto the stack, which the comment there said would be required if
+  interactive mode ever accepted input that was not a terminal.
+
+  Generated text is not what the loop test reads. It goes to standard output
+  as raw bytes, past Text_IO and past any redirection this process can
+  perform. The test asks the loop whether a turn completed instead, which is
+  a question the program already answers.
+
 - `/system` with no text removes the system message. It was matched as the
   eight characters `"/system "` -- with the space -- so a bare `/system` was
   not a command missing its argument but an unknown command, and a session

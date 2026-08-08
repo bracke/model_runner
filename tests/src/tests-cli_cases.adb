@@ -9,11 +9,14 @@ with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
 
 with Project_Tools.Files;
+with Project_Tools.Text;
 with Model_Runner.CLI.Options;
 with Model_Runner.Cancellation;
 with Model_Runner.CLI.Interactive;
 with Model_Runner.Conversation;
 with Model_Runner.Errors;
+with Model_Runner.Localization;
+with Model_Runner.Platform;
 with Model_Runner.Presentation;
 with Model_Runner.Progress;
 with Model_Runner.Limits;
@@ -1464,6 +1467,292 @@ package body Tests.CLI_Cases is
               & " generated command lines were refused, so the refusing path "
               & "was barely walked");
    end Any_Command_Line_Is_Answered;
+
+   --  Interactive's input policy: what each line does to the turn.
+   --
+   --  The loop that reads lines needs a terminal on both descriptors and no
+   --  test drives it, so for a long time nothing tested any of what it
+   --  decides -- which is how a command word came to be compared with its
+   --  argument still attached and went unnoticed. The deciding is now a unit
+   --  of its own, and this is it: accumulation, the blank line that submits,
+   --  the bound on a turn, and the rule that a slash is only a command when
+   --  nothing is pending.
+   procedure Interactive_Holds_A_Turn
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package I renames Model_Runner.CLI.Interactive;
+      use type I.Line_Effect;
+
+      Typing : I.Turn;
+      Ready  : Boolean;
+      Effect : I.Line_Effect;
+
+      --  Offer a line and assert what it did.
+      procedure Offer (Line : String; Expected : I.Line_Effect) is
+      begin
+         I.Offer (Typing, Line, Effect);
+         Assert (Effect = Expected,
+                 "'" & Line & "' was "
+                 & I.Line_Effect'Image (Effect) & ", not "
+                 & I.Line_Effect'Image (Expected));
+      end Offer;
+   begin
+      I.Open (Typing, Ready);
+      Assert (Ready, "a turn did not open");
+      Assert (I.Pending (Typing) = "", "a fresh turn holds text");
+
+      --  Lines accumulate, separated by line feeds, so a pasted paragraph
+      --  reaches the model as the paragraph it was.
+      Offer ("first", I.Held);
+      Assert (I.Pending (Typing) = "first",
+              "the first line was not held: " & I.Pending (Typing));
+      Offer ("second", I.Held);
+      Assert (I.Pending (Typing) = "first" & ASCII.LF & "second",
+              "lines were not separated by a line feed: "
+              & I.Pending (Typing));
+
+      --  A slash on a later line is text. Someone typing a path, or a
+      --  fraction, means the path: reading it as a command would throw away
+      --  the half they had already typed.
+      Offer ("/exit", I.Held);
+      Assert (I.Pending (Typing)
+              = "first" & ASCII.LF & "second" & ASCII.LF & "/exit",
+              "a slash inside a turn was taken for a command");
+
+      --  A blank line submits. What was accumulated is still there for the
+      --  caller to take, and taking it empties the turn.
+      Offer ("", I.Submits);
+      Assert (I.Pending (Typing)
+              = "first" & ASCII.LF & "second" & ASCII.LF & "/exit",
+              "submitting lost the turn");
+      I.Taken (Typing);
+      Assert (I.Pending (Typing) = "", "the turn was not emptied");
+
+      --  A line of nothing but spaces is blank. An empty submission is the
+      --  caller's business, and it sees an empty turn.
+      Offer ("   ", I.Submits);
+      Assert (I.Pending (Typing) = "", "spaces were accumulated");
+
+      --  A command, only because nothing is pending.
+      Offer ("/exit", I.Is_Command);
+      Assert (I.Pending (Typing) = "",
+              "a command was accumulated as well as recognized");
+      Offer ("/system be brief", I.Is_Command);
+      Offer ("/nonsense", I.Is_Command);
+
+      --  The bound. A turn that would pass Max_Turn_Bytes is refused, and
+      --  what was pending goes with it: a turn that kept the part that fit
+      --  would send the model half a sentence.
+      declare
+         Half : constant String (1 .. I.Max_Turn_Bytes / 2 + 1) :=
+           [others => 'x'];
+      begin
+         Offer (Half, I.Held);
+         Assert (I.Pending (Typing)'Length = Half'Length,
+                 "the first half was not held");
+         Offer (Half, I.Too_Long);
+         Assert (I.Pending (Typing) = "",
+                 "a refused turn kept the part that fit");
+      end;
+
+      --  Exactly the bound fits, and one byte more does not.
+      I.Taken (Typing);
+      declare
+         Full : constant String (1 .. I.Max_Turn_Bytes) := [others => 'y'];
+      begin
+         Offer (Full, I.Held);
+         Assert (I.Pending (Typing)'Length = I.Max_Turn_Bytes,
+                 "a turn of exactly the bound was refused");
+         Offer ("z", I.Too_Long);
+      end;
+
+      --  And the separator counts against the bound. One byte short of it,
+      --  plus one byte, is one byte over once the line feed between them is
+      --  written -- and the byte that does not fit is written past the end
+      --  of the buffer, not merely dropped. Checking the bound without the
+      --  separator passes every case above and overruns here.
+      I.Taken (Typing);
+      declare
+         Nearly : constant String (1 .. I.Max_Turn_Bytes - 1) :=
+           [others => 'w'];
+      begin
+         Offer (Nearly, I.Held);
+         Assert (I.Pending (Typing)'Length = I.Max_Turn_Bytes - 1,
+                 "one short of the bound was refused");
+         Offer ("z", I.Too_Long);
+         Assert (I.Pending (Typing) = "",
+                 "a refused turn kept the part that fit");
+      end;
+
+      I.Close (Typing);
+      I.Close (Typing);
+      Assert (I.Pending (Typing) = "", "a closed turn holds text");
+   end Interactive_Holds_A_Turn;
+
+   --  The interactive loop runs.
+   --
+   --  Nothing drove it for as long as it existed. The driver refuses
+   --  interactive mode unless both descriptors are terminals, so the loop
+   --  could only be reached by hand -- and everything it decides went
+   --  untested, which is how a command word came to be compared with its
+   --  argument still attached, and how a turn buffer that was never
+   --  allocated compiled and passed.
+   --
+   --  Run reads Current_Input, so a test can hand it a file. The terminal
+   --  requirement is the driver's and stays where it is.
+   --
+   --  Generated text is not what is checked here. It goes to standard output
+   --  as raw bytes on purpose, past Text_IO and past any redirection this
+   --  process can perform, and the tests that check what a model produces
+   --  inject a sink of their own. What is checked is the loop: /stats says
+   --  whether a turn has completed, so asking it is how a test finds out
+   --  whether the loop took a turn, without asking to see the turn.
+   procedure Interactive_Loop_Runs
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package I renames Model_Runner.CLI.Interactive;
+      package Pres renames Model_Runner.Presentation;
+      use Ada.Text_IO;
+
+      Input  : constant String := "obj/interactive-in.txt";
+      Errors : constant String := "obj/interactive-err.txt";
+
+      Image   : B.Byte_Array_Access;
+      Catalog : aliased Model_Runner.Localization.Catalog;
+
+      --  Run the loop over Lines and return what reached standard error.
+      function Conversed (Lines : String) return String is
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Rig     : Harness (Held'Access);
+         Session : L.Session;
+         Screen  : aliased Pres.Console;
+         Options : Opt.Command;
+         Handle  : File_Type;
+         Status  : Natural := 0;
+         Outcome : E.Error_Info;
+      begin
+         Create (Handle, Out_File, Input);
+         Put (Handle, Lines);
+         Close (Handle);
+
+         Start (Rig);
+         L.Open (Session, Rig.Ready, Status => Outcome);
+         Assert (E.Is_Ok (Outcome), "the session did not open");
+
+         Pres.Open
+           (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+            (Output_Is_Terminal => False,
+             Error_Is_Terminal  => False,
+             Input_Is_Terminal  => False,
+             Colour_Suppressed  => True),
+            Opt.Normal);
+
+         Options.Max_Tokens := 2;
+         Options.Sampling.Temperature := 0.0;
+
+         --  Statistics after every turn, so that a completed turn leaves a
+         --  mark on standard error whether or not anything asks for one.
+         Options.Show_Stats := True;
+
+         declare
+            From, Err : File_Type;
+         begin
+            Open (From, In_File, Input);
+            Create (Err, Out_File, Errors);
+            Set_Input (From);
+            Set_Error (Err);
+
+            begin
+               I.Run (Options, Screen, Rig.Ready, Session, Status);
+            exception
+               when others =>
+                  Set_Input (Standard_Input);
+                  Set_Error (Standard_Error);
+                  Close (From);
+                  Close (Err);
+                  raise;
+            end;
+
+            Set_Input (Standard_Input);
+            Set_Error (Standard_Error);
+            Close (From);
+            Close (Err);
+         end;
+
+         Assert (Status = 0,
+                 "the loop reported a failing status:"
+                 & Natural'Image (Status));
+
+         L.Close (Session);
+         L.Close (Rig.Ready, Outcome);
+         Containers.Close (Rig.Parsed);
+
+         return Project_Tools.Files.Read_Raw_File (Errors);
+      end Conversed;
+
+      --  Whether the loop said no turn had completed. Read from the catalog
+      --  rather than written out, so that the test is about the loop and not
+      --  about the English for it.
+      function Took_A_Turn (Lines : String) return Boolean is
+         Said : constant String := Conversed (Lines);
+         None : constant String :=
+           Model_Runner.Localization.Text (Catalog, "cli.interactive.no_stats");
+      begin
+         Assert (Project_Tools.Text.Contains
+                   (Said,
+                    Model_Runner.Localization.Text
+                      (Catalog, "cli.interactive.banner")),
+                 "the loop did not start");
+         return not Project_Tools.Text.Contains (Said, None);
+      end Took_A_Turn;
+   begin
+      --  Room for a turn to complete: the default context is sixteen tokens,
+      --  which the rendered conversation alone exceeds.
+      Tiny_Model.Build (Image, Room => 256);
+      Model_Runner.Localization.Open
+        (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+
+      --  Asked before anything has run, the loop says no turn has completed.
+      --  This is the control: without it every assertion below would be
+      --  satisfied by a loop that never printed the note at all.
+      Assert (not Took_A_Turn ("/stats" & ASCII.LF & "/exit" & ASCII.LF),
+              "a session that ran nothing claimed a completed turn");
+
+      --  A line, a blank line to submit it, and a turn has completed.
+      Assert (Took_A_Turn ("hello" & ASCII.LF & ASCII.LF & "/stats"
+                           & ASCII.LF & "/exit" & ASCII.LF),
+              "a submitted turn did not complete");
+
+      --  A slash on the second line of a turn is text. If it were read as a
+      --  command the loop would have left at it, and nothing after would
+      --  run -- so a completed turn here is the whole assertion.
+      Assert (Took_A_Turn ("first" & ASCII.LF & "/exit" & ASCII.LF & ASCII.LF
+                           & "/stats" & ASCII.LF & "/exit" & ASCII.LF),
+              "a slash inside a turn ended the session");
+
+      --  A command is not a prompt: /settings runs and no turn completes.
+      Assert (not Took_A_Turn ("/settings" & ASCII.LF & "/stats" & ASCII.LF
+                               & "/exit" & ASCII.LF),
+              "a command was taken for a prompt");
+
+      --  End of file submits what is pending rather than dropping it. No
+      --  /stats can be asked afterwards, so this reads the statistics the
+      --  turn itself printed.
+      declare
+         Marker : constant String :=
+           Model_Runner.Localization.Text
+             (Catalog, "statistics.generated_tokens");
+      begin
+         Assert (Project_Tools.Text.Contains
+                   (Conversed ("hello" & ASCII.LF), Marker),
+                 "a turn left pending at end of file was dropped");
+         Assert (not Project_Tools.Text.Contains
+                       (Conversed ("/exit" & ASCII.LF), Marker),
+                 "leaving immediately still ran a turn");
+      end;
+   end Interactive_Loop_Runs;
 
    --  Interactive reads a line of input as the command it is.
    --
@@ -3275,6 +3564,13 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");
+      Register_Routine
+        (T, Interactive_Holds_A_Turn'Access,
+         "interactive accumulates a turn, submits on a blank line and "
+         & "bounds what one turn may hold");
+      Register_Routine
+        (T, Interactive_Loop_Runs'Access,
+         "the interactive loop runs over redirected input");
       Register_Routine
         (T, Caller_Refusals_Report_Themselves'Access,
          "requests, conversations and models refuse by name");
