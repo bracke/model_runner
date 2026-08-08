@@ -7,6 +7,8 @@ with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
+
+with Project_Tools.Files;
 with Model_Runner.CLI.Options;
 with Model_Runner.Cancellation;
 with Model_Runner.Conversation;
@@ -2617,6 +2619,313 @@ package body Tests.CLI_Cases is
    -- Register_Tests --
    --------------------
 
+   ---------------------------------------
+   -- Published_Transcripts_Are_Real --
+   ---------------------------------------
+
+   --  The blocks the README shows as program output are program output.
+   --
+   --  Three of the transcripts in that file had drifted from what the program
+   --  prints -- one had never been runnable at all, and two showed a single
+   --  line where two are written. They are copied by hand, so nothing stopped
+   --  it. The ones that run against something this repository owns can be
+   --  replayed, and these are those: an inspection of the committed fixture,
+   --  and the two locale examples, which need no model because they fail
+   --  before one is opened.
+   --
+   --  The generated text of a run is not among them. It leaves through the
+   --  output sink rather than the text streams, so redirecting those does not
+   --  see it, and reaching it would mean giving the driver a sink for the
+   --  sake of a test. The transcript showing it was checked by hand when this
+   --  was written and remains one of the hand-copied ones.
+   --
+   --  What is compared is every output line the README shows, against what
+   --  the program wrote. The lines that name a path are skipped, because the
+   --  transcript was taken from a different directory than the tests run in,
+   --  and that is a difference in the reader's shell rather than in the
+   --  program.
+
+   procedure Published_Transcripts_Are_Real
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Errors : constant String := "obj/published-transcript.txt";
+
+      --  Everything the program writes to both streams for one command.
+      function Output_Of (Source : in out Fixed_Arguments) return String is
+         Handle : File_Type;
+         Status : Natural;
+         Room   : String (1 .. 32_768);
+         Used   : Natural := 0;
+      begin
+         Create (Handle, Out_File, Errors);
+         Set_Output (Handle);
+         Set_Error (Handle);
+
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               null;
+         end;
+
+         Set_Output (Standard_Output);
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Open (Handle, In_File, Errors);
+         while not End_Of_File (Handle) and then Used < Room'Length - 400 loop
+            declare
+               Line : String (1 .. 400);
+               Last : Natural;
+            begin
+               Get_Line (Handle, Line, Last);
+               Room (Used + 1 .. Used + Last) := Line (1 .. Last);
+               Used := Used + Last + 1;
+               Room (Used) := Character'Val (10);
+            end;
+         end loop;
+         Close (Handle);
+         return Room (1 .. Used);
+      end Output_Of;
+
+      Readme : constant String :=
+        (if Project_Tools.Files.File_Exists ("../README.md")
+         then Project_Tools.Files.Read_Raw_File ("../README.md")
+         else "");
+
+      --  The fenced block holding a line, without its fences.
+      function Block_Holding (Anchor : String) return String is
+         Fence : constant String := "```";
+         At_Anchor, Opens, Closes : Natural := 0;
+      begin
+         for Index in Readme'First .. Readme'Last - Anchor'Length + 1 loop
+            if Readme (Index .. Index + Anchor'Length - 1) = Anchor then
+               At_Anchor := Index;
+               exit;
+            end if;
+         end loop;
+         if At_Anchor = 0 then
+            return "";
+         end if;
+
+         for Index in reverse Readme'First .. At_Anchor - Fence'Length loop
+            if Readme (Index .. Index + Fence'Length - 1) = Fence then
+               Opens := Index + Fence'Length;
+               exit;
+            end if;
+         end loop;
+         for Index in At_Anchor .. Readme'Last - Fence'Length + 1 loop
+            if Readme (Index .. Index + Fence'Length - 1) = Fence then
+               Closes := Index - 1;
+               exit;
+            end if;
+         end loop;
+         if Opens = 0 or else Closes < Opens then
+            return "";
+         end if;
+         return Readme (Opens .. Closes);
+      end Block_Holding;
+
+      --  Every line of a published block must appear in what the program
+      --  wrote, except the command lines, the blanks, an elision, and any
+      --  line naming a path.
+      --  Complete means the block shows every line the program printed, not
+      --  merely lines that it printed. Only a transcript with nothing elided
+      --  can be held to that, which is why the inspection is not: it shows an
+      --  ellipsis where a reader does not need the rest.
+      procedure Must_Match
+        (Anchor, Produced, What : String; Complete : Boolean := False) is
+         Block : constant String := Block_Holding (Anchor);
+         From  : Natural := Block'First;
+      begin
+         Assert (Block'Length > 0,
+                 "no published block holds """ & Anchor & """");
+
+         --  A block can hold several transcripts. Start at this command and
+         --  stop at the next one, so each is compared against its own run
+         --  rather than against whatever else the block shows.
+         for Index in Block'First .. Block'Last - Anchor'Length + 1 loop
+            if Block (Index .. Index + Anchor'Length - 1) = Anchor then
+               --  Past the command line itself, whose own leading '$' would
+               --  otherwise end the scan before it compared anything.
+               From := Index;
+               while From <= Block'Last
+                 and then Block (From) /= Character'Val (10)
+               loop
+                  From := From + 1;
+               end loop;
+               From := From + 1;
+               exit;
+            end if;
+         end loop;
+
+         while From <= Block'Last loop
+            declare
+               Stop : Natural := From;
+            begin
+               while Stop <= Block'Last
+                 and then Block (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line  : constant String := Block (From .. Stop - 1);
+                  Empty : Boolean := True;
+                  Found : Boolean := False;
+               begin
+                  for Letter of Line loop
+                     if Letter /= ' ' then
+                        Empty := False;
+                     end if;
+                  end loop;
+
+                  exit when not Empty and then Line (Line'First) = '$';
+
+                  if not Empty
+                    and then Line (Line'First) /= '$'
+                    and then Line /= "  ..."
+                    and then not (Line'Length >= 6
+                                  and then Line (Line'First .. Line'First + 5)
+                                           = "  path")
+                  then
+                     --  A whole line of the output, not a fragment of one.
+                     --  Comparing by substring would let a published line
+                     --  that had lost its tail keep matching the full one,
+                     --  and losing a tail is exactly how these drift.
+                     declare
+                        Start : Natural := Produced'First;
+                     begin
+                        while Start <= Produced'Last loop
+                           declare
+                              Ends : Natural := Start;
+                           begin
+                              while Ends <= Produced'Last
+                                and then Produced (Ends) /= Character'Val (10)
+                              loop
+                                 Ends := Ends + 1;
+                              end loop;
+
+                              if Produced (Start .. Ends - 1) = Line then
+                                 Found := True;
+                              end if;
+
+                              Start := Ends + 1;
+                           end;
+                        end loop;
+                     end;
+
+                     Assert (Found,
+                             What & " does not print the published line """
+                             & Line & """");
+                  end if;
+               end;
+
+               From := Stop + 1;
+            end;
+         end loop;
+
+         if not Complete then
+            return;
+         end if;
+
+         --  The other direction. Without it a published block can lose a line
+         --  and still agree with everything it kept, which is how both locale
+         --  examples came to show one line where the program prints two.
+         declare
+            Start : Natural := Produced'First;
+         begin
+            while Start <= Produced'Last loop
+               declare
+                  Ends  : Natural := Start;
+                  Shown : Boolean := False;
+               begin
+                  while Ends <= Produced'Last
+                    and then Produced (Ends) /= Character'Val (10)
+                  loop
+                     Ends := Ends + 1;
+                  end loop;
+
+                  declare
+                     Line  : constant String := Produced (Start .. Ends - 1);
+                     Empty : Boolean := True;
+                     Scan  : Natural := Block'First;
+                  begin
+                     for Letter of Line loop
+                        if Letter /= ' ' then
+                           Empty := False;
+                        end if;
+                     end loop;
+
+                     while not Empty and then Scan <= Block'Last loop
+                        declare
+                           Upto : Natural := Scan;
+                        begin
+                           while Upto <= Block'Last
+                             and then Block (Upto) /= Character'Val (10)
+                           loop
+                              Upto := Upto + 1;
+                           end loop;
+                           if Block (Scan .. Upto - 1) = Line then
+                              Shown := True;
+                           end if;
+                           Scan := Upto + 1;
+                        end;
+                     end loop;
+
+                     Assert (Empty or else Shown,
+                             What & " prints """ & Line
+                             & """, which the published block does not show");
+                  end;
+
+                  Start := Ends + 1;
+               end;
+            end loop;
+         end;
+      end Must_Match;
+   begin
+      if Readme'Length = 0 then
+         --  Run from somewhere without the README beside the crate.
+         return;
+      end if;
+
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "inspect");
+         Add (Source, "fixtures/tiny-model.gguf");
+         Must_Match ("$ model_runner inspect", Output_Of (Source),
+                     "inspect");
+      end;
+
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "--locale");
+         Add (Source, "da");
+         Add (Source, "run");
+         Add (Source, "x.gguf");
+         Add (Source, "--bogus");
+         Must_Match ("$ model_runner --locale da", Output_Of (Source),
+                     "the Danish locale", Complete => True);
+      end;
+
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "--locale");
+         Add (Source, "qps");
+         Add (Source, "run");
+         Add (Source, "x.gguf");
+         Add (Source, "--bogus");
+         Must_Match ("$ model_runner --locale qps", Output_Of (Source),
+                     "the pseudo-locale", Complete => True);
+      end;
+   end Published_Transcripts_Are_Real;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -2697,6 +3006,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Reference_Comparison_Works'Access,
          "the reference comparison accepts a match and rejects a mismatch");
-   end Register_Tests;
+
+      Register_Routine
+        (T, Published_Transcripts_Are_Real'Access,
+         "the transcripts the README publishes are what the program prints");   end Register_Tests;
 
 end Tests.CLI_Cases;

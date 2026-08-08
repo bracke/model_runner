@@ -323,6 +323,11 @@ wall and 16.0 s of processor time.
   processors, twelve tokens took the same wall time for 14.6 s of processor
   time instead of 27.4 s. `--threads` overrides it as before.
 
+- A test replays the transcripts the README publishes and compares them with
+  what the program prints: the inspection of the committed fixture, and the
+  two locale examples, which are held to showing every line the program wrote
+  and not merely lines it wrote.
+
 - `tests check` fails when the sources behind a published performance figure
   change without the figure being measured again. The figures cannot be
   checked by value -- they move between runs and further between machines --
