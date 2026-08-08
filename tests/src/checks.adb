@@ -13,6 +13,7 @@ with Project_Tools.Tree_Checks;
 
 with Docs_Generation;
 with Reserved_Codes;
+with Template_Registry;
 
 with Model_Runner;
 with Model_Runner.Errors;
@@ -23,6 +24,8 @@ with Model_Runner.Text;
 package body Checks is
 
    use type Model_Runner.Errors.Error_Code;
+   use type Template_Registry.Outcome;
+   use type Template_Registry.Text_Access;
 
    package Dirs renames Ada.Directories;
    package E renames Model_Runner.Errors;
@@ -495,6 +498,204 @@ package body Checks is
                end;
             end if;
          end loop;
+      end;
+
+      --  Every chat-template row says what running it actually does.
+      --
+      --  This was the last hand-maintained registry: a table of claims about
+      --  the template subset, beside the code rather than about it. It said
+      --  `set` and the filters were rejected for as long as they had been
+      --  implemented, and nothing could tell.
+      --
+      --  No check can invent a row for a construct somebody adds. What this
+      --  one does is stop a row outliving what it says. Every row must have
+      --  an example carrying its label, every example is compiled and
+      --  rendered, and where it ends must be what its row claims -- so a
+      --  construct that moves into the subset fails while its row still calls
+      --  it refused, and one that moves out fails while its row still calls
+      --  it implemented.
+      declare
+         Matrix : constant String := Contents ("docs/support-matrix.md");
+         Opened : constant String := "## Chat-template constructs";
+         Seen   : array (1 .. Template_Registry.Count) of Boolean :=
+           [others => False];
+         Rows   : Natural := 0;
+
+         --  The chat-template section, up to the heading after it.
+         function Section return String is
+            From : Natural := 0;
+         begin
+            if Matrix'Length < Opened'Length then
+               return "";
+            end if;
+            for Index in Matrix'First .. Matrix'Last - Opened'Length + 1 loop
+               if Matrix (Index .. Index + Opened'Length - 1) = Opened then
+                  From := Index + Opened'Length;
+                  exit;
+               end if;
+            end loop;
+            if From = 0 then
+               return "";
+            end if;
+
+            for Index in From .. Matrix'Last - 2 loop
+               if Matrix (Index) = Character'Val (10)
+                 and then Matrix (Index + 1 .. Index + 2) = "##"
+               then
+                  return Matrix (From .. Index);
+               end if;
+            end loop;
+            return Matrix (From .. Matrix'Last);
+         end Section;
+
+         Body_Text : constant String := Section;
+         Cursor    : Natural := Body_Text'First;
+      begin
+         Result.Performed := Result.Performed + 1;
+         if Body_Text = "" then
+            Fail ("docs/support-matrix.md has no chat-template section; the "
+                  & "check no longer matches the document it reads");
+         end if;
+
+         while Cursor <= Body_Text'Last loop
+            declare
+               Stop : Natural := Cursor;
+            begin
+               while Stop <= Body_Text'Last
+                 and then Body_Text (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line : constant String := Body_Text (Cursor .. Stop - 1);
+                  Bar  : Natural := 0;
+               begin
+                  --  A row, not the heading and not the rule under it.
+                  if Line'Length > 4 and then Line (Line'First) = '|'
+                    and then Line (Line'First + 2) /= '-'
+                    and then not Holds (Line, "| Construct |")
+                  then
+                     --  The cell ends at the first bar that is not escaped.
+                     --  A row about the filter syntax writes its pipes as
+                     --  \| so the table renders, and splitting on those cut
+                     --  the label in half.
+                     for Index in Line'First + 1 .. Line'Last loop
+                        if Line (Index) = '|'
+                          and then Line (Index - 1) /= '\'
+                        then
+                           Bar := Index;
+                           exit;
+                        end if;
+                     end loop;
+
+                     if Bar = 0 then
+                        Result.Performed := Result.Performed + 1;
+                        Fail ("a chat-template row has one cell: " & Line);
+                     else
+                        declare
+                           Label : constant String :=
+                             T.Trim (Line (Line'First + 1 .. Bar - 1));
+                           State : constant String :=
+                             Line (Bar + 1 .. Line'Last);
+                           Want  : Template_Registry.Outcome :=
+                             Template_Registry.Works;
+                           Found : Natural := 0;
+                        begin
+                           Rows := Rows + 1;
+
+                           --  What the row claims, read from the front of
+                           --  the state cell rather than from anywhere in
+                           --  it. A row gives its verdict first and
+                           --  explains afterwards, and an explanation that
+                           --  mentions another verdict must not be able to
+                           --  change the one being checked.
+                           if T.Starts_With (T.Trim (State), "Implemented")
+                           then
+                              Want := Template_Registry.Works;
+                           elsif Holds (State, "at compile time") then
+                              Want := Template_Registry.Refused_At_Compile;
+                           elsif Holds (State, "when evaluated") then
+                              Want := Template_Registry.Refused_At_Render;
+                           else
+                              Result.Performed := Result.Performed + 1;
+                              Fail ("the chat-template row """ & Label
+                                    & """ does not say what it does: "
+                                    & State);
+                           end if;
+
+                           for Index in 1 .. Template_Registry.Count loop
+                              if Template_Registry.Item (Index).Label.all
+                                = Label
+                              then
+                                 Found := Index;
+                                 Seen (Index) := True;
+                              end if;
+                           end loop;
+
+                           Result.Performed := Result.Performed + 1;
+                           if Found = 0 then
+                              Fail ("no worked example for the chat-template "
+                                    & "row """ & Label & """");
+                           else
+                              declare
+                                 Detail : Template_Registry.Text_Access;
+                                 Got    : constant Template_Registry.Outcome :=
+                                   Template_Registry.Run
+                                     (Template_Registry.Item
+                                        (Found).Source.all, Detail);
+                              begin
+                                 Result.Performed := Result.Performed + 1;
+                                 if Got /= Want then
+                                    Fail ("the row """ & Label
+                                          & """ says "
+                                          & Template_Registry.Outcome'Image
+                                              (Want)
+                                          & " but its example is "
+                                          & Template_Registry.Outcome'Image
+                                              (Got)
+                                          & (if Detail = null then ""
+                                             else " (" & Detail.all & ")"));
+                                 end if;
+
+                                 --  And the example agrees with the state the
+                                 --  registry records, so that a row edited to
+                                 --  match a changed example is not enough.
+                                 Result.Performed := Result.Performed + 1;
+                                 if Got /= Template_Registry.Item (Found).State
+                                 then
+                                    Fail ("the example for """ & Label
+                                          & """ does not do what the registry "
+                                          & "says it does");
+                                 end if;
+                              end;
+                           end if;
+                        end;
+                     end if;
+                  end if;
+               end;
+
+               Cursor := Stop + 1;
+            end;
+         end loop;
+
+         --  A row for every example, as well as an example for every row: an
+         --  example left behind by a deleted row would otherwise go on
+         --  passing while documenting nothing.
+         for Index in 1 .. Template_Registry.Count loop
+            Result.Performed := Result.Performed + 1;
+            if not Seen (Index) then
+               Fail ("the worked example """
+                     & Template_Registry.Item (Index).Label.all
+                     & """ matches no chat-template row");
+            end if;
+         end loop;
+
+         Result.Performed := Result.Performed + 1;
+         if Rows = 0 then
+            Fail ("the chat-template section has no rows; the check no "
+                  & "longer matches the document it reads");
+         end if;
       end;
 
       --  Every vocabulary the tokenizer accepts is named in the matrix.

@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The chat-template section of the support matrix is checked against the
+  code. It was the last hand-maintained registry -- a table of claims beside
+  the engine rather than about it -- and it said `set` and the filters were
+  rejected for as long as they had been implemented.
+
+  Every row now has a worked example carrying its label. The example is
+  compiled and rendered, and where it ends must be the verdict the row gives.
+  A row added without an example fails, an example left behind by a deleted
+  row fails, a row that calls an implemented construct rejected fails, and so
+  does a construct that stops working while its row still claims it.
+
+  No check can invent a row for a construct somebody adds. What this one does
+  is stop a row outliving what it says.
+
 - The interactive loop is tested. Nothing drove it for as long as it existed:
   the driver refuses interactive mode unless both descriptors are terminals,
   so the loop could only be reached by hand, and everything it decides went
