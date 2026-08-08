@@ -3783,6 +3783,152 @@ package body Tests.GGUF_Cases is
               & N.Element_Count'Image (First));
    end Q6_K_Matches_An_Element_Wise_Reading;
 
+   -----------------------------------------------
+   -- K_Quants_Match_An_Element_Wise_Reading --
+   -----------------------------------------------
+
+   --  The four-bit and five-bit block formats, read the other way.
+   --
+   --  As with the six-bit format above, the decoder walks the block and the
+   --  reference starts from an element index. The hand-built blocks earlier
+   --  in this file set every sub-block scale to one and check two elements,
+   --  which cannot tell one sub-block from another or one group from the
+   --  next. Here the bytes are arbitrary and all 256 elements are compared.
+   --
+   --  The six-bit packing of the eight scales and eight minimums is stated
+   --  again below rather than derived, so this part is the same rule twice;
+   --  what the test establishes independently is where each element's bits
+   --  are and which sub-block governs it.
+
+   procedure K_Quants_Match_An_Element_Wise_Reading
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Seed : Interfaces.Unsigned_32 := 20_260_808;
+
+      function Next return Interfaces.Unsigned_32 is
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Seed;
+      end Next;
+
+      Decoded : N.Real_Array (0 .. 255);
+      Ok      : Boolean;
+
+      --  One and two, so that a scale used as a minimum, or the other way
+      --  round, does not go unnoticed.
+      Whole : constant N.Real := 1.0;
+      Twice : constant N.Real := 2.0;
+
+      procedure Compare
+        (Format : Model_Runner.GGUF.Tensor_Type;
+         Width  : B.Byte_Count;
+         Fifths : Boolean)
+      is
+         Data  : B.Byte_Array_Access;
+         Wrong : Natural := 0;
+         First : N.Element_Count := 0;
+
+         --  Where the quantized nibbles start; the five-bit format holds a
+         --  further bit for each element in the thirty-two bytes before.
+         Quants : constant B.Byte_Count := (if Fifths then 48 else 16);
+      begin
+         B.Allocate (Width, Data);
+         Assert (Data /= null, "could not allocate the block");
+
+         for Index in Data.all'Range loop
+            Data.all (Index) :=
+              B.Byte (Interfaces.Shift_Right (Next, 24) and 16#FF#);
+         end loop;
+
+         --  The two block scales are half precision and arbitrary bytes
+         --  could make them infinite, which would say nothing about layout.
+         Data.all (Data.all'First + 0) := 16#00#;
+         Data.all (Data.all'First + 1) := 16#3C#;   --  one
+         Data.all (Data.all'First + 2) := 16#00#;
+         Data.all (Data.all'First + 3) := 16#40#;   --  two
+
+         Q.Decode_Blocks (Format, Data.all, 0, 1, Decoded, Ok);
+         Assert (Ok, "the block was not decoded for "
+                 & Model_Runner.GGUF.Type_Name (Format));
+
+         for Index in N.Element_Count range 0 .. 255 loop
+            declare
+               Group    : constant Natural := Natural (Index / 64);
+               Within   : constant Natural := Natural (Index mod 64);
+               Upper    : constant Boolean := Within >= 32;
+               Position : constant Natural := Within mod 32;
+
+               --  Two sub-blocks per group of sixty-four, the second
+               --  governing the high nibbles.
+               Which : constant Natural :=
+                 Group * 2 + (if Upper then 1 else 0);
+
+               function Packed (At_Byte : Natural) return Natural
+               is (Natural (Data.all (Data.all'First + 4
+                                      + B.Byte_Count (At_Byte))));
+
+               --  The eight scales and eight minimums in twelve bytes: the
+               --  first four of each in six bits of their own byte, the
+               --  last four split between a low half and two bits carried
+               --  in the top of an earlier byte.
+               Factor : constant Natural :=
+                 (if Which < 4
+                  then Packed (Which) mod 64
+                  else Packed (Which + 4) mod 16
+                       + 16 * (Packed (Which - 4) / 64));
+               Minimum : constant Natural :=
+                 (if Which < 4
+                  then Packed (Which + 4) mod 64
+                  else Packed (Which + 4) / 16
+                       + 16 * (Packed (Which) / 64));
+
+               Nibble_Byte : constant Interfaces.Unsigned_8 :=
+                 Data.all (Data.all'First + Quants
+                           + B.Byte_Count (Group * 32 + Position));
+               Nibble : constant Natural :=
+                 (if Upper
+                  then Natural (Interfaces.Shift_Right (Nibble_Byte, 4))
+                  else Natural (Nibble_Byte and 16#0F#));
+
+               --  In the five-bit format one further bit per element sits
+               --  in a byte shared by the eight elements at this position,
+               --  one bit per sub-block.
+               Fifth : constant Natural :=
+                 (if not Fifths then 0
+                  elsif (Natural (Data.all (Data.all'First + 16
+                                            + B.Byte_Count (Position)))
+                         / (2 ** Which)) mod 2 = 1
+                  then 16
+                  else 0);
+
+               Expected : constant N.Real :=
+                 (Whole * N.Real (Factor)) * N.Real (Nibble + Fifth)
+                 - Twice * N.Real (Minimum);
+            begin
+               if Decoded (Index) /= Expected then
+                  if Wrong = 0 then
+                     First := Index;
+                  end if;
+                  Wrong := Wrong + 1;
+               end if;
+            end;
+         end loop;
+
+         B.Free (Data);
+
+         Assert (Wrong = 0,
+                 Model_Runner.GGUF.Type_Name (Format)
+                 & " disagrees with an element-wise reading on"
+                 & Natural'Image (Wrong) & " of 256 elements, first at"
+                 & N.Element_Count'Image (First));
+      end Compare;
+   begin
+      Compare (Model_Runner.GGUF.Type_Q4_K, 144, Fifths => False);
+      Compare (Model_Runner.GGUF.Type_Q5_K, 176, Fifths => True);
+   end K_Quants_Match_An_Element_Wise_Reading;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3908,6 +4054,10 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Q6_K_Matches_An_Element_Wise_Reading'Access,
          "six-bit decoding places every element where reading the layout "
-         & "element by element says it goes");  end Register_Tests;
+         & "element by element says it goes"); 
+      Register_Routine
+        (T, K_Quants_Match_An_Element_Wise_Reading'Access,
+         "four-bit and five-bit decoding place every element where reading "
+         & "the layout element by element says it goes"); end Register_Tests;
 
 end Tests.GGUF_Cases;
