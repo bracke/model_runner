@@ -861,6 +861,8 @@ package body Tests.Sampling_Cases is
       end Some_Logit;
 
       Answered : Natural := 0;
+      Sampled  : Natural := 0;
+      Refused  : Natural := 0;
    begin
       for Case_Number in 1 .. 2_000 loop
          declare
@@ -897,6 +899,7 @@ package body Tests.Sampling_Cases is
                Answered := Answered + 1;
 
                if E.Is_Ok (Status) then
+                  Sampled := Sampled + 1;
                   Assert (Token >= 0 and then Natural (Token) < Width,
                           "case" & Natural'Image (Case_Number)
                           & " chose a token outside the vocabulary:"
@@ -907,6 +910,7 @@ package body Tests.Sampling_Cases is
                --  too, and refusing before opening is the safest of the
                --  outcomes.
                Answered := Answered + 1;
+               Refused := Refused + 1;
             end if;
 
             S.Close (Item);
@@ -916,6 +920,28 @@ package body Tests.Sampling_Cases is
       Assert (Answered = 2_000,
               "only" & Natural'Image (Answered)
               & " of two thousand configurations were answered");
+
+      --  And that they were answered both ways. Every configuration being
+      --  refused before it opened would satisfy the count above while
+      --  sampling nothing at all, and the property this exists for -- that
+      --  a token which comes back is one the vocabulary has -- would then
+      --  be tested by no case.
+      Assert (Sampled > 1_000,
+              "only" & Natural'Image (Sampled)
+              & " configurations reached a token, so the check on which "
+              & "token came back had almost nothing to look at");
+
+      --  Refusals are the thin side here: the generator draws mostly
+      --  configurations the sampler accepts, and about one in a hundred is
+      --  turned away before it opens. That is the shape this test has, and
+      --  the bound is set to catch it collapsing rather than to claim the
+      --  refusal path is well covered -- which it is not, here. The
+      --  refusals that matter are held by name elsewhere, one condition at
+      --  a time.
+      Assert (Refused > 5,
+              "only" & Natural'Image (Refused)
+              & " configurations were refused, so the generator has stopped "
+              & "producing any that are");
    end Any_Sampling_Returns_A_Usable_Token;
 
    --  The stop-string matcher agrees with a plain reading of its rule.

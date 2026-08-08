@@ -1392,6 +1392,8 @@ package body Tests.CLI_Cases is
       end Piece;
 
       Answered : Natural := 0;
+      Accepted : Natural := 0;
+      Refused  : Natural := 0;
    begin
       for Case_Number in 1 .. 4_000 loop
          declare
@@ -1400,6 +1402,20 @@ package body Tests.CLI_Cases is
             Status : E.Error_Info;
             Count  : constant Natural := Draw (8);
          begin
+            --  Half the vectors start as a command line that would work,
+            --  and are then handed random pieces. Drawing every token freely
+            --  produced almost nothing the parser accepts -- around one in
+            --  forty -- so the accepting path was walked by a hundred cases
+            --  out of four thousand while the refusing path took the rest.
+            --  Starting from something well formed keeps the pieces random
+            --  while putting both paths under the generator.
+            if Draw (2) = 0 then
+               Add (Source, "run");
+               Add (Source, "m.gguf");
+               Add (Source, "--prompt");
+               Add (Source, "hi");
+            end if;
+
             for Index in 1 .. Count loop
                Add (Source, Piece (Draw (31)));
             end loop;
@@ -1410,6 +1426,12 @@ package body Tests.CLI_Cases is
             Opt.Parse (Source, Item, Status);
             Answered := Answered + 1;
 
+            if E.Is_Ok (Status) then
+               Accepted := Accepted + 1;
+            else
+               Refused := Refused + 1;
+            end if;
+
             Opt.Release (Item);
          end;
       end loop;
@@ -1417,6 +1439,20 @@ package body Tests.CLI_Cases is
       Assert (Answered = 4_000,
               "only" & Natural'Image (Answered)
               & " of four thousand command lines were answered");
+
+      --  Answered both ways, and neither side thin. Four thousand vectors
+      --  that were all refused would satisfy the count above while never
+      --  once carrying the parser through a command line it accepts, and a
+      --  generator drifting to either extreme would leave half of what this
+      --  covers uncovered without failing.
+      Assert (Accepted > 200,
+              "only" & Natural'Image (Accepted)
+              & " generated command lines parsed, so the accepting path was "
+              & "barely walked");
+      Assert (Refused > 200,
+              "only" & Natural'Image (Refused)
+              & " generated command lines were refused, so the refusing path "
+              & "was barely walked");
    end Any_Command_Line_Is_Answered;
 
    --  The conversation keeps its shape under the edits interactive mode makes.
