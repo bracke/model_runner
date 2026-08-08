@@ -30,7 +30,14 @@ package Tiny_Model is
    --  Write the model file to disk.
    --
    --  @param Path Destination path; overwritten if it exists.
-   procedure Write (Path : String);
+   --  Write the fixture.
+   --
+   --  @param Path Where to write it.
+   --  @param Adds_Beginning Whether the vocabulary declares that it wants a
+   --    beginning-of-text marker. False is not a curiosity: real models
+   --    declare it, and putting a marker in front of one that does not want
+   --    it feeds a sequence no other implementation would.
+   procedure Write (Path : String; Adds_Beginning : Boolean := True);
 
    --  Build the model file.
    --
@@ -62,6 +69,7 @@ package Tiny_Model is
    procedure Build
      (Result    : out Model_Runner.Bytes.Byte_Array_Access;
       Format    : Weight_Format := Float32;
-      End_Token : Natural := 2);
+      End_Token : Natural := 2;
+      Adds_Beginning : Boolean := True);
 
 end Tiny_Model;

@@ -25,7 +25,8 @@ package body Tiny_Model is
    procedure Build
      (Result    : out Model_Runner.Bytes.Byte_Array_Access;
       Format    : Weight_Format := Float32;
-      End_Token : Natural := 2)
+      End_Token : Natural := 2;
+      Adds_Beginning : Boolean := True)
    is
       Quantized : constant Boolean := Format = Q8_0;
 
@@ -182,7 +183,8 @@ package body Tiny_Model is
       Fixtures.Add_U32
         (Builder, "tokenizer.ggml.eos_token_id",
          Interfaces.Unsigned_32 (End_Token));
-      Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_bos_token", True);
+      Fixtures.Add_Bool
+        (Builder, "tokenizer.ggml.add_bos_token", Adds_Beginning);
       Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
 
       Weight ("token_embd.weight", [G.U64 (Embedding), Vocabulary]);
@@ -214,12 +216,12 @@ package body Tiny_Model is
    -- Write --
    -----------
 
-   procedure Write (Path : String) is
+   procedure Write (Path : String; Adds_Beginning : Boolean := True) is
       use Ada.Streams;
       Image  : Model_Runner.Bytes.Byte_Array_Access;
       Handle : Stream_IO.File_Type;
    begin
-      Build (Image);
+      Build (Image, Adds_Beginning => Adds_Beginning);
 
       Stream_IO.Create (Handle, Stream_IO.Out_File, Path);
 

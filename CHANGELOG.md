@@ -522,7 +522,10 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
-- A beginning-of-text marker is added only when the vocabulary asks for one.
+- A beginning-of-text marker is added only when the vocabulary asks for one,
+  and a mandatory test holds it: two fixtures differing in that one
+  declaration, the same prompt through the command line, and the token counts
+  must differ by exactly one.
   A request could ask for one and get it regardless, so every model declaring
   that it wants none was fed a sequence no other implementation would produce.
   On such a model it moved a logit by nearly two -- against the hundredths

@@ -3028,6 +3028,106 @@ package body Tests.CLI_Cases is
       end;
    end Published_Transcripts_Are_Real;
 
+   ---------------------------------------------
+   -- Beginning_Marker_Follows_The_Vocabulary --
+   ---------------------------------------------
+
+   --  A vocabulary that wants no beginning marker is not given one.
+   --
+   --  The request asks for one and the vocabulary decides, and until that was
+   --  so, every model declaring that it wants none was fed a sequence no
+   --  other implementation would produce. It cost a whole token of context
+   --  and moved a logit by nearly two, which showed up as generation ending
+   --  after two tokens -- indistinguishable, without a number, from the model
+   --  simply choosing to stop.
+   --
+   --  Two fixtures differing in that one declaration, the same prompt through
+   --  each, and the token counts must differ by exactly one.
+
+   procedure Beginning_Marker_Follows_The_Vocabulary
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Wants   : constant String := "obj/marker-wanted.gguf";
+      Refuses : constant String := "obj/marker-refused.gguf";
+
+      --  Through the command line, because that is the path the defect was
+      --  on: the tokenizer took a flag and obeyed it, and the generator was
+      --  the one deciding wrongly what to pass.
+      function Prompt_Tokens_Of (Path : String) return Natural is
+         use Ada.Text_IO;
+         Errors : constant String := "obj/marker-stats.txt";
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+         Status : Natural;
+         Found  : Natural := 0;
+      begin
+         Add (Source, "run");
+         Add (Source, Path);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+         Add (Source, "--threads");
+         Add (Source, "1");
+         Add (Source, "--show-stats");
+
+         Create (Handle, Out_File, Errors);
+         Set_Output (Handle);
+         Set_Error (Handle);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               null;
+         end;
+         Set_Output (Standard_Output);
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Open (Handle, In_File, Errors);
+         while not End_Of_File (Handle) loop
+            declare
+               Line : String (1 .. 200);
+               Last : Natural;
+               Mark : constant String := "prompt tokens";
+            begin
+               Get_Line (Handle, Line, Last);
+               for Index in 1 .. Last - Mark'Length + 1 loop
+                  if Line (Index .. Index + Mark'Length - 1) = Mark then
+                     Found :=
+                       Natural'Value (Line (Index + Mark'Length .. Last));
+                  end if;
+               end loop;
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+         Close (Handle);
+         return Found;
+      end Prompt_Tokens_Of;
+
+      With_Marker    : Natural;
+      Without_Marker : Natural;
+   begin
+      Tiny_Model.Write (Wants, Adds_Beginning => True);
+      Tiny_Model.Write (Refuses, Adds_Beginning => False);
+
+      With_Marker := Prompt_Tokens_Of (Wants);
+      Without_Marker := Prompt_Tokens_Of (Refuses);
+
+      Assert (With_Marker > 0 and then Without_Marker > 0,
+              "neither fixture tokenized");
+
+      Assert (With_Marker = Without_Marker + 1,
+              "a vocabulary that wants no beginning marker was given one:"
+              & Natural'Image (With_Marker) & " tokens against"
+              & Natural'Image (Without_Marker));
+   end Beginning_Marker_Follows_The_Vocabulary;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3111,6 +3211,10 @@ package body Tests.CLI_Cases is
 
       Register_Routine
         (T, Published_Transcripts_Are_Real'Access,
-         "the transcripts the README publishes are what the program prints");   end Register_Tests;
+         "the transcripts the README publishes are what the program prints"); 
+      Register_Routine
+        (T, Beginning_Marker_Follows_The_Vocabulary'Access,
+         "a vocabulary that declares it wants no beginning marker is not "
+         & "given one");  end Register_Tests;
 
 end Tests.CLI_Cases;
