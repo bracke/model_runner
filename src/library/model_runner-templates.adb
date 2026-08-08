@@ -10,6 +10,12 @@ package body Model_Runner.Templates is
 
    procedure Free_Program is
      new Ada.Unchecked_Deallocation (Instruction_Array, Instruction_Access);
+
+   procedure Free_Operands is
+     new Ada.Unchecked_Deallocation (Operand_Array, Operand_Array_Access);
+
+   procedure Free_Conditions is
+     new Ada.Unchecked_Deallocation (Condition_Array, Condition_Array_Access);
    procedure Free_Text is
      new Ada.Unchecked_Deallocation (String, Text_Access);
 
@@ -22,10 +28,18 @@ package body Model_Runner.Templates is
       if Item.Program /= null then
          Free_Program (Item.Program);
       end if;
+      if Item.Operands /= null then
+         Free_Operands (Item.Operands);
+      end if;
+      if Item.Conditions /= null then
+         Free_Conditions (Item.Conditions);
+      end if;
       if Item.Source /= null then
          Free_Text (Item.Source);
       end if;
       Item.Program_Used := 0;
+      Item.Operand_Used := 0;
+      Item.Condition_Used := 0;
       Item.Source_Used := 0;
       Item.Ready := False;
    exception
@@ -91,6 +105,79 @@ package body Model_Runner.Templates is
       end Fail;
 
       --  Append an instruction, reporting the instruction-count bound.
+      --  Put an operand aside and return where it went. The table starts
+      --  small and doubles, so a template with one output pays for one.
+      procedure Keep (Value : Operand; Position : out Natural) is
+      begin
+         Position := 0;
+
+         --  Kept before the instruction that names it is emitted, so this
+         --  is where the cap is met first. Emit refuses too, and the caller
+         --  stops on either.
+         if Item.Operand_Used >= Max_Instructions then
+            Fail (E.Template_Too_Large, "instructions");
+            return;
+         end if;
+
+         if Item.Operands = null then
+            Item.Operands := new Operand_Array (1 .. 8);
+         elsif Item.Operand_Used = Item.Operands.all'Length then
+            declare
+               Wider : constant Operand_Array_Access :=
+                 new Operand_Array
+                   (1 .. Natural'Min (Item.Operands.all'Length * 2,
+                                      Max_Instructions));
+               Older : Operand_Array_Access := Item.Operands;
+            begin
+               --  It cannot fail to grow: every operand belongs to an
+               --  instruction, and those are capped at Max_Instructions.
+               Wider.all (1 .. Item.Operand_Used) :=
+                 Older.all (1 .. Item.Operand_Used);
+               Item.Operands := Wider;
+               Free_Operands (Older);
+            end;
+         end if;
+
+         Item.Operand_Used := Item.Operand_Used + 1;
+         Item.Operands.all (Item.Operand_Used) := Value;
+         Position := Item.Operand_Used;
+      end Keep;
+
+      --  The same for a condition.
+      procedure Keep (Value : Condition; Position : out Natural) is
+      begin
+         Position := 0;
+
+         --  Kept before the instruction that names it is emitted, so this
+         --  is where the cap is met first. Emit refuses too, and the caller
+         --  stops on either.
+         if Item.Condition_Used >= Max_Instructions then
+            Fail (E.Template_Too_Large, "instructions");
+            return;
+         end if;
+
+         if Item.Conditions = null then
+            Item.Conditions := new Condition_Array (1 .. 8);
+         elsif Item.Condition_Used = Item.Conditions.all'Length then
+            declare
+               Wider : constant Condition_Array_Access :=
+                 new Condition_Array
+                   (1 .. Natural'Min (Item.Conditions.all'Length * 2,
+                                      Max_Instructions));
+               Older : Condition_Array_Access := Item.Conditions;
+            begin
+               Wider.all (1 .. Item.Condition_Used) :=
+                 Older.all (1 .. Item.Condition_Used);
+               Item.Conditions := Wider;
+               Free_Conditions (Older);
+            end;
+         end if;
+
+         Item.Condition_Used := Item.Condition_Used + 1;
+         Item.Conditions.all (Item.Condition_Used) := Value;
+         Position := Item.Condition_Used;
+      end Keep;
+
       procedure Emit (Value : Instruction; Position : out Natural) is
       begin
          Position := 0;
@@ -512,7 +599,21 @@ package body Model_Runner.Templates is
                   return;
                end if;
 
-               Emit ((Op => Op_Jump_If_False, Test => Test, others => <>), Where);
+               declare
+                  Held : Natural;
+               begin
+                  Keep (Test, Held);
+
+                  --  Keeping can fail on the same bound Emit reports, and
+                  --  failing releases the program, so nothing may be emitted
+                  --  after it.
+                  if Held = 0 then
+                     Where := 0;
+                  else
+                     Emit ((Op => Op_Jump_If_False, Test_At => Held,
+                            others => <>), Where);
+                  end if;
+               end;
                if Where = 0 then
                   return;
                end if;
@@ -551,7 +652,21 @@ package body Model_Runner.Templates is
                Item.Program.all (Frames (Depth).Pending).Target :=
                  Item.Program_Used + 1;
 
-               Emit ((Op => Op_Jump_If_False, Test => Test, others => <>), Where);
+               declare
+                  Held : Natural;
+               begin
+                  Keep (Test, Held);
+
+                  --  Keeping can fail on the same bound Emit reports, and
+                  --  failing releases the program, so nothing may be emitted
+                  --  after it.
+                  if Held = 0 then
+                     Where := 0;
+                  else
+                     Emit ((Op => Op_Jump_If_False, Test_At => Held,
+                            others => <>), Where);
+                  end if;
+               end;
                if Where = 0 then
                   return;
                end if;
@@ -763,8 +878,19 @@ package body Model_Runner.Templates is
                            return;
                         end if;
 
-                        Emit ((Op => Op_Output, Value => Value, others => <>),
-                              Where);
+                        declare
+                           Kept : Natural;
+                        begin
+                           Keep (Value, Kept);
+
+                           if Kept = 0 then
+                              Where := 0;
+                           else
+                              Emit ((Op => Op_Output, Value_At => Kept,
+                                     others => <>),
+                                    Where);
+                           end if;
+                        end;
                         if Where = 0 then
                            return;
                         end if;
@@ -980,7 +1106,7 @@ package body Model_Runner.Templates is
                   Position := Position + 1;
 
                when Op_Output =>
-                  Emit_Operand (Step.Value);
+                  Emit_Operand (Item.Operands.all (Step.Value_At));
                   Position := Position + 1;
 
                when Op_For_Begin =>
@@ -1001,7 +1127,7 @@ package body Model_Runner.Templates is
                   end if;
 
                when Op_Jump_If_False =>
-                  if Truth_Of (Step.Test) then
+                  if Truth_Of (Item.Conditions.all (Step.Test_At)) then
                      Position := Position + 1;
                   else
                      Position := Step.Target;

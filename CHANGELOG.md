@@ -331,6 +331,11 @@ wall and 16.0 s of processor time.
 
 ### Fixed
 
+- Compiling a chat template no longer allocates twenty-six megabytes. An
+  instruction named its operand and condition rather than carrying them, so a
+  compiled program is about a hundred kilobytes and the tables holding the
+  rest are as long as the template needs.
+
 - Most of the metadata parsing slowdown introduced with the truncation fix is
   gone: a run within the copy bound is read into a buffer and placed, rather
   than written through a slice of the pool.

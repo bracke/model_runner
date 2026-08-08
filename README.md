@@ -212,10 +212,9 @@ cd tests && ./bin/tests package .. .       # write model_runner-<version>.tar
 cd tests && ./bin/tests external-model --model /path/to/your.gguf [--expect FILE]
 ```
 
-The suite takes about half a minute, three quarters of which is the chat
-template property test — two thousand templates compiled, which is where that
-time goes: each compilation allocates a fixed program of four thousand
-instructions and initialises it.
+The suite takes a second and a half. It took half a minute until compiling a
+template stopped allocating twenty-six megabytes: an instruction carried its
+operand and its condition inline, and the program is four thousand of them.
 
 Every test is deterministic, offline, and needs no downloaded model. The
 checklist holds both: no test source may name a socket, a resolver or an

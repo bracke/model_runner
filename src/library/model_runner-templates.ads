@@ -185,16 +185,35 @@ private
       Op_Jump_If_False, --  skip a branch
       Op_Jump);         --  unconditional jump
 
+   --  An instruction names its operand and its condition rather than
+   --  carrying them.
+   --
+   --  A condition is six kilobytes -- eight clauses of two thirty-two term
+   --  operands -- and an operand is four hundred bytes, while an instruction
+   --  needs neither unless it is a jump or an output. Carried inline, the
+   --  fixed program of four thousand instructions came to twenty-six
+   --  megabytes, allocated and initialised on every compile. Held to one
+   --  side and pointed at, the program is a hundred kilobytes and the side
+   --  tables are as long as the template actually needs.
    type Instruction is record
       Op      : Opcode := Op_Text;
       Offset  : Natural := 0;
       Length  : Natural := 0;
       Target  : Natural := 0;
-      Value   : Operand;
-      Test    : Condition;
+
+      --  Positions in the compiled template's operand and condition tables,
+      --  or zero when this instruction has none.
+      Value_At : Natural := 0;
+      Test_At  : Natural := 0;
    end record;
 
    type Instruction_Array is array (1 .. Max_Instructions) of Instruction;
+
+   type Operand_Array is array (Positive range <>) of Operand;
+   type Operand_Array_Access is access Operand_Array;
+
+   type Condition_Array is array (Positive range <>) of Condition;
+   type Condition_Array_Access is access Condition_Array;
    type Instruction_Access is access Instruction_Array;
 
    type Text_Access is access String;
@@ -205,6 +224,13 @@ private
       Program_Used : Natural := 0;
       Source       : Text_Access := null;
       Source_Used  : Natural := 0;
+
+      --  Grown as the template needs them, rather than sized for the largest
+      --  program the engine will accept.
+      Operands      : Operand_Array_Access := null;
+      Operand_Used  : Natural := 0;
+      Conditions    : Condition_Array_Access := null;
+      Condition_Used : Natural := 0;
 
       --  Taken from the bounds this was compiled with, so that rendering
       --  needs no bounds of its own.
