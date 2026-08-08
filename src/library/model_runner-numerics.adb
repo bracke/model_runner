@@ -103,54 +103,53 @@ package body Model_Runner.Numerics is
    --  an exception instead of a diagnostic. Same reason as From_Bits below.
    function To_Real (Item : Half) return Real is
       pragma Suppress (Validity_Check);
-
-      --  Widening by arithmetic rather than by cases.
-      --
-      --  The obvious form asks which kind of value it has and, for a
-      --  subnormal, shifts the mantissa one bit at a time until the leading
-      --  bit appears. A loop whose length depends on the value is why this
-      --  format decoded slower than the quantized ones, which do fixed work
-      --  per element.
-      --
-      --  Instead: the sign moves to the top, the exponent and mantissa move
-      --  to their wider places, and the bias is corrected by adding the
-      --  difference of the two biases to the exponent field. That is exact
-      --  for every normal value. Two exponents need more: the widest, which
-      --  means infinity or not-a-number and must stay widest rather than
-      --  become a large finite number, and zero, whose value is the mantissa
-      --  read as the fraction of a number just above one, less that one.
-      Raw : constant Interfaces.Unsigned_32 :=
-        Interfaces.Unsigned_32 (Interfaces.Unsigned_16 (Item));
-
-      Sign : constant Interfaces.Unsigned_32 :=
-        Interfaces.Shift_Left (Raw and 16#8000#, 16);
-
-      --  The widest binary16 exponent, moved to its binary32 place.
-      Widest : constant Interfaces.Unsigned_32 :=
-        Interfaces.Shift_Left (16#7C00#, 13);
-
-      Rest : Interfaces.Unsigned_32 :=
-        Interfaces.Shift_Left (Raw and 16#7FFF#, 13);
-
-      Exponent : constant Interfaces.Unsigned_32 := Rest and Widest;
+      Raw       : constant Interfaces.Unsigned_16 :=
+        Interfaces.Unsigned_16 (Item);
+      Sign      : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32 (Interfaces.Shift_Right (Raw, 15)) * 2 ** 31;
+      Exponent  : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32 (Interfaces.Shift_Right (Raw, 10) and 16#1F#);
+      Mantissa  : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32 (Raw and 16#03FF#);
    begin
-      Rest := Rest + Interfaces.Shift_Left (127 - 15, 23);
+      if Exponent = 0 then
+         if Mantissa = 0 then
+            --  Signed zero.
+            return To_Value (Sign);
+         end if;
 
-      if Exponent = Widest then
-         --  Infinity or not-a-number: undo the bias correction by carrying
-         --  the exponent the rest of the way to its own widest.
-         Rest := Rest + Interfaces.Shift_Left (128 - 16, 23);
+         --  Subnormal. Shift the mantissa left until the implicit leading bit
+         --  appears, decrementing the binary32 exponent to match. binary32 has
+         --  ample exponent range, so the result is normal and exact.
+         declare
+            Shifted  : Interfaces.Unsigned_32 := Mantissa;
+            Adjusted : Interfaces.Unsigned_32 := 127 - 15 + 1;
+         begin
+            while (Shifted and 16#0000_0400#) = 0 loop
+               Shifted := Interfaces.Shift_Left (Shifted, 1);
+               Adjusted := Adjusted - 1;
+            end loop;
+            Shifted := Shifted and 16#0000_03FF#;
+            return
+              To_Value
+                (Sign
+                 or Interfaces.Shift_Left (Adjusted, 23)
+                 or Interfaces.Shift_Left (Shifted, 13));
+         end;
 
-      elsif Exponent = 0 then
-         --  Zero or subnormal: read the mantissa as the fraction of the
-         --  smallest normal binary16 and subtract that number, which leaves
-         --  the subnormal value and leaves zero as zero.
-         Rest := Rest + Interfaces.Shift_Left (1, 23);
-         Rest := To_Bits (To_Value (Rest)
-                          - To_Value (Interfaces.Shift_Left (113, 23)));
+      elsif Exponent = 16#1F# then
+         --  Infinity or NaN. The payload's leading bits are preserved.
+         return
+           To_Value
+             (Sign or Exponent_Mask or Interfaces.Shift_Left (Mantissa, 13));
+
+      else
+         return
+           To_Value
+             (Sign
+              or Interfaces.Shift_Left (Exponent + (127 - 15), 23)
+              or Interfaces.Shift_Left (Mantissa, 13));
       end if;
-
-      return To_Value (Sign or Rest);
    end To_Real;
 
    -------------
