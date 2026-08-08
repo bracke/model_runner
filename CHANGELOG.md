@@ -323,6 +323,11 @@ wall and 16.0 s of processor time.
   processors, twelve tokens took the same wall time for 14.6 s of processor
   time instead of 27.4 s. `--threads` overrides it as before.
 
+- `tests conformance` checks that the README still quotes the numbers it
+  prints, and fails the release checklist when it does not. The counts there
+  had drifted to 4 and 64 while the run had grown to 8 and 128, and the worst
+  divergence was published six times smaller than it had become.
+
 - The speed figures in the README are quoted at the worker count the program
   chooses rather than at fourteen threads, which is more than this machine can
   use and is no longer what it picks. The batch-size sweep is re-measured at

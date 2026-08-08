@@ -19,6 +19,9 @@ with Conformance;
 with External_Model;
 with Docs_Generation;
 with Benchmarks;
+
+with Project_Tools.Files;
+with Project_Tools.Text;
 with Packaging;
 with Fuzzing;
 with Tiny_Model;
@@ -44,6 +47,30 @@ procedure Tests_Main is
          return Ada.Command_Line.Argument (1);
       end if;
    end Command;
+
+   --  The README beside this crate, or the empty string when there is none.
+   function Readme_Text return String is
+      Path : constant String := "../README.md";
+   begin
+      if Project_Tools.Files.File_Exists (Path) then
+         return Project_Tools.Files.Read_Raw_File (Path);
+      end if;
+      return "";
+   exception
+      when others =>
+         return "";
+   end Readme_Text;
+
+   type Field_Text is access constant String;
+   type Field_List is array (Positive range <>) of Field_Text;
+
+   --  Every number the conformance summary prints, as it prints it.
+   function Conformance_Fields (Item : Conformance.Report) return Field_List
+   is ([new String'("sequences" & Natural'Image (Item.Sequences)),
+        new String'("logits compared" & Natural'Image (Item.Compared)),
+        new String'("worst absolute" & Long_Float'Image (Item.Worst_Abs)),
+        new String'("worst relative" & Long_Float'Image (Item.Worst_Rel)),
+        new String'("outside tolerance" & Natural'Image (Item.Failures))]);
 
 begin
    if Command = "test" then
@@ -144,6 +171,41 @@ begin
          if not Conformance.Is_Clean (Result) then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
+
+         --  The README publishes these numbers, and the support matrix names
+         --  it as their only home. That made keeping them current a duty
+         --  somebody had to remember, and twice nobody did: the counts there
+         --  said 4 and 64 after the run had grown to 8 and 128, and the worst
+         --  divergence was quoted six times smaller than it had become.
+         --
+         --  So the run checks the file. Every field it prints must appear
+         --  there, which fails the moment the arithmetic changes -- and the
+         --  moment the arithmetic changes is exactly when someone should look
+         --  at what is published about it rather than find out later.
+         declare
+            Published : constant String := Readme_Text;
+         begin
+            if Published'Length = 0 then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "conformance: no README beside this crate, figures not"
+                  & " checked");
+            else
+               for Number of Conformance_Fields (Result) loop
+                  if not Project_Tools.Text.Contains
+                           (Published, Number.all)
+                  then
+                     Ada.Text_IO.Put_Line
+                       (Ada.Text_IO.Standard_Error,
+                        "conformance: the README does not say """
+                        & Number.all & """, so what it publishes about "
+                        & "this run is out of date");
+                     Ada.Command_Line.Set_Exit_Status
+                       (Ada.Command_Line.Failure);
+                  end if;
+               end loop;
+            end if;
+         end;
       end;
 
    elsif Command = "external-model" then

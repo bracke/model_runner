@@ -401,13 +401,20 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 4, logits compared 64,
-             worst absolute 3.93E-07, worst relative 1.96E-06,
+conformance: sequences 8, logits compared 128,
+             worst absolute 1.22573368138701E-06,
+             worst relative 1.22468576261539E-05,
              outside tolerance 0
 ```
 
-Tolerance is 1e-3 relative with a 1e-4 absolute floor; the observed worst case
-is three orders of magnitude inside it.
+Tolerance is 1e-3 relative with a 1e-4 absolute floor, so the observed worst
+case is about eighty times inside it.
+
+Those digits are what the run prints, and `tests conformance` checks that this
+file still quotes them. It had gone stale twice before that check existed: the
+counts here read 4 and 64 while the run had grown to 8 and 128, and the worst
+divergence was quoted six times smaller than it is. A figure worth publishing
+is worth failing the release checklist over.
 
 `tests external-model --model PATH [--expect FILE]` runs the same kind of
 validation against a model you already have — container, architecture, session,
