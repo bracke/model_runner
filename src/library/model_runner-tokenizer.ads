@@ -294,6 +294,12 @@ private
    --  which is how the file writes them. The value is the rank: the lower it
    --  is the earlier the merge is applied, and a pair that is absent is one
    --  the vocabulary never merges.
+   --  Which rule cuts text into pieces before any merging.
+   --
+   --  They differ in what may lead a word and in how digits are grouped, and
+   --  the differences are not cosmetic: a model is trained on one answer.
+   type Cut_Rule is (Rule_GPT2, Rule_Falcon, Rule_Llama3, Rule_Qwen2);
+
    package Merge_Maps is
      new Ada.Containers.Indefinite_Hashed_Maps
        (Key_Type        => String,
@@ -322,6 +328,7 @@ private
       Byte_Tokens   : Byte_Token_Array := [others => No_Token];
       Byte_Fallback : Boolean := False;
       Merges        : Merge_Maps.Map;
+      Cutting       : Cut_Rule := Rule_GPT2;
    end record;
 
    overriding procedure Finalize (Item : in out Vocabulary);

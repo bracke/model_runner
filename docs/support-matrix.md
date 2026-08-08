@@ -65,7 +65,7 @@ asymmetric key and value widths, and rotary scaling other than `none` and
 | Special tokens: beginning, end, unknown | Implemented |
 | `add_bos_token` / `add_eos_token` policy | Implemented |
 | UTF-8-boundary-safe incremental decoding | Implemented |
-| BPE merge tables | Implemented for the `gpt-2`, `falcon` and `starcoder` cutting rules, in any script; a vocabulary naming another rule is refused by name |
+| BPE merge tables | Implemented for the `gpt-2`, `falcon`, `starcoder`, `llama3` and `qwen2` cutting rules, in any script; a vocabulary naming another rule is refused by name |
 
 ## Chat-template constructs
 

@@ -62,8 +62,12 @@ Keep a Changelog and the project uses semantic versioning.
   implement. The later rules let any single character that is neither letter
   nor digit lead a word, where the original lets only a space, so a tab
   between two words is three pieces under one rule and two under the other.
-  `gpt-2`, `falcon` and `starcoder` are accepted and verified; `llama3` and
-  `qwen2` are refused by name rather than cut by the wrong rule.
+  Five rules are implemented and verified against the reference on
+  forty-five strings: `gpt-2`, `falcon`, `starcoder`, `llama3` and `qwen2`.
+  They differ in what may lead a run -- a space under the first, any
+  non-letter under the last two, nothing at all before digits there -- and in
+  how digits group: without limit, in threes, or one at a time. A vocabulary
+  naming a rule that is not among these is refused by name.
 
 - `tests tokenize --model PATH --prompt TEXT` prints the identifiers a
   vocabulary produces, which is what makes this comparable with another

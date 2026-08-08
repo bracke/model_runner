@@ -256,9 +256,20 @@ package body Model_Runner.Tokenizer is
                Cutting : constant String :=
                  Containers.String_Value (Source, "tokenizer.ggml.pre");
             begin
-               if Cutting /= "" and then Cutting /= "gpt-2"
-                 and then Cutting /= "falcon" and then Cutting /= "starcoder"
+               if Cutting = "" or else Cutting = "gpt-2"
+                 or else Cutting = "starcoder"
                then
+                  Item.Cutting := Rule_GPT2;
+               elsif Cutting = "falcon" then
+                  --  Leads a run as the original does, but groups digits in
+                  --  threes as the later rules do, which only shows on a run
+                  --  of four or more.
+                  Item.Cutting := Rule_Falcon;
+               elsif Cutting = "llama3" or else Cutting = "llama-bpe" then
+                  Item.Cutting := Rule_Llama3;
+               elsif Cutting = "qwen2" then
+                  Item.Cutting := Rule_Qwen2;
+               else
                   Item.Model := Kind_Unsupported;
                   Status := E.Make (E.Tokenizer_Unsupported_Model);
                   E.Add_Text (Status, "model", Cutting, E.Param_Identifier);
@@ -658,7 +669,8 @@ package body Model_Runner.Tokenizer is
       --  vocabulary of this kind cuts roughly this way and they differ in the
       --  details, which is why Understood below refuses the text this cannot
       --  cut faithfully rather than cutting it wrongly.
-      function Cut_At (Text : String; From : Positive) return Natural;
+      function Cut_At
+        (Text : String; From : Positive; Rule : Cut_Rule) return Natural;
 
 
    end BPE;
@@ -685,7 +697,9 @@ package body Model_Runner.Tokenizer is
           or else Handling.Is_Space (Wide (Code_Point))
           or else Handling.Is_Line_Terminator (Wide (Code_Point)));
 
-      function Cut_At (Text : String; From : Positive) return Natural is
+      function Cut_At
+        (Text : String; From : Positive; Rule : Cut_Rule) return Natural
+      is
          --  The code point at a byte position, and how many bytes it took.
          procedure Look
            (At_Byte : Positive; Value : out Natural; Width : out Natural) is
@@ -759,10 +773,36 @@ package body Model_Runner.Tokenizer is
          Look (Index, Here, Wide_Here);
          Look (Index + Wide_Here, Next, Wide_Next);
 
-         --  One leading space belongs to the run that follows it, unless
-         --  what follows is more space, in which case the run is the space.
-         if Here = 32 and then Wide_Next > 0 and then not Is_Space (Next) then
-            Step;
+         --  What may lead a word. Under the original rule only a space may,
+         --  and under the later ones any single character that is neither a
+         --  letter, a digit, nor a line ending -- which is why a tab joins
+         --  the word after it there and stands alone here.
+         --  What may lead a run depends on both rules and on what follows.
+         --
+         --  Under the original rule a space may lead anything: letters,
+         --  digits, or symbols. Under the later ones any single character
+         --  that is neither letter, digit nor line ending may lead letters --
+         --  which is why a tab joins the word after it there -- a space may
+         --  still lead symbols, and nothing at all may lead digits, which is
+         --  what keeps their groups of three from starting with one.
+         if Wide_Next > 0 and then not Is_Space (Next) then
+            if Is_Letter (Next) then
+               if (if Rule in Rule_GPT2 | Rule_Falcon
+                   then Here = 32
+                   else not Is_Letter (Here) and then not Is_Digit (Here)
+                        and then Here /= 13 and then Here /= 10)
+               then
+                  Step;
+               end if;
+
+            elsif Is_Digit (Next) then
+               if Rule in Rule_GPT2 | Rule_Falcon and then Here = 32 then
+                  Step;
+               end if;
+
+            elsif Here = 32 then
+               Step;
+            end if;
          end if;
 
          if Is_Letter (Here) then
@@ -771,9 +811,22 @@ package body Model_Runner.Tokenizer is
             end loop;
 
          elsif Is_Digit (Here) then
-            while Runs_On (2) loop
-               Step;
-            end loop;
+            --  Digits run to the end under the original rule, in threes
+            --  under llama3, and one at a time under qwen2.
+            declare
+               Room : Natural :=
+                 (case Rule is
+                     when Rule_GPT2 => Natural'Last,
+                     when Rule_Falcon => 3,
+                     when Rule_Llama3 => 3,
+                     when Rule_Qwen2 => 1);
+            begin
+               Room := Room - 1;
+               while Room > 0 and then Runs_On (2) loop
+                  Step;
+                  Room := Room - 1;
+               end loop;
+            end;
 
          elsif Is_Space (Here) then
             --  A run of spaces keeps its last one for the word that follows.
@@ -1035,7 +1088,8 @@ package body Model_Runner.Tokenizer is
 
             while From <= Text'Last loop
                declare
-                  Stop : constant Natural := BPE.Cut_At (Text, From);
+                  Stop : constant Natural :=
+                    BPE.Cut_At (Text, From, Item.Cutting);
                begin
                   exit when Stop < From;
                   Emit (Text (From .. Stop));
