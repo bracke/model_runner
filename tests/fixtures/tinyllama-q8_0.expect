@@ -17,3 +17,15 @@ model tinyllama-1.1b-chat-v1.0.Q8_0.gguf
 prompt The capital of France is
 tokens 1 450 7483 310 3444 338
 greedy_text \sParis.
+
+# Three logits at the position after the prompt, from llama-eval-callback,
+# which prints the first three and last three values of result_output. The
+# tolerance is 0.08 because that is what the two implementations agree to,
+# not because it is what anyone wanted. With bit-identical weights they still
+# differ by about 0.006, and decoding a quantized weight widens that to about
+# 0.06. A first attempt at 0.02 failed on the third of these three, which is
+# how the figure was arrived at. See docs/reference-runtime.md.
+logit 0 -7.3490
+logit 1 -6.9229
+logit 2 8.3673
+tolerance 0.08

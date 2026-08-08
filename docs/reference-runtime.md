@@ -81,17 +81,38 @@ same prompt, fourteen tokens, greedy, against `llama.cpp`:
 | Q8_0 | parts company after about four |
 | Q4_K | parts company after about six |
 
-BF16 is the control. Widening one of those is a shift and nothing else, so
-both implementations hold bit-identical weights, and fourteen tokens of a full
-forward pass -- attention, normalization, softmax, the sampler -- come back
-the same. Whatever differs cannot be in that path.
+Measuring the logits says how far apart they are, and corrects the reading
+above. `llama-eval-callback` prints the first three values of `result_output`,
+which is the logit vector at the position after the prompt, and the
+`logit` directive compares them. For the same prompt and model:
 
-What differs is decoding a quantized weight, where a value is a small integer
-times a scale, and the two implementations apply that scale and sum the
-products in different orders. The last bits of a logit differ, and a token
-chosen by a close margin flips. That is why the divergence appears at all and
-why it appears at a different point for each format rather than at a
-consistent one.
+| weights | how far three logits differ |
+|---|---|
+| BF16 | 0.0044, 0.0072, 0.0079 |
+| Q8_0 | 0.0113, 0.0054, 0.0577 |
+| Q4_K | 0.0107, 0.0054, 0.0593 |
+
+BF16 was called the control on the grounds that both implementations hold
+bit-identical weights there, and that fourteen matching tokens meant nothing
+in the forward pass differed. The first half is right and the second was too
+strong. The logits differ at BF16 too, by about 0.006, which is the forward
+pass itself: this engine accumulates a row product in binary64 and sums its
+spans in its own order, and the other does neither. Fourteen tokens matched
+because no margin among them was smaller than 0.006, not because nothing
+differed.
+
+Decoding a quantized weight widens that by roughly ten times, to about 0.06,
+which is the part that is genuinely about the format. For scale, quantization
+itself moves a logit far further than either: llama.cpp's own first logit goes
+from -7.369 at BF16 to -7.046 at Q4_K, a shift of 0.32, and both
+implementations take that shift together.
+
+So there are three sizes, and it is worth keeping them apart. About 0.006 is
+two implementations of the same arithmetic. About 0.06 is two implementations
+of the same quantized format. About 0.3 is the format itself. Greedy decoding
+parts company when the gap between the two best tokens falls below the first
+two, which is why it happens at all and why it happens at a different point
+for each format.
 
 So: exact weights are exact, and quantized weights agree until they meet a
 near-tie. The engine's output is reproducible under a fixed seed and unchanged
