@@ -638,11 +638,13 @@ engine supports:
 | Q6_K | 0.38 | Q4_0 | 0.57 |
 | Q8_0 | 0.38 | | |
 
-Medians of three runs. What they were measured against is recorded in
-[docs/measured-figures.txt](docs/measured-figures.txt), and `tests check`
-fails when the sources behind them change without the figures being taken
-again -- which is how this table came to be two to four times wrong once
-before.
+Medians of three runs. What every measured figure in this section was taken
+against is recorded in
+[docs/measured-figures.txt](docs/measured-figures.txt), which names each group
+of figures and the sources it depends on. `tests check` fails when those
+sources change without the figures being taken again, and says which figures
+those are -- this table came to be two to four times wrong once before, and
+the checklist is a better place to remember than a person is.
 
 The benchmark forces every block scale to a modest normal exponent before it
 times anything. It used to fill its tensors with arbitrary bytes, and bytes

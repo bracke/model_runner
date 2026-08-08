@@ -984,6 +984,13 @@ package body Checks is
          end Word;
 
          From : Positive := (if Listing'Length = 0 then 1 else Listing'First);
+
+         --  The "# covers:" line before a group says which published figures
+         --  it stands for. Without it the check tells a reader that something
+         --  changed and leaves them to guess what to measure again.
+         Marker  : constant String := "# covers:";
+         Covers  : String (1 .. 400) := [others => ' '];
+         Covered : Natural := 0;
       begin
          Result.Performed := Result.Performed + 1;
 
@@ -1004,6 +1011,34 @@ package body Checks is
                   declare
                      Line : constant String := Listing (From .. Stop - 1);
                   begin
+                     if Line'Length >= Marker'Length
+                       and then Line (Line'First .. Line'First
+                                      + Marker'Length - 1) = Marker
+                     then
+                        declare
+                           Rest  : constant String :=
+                             Line (Line'First + Marker'Length .. Line'Last);
+                           Begins : Natural := Rest'First;
+                        begin
+                           while Begins <= Rest'Last
+                             and then Rest (Begins) = ' '
+                           loop
+                              Begins := Begins + 1;
+                           end loop;
+
+                           declare
+                              Said : constant String :=
+                                Rest (Begins .. Rest'Last);
+                              Room : constant Natural :=
+                                Natural'Min (Said'Length, Covers'Length);
+                           begin
+                              Covers (1 .. Room) :=
+                                Said (Said'First .. Said'First + Room - 1);
+                              Covered := Room;
+                           end;
+                        end;
+                     end if;
+
                      if Line'Length > 0
                        and then Word (Line, 1)'Length > 0
                        and then Word (Line, 1) (Word (Line, 1)'First) /= '#'
@@ -1049,10 +1084,14 @@ package body Checks is
                            elsif Whole and then Hex (Sum) /= Known then
                               Fail ("the sources behind the published "
                                     & Name & " figures have changed since "
-                                    & "they were measured; re-measure, then "
-                                    & "record " & Hex (Sum) & " in "
+                                    & "they were measured; re-measure "
+                                    & (if Covered > 0
+                                       then Covers (1 .. Covered)
+                                       else "them")
+                                    & ", then record " & Hex (Sum) & " in "
                                     & Record_Path);
                            end if;
+                           Covered := 0;
                         end;
                      end if;
                   end;

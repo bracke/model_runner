@@ -1,7 +1,7 @@
 # What the published performance figures were measured against.
 #
-# The README publishes numbers that were measured, not derived: how long a
-# row product takes per element, how long twelve tokens take, how the matrix
+# The README publishes numbers that were measured, not derived: how long a row
+# product takes per element, how long twelve tokens take, how the matrix
 # product scales. They cannot be checked the way the conformance figures can,
 # because they differ by half a per cent between runs and by much more between
 # machines, so no assertion about their value can hold anywhere but here.
@@ -14,15 +14,27 @@
 # what you get, or say why the change cannot have moved them.
 #
 # That is a duty, and the point of putting it here is that it is a duty the
-# release checklist enforces rather than one somebody has to remember. Both
-# groups below have gone stale once already, by two to four times.
+# release checklist enforces rather than one somebody has to remember. Every
+# group below has gone stale once already, by two to four times.
 #
 # Format, one group per line:
 #   <name> <fingerprint> <source> [<source> ...]
 #
+# The "# covers:" line before a group says which published figures it stands
+# for, and the check prints it when that group fails. A group whose figures
+# are not named is a group nobody can answer: the reader learns that something
+# changed and is left to guess what to measure again. If you add a figure to
+# the README, add it to a covers line, and if it depends on a source no group
+# lists, list it.
+#
 # On a mismatch the check prints the fingerprint it computed. Paste that in
 # after re-measuring -- not before.
 
+# covers: the row-product table under "Kernels"
 kernels 1A59968C7818FD5F src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
-engine D935E8AE8BCFA966 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb
+# covers: the twelve-token figure and the batch-size table under "Speed"
+engine 6BCB3C087CA1F6F8 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+
+# covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
+scaling A56E9D7C614BDE36 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
