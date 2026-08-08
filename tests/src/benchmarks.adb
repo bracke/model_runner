@@ -304,11 +304,13 @@ package body Benchmarks is
       --  its time in: one vector per pass is generating a token, where each
       --  weight byte is read for a single multiply, and thirty-two is
       --  evaluating a prompt, where the same byte serves thirty-two.
-      procedure Measure_Scaling (Name : String; Vectors_Per_Pass : N.Element_Count)
+      procedure Measure_Scaling
+        (Name             : String;
+         Vectors_Per_Pass : N.Element_Count;
+         Format           : G.Tensor_Type := G.Type_Q8_0)
       is
          Rows    : constant N.Element_Count := 4096;
          Columns : constant N.Element_Count := 4096;
-         Format  : constant G.Tensor_Type := G.Type_Q8_0;
          Width   : constant B.Byte_Count :=
            B.Byte_Count (Columns) / B.Byte_Count (G.Block_Elements (Format))
            * B.Byte_Count (G.Block_Bytes (Format));
@@ -632,8 +634,11 @@ package body Benchmarks is
       IO.New_Line;
 
       IO.Put_Line ("matrix product across workers");
-      Measure_Scaling ("one vector per pass, as when generating", 1);
-      Measure_Scaling ("thirty-two per pass, as when evaluating a prompt", 32);
+      Measure_Scaling ("q8_0, one vector per pass, as when generating", 1);
+      Measure_Scaling ("q4_k, one vector per pass", 1, G.Type_Q4_K);
+      Measure_Scaling ("q8_0, thirty-two per pass, as when evaluating a prompt",
+                       32);
+      Measure_Scaling ("q4_k, thirty-two per pass", 32, G.Type_Q4_K);
       IO.New_Line;
 
       IO.Put_Line ("vector kernels");
