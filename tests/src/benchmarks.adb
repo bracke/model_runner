@@ -8,6 +8,7 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
+with Model_Runner.Kernels;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization;
 with Model_Runner.Tensors;
@@ -234,6 +235,60 @@ package body Benchmarks is
 
          B.Free (Data);
       end Measure;
+
+      --  The vector kernels each token passes through, which the measures
+      --  above do not touch: normalization before every attention and feed
+      --  forward block, softmax over the attention scores and again over the
+      --  vocabulary, and the activation between the feed forward matrices.
+      --  A row product is the larger cost, but these run just as often and
+      --  nothing here was measuring them.
+      procedure Measure_Vector (Name : String; Which : Character) is
+         Length : constant N.Element_Count := 4096;
+         Values : N.Real_Array (0 .. Length - 1);
+         Weight : constant N.Real_Array (0 .. Length - 1) := [others => 1.0];
+         Target : N.Real_Array (0 .. Length - 1) := [others => 0.0];
+         Started : Ada.Real_Time.Time;
+         Done    : N.Element_Count := 0;
+         Guard   : N.Real := 0.0;
+         Ok      : Boolean;
+      begin
+         for Index in Values'Range loop
+            Values (Index) := N.Real (Index mod 23) * 0.125 - 1.0;
+         end loop;
+
+         Started := Ada.Real_Time.Clock;
+         loop
+            case Which is
+               when 'S' =>
+                  Target := Values;
+                  Model_Runner.Kernels.Softmax (Target, Ok);
+                  Guard := Guard + Target (0);
+               when 'N' =>
+                  Model_Runner.Kernels.RMS_Norm
+                    (Values, Weight, 1.0E-5, Target);
+                  Guard := Guard + Target (0);
+               when 'L' =>
+                  Target := Values;
+                  Model_Runner.Kernels.SiLU (Target);
+                  Guard := Guard + Target (0);
+               when others =>
+                  Guard := Guard
+                    + Model_Runner.Kernels.Dot (Values, Weight);
+            end case;
+
+            Done := Done + Length;
+            exit when Ada.Real_Time.To_Duration
+              (Ada.Real_Time.Clock - Started) >= Seconds;
+         end loop;
+
+         Report
+           (Name, Long_Long_Integer (Done),
+            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started));
+
+         if Guard = N.Real'Last then
+            IO.Put_Line ("");
+         end if;
+      end Measure_Vector;
 
       --  Decode blocks with no arithmetic on top, to separate the cost of
       --  producing the values from the cost of using them.
@@ -474,6 +529,13 @@ package body Benchmarks is
       Measure ("f16  Dequantize_Row", G.Type_F16, False);
       Measure ("q4_k Dequantize_Row", G.Type_Q4_K, False);
       Measure ("f32  Dequantize_Row", G.Type_F32, False);
+      IO.New_Line;
+
+      IO.Put_Line ("vector kernels");
+      Measure_Vector ("softmax", 'S');
+      Measure_Vector ("rms norm", 'N');
+      Measure_Vector ("silu", 'L');
+      Measure_Vector ("dot", 'D');
       IO.New_Line;
 
       IO.Put_Line ("metadata parsing");

@@ -101,19 +101,22 @@ package Model_Runner.Numerics is
    --
    --  @param Item Value to test.
    --  @return True when Item is finite.
-   function Is_Finite (Item : Real) return Boolean;
+   function Is_Finite (Item : Real) return Boolean
+     with Inline;
 
    --  Report whether a value is NaN.
    --
    --  @param Item Value to test.
    --  @return True when Item is a quiet or signalling NaN.
-   function Is_NaN (Item : Real) return Boolean;
+   function Is_NaN (Item : Real) return Boolean
+     with Inline;
 
    --  Report whether a wide value is neither infinite nor NaN.
    --
    --  @param Item Value to test.
    --  @return True when Item is finite.
-   function Is_Finite (Item : Wide_Real) return Boolean;
+   function Is_Finite (Item : Wide_Real) return Boolean
+     with Inline;
 
    --  Exponential function used by softmax, evaluated in the wide format.
    --
