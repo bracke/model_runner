@@ -526,8 +526,8 @@ Named in the specification, absent here:
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
-chooses for itself. From a short prompt, twelve tokens take **2.19 s** --
-about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.5 s of
+chooses for itself. From a short prompt, twelve tokens take **2.09 s** --
+about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.3 s of
 processor time, the median of three runs. Loading the model costs a further
 0.8 s of wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
@@ -581,8 +581,8 @@ everywhere and still accepts any number the backend allows.
 
 What is left over is not the memory. Measured on its own, away from the model,
 the matrix product reaches about 4.8x on eight shares against its own serial
-rate, and reaches it whether one vector is passed or thirty-two -- 2577 to
-12108 Me/s in the first case and 4815 to 23016 in the second, medians of three
+rate, and reaches it whether one vector is passed or thirty-two -- 2585 to
+12142 Me/s in the first case and 4753 to 22813 in the second, medians of three
 runs.
 If memory were the wall those two would part company, because the second reads
 each weight byte once for thirty-two multiplies and the first reads it once
@@ -603,8 +603,8 @@ ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
 end. That gap was the contention, not the bytes: with the contention gone the
 four-bit format is within a few per cent of the eight-bit one either way --
-12327 Me/s against 12108 at eight shares with one vector, 22877 against 23016
-with thirty-two, 2658 against 2577 serially -- and end to end the two are
+11710 Me/s against 12142 at eight shares with one vector, 23450 against 22813
+with thirty-two, 2660 against 2585 serially -- and end to end the two are
 indistinguishable, 2.06 and 2.18 s against 2.06 and 2.26.
 
 It is worth keeping as a lesson rather than a result. A measurement taken
@@ -649,14 +649,14 @@ model says.
 
 | `--batch-size` | prompt evaluation | rate | output |
 |---|---|---|---|
-| 1 (one token at a time) | 12.94 s | 10.1 tokens/s | `7066666208f6fbe6` |
+| 1 (one token at a time) | 12.64 s | 10.4 tokens/s | `7066666208f6fbe6` |
 | 2 | 10.34 s | 12.7 tokens/s | `7066666208f6fbe6` |
 | 4 | 8.66 s | 15.1 tokens/s | `7066666208f6fbe6` |
-| 8 | 7.63 s | 17.2 tokens/s | `7066666208f6fbe6` |
+| 8 | 7.79 s | 16.8 tokens/s | `7066666208f6fbe6` |
 | 16 | 7.20 s | 18.2 tokens/s | `7066666208f6fbe6` |
-| 32 (default) | 6.86 s | 19.1 tokens/s | `7066666208f6fbe6` |
+| 32 (default) | 6.82 s | 19.2 tokens/s | `7066666208f6fbe6` |
 | 64 | 6.36 s | 20.6 tokens/s | `7066666208f6fbe6` |
-| 128 (cap) | 6.64 s | 19.7 tokens/s | `7066666208f6fbe6` |
+| 128 (cap) | 6.63 s | 19.8 tokens/s | `7066666208f6fbe6` |
 
 Most of the benefit arrives by a batch of eight, and it flattens after
 thirty-two. Batching amortizes the cost of decoding the weights across the
@@ -672,11 +672,20 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.26 | Q8_0 | 0.38 |
-| Q4_0 | 0.31 | Q5_K | 0.40 |
-| BF16 | 0.32 | Q3_K | 0.48 |
-| Q4_K | 0.37 | F16 | 0.55 |
-| Q6_K | 0.38 | Q2_K | 0.72 |
+| F32 | 0.26 | Q4_1 | 0.43 |
+| Q4_0 | 0.31 | Q3_K | 0.47 |
+| BF16 | 0.32 | F16 | 0.55 |
+| Q4_K | 0.37 | Q2_K | 0.70 |
+| Q6_K | 0.37 | Q5_0 | 1.05 |
+| Q8_0 | 0.38 | Q5_1 | 1.08 |
+| Q5_K | 0.40 | | |
+
+The two five-bit legacy formats are the outliers, and the reason is where
+they keep the fifth bit: bit *j* of a thirty-two bit word rather than a fixed
+place in a byte already being read. The shift amount therefore varies with the
+element, and an instruction set without a per-lane shift cannot vectorize that
+loop. Baseline x86-64 has none, and building for a host that does measured
+slower everywhere else.
 
 Medians of three runs. What every measured figure in this section was taken
 against is recorded in

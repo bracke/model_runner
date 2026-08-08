@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Q4_1, Q5_0 and Q5_1 tensors are decoded rather than refused. Q4_1 is a
+  nibble with a scale and a minimum instead of a fixed bias; the two five-bit
+  formats hold each element's fifth bit in a thirty-two bit word beside the
+  nibbles, centring by sixteen or carrying a minimum. Each was checked against
+  a model quantized to it, and each matches the reference runtime's greedy
+  output exactly.
+
+  The five-bit pair costs about two and a half times what the four-bit ones
+  do, because the fifth bit for element j is bit j of a word, so the shift
+  varies with the element and the loop will not vectorize without a per-lane
+  shift instruction. The README says so where the figures are.
+
+  Q8_1 and Q8_K stay refused. Neither is a way weights are stored: both are
+  intermediates ggml builds inside its own dot products.
+
 - Q3_K tensors are decoded rather than refused, at 0.48 nanoseconds an
   element. Three bits in two pieces: the low two packed four to a byte, the
   third in a mask shared by the whole block whose absence subtracts four, and

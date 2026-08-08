@@ -26,7 +26,10 @@ validation, runtime execution, structured error handling and AUnit coverage.
 | BF16 | 1 | 2 | Implemented; the top half of a binary32 |
 | Q2_K | 256 | 84 | Implemented; two bits an element, sixteen sub-blocks |
 | Q3_K | 256 | 110 | Implemented; two bits and a shared mask of thirds |
-| Q4_1, Q5_0, Q5_1, Q8_1, Q8_K | — | — | Recognized by the parser, rejected before preparation |
+| Q4_1 | 32 | 20 | Implemented; a nibble with a scale and a minimum |
+| Q5_0 | 32 | 22 | Implemented; a fifth bit apart, centred by sixteen |
+| Q5_1 | 32 | 24 | Implemented; a fifth bit apart, with a minimum |
+| Q8_1, Q8_K | — | — | Recognized by the parser, rejected before preparation. Neither is a way weights are stored: both are intermediates ggml builds inside its own dot products |
 | Everything else | — | — | Rejected: `MR-GGUF-0017` |
 
 Recognized is not supported. A recognized-but-unimplemented format passes

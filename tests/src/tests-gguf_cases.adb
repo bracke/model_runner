@@ -883,8 +883,13 @@ package body Tests.GGUF_Cases is
                --  sign and the exponent and this is the same taming the
                --  four-byte format gets, one byte lower.
                Data (Data'First + B.Byte_Count (Block) * Width + 1) := 16#3E#;
-            when Model_Runner.GGUF.Type_Q4_0 | Model_Runner.GGUF.Type_Q8_0 =>
+            when Model_Runner.GGUF.Type_Q4_0 | Model_Runner.GGUF.Type_Q8_0
+               | Model_Runner.GGUF.Type_Q5_0 =>
                Tame_Half (Block, 0);
+            when Model_Runner.GGUF.Type_Q4_1 | Model_Runner.GGUF.Type_Q5_1 =>
+               --  A scale and a minimum, both at the head.
+               Tame_Half (Block, 0);
+               Tame_Half (Block, 2);
             when Model_Runner.GGUF.Type_Q4_K | Model_Runner.GGUF.Type_Q5_K =>
                --  Scale and minimum both lead the block.
                Tame_Half (Block, 0);
@@ -936,10 +941,11 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 10) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 13) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
          Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
-         Model_Runner.GGUF.Type_Q3_K,
+         Model_Runner.GGUF.Type_Q3_K, Model_Runner.GGUF.Type_Q4_1,
+         Model_Runner.GGUF.Type_Q5_0, Model_Runner.GGUF.Type_Q5_1,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];
@@ -1109,10 +1115,11 @@ package body Tests.GGUF_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      Formats : constant array (1 .. 10) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 13) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
          Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
-         Model_Runner.GGUF.Type_Q3_K,
+         Model_Runner.GGUF.Type_Q3_K, Model_Runner.GGUF.Type_Q4_1,
+         Model_Runner.GGUF.Type_Q5_0, Model_Runner.GGUF.Type_Q5_1,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];
@@ -1204,7 +1211,7 @@ package body Tests.GGUF_Cases is
          end;
       end loop;
 
-      Assert (Checked_Rows = 10, "not every format was checked");
+      Assert (Checked_Rows = 13, "not every format was checked");
    end Fused_Dot_Matches_Decoder;
 
    --  Decoded values, against expectations worked out from the layout.
@@ -1390,6 +1397,65 @@ package body Tests.GGUF_Cases is
          Check (Model_Runner.GGUF.Type_Q3_K, Block, 192, -4.0);
       end;
 
+      --  Q4_1: as Q4_0, but the block carries a minimum instead of biasing
+      --  by eight, so an element is its nibble scaled and then lifted.
+      declare
+         Block : B.Byte_Array (0 .. 19) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;      --  d = 1
+         Block (2) := One_Low;
+         Block (3) := One_High;      --  m = 1
+         Block (4) := 16#32#;        --  low nibble 2, high nibble 3
+         Check (Model_Runner.GGUF.Type_Q4_1, Block, 0, 3.0);
+         Check (Model_Runner.GGUF.Type_Q4_1, Block, 16, 4.0);
+      end;
+
+      --  Q5_0: a fifth bit in four bytes of its own, then the nibbles, and
+      --  the result centred by subtracting sixteen. Bit j serves element j
+      --  and bit j + 16 serves element j + 16, which is why the bit for the
+      --  seventeenth element is in the third of those four bytes.
+      declare
+         Block : B.Byte_Array (0 .. 21) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;      --  d = 1
+         Block (2) := 16#01#;        --  fifth bit of element 0
+         Block (4) := 16#01#;        --  fifth bit of element 16
+         Block (6) := 16#32#;        --  low nibble 2, high nibble 3
+         Check (Model_Runner.GGUF.Type_Q5_0, Block, 0, 2.0);
+         Check (Model_Runner.GGUF.Type_Q5_0, Block, 16, 3.0);
+
+         --  Without the fifth bit the same nibble is sixteen lower. Element
+         --  16 keeps its own bit, which is in a different byte: a decoder
+         --  taking both bits from the low half would move it too.
+         Block (2) := 16#00#;
+         Check (Model_Runner.GGUF.Type_Q5_0, Block, 0, -14.0);
+         Check (Model_Runner.GGUF.Type_Q5_0, Block, 16, 3.0);
+      end;
+
+      --  Q5_1: the fifth bit of Q5_0 with the minimum of Q4_1, so nothing is
+      --  centred and the four bytes sit after both scales rather than one.
+      declare
+         Block : B.Byte_Array (0 .. 23) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;      --  d = 1
+         Block (2) := One_Low;
+         Block (3) := One_High;      --  m = 1
+         Block (4) := 16#01#;        --  fifth bit of element 0
+         Block (6) := 16#01#;        --  fifth bit of element 16
+         Block (8) := 16#32#;        --  low nibble 2, high nibble 3
+         Check (Model_Runner.GGUF.Type_Q5_1, Block, 0, 19.0);
+         Check (Model_Runner.GGUF.Type_Q5_1, Block, 16, 20.0);
+
+         --  As above: clearing the first element's fifth bit must leave the
+         --  seventeenth element's alone.
+         Block (4) := 16#00#;
+         Check (Model_Runner.GGUF.Type_Q5_1, Block, 0, 3.0);
+         Check (Model_Runner.GGUF.Type_Q5_1, Block, 16, 20.0);
+      end;
+
       --  Q4_K: value is d times the sub-block scale times the nibble, less
       --  dmin times the sub-block minimum. With d one, dmin zero, and the
       --  first four sub-block scales one, the value is the nibble.
@@ -1543,10 +1609,11 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 10) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 13) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
          Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
-         Model_Runner.GGUF.Type_Q3_K,
+         Model_Runner.GGUF.Type_Q3_K, Model_Runner.GGUF.Type_Q4_1,
+         Model_Runner.GGUF.Type_Q5_0, Model_Runner.GGUF.Type_Q5_1,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
          Model_Runner.GGUF.Type_Q6_K];
@@ -3032,9 +3099,14 @@ package body Tests.GGUF_Cases is
 
       --  A format this build does not decode. The container may carry it and
       --  the engine still cannot run it, and the two are different refusals.
-      Assert (Shaped (G.Type_Q4_1, 1, 32) = E.Tensor_Format_Unsupported,
+      --
+      --  Q8_1 rather than one of the formats that were once refused here:
+      --  it is an intermediate ggml uses inside its own dot products and not
+      --  a way weights are stored, so it is the one entry in the table least
+      --  likely to be implemented and take this check with it.
+      Assert (Shaped (G.Type_Q8_1, 1, 32) = E.Tensor_Format_Unsupported,
               "a view over an undecodable format was made: "
-              & E.Error_Code'Image (Shaped (G.Type_Q4_1, 1, 32)));
+              & E.Error_Code'Image (Shaped (G.Type_Q8_1, 1, 32)));
 
       --  A shape that does not fit the buffer it is placed in.
       Assert (Shaped (G.Type_F32, 1_000, 1_000) = E.Tensor_Out_Of_Bounds,

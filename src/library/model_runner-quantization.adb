@@ -530,7 +530,8 @@ package body Model_Runner.Quantization is
 
    function Is_Decodable (Format : G.Tensor_Type) return Boolean
    is (Format in G.Type_F32 | G.Type_F16 | G.Type_BF16 | G.Type_Q4_0
-                | G.Type_Q8_0 | G.Type_Q2_K | G.Type_Q3_K
+                | G.Type_Q8_0 | G.Type_Q4_1 | G.Type_Q5_0 | G.Type_Q5_1
+                | G.Type_Q2_K | G.Type_Q3_K
                 | G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K);
 
    -------------------
@@ -574,6 +575,113 @@ package body Model_Runner.Quantization is
       --  simple layouts lived here and nothing called it, so nothing tested
       --  it either.
       case Format is
+         when G.Type_Q4_1 =>
+            --  As Q4_0, with a minimum of its own instead of a fixed bias of
+            --  eight: the block carries two half-precision numbers, and a
+            --  nibble is scaled and then lifted rather than centred.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               D      : constant Real := Scale (Data, Offset);
+               Lowest : constant Real := Scale (Data, Offset + 2);
+               Base   : constant B.Byte_Index := Data'First + Offset + 4;
+            begin
+               for J in 0 .. 15 loop
+                  declare
+                     Packed : constant Interfaces.Unsigned_8 :=
+                       Data (Base + B.Byte_Count (J));
+                  begin
+                     Target (Target'First + Element_Count (J)) :=
+                       D * Real (Integer (Packed and 16#0F#)) + Lowest;
+                     Target (Target'First + Element_Count (J) + 16) :=
+                       D * Real (Integer (Interfaces.Shift_Right (Packed, 4)))
+                       + Lowest;
+                  end;
+               end loop;
+               Ok := True;
+            end;
+
+         when G.Type_Q5_0 | G.Type_Q5_1 =>
+            --  A fifth bit for each element, held apart from the nibbles in
+            --  four bytes read as one number: bit j belongs to element j and
+            --  bit j + 16 to element j + 16, which is the same rule the
+            --  five-bit super-block uses kept in a different place.
+            --
+            --  These two cost about two and a half times what the four-bit
+            --  formats do -- 1.05 nanoseconds an element against 0.43 -- and
+            --  the fifth bit is the whole of it. Every other format finds its
+            --  extra bits at a fixed place in a byte it is already reading;
+            --  here the bit for element j is bit j of a thirty-two bit word,
+            --  so the shift amount varies with the element and the loop
+            --  cannot be vectorized by an instruction set without a per-lane
+            --  shift. Baseline x86-64 has none, and compiling for a host that
+            --  does measured slower everywhere else, which is in the README.
+            --  Turning the two conditionals into shifts was tried and changed
+            --  nothing, which is what said the branch was not the cost.
+            --
+            --  The two differ only in what happens once the fifth bit is
+            --  restored. Q5_0 centres the result by subtracting sixteen, as
+            --  Q4_0 subtracts eight; Q5_1 carries a minimum instead, as Q4_1
+            --  does. Everything else is the same, which is why they share a
+            --  branch rather than repeating one.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               Centred : constant Boolean := Format = G.Type_Q5_0;
+
+               --  Q5_0 keeps the fifth bits straight after its one scale;
+               --  Q5_1 keeps them after its two.
+               Fifths_At : constant B.Byte_Count := (if Centred then 2 else 4);
+               Quants_At : constant B.Byte_Count := (if Centred then 6 else 8);
+
+               D      : constant Real := Scale (Data, Offset);
+               Lowest : constant Real :=
+                 (if Centred then 0.0 else Scale (Data, Offset + 2));
+               Bias   : constant Integer := (if Centred then 16 else 0);
+
+               Head   : constant B.Byte_Index := Data'First + Offset;
+               Base   : constant B.Byte_Index := Head + Quants_At;
+
+               Fifths : constant Interfaces.Unsigned_32 :=
+                 Interfaces.Unsigned_32 (Data (Head + Fifths_At))
+                 or Interfaces.Shift_Left
+                      (Interfaces.Unsigned_32
+                         (Data (Head + Fifths_At + 1)), 8)
+                 or Interfaces.Shift_Left
+                      (Interfaces.Unsigned_32
+                         (Data (Head + Fifths_At + 2)), 16)
+                 or Interfaces.Shift_Left
+                      (Interfaces.Unsigned_32
+                         (Data (Head + Fifths_At + 3)), 24);
+            begin
+               for J in 0 .. 15 loop
+                  declare
+                     Packed : constant Interfaces.Unsigned_8 :=
+                       Data (Base + B.Byte_Count (J));
+                     Low_Fifth : constant Integer :=
+                       (if (Interfaces.Shift_Right (Fifths, J) and 1) = 1
+                        then 16 else 0);
+                     High_Fifth : constant Integer :=
+                       (if (Interfaces.Shift_Right (Fifths, J + 16) and 1) = 1
+                        then 16 else 0);
+                  begin
+                     Target (Target'First + Element_Count (J)) :=
+                       D * Real (Integer (Packed and 16#0F#)
+                                 + Low_Fifth - Bias)
+                       + Lowest;
+                     Target (Target'First + Element_Count (J) + 16) :=
+                       D * Real (Integer (Interfaces.Shift_Right (Packed, 4))
+                                 + High_Fifth - Bias)
+                       + Lowest;
+                  end;
+               end loop;
+               Ok := True;
+            end;
+
          when G.Type_Q2_K =>
             declare
                pragma Suppress (Index_Check);
