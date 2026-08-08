@@ -1636,6 +1636,53 @@ package body Tests.GGUF_Cases is
                  & "counts");
       end;
 
+      --  What a token decodes to is not escaped, and that is deliberate.
+      --
+      --  Generated text is the program's output rather than something it
+      --  says about a file, and it is streamed as the model produced it: a
+      --  model that generates an escape sequence has generated one, and
+      --  rewriting it would corrupt output that a reader asked for and may
+      --  be redirecting to a file. The line is between what the program
+      --  reports -- keys, names, values, diagnostics, all escaped -- and
+      --  what it passes through. This pins that line, so that a change which
+      --  escaped everything would have to be a decision rather than a
+      --  slip.
+      declare
+         package Vocab renames Model_Runner.Tokenizer;
+
+         Words   : Vocab.Vocabulary;
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Item    : Containers.Container;
+         Parsed  : E.Error_Info;
+         Status  : E.Error_Info;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, 2);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "a" & ESC & "[2J");
+         Fixtures.End_Array (Builder);
+         Fixtures.Build (Builder, Image);
+
+         Parse_Image (Image.all, Item, Parsed);
+         Assert (E.Is_Ok (Parsed), "the vocabulary fixture did not parse");
+
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the vocabulary did not load: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Assert (Vocab.Token_Text (Words, 1) = "a" & ESC & "[2J",
+                 "token text was altered on the way out");
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+
       --  And now through a file, which is where a defect would actually live:
       --  the escaping is applied at the call sites, not by the reader.
       Fixtures.Reset (Builder);

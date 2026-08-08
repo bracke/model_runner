@@ -451,6 +451,13 @@ the tokenizer, the metadata accessors, the engine itself -- may not name a
 file, a stream, a directory, the environment or the command line at all, and
 the release checklist fails if one of them does.
 
+Generated text is passed through as the model produced it. It is never styled
+and never escaped: a model that generates a terminal escape sequence has
+generated one, and rewriting it would corrupt output a reader asked for. The
+line is between what the program says about a file — keys, names, values,
+diagnostics, all escaped — and what it hands back. Redirect to a file, or
+filter, if the model is one you do not trust with your terminal.
+
 Prompt text given with `--prompt` may be visible to other local processes. Use
 `--prompt-file` or standard input for sensitive text.
 
