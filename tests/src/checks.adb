@@ -677,6 +677,81 @@ package body Checks is
          end loop;
       end;
 
+      --  No test names a model file under fixtures by hand.
+      --
+      --  fixtures/*.gguf is ignored by git, deliberately: a model file is
+      --  not committed unless its licence plainly allows it. Three tests
+      --  then read fixtures/tiny-model.gguf as though the repository
+      --  carried it, and it was carried by one machine -- the one where
+      --  `tests fixtures` had been run -- so the suite passed here and
+      --  failed on every clean checkout for forty consecutive pushes.
+      --
+      --  The rule that prevents the next one: a model under fixtures is
+      --  named through Tiny_Model.Suite_Fixture, which is beside the
+      --  operation that writes it, so a test that reads one cannot avoid
+      --  writing it. A test needing a different model writes it into obj
+      --  like every other fixture the suite builds for itself.
+      declare
+         Named : Natural := 0;
+
+         procedure Visit_Fixture_Paths (Relative : String) is
+            Text   : constant String := Contents (Relative);
+            Needle : constant String := """fixtures/";
+         begin
+            --  The registry that carries the path is where the literal
+            --  belongs, so it is the one file allowed to hold one.
+            if T.Ends_With (Relative, "tiny_model.ads") then
+               return;
+            end if;
+
+            if Text'Length < Needle'Length then
+               return;
+            end if;
+
+            for Index in Text'First .. Text'Last - Needle'Length + 1 loop
+               if Text (Index .. Index + Needle'Length - 1) = Needle then
+                  declare
+                     From : constant Natural := Index + Needle'Length;
+                     Stop : Natural := From;
+                  begin
+                     while Stop <= Text'Last and then Text (Stop) /= '"' loop
+                        Stop := Stop + 1;
+                     end loop;
+
+                     declare
+                        Named_Path : constant String :=
+                          Text (From .. Stop - 1);
+                     begin
+                        Named := Named + 1;
+                        Result.Performed := Result.Performed + 1;
+                        if T.Ends_With (Named_Path, ".gguf") then
+                           Fail (Relative & " names fixtures/" & Named_Path
+                                 & " by hand; git does not carry a model "
+                                 & "file, so read it through "
+                                 & "Tiny_Model.Suite_Fixture, which writes "
+                                 & "it, or write your own into obj");
+                        end if;
+                     end;
+                  end;
+               end if;
+            end loop;
+         end Visit_Fixture_Paths;
+
+         procedure Scan_Fixture_Paths is
+           new For_Each_Source (Visit_Fixture_Paths);
+      begin
+         Scan_Fixture_Paths ("tests/src");
+
+         --  The prompts and the expectation files are named this way and are
+         --  committed, so finding none at all means this stopped reading the
+         --  sources rather than that the sources stopped naming them.
+         Result.Performed := Result.Performed + 1;
+         if Named = 0 then
+            Fail ("no fixture paths were found in the tests; the check no "
+                  & "longer matches the sources it reads");
+         end if;
+      end;
+
       --  Every interactive command has a word, a help line, and a help
       --  line that names it -- in every locale.
       --

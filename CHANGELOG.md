@@ -38,6 +38,22 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- No test names a model file under `fixtures/` by hand. That path is ignored
+  by git -- a model file is not committed unless its licence plainly allows
+  it -- so a model read from there must come through
+  `Tiny_Model.Suite_Fixture`, which is beside the operation that writes it,
+  or be written into `obj` like every other fixture the suite builds. The
+  rule is what stops the next test from depending on a file the repository
+  does not carry.
+
+- The README no longer says the suite does not need that fixture. It said so,
+  and it was the belief behind forty consecutive red CI runs.
+
+- The clean-checkout path is verified rather than only described: clone,
+  siblings, `alr update`, `alr build`, the same two in `tests`, then the
+  suite and the repository checks. 169 tests and 3783 checks pass on a tree
+  holding only what git carries.
+
 - The suite writes the fixture it reads. `tests/fixtures/*.gguf` is ignored
   by git -- a model file is not committed unless its licence plainly allows
   it -- and four tests read `fixtures/tiny-model.gguf` as though it were

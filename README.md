@@ -180,7 +180,13 @@ cd tests && alr build && ./bin/tests test
 ```
 
 I have not reduced that to a single verified command line, and would rather say
-so than print one that does not work.
+so than print one that does not work. What is verified is that the steps above
+work on a tree holding only what git carries: clone, symlink the siblings,
+`alr update`, `alr build`, then the same two in `tests`. The suite and the
+repository checks both pass there. That is worth doing by hand before a
+release, because it is the only arrangement in which the repository is what a
+reader gets -- and the one arrangement in which the suite failed for forty
+pushes while passing here.
 
 Two things are generated rather than committed, so a clone does not have them
 until something makes them:
@@ -189,9 +195,15 @@ until something makes them:
   project files import it. `alr build` creates it. Calling `gprbuild` directly
   in a fresh clone fails with `imported project file "config/..." not found`,
   which is what that means.
-- **`tests/fixtures/tiny-model.gguf`** is written by `tests fixtures`. The test
-  suite does not need it -- it builds the same model in memory -- but the
-  command-line examples above do.
+- **`tests/fixtures/tiny-model.gguf`** is written by `tests fixtures`, and by
+  the suite itself: three tests read a model from that path and write it
+  first, through one operation that also names it. This paragraph used to say
+  the suite did not need it -- that it built the same model in memory -- and
+  that was the belief behind forty consecutive red CI runs. The file is
+  ignored by git, because a model file is not committed unless its licence
+  plainly allows it; it was present on the machine where the suite was run
+  and on no clean checkout, so the suite passed here and failed there with
+  `inspect does not print the published line "Container"`.
 
 Development is the default profile here and in every sibling crate, on
 purpose: `-Og` with the full validity checks, one profile across every root so
