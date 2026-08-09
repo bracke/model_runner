@@ -60,7 +60,8 @@
 # not contradicted by these: they include load and one generated token.
 #
 # The Selecting_Backend progress event in Prepare: one Publish per model
-# load, outside the window as above.
+# load, outside the window as above. The Prompt_Rendered event is in the
+# command layer, which no group here fingerprints.
 #
 # Anything touching these files that is not outside the measured window gets
 # a re-measure like that one.

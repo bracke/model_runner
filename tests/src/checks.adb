@@ -554,6 +554,113 @@ package body Checks is
                 "a two-worker pool says it does not run in parallel");
       end;
 
+      --  Every progress stage this program declares is published somewhere.
+      --
+      --  A stage nobody publishes is a stage an observer waits for forever.
+      --  Five were in that position and none of them were found by anything:
+      --  Converting_Tensor and Preparing_Kernels named steps this program
+      --  does not take, Selecting_Backend named one it had only just gained,
+      --  and Prompt_Rendered could only be published by the caller of
+      --  generation, because generation is handed a prompt already rendered.
+      --
+      --  The stage names are read out of the enumerations and looked for in
+      --  a Publish call. That is a weaker statement than watching a run make
+      --  each one happen, and it is the one that costs no observer parameter
+      --  on the command driver; the verbose trace is read by a test, which
+      --  is the other half.
+      declare
+         Spec : constant String :=
+           Contents ("src/library/model_runner-progress.ads");
+         Body_Text : constant String :=
+           Contents ("src/library/model_runner-generation.adb")
+           & Contents ("src/library/model_runner-llama.adb")
+           & Contents ("src/library/model_runner-gguf-containers-reader.adb")
+           & Contents ("src/library/model_runner-cli-execute.adb");
+         Named : Natural := 0;
+
+         --  The literals between "type NAME is" and the ");" that ends it.
+         procedure Each_Stage (Kind : String) is
+            Opening : constant String := "type " & Kind & " is";
+            From    : Natural := 0;
+            Upto    : Natural := 0;
+         begin
+            if Spec'Length < Opening'Length then
+               return;
+            end if;
+            for Index in Spec'First .. Spec'Last - Opening'Length + 1 loop
+               if Spec (Index .. Index + Opening'Length - 1) = Opening then
+                  From := Index + Opening'Length;
+                  exit;
+               end if;
+            end loop;
+            if From = 0 then
+               return;
+            end if;
+
+            for Index in From .. Spec'Last - 1 loop
+               if Spec (Index .. Index + 1) = ");" then
+                  Upto := Index;
+                  exit;
+               end if;
+            end loop;
+            if Upto = 0 then
+               return;
+            end if;
+
+            declare
+               Cursor : Natural := From;
+            begin
+               while Cursor <= Upto loop
+                  declare
+                     Start : Natural := Cursor;
+                  begin
+                     while Start <= Upto
+                       and then not (Spec (Start) in 'A' .. 'Z')
+                     loop
+                        Start := Start + 1;
+                     end loop;
+                     exit when Start > Upto;
+
+                     declare
+                        Stop : Natural := Start;
+                     begin
+                        while Stop <= Upto
+                          and then (Spec (Stop) in 'A' .. 'Z'
+                                    or else Spec (Stop) in 'a' .. 'z'
+                                    or else Spec (Stop) = '_')
+                        loop
+                           Stop := Stop + 1;
+                        end loop;
+
+                        Named := Named + 1;
+                        Result.Performed := Result.Performed + 1;
+                        --  Preceded by a dot, so that Progress.Opening_Model
+                        --  and P.Opening_Model both count and a comment
+                        --  mentioning the stage by name does not.
+                        if not Holds (Body_Text,
+                                      "." & Spec (Start .. Stop - 1))
+                        then
+                           Fail ("the progress stage "
+                                 & Spec (Start .. Stop - 1)
+                                 & " is declared and published by nothing");
+                        end if;
+                        Cursor := Stop;
+                     end;
+                  end;
+               end loop;
+            end;
+         end Each_Stage;
+      begin
+         Each_Stage ("Load_Stage");
+         Each_Stage ("Generation_Stage");
+
+         Result.Performed := Result.Performed + 1;
+         if Named = 0 then
+            Fail ("no progress stages were found; the check no longer "
+                  & "matches the source it reads");
+         end if;
+      end;
+
       --  No help line writes out a list the code can generate.
       --
       --  Four value sets went stale one at a time this way, each found only

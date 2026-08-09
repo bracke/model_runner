@@ -843,6 +843,47 @@ package body Tests.CLI_Cases is
          return Project_Tools.Files.Read_Raw_File (Captured);
       end Traced;
 
+      --  Whether a screen holds Text as a line: the whole of one when Whole,
+      --  or the start of one otherwise. A line may carry generated text
+      --  ahead of it, since that goes to the other stream and the two are
+      --  interleaved by the terminal, so the end of a line is what is
+      --  matched against and not its beginning.
+      function Said_On_Its_Own
+        (Screen : String; Text : String; Whole : Boolean) return Boolean
+      is
+         Cursor : Natural := Screen'First;
+      begin
+         while Cursor <= Screen'Last loop
+            declare
+               Stop : Natural := Cursor;
+            begin
+               while Stop <= Screen'Last and then Screen (Stop) /= ASCII.LF
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line : constant String :=
+                    Model_Runner.Text.Trim (Screen (Cursor .. Stop - 1));
+               begin
+                  if Whole then
+                     if Line'Length >= Text'Length
+                       and then Line (Line'Last - Text'Length + 1 .. Line'Last)
+                                = Text
+                     then
+                        return True;
+                     end if;
+                  elsif Project_Tools.Text.Contains (Line, Text) then
+                     return True;
+                  end if;
+               end;
+
+               Cursor := Stop + 1;
+            end;
+         end loop;
+         return False;
+      end Said_On_Its_Own;
+
       Catalog : aliased Model_Runner.Localization.Catalog;
    begin
       Tiny_Model.Write (Model, Room => 256);
@@ -870,6 +911,62 @@ package body Tests.CLI_Cases is
                        & " has no message of its own");
                Assert (Project_Tools.Text.Contains (Screen, Said),
                        "a verbose run did not report " & Said);
+            end;
+         end loop;
+      end;
+
+      --  And every generation stage, from the same run. These are the
+      --  stages of a request rather than of a load, and they are published
+      --  from two layers -- the engine says most of them, the command layer
+      --  says the prompt was rendered, because generation is handed one
+      --  already rendered and never sees the conversation it came from.
+      declare
+         Screen : constant String :=
+           Traced ("run " & Model & " --prompt hi --max-tokens 2 --verbose");
+      begin
+         for Stage in Model_Runner.Progress.Generation_Stage loop
+            declare
+               Key : constant String :=
+                 "progress.generation."
+                 & Model_Runner.Text.To_Lower
+                     (Model_Runner.Progress.Generation_Stage'Image (Stage));
+               --  Rendered with the arguments these lines take, because a
+               --  message asked for without them comes back as its own key.
+               Said : constant String :=
+                 Model_Runner.Localization.Text
+                   (Catalog, Key,
+                    [Model_Runner.Localization.Named ("completed", "0"),
+                     Model_Runner.Localization.Named ("total", "0")]);
+
+               --  The message up to its first figure. The counts a run
+               --  reports are not known here, and rendering with zeroes
+               --  puts a zero where they will be, so the part before it is
+               --  the part that can be looked for.
+               Fixed : Natural := Said'Last;
+            begin
+               Assert (Said /= "" and then Said /= "<" & Key & ">",
+                       "the generation stage "
+                       & Model_Runner.Progress.Generation_Stage'Image (Stage)
+                       & " has no message of its own");
+
+               for Index in Said'Range loop
+                  if Said (Index) in '0' .. '9' then
+                     Fixed := Index - 1;
+                     exit;
+                  end if;
+               end loop;
+
+               --  A stage whose message carries no figure has to appear as
+               --  a line of its own. "evaluating prompt" is the whole of
+               --  one stage's line and the start of another's, so looking
+               --  for it anywhere finds the wrong one: silencing the first
+               --  left the second saying it and the test was content.
+               Assert (Said_On_Its_Own
+                         (Screen,
+                          Model_Runner.Text.Trim (Said (Said'First .. Fixed)),
+                          Whole => Fixed = Said'Last),
+                       "a verbose run did not report "
+                       & Model_Runner.Progress.Generation_Stage'Image (Stage));
             end;
          end loop;
       end;

@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `Prompt_Rendered` is reported. It was declared and published by nothing:
+  generation is handed a prompt already rendered and never sees the
+  conversation it came from, so only its caller could ever say so, and its
+  caller did not.
+
+- The release checklist fails when a progress stage is declared and
+  published by nothing, and a test reads the generation stages out of a
+  verbose run. Five stages had been in that position and none of them were
+  found by anything.
+
 - The progress trace reports selecting a backend, which it could not before
   because nothing published the event. `Converting_Tensor` and
   `Preparing_Kernels` were removed: they named steps this program does not

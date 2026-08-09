@@ -1046,6 +1046,17 @@ package body Model_Runner.CLI.Execute is
 
                Rendered := new String'(Buffer.all (1 .. Last));
                Free_Text (Buffer);
+
+               --  Said here because here is where it happens. Generation is
+               --  handed a prompt that is already rendered and never sees
+               --  the conversation it came from, so the stage it declares
+               --  for this could only ever be published by its caller --
+               --  and was published by nobody.
+               Model_Runner.Progress.Publish
+                 (Reporter'Unchecked_Access,
+                  Model_Runner.Progress.Generation_Progress
+                    (Model_Runner.Progress.Prompt_Rendered,
+                     Interfaces.Unsigned_64 (Last)));
             end;
          end if;
 
