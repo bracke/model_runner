@@ -956,6 +956,106 @@ package body Checks is
          end if;
       end;
 
+      --  Every test that exists is registered, and there are still as many
+      --  as there were.
+      --
+      --  A test procedure that nobody registers runs nothing and passes
+      --  quietly, which is worse than not writing it: the suite counts one
+      --  more success and covers one thing less. And a suite that shrinks is
+      --  invisible to a runner that only asks whether what ran passed.
+      declare
+         Registered : Natural := 0;
+         Declared   : Natural := 0;
+
+         --  The floor. Raise it when the suite grows; it exists so that
+         --  deleting tests has to be deliberate rather than unnoticed.
+         Fewest : constant := 160;
+
+         procedure Examine_Tests (Relative : String) is
+            Text : constant String := Contents (Relative);
+
+            --  Whether the file registers this name.
+            function Registers (Name : String) return Boolean
+            is (Holds (Text, "(T, " & Name & "'Access")
+                or else Holds (Text, "(T, " & Name & "'access"));
+
+            Cursor : Natural := Text'First;
+         begin
+            if Relative'Length < 4
+              or else Relative (Relative'Last - 3 .. Relative'Last) /= ".adb"
+              or else Text'Length = 0
+              or else not Holds (Text, "Register_Routine")
+            then
+               return;
+            end if;
+
+            while Cursor <= Text'Last loop
+               declare
+                  Stop : Natural := Cursor;
+               begin
+                  while Stop <= Text'Last
+                    and then Text (Stop) /= Character'Val (10)
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  declare
+                     Line : constant String := Text (Cursor .. Stop - 1);
+                  begin
+                     if Holds (Line, "Register_Routine") then
+                        Registered := Registered + 1;
+                     end if;
+
+                     --  A test procedure: declared at package level and
+                     --  taking a test case, which is the shape AUnit needs.
+                     if Line'Length > 16
+                       and then Line (Line'First .. Line'First + 2) = "   "
+                       and then T.Starts_With
+                                  (Line (Line'First + 3 .. Line'Last),
+                                   "procedure ")
+                       and then Holds (Text,
+                                       Line (Line'First + 13 .. Line'Last)
+                                       & Character'Val (10)
+                                       & "     (T")
+                     then
+                        declare
+                           Name : constant String :=
+                             Line (Line'First + 13 .. Line'Last);
+                        begin
+                           Declared := Declared + 1;
+                           Result.Performed := Result.Performed + 1;
+                           if not Registers (Name) then
+                              Fail ("the test " & Name & " in " & Relative
+                                    & " is written and registered by "
+                                    & "nothing, so it never runs");
+                           end if;
+                        end;
+                     end if;
+                  end;
+
+                  Cursor := Stop + 1;
+               end;
+            end loop;
+         end Examine_Tests;
+
+         procedure Examine_All_Tests is new For_Each_Source (Examine_Tests);
+      begin
+         Examine_All_Tests ("tests/src");
+
+         Result.Performed := Result.Performed + 1;
+         if Registered < Fewest then
+            Fail ("the suite registers" & Natural'Image (Registered)
+                  & " tests, fewer than the" & Natural'Image (Fewest)
+                  & " it had; deleting tests is a decision, not a detail");
+         end if;
+
+         Result.Performed := Result.Performed + 1;
+         if Declared = 0 then
+            Fail ("no test procedures were found; the check no longer "
+                  & "matches the sources it reads");
+         end if;
+      end;
+
       --  Every public subprogram has a caller.
       --
       --  An operation nothing calls is an operation nothing tests, and when

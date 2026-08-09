@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `tests check` runs the suite. Calling it the gate while a hundred and
+  sixty-four tests were a command somebody had to remember was the same
+  mistake as leaving conformance outside, made in the sentence that fixed
+  that one. It costs 1.3 seconds.
+
+- The gate fails when a test procedure is written and registered by nothing,
+  and when the suite registers fewer tests than it had. A test nobody
+  registers runs nothing and passes quietly, which is worse than not writing
+  it: the count goes up and the coverage goes down.
+
 - The gate asks whether the fuzzing campaign reached the engine.
   `Fuzzing.Reached_The_Engine` exists to say that clean totals mean nothing
   if every case stopped at the parser, and the gate added an hour earlier

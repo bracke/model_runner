@@ -127,7 +127,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; per-destination automatic styling; severity always carried by a word as well as a colour; generated text never styled |
 | CPU backend | Ada worker pool: a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown. `--threads` selects the count; the result is bit-identical whatever it is |
-| Tooling | `tests test`, `tests check`, `tests conformance`, `tests external-model`, `tests docs`, `tests fuzz`, `tests fixtures` — all Ada, all in the tests crate. `tests check` is the gate and runs the conformance comparison and a short fuzzing campaign itself; the separate commands are for looking closer |
+| Tooling | `tests test`, `tests check`, `tests conformance`, `tests external-model`, `tests docs`, `tests fuzz`, `tests fixtures` — all Ada, all in the tests crate. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
 ## Building and testing
@@ -197,8 +197,8 @@ model take 2.2 seconds at `--release` and around 14 at the default.
 alr build --release                        # optimized, what to ship and measure
 alr build                                  # debug: -Og, all validity checks
 cd tests && ./bin/tests test               # the whole suite
-cd tests && ./bin/tests check              # the gate: repository checks,
-                                           # conformance, a short fuzz run
+cd tests && ./bin/tests check              # the gate: the suite, repository
+                                           # checks, conformance, a fuzz run
 cd tests && ./bin/tests conformance        # engine vs independent reference
 cd tests && ./bin/tests benchmark          # row kernels and parsing, synthetic
 cd tests && ./bin/tests docs               # regenerate docs/error-codes.md

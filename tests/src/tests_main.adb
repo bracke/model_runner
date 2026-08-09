@@ -193,8 +193,16 @@ begin
          Fuzzed : Fuzzing.Report;
          Failed : Boolean := False;
       begin
+         --  The suite first. Calling this command the gate while the
+         --  hundred and sixty-four tests were a command somebody had to
+         --  remember was the same mistake as leaving conformance outside,
+         --  made in the sentence that fixed it.
+         if Run_Suite (Reporter) /= AUnit.Success then
+            Failed := True;
+         end if;
+
          Checks.Run (Root, Result);
-         Failed := not Checks.Is_Clean (Result);
+         Failed := Failed or else not Checks.Is_Clean (Result);
 
          --  The gate runs the two things that were commands somebody had to
          --  remember. Conformance is the strongest evidence this repository
