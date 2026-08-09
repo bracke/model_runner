@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `tests conformance` runs every repacking mode against the independent
+  implementation: 96 sequences where there were 32. Repacking replaces the
+  quantized views the kernels decode with binary32 or brain-float ones,
+  which is a different arithmetic path through the same engine, and it was
+  checked only by a tiny-model test and by hand.
+
+- What rounding to brain floats costs is a number now. On the fixture it
+  moves a logit by up to 0.032, and a logit near zero by almost all of
+  itself; the rounded comparisons are counted and reported apart from the
+  exact ones, because mixing them would let the lossy path's error hide the
+  exact path's. `--repack f32` is in the exact set, where it belongs. The
+  README said only that bf16 "can change what the model says" and that the
+  text happened not to change, which is an anecdote.
+
+- `inspect` prices both repacking modes. It priced the cheaper one, so a
+  caller who wanted the exact mode was shown the cost of the other: 4.83 GB
+  against 2.63 for a 431 MB Q2_K file.
+
 - `--repack` takes a mode: `f32`, `bf16` or `none`. Binary32 is exact and
   holds the logits to the bit; a brain float rounds to eight mantissa bits,
   writes two bytes a weight instead of four, and is faster everywhere --

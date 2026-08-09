@@ -878,21 +878,36 @@ package body Model_Runner.CLI.Execute is
                --  weighing that flag has to have and could get only by trying
                --  it and watching. Every matrix becomes four bytes a weight;
                --  the vectors are decoded already and are not repacked.
+               --  One line per mode, because the modes differ by a factor
+               --  of two and the flag offers both: a caller who wants the
+               --  exact one was being shown the price of the other.
                declare
                   Repacked : Interfaces.Unsigned_64 := 0;
+                  Exact    : Interfaces.Unsigned_64 := 0;
                begin
                   --  A matrix already in the target format is not copied,
                   --  so a file that is binary32 throughout needs nothing --
                   --  which is what this said 9888 bytes for on a 5024-byte
                   --  fixture before the skip existed.
                   for Index in 1 .. Containers.Tensor_Count (Container) loop
-                     if Containers.Tensor_Rank (Container, Index) >= 2
-                       and then not G."=" (Containers.Tensor_Format
-                                             (Container, Index),
-                                           G.Type_BF16)
-                     then
-                        Repacked := Repacked
-                          + Containers.Tensor_Elements (Container, Index) * 2;
+                     if Containers.Tensor_Rank (Container, Index) >= 2 then
+                        if not G."=" (Containers.Tensor_Format
+                                        (Container, Index),
+                                      G.Type_BF16)
+                        then
+                           Repacked := Repacked
+                             + Containers.Tensor_Elements (Container, Index)
+                               * 2;
+                        end if;
+
+                        if not G."=" (Containers.Tensor_Format
+                                        (Container, Index),
+                                      G.Type_F32)
+                        then
+                           Exact := Exact
+                             + Containers.Tensor_Elements (Container, Index)
+                               * 4;
+                        end if;
                      end if;
                   end loop;
 
@@ -901,6 +916,13 @@ package body Model_Runner.CLI.Execute is
                   --  once while it is being written; the file's are released
                   --  when it is done. A caller deciding whether --repack
                   --  will run needs the moment when both are there.
+                  Pres.Put_Field
+                    (Screen, "cli.inspect.label.repacked_exact",
+                     T.Image
+                       (Long_Long_Integer
+                          (Exact
+                           + Containers.Tensor_Data_Bytes (Container))),
+                     Pres.Answer);
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.repacked_bytes",
                      T.Image

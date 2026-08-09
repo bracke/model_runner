@@ -18,6 +18,8 @@ package body Conformance is
    package Containers renames Model_Runner.GGUF.Containers;
    package E renames Model_Runner.Errors;
    package L renames Model_Runner.Llama;
+
+   use type L.Repack_Mode;
    package N renames Model_Runner.Numerics;
    package R renames Reference_Transformer;
 
@@ -38,7 +40,8 @@ package body Conformance is
       procedure Compare
         (Tokens  : Sequence;
          Backend : Model_Runner.Backend.Backend_Kind :=
-           Model_Runner.Backend.Backend_CPU)
+           Model_Runner.Backend.Backend_CPU;
+         Repack  : L.Repack_Mode := L.No_Repack)
       is
          Held      : aliased constant B.Byte_Array := Image.all;
          Source    : Model_Runner.Byte_Sources.Memory.Buffer_Source
@@ -56,7 +59,8 @@ package body Conformance is
          end if;
 
          L.Prepare
-           (Engine, Parsed, Source, Backend => Backend, Status => Status);
+           (Engine, Parsed, Source, Backend => Backend, Repack => Repack,
+            Status => Status);
          if E.Is_Error (Status) then
             Containers.Close (Parsed);
             return;
@@ -119,15 +123,33 @@ package body Conformance is
                      Relative : constant Long_Float :=
                        (if Scale > 0.0 then Gap / Scale else 0.0);
                   begin
-                     Result.Compared := Result.Compared + 1;
-                     Result.Worst_Abs := Long_Float'Max (Result.Worst_Abs, Gap);
-                     Result.Worst_Rel :=
-                       Long_Float'Max (Result.Worst_Rel, Relative);
+                     if Repack = L.To_BF16 then
+                        Result.Lossy_Compared := Result.Lossy_Compared + 1;
+                        Result.Lossy_Worst_Abs :=
+                          Long_Float'Max (Result.Lossy_Worst_Abs, Gap);
+                        Result.Lossy_Worst_Rel :=
+                          Long_Float'Max (Result.Lossy_Worst_Rel, Relative);
+                     else
+                        Result.Compared := Result.Compared + 1;
+                        Result.Worst_Abs :=
+                          Long_Float'Max (Result.Worst_Abs, Gap);
+                        Result.Worst_Rel :=
+                          Long_Float'Max (Result.Worst_Rel, Relative);
+                     end if;
 
                      --  A logit passes when it is close in absolute terms or
                      --  close in relative terms; the absolute floor keeps a
-                     --  value near zero from being judged by a ratio.
-                     if Gap > Absolute_Tolerance
+                     --  value near zero from being judged by a ratio. The
+                     --  rounded path is judged by its own pair, because
+                     --  holding it to the exact one would say only what
+                     --  rounding already says.
+                     if Repack = L.To_BF16 then
+                        if Gap > Lossy_Absolute_Tolerance
+                          and then Relative > Lossy_Relative_Tolerance
+                        then
+                           Result.Failures := Result.Failures + 1;
+                        end if;
+                     elsif Gap > Absolute_Tolerance
                        and then Relative > Relative_Tolerance
                      then
                         Result.Failures := Result.Failures + 1;
@@ -160,22 +182,31 @@ package body Conformance is
       --  of them agreeing with the independent implementation says the
       --  arithmetic is right. The second is the stronger statement and it
       --  was only ever made about one of the two.
+      --  And every repacking mode. Repacking replaces the quantized views
+      --  the kernels decode with binary32 or brain-float ones, which is a
+      --  different arithmetic path through the same engine: f32 must land
+      --  exactly where the stored layout does, and bf16 rounds every weight
+      --  to eight mantissa bits, which is the one lossy thing this program
+      --  does and the one that had no number attached to it.
       for Backend in Model_Runner.Backend.Backend_Kind loop
          for Qwen in Boolean loop
             for Format in Tiny_Model.Weight_Format loop
                Tiny_Model.Build (Image, Format, Qwen => Qwen);
 
-               Compare (Sequence'(1 => 4), Backend);
-               Compare (Sequence'(4, 5), Backend);
-               Compare (Sequence'(1, 4, 5, 6, 7), Backend);
-               Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend);
+               for Repack in L.Repack_Mode loop
+                  Compare (Sequence'(1 => 4), Backend, Repack);
+                  Compare (Sequence'(4, 5), Backend, Repack);
+                  Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack);
+                  Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
+                           Repack);
+               end loop;
 
                B.Free (Image);
             end loop;
          end loop;
       end loop;
 
-      Result.Ran := Result.Sequences = 32;
+      Result.Ran := Result.Sequences = 96;
    end Run;
 
 end Conformance;

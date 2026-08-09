@@ -442,14 +442,28 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 32, logits compared 512,
+conformance: sequences 96, logits compared 1024,
              worst absolute 1.22573368138701E-06,
              worst relative 8.26692137016013E-04,
+             rounded logits compared 512,
+             rounded worst absolute 3.20279926393028E-02,
+             rounded worst relative 9.91448463391238E-01,
              outside tolerance 0
 ```
 
-Both architectures, both weight formats, both backends. Tolerance is 1e-3
-relative with a 1e-4 absolute floor, and nothing is outside it.
+Both architectures, both weight formats, both backends, and every repacking
+mode. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
+outside it.
+
+The rounded figures are `--repack bf16`, counted apart because mixing them in
+would let the lossy path's error hide the exact path's. They are the number
+that flag never had: rounding every weight to eight mantissa bits moves a
+logit on this fixture by up to **0.032**, and a logit close to zero moves by
+almost all of itself, which is what the relative figure says. `--repack f32`
+is in the first set, where it belongs: it lands exactly where the stored
+layout does. The bound the rounded path is held to is 5e-2 relative with a
+1e-1 absolute floor -- what it measures, rounded up -- rather than the exact
+one, which would only restate that rounding rounds.
 
 Running the reference backend through the same comparison is worth the
 seconds it costs: that the two backends agree with each other says the fast

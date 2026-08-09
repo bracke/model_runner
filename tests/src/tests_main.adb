@@ -82,6 +82,12 @@ procedure Tests_Main is
         new String'("logits compared" & Natural'Image (Item.Compared)),
         new String'("worst absolute" & Long_Float'Image (Item.Worst_Abs)),
         new String'("worst relative" & Long_Float'Image (Item.Worst_Rel)),
+        new String'("rounded logits compared"
+                    & Natural'Image (Item.Lossy_Compared)),
+        new String'("rounded worst absolute"
+                    & Long_Float'Image (Item.Lossy_Worst_Abs)),
+        new String'("rounded worst relative"
+                    & Long_Float'Image (Item.Lossy_Worst_Rel)),
         new String'("outside tolerance" & Natural'Image (Item.Failures))]);
 
    --  Refuse an option this command does not take.
@@ -296,6 +302,12 @@ begin
             & ", logits compared" & Natural'Image (Result.Compared)
             & ", worst absolute" & Long_Float'Image (Result.Worst_Abs)
             & ", worst relative" & Long_Float'Image (Result.Worst_Rel)
+            & ", rounded logits compared"
+            & Natural'Image (Result.Lossy_Compared)
+            & ", rounded worst absolute"
+            & Long_Float'Image (Result.Lossy_Worst_Abs)
+            & ", rounded worst relative"
+            & Long_Float'Image (Result.Lossy_Worst_Rel)
             & ", outside tolerance" & Natural'Image (Result.Failures));
 
          if not Conformance.Is_Clean (Result) then

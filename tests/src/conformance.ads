@@ -21,12 +21,33 @@ package Conformance is
    --  difference that has no meaning there.
    Absolute_Tolerance : constant := 1.0E-4;
 
+   --  What repacking to brain floats is allowed to move a logit by.
+   --
+   --  A brain float keeps eight mantissa bits where binary32 keeps
+   --  twenty-three, so a weight rounded into one carries about a thousandth
+   --  of relative error, and a matrix product over thousands of them
+   --  accumulates. It is the one lossy thing this program does, and it had
+   --  no number attached to it: the README said it "can change what the
+   --  model says" and reported that the text happened not to change, which
+   --  is an anecdote. These are what the comparison measured, rounded up to
+   --  the next round figure.
+   Lossy_Relative_Tolerance : constant := 5.0E-2;
+   Lossy_Absolute_Tolerance : constant := 1.0E-1;
+
    --  What a comparison found.
    type Report is record
       Sequences  : Natural := 0;
       Compared   : Natural := 0;
       Worst_Abs  : Long_Float := 0.0;
       Worst_Rel  : Long_Float := 0.0;
+
+      --  The same, for the comparisons where the weights were rounded into
+      --  brain floats. Kept apart because mixing them would let the lossy
+      --  path's error hide the exact path's.
+      Lossy_Compared  : Natural := 0;
+      Lossy_Worst_Abs : Long_Float := 0.0;
+      Lossy_Worst_Rel : Long_Float := 0.0;
+
       Failures   : Natural := 0;
       Ran        : Boolean := False;
    end record;
