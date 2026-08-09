@@ -1,4 +1,5 @@
 with Model_Runner.Byte_Sources.Memory;
+with Model_Runner.Platform;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
@@ -39,12 +40,22 @@ package body Conformance is
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
+      --  A pool for the half of the sweep that runs in parallel. Made once
+      --  and shared: what is compared is the partitioning, and one pool
+      --  partitions the same way every time.
+      Team : aliased Model_Runner.Backend.CPU.Pool
+        (Model_Runner.Backend.CPU.Worker_Count
+           (Positive'Min
+              (4,
+               Positive'Max (1, Model_Runner.Platform.Core_Count - 1))));
+
       procedure Compare
         (Tokens  : Sequence;
          Backend : Model_Runner.Backend.Backend_Kind :=
            Model_Runner.Backend.Backend_CPU;
          Repack  : L.Repack_Mode := L.No_Repack;
-         Batched : Boolean := False)
+         Batched : Boolean := False;
+         Shared  : Boolean := False)
       is
          Held      : aliased constant B.Byte_Array := Image.all;
          Source    : Model_Runner.Byte_Sources.Memory.Buffer_Source
@@ -96,7 +107,15 @@ package body Conformance is
                return;
             end if;
 
-            L.Open (Session, Engine, Status => Status);
+            --  Serial, or across the pool. The partitioned path is what a
+            --  real run uses and it was compared only against the engine's
+            --  own serial results: a partition that is wrong the same way at
+            --  every worker count passes a stability check and fails this
+            --  one.
+            L.Open
+              (Session, Engine,
+               Workers => (if Shared then Team'Unchecked_Access else null),
+               Status => Status);
             if E.Is_Error (Status) then
                R.Close (Reference);
                L.Close (Engine, Status);
@@ -216,6 +235,16 @@ package body Conformance is
       --  Which backends take more than a token at a time, asked of the
       --  backends rather than named here.
       declare
+         --  Which backends run their products across a pool, asked of them.
+         function Shares
+           (Kind : Model_Runner.Backend.Backend_Kind) return Boolean
+         is (case Kind is
+               when Model_Runner.Backend.Backend_CPU =>
+                 Model_Runner.Backend.CPU.Describe
+                   (Model_Runner.Backend.CPU.Max_Workers).Supports_Parallel,
+               when Model_Runner.Backend.Backend_Reference =>
+                 Model_Runner.Backend.Reference.Describe.Supports_Parallel);
+
          function Batches
            (Kind : Model_Runner.Backend.Backend_Kind) return Boolean
          is (case Kind is
@@ -226,6 +255,7 @@ package body Conformance is
                  Model_Runner.Backend.Reference.Describe.Supports_Batched);
 
          Batching : Natural := 0;
+         Sharing  : Natural := 0;
       begin
          for Backend in Model_Runner.Backend.Backend_Kind loop
             for Qwen in Boolean loop
@@ -256,6 +286,22 @@ package body Conformance is
                         Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
                                  Repack, Batched => True);
                      end if;
+
+                     --  And again across a pool, where the rows of every
+                     --  product are partitioned. The reference backend has
+                     --  no pool to share, which it says of itself.
+                     if Shares (Backend) then
+                        Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack,
+                                 Shared => True);
+                        Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
+                                 Repack, Shared => True);
+
+                        if Batches (Backend) then
+                           Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8),
+                                    Backend, Repack,
+                                    Batched => True, Shared => True);
+                        end if;
+                     end if;
                   end loop;
 
                   B.Free (Image);
@@ -275,6 +321,9 @@ package body Conformance is
             if Batches (Kind) then
                Batching := Batching + 1;
             end if;
+            if Shares (Kind) then
+               Sharing := Sharing + 1;
+            end if;
          end loop;
 
          declare
@@ -286,15 +335,24 @@ package body Conformance is
             Repacks : constant Natural :=
               L.Repack_Mode'Pos (L.Repack_Mode'Last) + 1;
 
-            --  Two architectures; four sequences a token at a time on every
-            --  backend, and three of them again in one pass on the backends
-            --  that batch.
+            --  Two architectures. Four sequences a token at a time on every
+            --  backend; three of them again in one pass on the backends that
+            --  batch; two across a pool on the backends that partition, and
+            --  one of those in one pass as well.
             Expected : constant Natural :=
-              Formats * 2 * Repacks * (Backends * 4 + Batching * 3);
+              Formats * 2 * Repacks
+              * (Backends * 4 + Batching * 3 + Sharing * 2
+                 + (if Batching > 0 and then Sharing > 0 then 1 else 0));
          begin
             Result.Ran := Result.Sequences = Expected;
          end;
       end;
+
+      --  The workers are told to stop before this returns. Leaving the
+      --  frame waits for them to terminate, and a pool nobody closed waits
+      --  for work that is never coming: the first version of this hung
+      --  after every comparison had already passed.
+      Model_Runner.Backend.CPU.Close (Team);
 
    end Run;
 

@@ -442,18 +442,19 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 858, logits compared 9152,
+conformance: sequences 1092, logits compared 11648,
              worst absolute 3.46898714553845E-06,
              worst relative 8.94395650089654E-04,
-             rounded logits compared 4576,
+             rounded logits compared 5824,
              rounded worst absolute 1.36861269753309E-01,
              rounded worst relative 1.15330975240755E+00,
              outside tolerance 0
 ```
 
 Both architectures, both backends, both evaluation paths -- a token at a time
-and a whole prompt in one pass -- every repacking mode, and every one of the
-thirteen weight formats the engine decodes: binary32, F16, BF16, Q4_0, Q4_1,
+and a whole prompt in one pass -- serial and across a worker pool, every
+repacking mode, and every one of the thirteen weight formats the engine
+decodes: binary32, F16, BF16, Q4_0, Q4_1,
 Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K and Q6_K. The fixture writes each of
 them and the reference reads each of them, both worked out from the layouts
 rather than by calling the engine, so a packing mistake cannot be common to
@@ -485,6 +486,13 @@ is in the first set, where it belongs: it lands exactly where the stored
 layout does. The bound the rounded path is held to is 5e-2 relative with a
 1e-1 absolute floor -- what it measures, rounded up -- rather than the exact
 one, which would only restate that rounding rounds.
+
+The partitioned path is compared for the same reason the batched one is: a
+run uses it and only the engine had ever read what it produced. Row
+partitioning is where a boundary error would live, and the two checks that
+exercise a pool -- worker-count stability here and in `tests external-model`
+-- compare the engine against itself, so a partition that is wrong the same
+way at every worker count passes both.
 
 The batched path is compared because it is the one a prompt goes through, and
 it was checked only against the engine's own single-token results: the

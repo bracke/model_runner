@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Conformance compares the partitioned path as well as the serial one: 1092
+  sequences. Every one of them ran with no worker pool, so the path a real
+  run takes -- rows divided across workers -- had been compared only against
+  the engine's own serial results. The two checks that do exercise a pool
+  compare the engine against itself, so a partition that is wrong the same
+  way at every worker count passes both and would have passed the sweep.
+
+  The pool is asked for rather than assumed: the backends that partition are
+  the ones that say they do, counted into the expected total like the ones
+  that batch.
+
 - Conformance compares the batched path as well as the single-token one:
   858 sequences. `Evaluate_Batch` is what a prompt goes through, and it was
   checked only against the engine's own single-token results -- so the
