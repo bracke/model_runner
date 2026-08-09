@@ -40,7 +40,10 @@ package Tiny_Model is
    --    beginning-of-text marker. False is not a curiosity: real models
    --    declare it, and putting a marker in front of one that does not want
    --    it feeds a sequence no other implementation would.
-   procedure Write (Path : String; Adds_Beginning : Boolean := True);
+   procedure Write
+     (Path : String;
+      Adds_Beginning : Boolean := True;
+      Room : Positive := Context);
 
    --  Build the model file.
    --

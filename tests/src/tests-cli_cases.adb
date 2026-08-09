@@ -28,6 +28,8 @@ with Model_Runner.Numerics;
 with Model_Runner.Output;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
+with Model_Runner.GGUF;
+with Model_Runner.Quantization;
 with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
@@ -500,6 +502,290 @@ package body Tests.CLI_Cases is
       Assert (not Project_Tools.Text.Contains (Inspect_Screen, "{value}"),
               "an inspect help line printed its placeholder");
    end Help_Screen_Is_Laid_Out;
+
+   --  The reported screens are laid out: fields in a column, under headings.
+   --
+   --  inspect is the second-largest thing this program prints and nothing
+   --  read it; the statistics line was read only for whether one word of it
+   --  appeared. Both are built from many separate calls whose layout lives
+   --  in the caller, which is the property that let three help lines drift
+   --  out of their column and stay there.
+   --
+   --  They go to standard error, which a test can take.
+   procedure Reported_Screens_Are_Laid_Out
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model    : constant String := "obj/screens-model.gguf";
+      Captured : constant String := "obj/screens.txt";
+
+      --  Run a command and return what reached standard error.
+      function Reported (Words : String) return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Handle : File_Type;
+         First  : Positive := Words'First;
+      begin
+         for Index in Words'Range loop
+            if Words (Index) = ' ' then
+               if Index > First then
+                  Add (Source, Words (First .. Index - 1));
+               end if;
+               First := Index + 1;
+            end if;
+         end loop;
+         if First <= Words'Last then
+            Add (Source, Words (First .. Words'Last));
+         end if;
+
+         Create (Handle, Out_File, Captured);
+         Set_Error (Handle);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Assert (Status = 0,
+                 """" & Words & """ failed with status"
+                 & Natural'Image (Status));
+         return Project_Tools.Files.Read_Raw_File (Captured);
+      end Reported;
+
+      --  Every field line in Text starts its value at the same column, and
+      --  every heading starts at the first. Returns how many fields there
+      --  were, so that a screen which printed none cannot pass.
+      --  The same, for what reaches standard output. The two streams carry
+      --  different things on purpose -- diagnostics, progress and statistics
+      --  to one, application text to the other -- so a test has to say which
+      --  it means, and getting it wrong reads as the screen being empty.
+      function Printed (Words : String) return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Handle : File_Type;
+         First  : Positive := Words'First;
+      begin
+         for Index in Words'Range loop
+            if Words (Index) = ' ' then
+               if Index > First then
+                  Add (Source, Words (First .. Index - 1));
+               end if;
+               First := Index + 1;
+            end if;
+         end loop;
+         if First <= Words'Last then
+            Add (Source, Words (First .. Words'Last));
+         end if;
+
+         Create (Handle, Out_File, Captured);
+         Set_Output (Handle);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               Set_Output (Standard_Output);
+               Close (Handle);
+               raise;
+         end;
+         Set_Output (Standard_Output);
+         Close (Handle);
+
+         Assert (Status = 0,
+                 """" & Words & """ failed with status"
+                 & Natural'Image (Status));
+         return Project_Tools.Files.Read_Raw_File (Captured);
+      end Printed;
+
+      --  Whether Text holds a catalog placeholder: a brace, a run of
+      --  lower-case letters or underscores, and a closing brace. Looking for
+      --  a bare brace is not enough -- a model's own chat template is
+      --  metadata that inspect prints, and it is full of them.
+      function Holds_Placeholder (Text : String) return Boolean is
+      begin
+         for Index in Text'Range loop
+            if Text (Index) = '{' then
+               declare
+                  Scan : Natural := Index + 1;
+               begin
+                  while Scan <= Text'Last
+                    and then (Text (Scan) in 'a' .. 'z'
+                              or else Text (Scan) = '_')
+                  loop
+                     Scan := Scan + 1;
+                  end loop;
+                  if Scan > Index + 1
+                    and then Scan <= Text'Last
+                    and then Text (Scan) = '}'
+                  then
+                     return True;
+                  end if;
+               end;
+            end if;
+         end loop;
+         return False;
+      end Holds_Placeholder;
+
+      function Fields_Line_Up (Text : String) return Natural is
+         Column : Natural := 0;
+         Count  : Natural := 0;
+         Cursor : Natural := Text'First;
+      begin
+         while Cursor <= Text'Last loop
+            declare
+               Stop : Natural := Cursor;
+            begin
+               while Stop <= Text'Last and then Text (Stop) /= ASCII.LF loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line : constant String := Text (Cursor .. Stop - 1);
+                  At_Value : Natural := 0;
+               begin
+                  if Line'Length > 2
+                    and then Line (Line'First .. Line'First + 1) = "  "
+                  then
+                     --  A field: two spaces, a label, a run of two or more
+                     --  spaces, then the value. The first such run is the
+                     --  column; a later one is inside the value, which is
+                     --  what "present and supported" taught this test.
+                     --
+                     --  A label too long for the column takes a single
+                     --  space instead. Those cannot line up with anything
+                     --  and are not counted.
+                     for Index in Line'First + 2 .. Line'Last - 2 loop
+                        if At_Value = 0
+                          and then Line (Index) = ' '
+                          and then Line (Index + 1) = ' '
+                        then
+                           At_Value := Index + 2;
+                           while At_Value <= Line'Last
+                             and then Line (At_Value) = ' '
+                           loop
+                              At_Value := At_Value + 1;
+                           end loop;
+                        end if;
+                     end loop;
+
+                     if At_Value > Line'First + 2
+                       and then At_Value - Line'First >= 24
+                     then
+                        Count := Count + 1;
+                        if Column = 0 then
+                           Column := At_Value - Line'First;
+                        else
+                           Assert (At_Value - Line'First = Column,
+                                   "a field starts its value at column"
+                                   & Natural'Image (At_Value - Line'First)
+                                   & " where the others use"
+                                   & Natural'Image (Column) & ": '"
+                                   & Line & "'");
+                        end if;
+                     end if;
+
+                  elsif Line'Length > 0 and then Line (Line'First) = ' ' then
+                     Assert (False,
+                             "a line is indented by one space: '" & Line & "'");
+
+                  elsif Line'Length > 0 then
+                     --  A heading. Each section sets its own column: the
+                     --  container block puts values at one, the metadata
+                     --  table is three columns wide and puts them at
+                     --  another, and neither is wrong. What would be wrong
+                     --  is a section disagreeing with itself.
+                     Column := 0;
+                  end if;
+               end;
+
+               Cursor := Stop + 1;
+            end;
+         end loop;
+         return Count;
+      end Fields_Line_Up;
+   begin
+      --  Room enough for a turn to complete; the default context is
+      --  sixteen tokens and the rendered conversation alone exceeds it.
+      Tiny_Model.Write (Model, Room => 256);
+
+      --  inspect, with everything it can show.
+      declare
+         Screen : constant String :=
+           Reported ("inspect " & Model & " --metadata --tensors");
+      begin
+         Assert (Fields_Line_Up (Screen) > 8,
+                 "the inspect screen showed almost no fields");
+         Assert (Project_Tools.Text.Contains (Screen, "GGUF version"),
+                 "the inspect screen does not report the container version");
+         Assert (Project_Tools.Text.Contains (Screen, "llama"),
+                 "the inspect screen does not report the architecture");
+         Assert (not Holds_Placeholder (Screen),
+                 "the inspect screen printed an unsubstituted placeholder");
+      end;
+
+      --  version reports what this build can take, from the build. Someone
+      --  asking whether their file will open gets an answer.
+      declare
+         Screen : constant String := Printed ("version");
+      begin
+         for Format in Model_Runner.GGUF.Tensor_Type loop
+            if Model_Runner.Quantization.Is_Decodable (Format) then
+               Assert (Project_Tools.Text.Contains
+                         (Screen, Model_Runner.GGUF.Type_Name (Format)),
+                       "version does not report "
+                       & Model_Runner.GGUF.Type_Name (Format)
+                       & ", which this build decodes");
+            end if;
+         end loop;
+
+         for Kind in Model_Runner.Backend.Backend_Kind loop
+            Assert (Project_Tools.Text.Contains
+                      (Screen, Model_Runner.Backend.Backend_Name (Kind)),
+                    "version does not report a backend this build has");
+         end loop;
+
+         for Format in Model_Runner.Templates.Chat_Format loop
+            Assert (Project_Tools.Text.Contains
+                      (Screen, Model_Runner.Templates.Format_Name (Format)),
+                    "version does not report a chat format this build has");
+         end loop;
+
+         Assert (not Holds_Placeholder (Screen),
+                 "version printed an unsubstituted placeholder");
+      end;
+
+      --  And the statistics of a run, which is the same shape.
+      declare
+         Screen : constant String :=
+           Reported ("run " & Model
+                     & " --prompt hi --max-tokens 2 --show-stats");
+         Missing : Natural := 0;
+
+         procedure Require (Label : String) is
+         begin
+            if not Project_Tools.Text.Contains (Screen, Label) then
+               Missing := Missing + 1;
+               Assert (False, "the statistics do not report " & Label);
+            end if;
+         end Require;
+      begin
+         Assert (Fields_Line_Up (Screen) > 5,
+                 "the statistics showed almost no fields");
+         Require ("prompt tokens");
+         Require ("generated tokens");
+         Require ("context position");
+         Require ("seed");
+         Assert (Missing = 0, "figures are missing from the statistics");
+         Assert (not Holds_Placeholder (Screen),
+                 "the statistics printed an unsubstituted placeholder");
+      end;
+   end Reported_Screens_Are_Laid_Out;
 
    --  Malformed command lines are rejected with the code that names the
    --  problem.
@@ -3879,6 +4165,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Help_Screen_Is_Laid_Out'Access,
          "the help screen is laid out and lists every option it accepts");
+      Register_Routine
+        (T, Reported_Screens_Are_Laid_Out'Access,
+         "the inspect and statistics screens are laid out in a column");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");

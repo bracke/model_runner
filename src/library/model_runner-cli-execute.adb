@@ -13,6 +13,7 @@ with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
+with Model_Runner.Quantization;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Limits;
@@ -351,6 +352,76 @@ package body Model_Runner.CLI.Execute is
    --  help and version
    ---------------------------------------------------------------------------
 
+   --  The chat formats this build carries, in the order they are
+   --  declared. Written out beside the option before this, where it said
+   --  "llama3 or chatml" and would have gone on saying it.
+   function Format_Names return String is
+      Room : String (1 .. 256);
+      Used : Natural := 0;
+
+      procedure Add (Text : String) is
+      begin
+         if Used + Text'Length <= Room'Length then
+            Room (Used + 1 .. Used + Text'Length) := Text;
+            Used := Used + Text'Length;
+         end if;
+      end Add;
+   begin
+      for Format in Model_Runner.Templates.Chat_Format loop
+         if Used > 0 then
+            Add (", ");
+         end if;
+         Add (Model_Runner.Templates.Format_Name (Format));
+      end loop;
+      return Room (1 .. Used);
+   end Format_Names;
+
+   --  The backends this build has, in the order they are declared.
+   function Backend_Names return String is
+      Room : String (1 .. 256);
+      Used : Natural := 0;
+
+      procedure Add (Text : String) is
+      begin
+         if Used + Text'Length <= Room'Length then
+            Room (Used + 1 .. Used + Text'Length) := Text;
+            Used := Used + Text'Length;
+         end if;
+      end Add;
+   begin
+      for Kind in Model_Runner.Backend.Backend_Kind loop
+         if Used > 0 then
+            Add (", ");
+         end if;
+         Add (Model_Runner.Backend.Backend_Name (Kind));
+      end loop;
+      return Room (1 .. Used);
+   end Backend_Names;
+
+   --  The tensor formats this build decodes, in the order they are declared.
+   function Decodable_Formats return String is
+      Room : String (1 .. 256);
+      Used : Natural := 0;
+
+      procedure Add (Text : String) is
+      begin
+         if Used + Text'Length <= Room'Length then
+            Room (Used + 1 .. Used + Text'Length) := Text;
+            Used := Used + Text'Length;
+         end if;
+      end Add;
+   begin
+      for Format in Model_Runner.GGUF.Tensor_Type loop
+         if Model_Runner.Quantization.Is_Decodable (Format) then
+            if Used > 0 then
+               Add (", ");
+            end if;
+            Add (Model_Runner.GGUF.Type_Name (Format));
+         end if;
+      end loop;
+      return Room (1 .. Used);
+   end Decodable_Formats;
+
    procedure Show_Version (Screen : in out Pres.Console) is
    begin
       Screen.Put_Message
@@ -360,57 +431,25 @@ package body Model_Runner.CLI.Execute is
       Screen.Put_Message
         ("application.architecture",
          [Loc.Named ("name", L.Architecture_Name)]);
+
+      --  What this build can actually take, asked of the build. Someone
+      --  running version wants to know whether their file will open, and
+      --  the answer was one architecture name and nothing else -- while the
+      --  program could already list its formats, its backends and its chat
+      --  formats for itself, and does, in help.
+      Screen.Put_Message
+        ("application.formats", [Loc.Named ("value", Decodable_Formats)]);
+      Screen.Put_Message
+        ("application.backends", [Loc.Named ("value", Backend_Names)]);
+      Screen.Put_Message
+        ("application.chat_formats", [Loc.Named ("value", Format_Names)]);
    end Show_Version;
 
    procedure Show_Help
      (Screen : in out Pres.Console;
       Topic  : String)
    is
-      --  The chat formats this build carries, in the order they are
-      --  declared. Written out beside the option before this, where it said
-      --  "llama3 or chatml" and would have gone on saying it.
-      function Format_Names return String is
-         Room : String (1 .. 256);
-         Used : Natural := 0;
 
-         procedure Add (Text : String) is
-         begin
-            if Used + Text'Length <= Room'Length then
-               Room (Used + 1 .. Used + Text'Length) := Text;
-               Used := Used + Text'Length;
-            end if;
-         end Add;
-      begin
-         for Format in Model_Runner.Templates.Chat_Format loop
-            if Used > 0 then
-               Add (", ");
-            end if;
-            Add (Model_Runner.Templates.Format_Name (Format));
-         end loop;
-         return Room (1 .. Used);
-      end Format_Names;
-
-      --  The backends this build has, in the order they are declared.
-      function Backend_Names return String is
-         Room : String (1 .. 256);
-         Used : Natural := 0;
-
-         procedure Add (Text : String) is
-         begin
-            if Used + Text'Length <= Room'Length then
-               Room (Used + 1 .. Used + Text'Length) := Text;
-               Used := Used + Text'Length;
-            end if;
-         end Add;
-      begin
-         for Kind in Model_Runner.Backend.Backend_Kind loop
-            if Used > 0 then
-               Add (", ");
-            end if;
-            Add (Model_Runner.Backend.Backend_Name (Kind));
-         end loop;
-         return Room (1 .. Used);
-      end Backend_Names;
 
       --  Emit a block of help lines, each an independent catalog entry so
       --  that a translation can reflow a line without breaking the layout.

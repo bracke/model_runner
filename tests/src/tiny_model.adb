@@ -218,12 +218,15 @@ package body Tiny_Model is
    -- Write --
    -----------
 
-   procedure Write (Path : String; Adds_Beginning : Boolean := True) is
+   procedure Write
+     (Path : String;
+      Adds_Beginning : Boolean := True;
+      Room : Positive := Context) is
       use Ada.Streams;
       Image  : Model_Runner.Bytes.Byte_Array_Access;
       Handle : Stream_IO.File_Type;
    begin
-      Build (Image, Adds_Beginning => Adds_Beginning);
+      Build (Image, Adds_Beginning => Adds_Beginning, Room => Room);
 
       Stream_IO.Create (Handle, Stream_IO.Out_File, Path);
 

@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The `inspect` and statistics screens are read by a test. Both are built
+  from many separate calls whose layout lives in the caller, which is the
+  property that let three help lines drift out of their column; nothing had
+  looked at either. Fields must line up within a section -- the container
+  block and the three-column metadata table set their own -- every figure the
+  statistics claim must appear, and no line may show a placeholder it was
+  meant to substitute.
+
 - The `--backend`, `--chat-template` and `--color` help lines print indented
   and in their places again. Each was moved out of the block that lays the
   help out, one at a time, to give it a value the program computes, and each
@@ -151,6 +159,11 @@ Keep a Changelog and the project uses semantic versioning.
   the code.
 
 ### Added
+
+- `version` reports what this build can take: the tensor formats it decodes,
+  the backends it has and the chat formats it carries, all asked of the
+  build. It said an architecture name and nothing else, while the same lists
+  were already being produced for the help screen.
 
 - Every field of the backend's `Capabilities` is now asked by something. The
   formats and the alignment are checked per tensor while a model loads,

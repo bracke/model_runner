@@ -5,6 +5,9 @@ en.application.summary = Local GGUF language-model execution. Loads a model file
 en.application.version = model_runner {version}
 en.application.license = license {license}
 en.application.architecture = architecture {name}
+en.application.formats = tensor formats {value}
+en.application.backends = backends {value}
+en.application.chat_formats = chat formats {value}
 en.application.tokenizer = tokenizer {name}
 
 en.cli.label.standard_input = standard input
@@ -362,6 +365,9 @@ da.application.summary = Lokal kørsel af GGUF-sprogmodeller. Indlæser en model
 da.application.version = model_runner {version}
 da.application.license = licens {license}
 da.application.architecture = arkitektur {name}
+da.application.formats = tensorformater {value}
+da.application.backends = backends {value}
+da.application.chat_formats = chatformater {value}
 da.application.tokenizer = tokenizer {name}
 da.cli.label.standard_input = standardinddata
 
@@ -587,6 +593,9 @@ qps.application.summary = ⟦Ĺóçáĺ GGÚF ĺáñgúágé-móðéĺ éxéçú
 qps.application.version = ⟦model_runner {version}⟧
 qps.application.license = ⟦ĺíçéñßé {license}⟧
 qps.application.architecture = ⟦áŕçhíŧéçŧúŕé {name}⟧
+qps.application.formats = ⟦ŧéñßóŕ fóŕmáŧß {value}⟧
+qps.application.backends = ⟦báçkéñðß {value}⟧
+qps.application.chat_formats = ⟦çháŧ fóŕmáŧß {value}⟧
 qps.application.tokenizer = ⟦ŧókéñízéŕ {name}⟧
 qps.cli.label.standard_input = ⟦ßŧáñðáŕð íñpúŧ⟧
 
