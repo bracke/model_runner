@@ -120,6 +120,123 @@ package body Reference_Transformer is
       return Scale * Long_Float (Quant);
    end Decode_Q8_0;
 
+   --  Decode one half-precision element, independently of the engine.
+   --
+   --  Five exponent bits biased by fifteen and ten of mantissa, worked out
+   --  from the fields the way the Q8_0 decoder does its scale.
+   function Decode_Half
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64) return Long_Float
+   is
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Raw      : constant Natural := Byte_At (Base) + 256 * Byte_At (Base + 1);
+      Sign     : constant Long_Float :=
+        (if Raw >= 16#8000# then -1.0 else 1.0);
+      Exponent : constant Integer := (Raw / 1024) mod 32;
+      Mantissa : constant Integer := Raw mod 1024;
+   begin
+      if Exponent = 0 then
+         return Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+      elsif Exponent = 31 then
+         return 0.0;
+      else
+         return Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+           * (2.0 ** (Exponent - 15));
+      end if;
+   end Decode_Half;
+
+   --  Decode one BF16 element, independently of the engine.
+   --
+   --  A brain float is the top half of a binary32: the same sign and
+   --  exponent, and seven mantissa bits where binary32 has twenty-three.
+   --  Worked out from those fields rather than by shifting into a float,
+   --  which is what the engine does.
+   function Decode_BF16
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64) return Long_Float
+   is
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Raw      : constant Natural := Byte_At (Base) + 256 * Byte_At (Base + 1);
+      Sign     : constant Long_Float :=
+        (if Raw >= 16#8000# then -1.0 else 1.0);
+      Exponent : constant Integer := (Raw / 128) mod 256;
+      Mantissa : constant Integer := Raw mod 128;
+   begin
+      if Exponent = 0 then
+         return Sign * Long_Float (Mantissa) * (2.0 ** (-133));
+      elsif Exponent = 255 then
+         return 0.0;
+      else
+         return Sign * (1.0 + Long_Float (Mantissa) / 128.0)
+           * (2.0 ** (Exponent - 127));
+      end if;
+   end Decode_BF16;
+
+   --  Decode one four-bit element, independently of the engine.
+   --
+   --  Thirty-two to a block: a half-precision scale, then for Q4_1 a
+   --  half-precision minimum, then sixteen bytes in which element j is the
+   --  low nibble and element j + 16 the high one. Q4_0 centres the level on
+   --  eight; Q4_1 lifts it from the minimum.
+   function Decode_Four_Bit
+     (Image   : Model_Runner.Bytes.Byte_Array;
+      Base    : Interfaces.Unsigned_64;
+      Index   : Natural;
+      Centred : Boolean) return Long_Float
+   is
+      Width  : constant Interfaces.Unsigned_64 := (if Centred then 18 else 20);
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 32);
+      Within : constant Natural := Index mod 32;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * Width;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      function Half_At (Offset : Interfaces.Unsigned_64) return Long_Float is
+         Raw      : constant Natural :=
+           Byte_At (Offset) + 256 * Byte_At (Offset + 1);
+         Sign     : constant Long_Float :=
+           (if Raw >= 16#8000# then -1.0 else 1.0);
+         Exponent : constant Integer := (Raw / 1024) mod 32;
+         Mantissa : constant Integer := Raw mod 1024;
+      begin
+         if Exponent = 0 then
+            return Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+         elsif Exponent = 31 then
+            return 0.0;
+         else
+            return Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+              * (2.0 ** (Exponent - 15));
+         end if;
+      end Half_At;
+
+      Scale   : constant Long_Float := Half_At (At_Block);
+      Lowest  : constant Long_Float :=
+        (if Centred then 0.0 else Half_At (At_Block + 2));
+      Quants  : constant Interfaces.Unsigned_64 :=
+        At_Block + (if Centred then 2 else 4);
+
+      Packed  : constant Natural :=
+        Byte_At (Quants + Interfaces.Unsigned_64 (Within mod 16));
+      Level   : constant Natural :=
+        (if Within < 16 then Packed mod 16 else Packed / 16);
+   begin
+      if Centred then
+         return Scale * Long_Float (Level - 8);
+      else
+         return Scale * Long_Float (Level) + Lowest;
+      end if;
+   end Decode_Four_Bit;
+
    --  Decode one Q2_K element, independently of the engine.
    --
    --  The layout says: two hundred and fifty-six elements to a superblock of
@@ -319,6 +436,10 @@ package body Reference_Transformer is
                         | Model_Runner.GGUF.Type_Q8_0
                         | Model_Runner.GGUF.Type_Q4_K
                         | Model_Runner.GGUF.Type_Q2_K
+                        | Model_Runner.GGUF.Type_BF16
+                        | Model_Runner.GGUF.Type_Q4_0
+                        | Model_Runner.GGUF.Type_Q4_1
+                        | Model_Runner.GGUF.Type_F16
          then
             return null;
          end if;
@@ -350,6 +471,43 @@ package body Reference_Transformer is
                           + Interfaces.Unsigned_64 (Row) * 34
                             * Interfaces.Unsigned_64 (Columns / 32),
                           Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_F16
+                  then
+                     Result (Row, Column) :=
+                       Decode_Half
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row * Columns + Column)
+                            * 2);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_BF16
+                  then
+                     Result (Row, Column) :=
+                       Decode_BF16
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row * Columns + Column)
+                            * 2);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          in Model_Runner.GGUF.Type_Q4_0
+                           | Model_Runner.GGUF.Type_Q4_1
+                  then
+                     declare
+                        Centred : constant Boolean :=
+                          Containers.Tensor_Format (Source, Index)
+                            = Model_Runner.GGUF.Type_Q4_0;
+                        Width   : constant Interfaces.Unsigned_64 :=
+                          (if Centred then 18 else 20);
+                     begin
+                        Result (Row, Column) :=
+                          Decode_Four_Bit
+                            (Image,
+                             Offset
+                             + Interfaces.Unsigned_64 (Row) * Width
+                               * Interfaces.Unsigned_64 (Columns / 32),
+                             Column, Centred);
+                     end;
                   elsif Containers.Tensor_Format (Source, Index)
                           = Model_Runner.GGUF.Type_Q2_K
                   then

@@ -442,17 +442,21 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 192, logits compared 2048,
+conformance: sequences 384, logits compared 4096,
              worst absolute 2.66391572001368E-06,
-             worst relative 8.26692137016013E-04,
-             rounded logits compared 1024,
+             worst relative 8.94395650089654E-04,
+             rounded logits compared 2048,
              rounded worst absolute 8.99418639596608E-02,
              rounded worst relative 1.34086800307472E+00,
              outside tolerance 0
 ```
 
-Both architectures, four weight formats -- binary32, Q8_0, Q4_K and Q2_K --
-both backends, and every repacking mode. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
+Both architectures, eight weight formats -- binary32, F16, BF16, Q4_0, Q4_1,
+Q8_0, Q4_K and Q2_K -- both backends, and every repacking mode. The engine
+decodes thirteen: Q5_0, Q5_1, Q3_K, Q5_K and Q6_K are decoded by code no
+independent implementation here has read, because the fixture cannot write
+them and the reference cannot read them. That is a gap and it is stated
+rather than papered over. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
 outside it.
 
 The rounded figures are `--repack bf16`, counted apart because mixing them in

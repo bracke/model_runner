@@ -3813,6 +3813,62 @@ package body Tests.GGUF_Cases is
                  & "bits can explain");
       end;
 
+      --  The legacy four-bit blocks, centred and lifted. Thirty-two to a
+      --  block rather than a superblock, and sixteen levels over the whole
+      --  of it rather than over sixteen elements, so the bound is coarser
+      --  than Q4_K's for the same number of bits.
+      declare
+         Narrow  : constant N.Real_Array (0 .. 31) := Values (0 .. 31);
+         Back    : N.Real_Array (0 .. 31) := [others => 0.0];
+         Widest  : N.Real := 0.0;
+      begin
+         for Centred in Boolean loop
+            declare
+               Encoded : constant B.Byte_Array :=
+                 (if Centred then Fixtures.Encode_Q4_0 (Narrow)
+                  else Fixtures.Encode_Q4_1 (Narrow));
+            begin
+               Assert (Encoded'Length = (if Centred then 18 else 20),
+                       "a four-bit block is eighteen or twenty bytes");
+
+               Back := [others => 0.0];
+               Q.Decode_Blocks
+                 ((if Centred then G.Type_Q4_0 else G.Type_Q4_1),
+                  Encoded, 0, 1, Back, Ok);
+               Assert (Ok, "the engine could not read the encoded block");
+
+               Widest := 0.0;
+               for Index in Narrow'Range loop
+                  Widest :=
+                    N.Real'Max (Widest, abs (Narrow (Index) - Back (Index)));
+               end loop;
+
+               --  Sixteen levels over the block's span, which here is at
+               --  most 1.75, and the centred form spends half its levels on
+               --  a sign the data may not use.
+               Assert (Widest < 0.15,
+                       "a four-bit block came back"
+                       & N.Real'Image (Widest) & " away");
+            end;
+         end loop;
+      end;
+
+      --  And half precision and brain floats, where the only question is
+      --  whether the bytes land where the reader looks.
+      declare
+         Narrow : constant N.Real_Array (0 .. 31) := Values (0 .. 31);
+         Back   : N.Real_Array (0 .. 31) := [others => 0.0];
+      begin
+         Q.Decode_Blocks
+           (G.Type_BF16, Fixtures.Encode_BF16 (Narrow), 0, 32, Back, Ok);
+         Assert (Ok, "the engine could not read the encoded brain floats");
+
+         for Index in Narrow'Range loop
+            Assert (abs (Narrow (Index) - Back (Index)) < 0.01,
+                    "a brain float came back too far from its value");
+         end loop;
+      end;
+
       --  And the two-bit format, which names four levels over sixteen
       --  elements: coarser by design, and held to what that allows rather
       --  than to what four bits allowed.
@@ -4435,7 +4491,7 @@ package body Tests.GGUF_Cases is
    begin
       Register_Routine
         (T, Fixture_Q4_K_Round_Trips'Access,
-         "the fixture's k-quant encoders are the inverse of the engine's reader");
+         "every fixture encoder is the inverse of the engine's reader");
       Register_Routine
         (T, Valid_File_Parses'Access,
          "a well-formed container parses and reports its facts");

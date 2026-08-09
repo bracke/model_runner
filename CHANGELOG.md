@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Conformance covers eight of the thirteen formats the engine decodes, where
+  it covered four: binary32, F16, BF16, Q4_0, Q4_1, Q8_0, Q4_K and Q2_K, in
+  384 sequences. Both sides had to learn each one -- the fixture cannot write
+  what the reference cannot read, and a format only one of them knows is
+  silently skipped, which is what happened when the Q4_K fixture arrived
+  before the reference could decode it.
+
+  BF16 mattered most: it is what `--repack bf16` writes, so the one format
+  the repacking path produces was the one no independent implementation
+  could read.
+
+  Q5_0, Q5_1, Q3_K, Q5_K and Q6_K remain decoded by code nothing here has
+  read independently. The README says so rather than leaving the count to be
+  inferred.
+
 - The fixture builds both k-quants, and conformance compares them: 192
   sequences where there were 96. Q2_K names four levels over sixteen
   elements and leans hardest on its scales, which is why repacking helps it

@@ -200,6 +200,30 @@ package Fixtures is
    --  @return The encoded bytes.
    function Encode_Q2_K (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Encode values as BF16: the top half of each binary32 pattern, rounded
+   --  to nearest even.
+   --
+   --  This is what --repack bf16 writes, so the one format the repacking
+   --  path produces was the one no independent implementation could read.
+   --
+   --  @param Values Values to encode.
+   --  @return Two bytes per value.
+   function Encode_BF16 (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as Q4_0: thirty-two to a block of eighteen bytes, a
+   --  half-precision scale and four bits an element centred on eight.
+   --
+   --  @param Values Values to encode; a whole number of 32-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q4_0 (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as Q4_1: as Q4_0, with a minimum of its own instead of a
+   --  fixed bias, in twenty bytes.
+   --
+   --  @param Values Values to encode; a whole number of 32-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q4_1 (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode binary16 values.
    --
    --  @param Values Values to encode.

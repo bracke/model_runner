@@ -32,7 +32,8 @@ package body Tiny_Model is
       Qwen      : Boolean := False;
       Omit_Biases : Boolean := False)
    is
-      Quantized : constant Boolean := Format in Q8_0 | Q4_K | Q2_K;
+      Quantized : constant Boolean :=
+        Format in Q4_0 | Q4_1 | Q8_0 | Q4_K | Q2_K;
       Deep      : constant Boolean := Format in Q4_K | Q2_K;
 
       --  The quantized fixture is wider because a Q8_0 row must be a whole
@@ -75,7 +76,23 @@ package body Tiny_Model is
             --  A quantized model keeps its matrices quantized and its norms
             --  in binary32; the fixture follows that, so the quantized path
             --  is exercised the way a real file exercises it.
-            if Format = Q2_K and then Total mod 256 = 0 then
+            if Format = F16 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_F16,
+                  Fixtures.Encode_F16 (Values));
+            elsif Format = BF16 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_BF16,
+                  Fixtures.Encode_BF16 (Values));
+            elsif Format = Q4_0 and then Total mod 32 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q4_0,
+                  Fixtures.Encode_Q4_0 (Values));
+            elsif Format = Q4_1 and then Total mod 32 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q4_1,
+                  Fixtures.Encode_Q4_1 (Values));
+            elsif Format = Q2_K and then Total mod 256 = 0 then
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_Q2_K,
                   Fixtures.Encode_Q2_K (Values));

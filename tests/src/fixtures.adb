@@ -448,6 +448,115 @@ package body Fixtures is
    -- Encode_Q8_0 --
    ------------------
 
+   function Encode_BF16 (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_32;
+
+      Result : B.Byte_Array (0 .. B.Byte_Count (Values'Length) * 2 - 1) :=
+        [others => 0];
+      At_Byte : B.Byte_Count := 0;
+   begin
+      for Value of Values loop
+         declare
+            Whole : constant Interfaces.Unsigned_32 := N.Bits (Value);
+            Round : constant Interfaces.Unsigned_32 :=
+              16#7FFF# + (Interfaces.Shift_Right (Whole, 16) and 1);
+            Kept  : constant Interfaces.Unsigned_16 :=
+              Interfaces.Unsigned_16
+                (Interfaces.Shift_Right (Whole + Round, 16) and 16#FFFF#);
+         begin
+            Result (At_Byte .. At_Byte + 1) := B.Put_U16 (Kept);
+            At_Byte := At_Byte + 2;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_BF16;
+
+   --  One block of thirty-two, four bits an element, with or without a
+   --  minimum of its own. Q4_0 centres on eight and carries one
+   --  half-precision number; Q4_1 lifts from a minimum and carries two.
+   function Encode_Four_Bit
+     (Values  : N.Real_Array;
+      Centred : Boolean) return B.Byte_Array
+   is
+      use type Interfaces.Unsigned_8;
+
+      Width  : constant B.Byte_Count := (if Centred then 18 else 20);
+      Blocks : constant N.Element_Count := Values'Length / 32;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * Width - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 32;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * Width;
+
+            Smallest : N.Real := Values (First);
+            Largest  : N.Real := Values (First);
+         begin
+            for Index in 0 .. 31 loop
+               Smallest := N.Real'Min
+                 (Smallest, Values (First + N.Element_Count (Index)));
+               Largest := N.Real'Max
+                 (Largest, Values (First + N.Element_Count (Index)));
+            end loop;
+
+            declare
+               --  Centred: the levels run -8 .. 7 and the scale is set by
+               --  whichever end is further from zero. Lifted: they run
+               --  0 .. 15 from the block's own minimum.
+               Extent : constant N.Real :=
+                 N.Real'Max (abs Smallest, abs Largest);
+               D      : constant N.Real :=
+                 (if Centred
+                  then (if Extent = 0.0 then 1.0 else Extent / 8.0)
+                  else (if Largest = Smallest then 1.0
+                        else (Largest - Smallest) / 15.0));
+               Quants : constant B.Byte_Count :=
+                 At_Byte + (if Centred then 2 else 4);
+
+               function Level (Index : Natural) return Interfaces.Unsigned_8
+               is
+                  Value : constant N.Real :=
+                    Values (First + N.Element_Count (Index));
+                  Step  : constant N.Real :=
+                    (if Centred then Value / D else (Value - Smallest) / D);
+               begin
+                  return Interfaces.Unsigned_8
+                    (N.Real'Max
+                       (0.0,
+                        N.Real'Min
+                          (15.0,
+                           N.Real'Rounding (Step)
+                           + (if Centred then 8.0 else 0.0))));
+               end Level;
+            begin
+               Result (At_Byte .. At_Byte + 1) := Encode_F16 ([1 => D]);
+               if not Centred then
+                  Result (At_Byte + 2 .. At_Byte + 3) :=
+                    Encode_F16 ([1 => Smallest]);
+               end if;
+
+               --  Element j in the low nibble, element j + 16 in the high.
+               for J in 0 .. 15 loop
+                  Result (Quants + B.Byte_Count (J)) :=
+                    Level (J)
+                    or Interfaces.Shift_Left (Level (J + 16), 4);
+               end loop;
+            end;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Four_Bit;
+
+   function Encode_Q4_0 (Values : N.Real_Array) return B.Byte_Array
+   is (Encode_Four_Bit (Values, Centred => True));
+
+   function Encode_Q4_1 (Values : N.Real_Array) return B.Byte_Array
+   is (Encode_Four_Bit (Values, Centred => False));
+
    function Encode_Q2_K (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
 
