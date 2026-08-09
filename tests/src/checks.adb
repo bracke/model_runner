@@ -21,7 +21,9 @@ with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.CLI.Options;
 with Model_Runner.GGUF;
+with Model_Runner.Generation;
 with Model_Runner.Llama;
+with Model_Runner.Progress;
 with Model_Runner.Quantization;
 with Model_Runner.Templates;
 with Model_Runner.Text;
@@ -426,6 +428,154 @@ package body Checks is
                if not Has_Key (E.Message_Key (Code)) then
                   Fail ("no catalog entry for " & E.Message_Key (Code));
                end if;
+            end if;
+         end loop;
+      end;
+
+      --  Every catalog key has a reader.
+      --
+      --  Every other registry in this repository is asked of the code: an
+      --  enumeration value with no reader fails, a public operation with no
+      --  caller fails, a documented row with no code behind it fails. The
+      --  catalog was the last one nobody asked. Ten keys had no reader at
+      --  all, and three of them read as capability rather than cruft --
+      --  "backend" and "worker tasks" were labels for figures the program
+      --  never printed, and "the model has no chat template; the prompt is
+      --  being sent unchanged" described a silent fallback the program
+      --  refuses to make. They were carried in three locales.
+      --
+      --  A key is reachable one of two ways. Most are written where they are
+      --  used, so the literal appears in a source. The rest are built from an
+      --  enumeration -- a diagnostic, a completion reason, a progress stage --
+      --  and those are constructed here the same way the code constructs
+      --  them, so a stage that gains a value needs a key and a key whose
+      --  stage is gone has nobody to answer for it.
+      declare
+         Catalog : constant String :=
+           Contents ("resources/messages/catalog.txt");
+
+         Room  : constant := 512;
+         Width : constant := 96;
+
+         type Key_Text is record
+            Text : String (1 .. Width) := [others => ' '];
+            Last : Natural := 0;
+            Read : Boolean := False;
+         end record;
+
+         Keys  : array (1 .. Room) of Key_Text;
+         Count : Natural := 0;
+
+         --  Mark a key as reached, by whatever reached it.
+         procedure Reached (Key : String) is
+         begin
+            for Index in 1 .. Count loop
+               if Keys (Index).Text (1 .. Keys (Index).Last) = Key then
+                  Keys (Index).Read := True;
+               end if;
+            end loop;
+         end Reached;
+
+         --  Mark every key a source names as a literal.
+         procedure Visit_Keys (Relative : String) is
+            Text : constant String := Contents (Relative);
+         begin
+            for Index in 1 .. Count loop
+               if not Keys (Index).Read
+                 and then Holds
+                            (Text,
+                             '"' & Keys (Index).Text (1 .. Keys (Index).Last)
+                             & '"')
+               then
+                  Keys (Index).Read := True;
+               end if;
+            end loop;
+         end Visit_Keys;
+
+         procedure Scan_Keys is new For_Each_Source (Visit_Keys);
+
+         Cursor : Natural := Catalog'First;
+      begin
+         --  The English keys are the catalog: another locale carries a
+         --  subset and falls back, so a key it does not have is not missing.
+         while Cursor <= Catalog'Last loop
+            declare
+               Stop : Natural := Cursor;
+            begin
+               while Stop <= Catalog'Last
+                 and then Catalog (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line : constant String := Catalog (Cursor .. Stop - 1);
+               begin
+                  if Line'Length > 3
+                    and then Line (Line'First .. Line'First + 2) = "en."
+                  then
+                     for Index in Line'First + 3 .. Line'Last loop
+                        if Line (Index) = ' ' then
+                           declare
+                              Key : constant String :=
+                                Line (Line'First + 3 .. Index - 1);
+                           begin
+                              if Count < Room and then Key'Length <= Width then
+                                 Count := Count + 1;
+                                 Keys (Count).Last := Key'Length;
+                                 Keys (Count).Text (1 .. Key'Length) := Key;
+                              end if;
+                           end;
+                           exit;
+                        end if;
+                     end loop;
+                  end if;
+               end;
+
+               Cursor := Stop + 1;
+            end;
+         end loop;
+
+         Result.Performed := Result.Performed + 1;
+         if Count = 0 then
+            Fail ("no catalog keys were found; the check no longer matches "
+                  & "the file it reads");
+         end if;
+
+         --  The three families the code builds rather than writes.
+         for Code in E.Error_Code loop
+            if Code /= E.No_Error then
+               Reached (E.Message_Key (Code));
+            end if;
+         end loop;
+
+         for Reason in Model_Runner.Generation.Completion_Reason loop
+            Reached
+              ("completion." & Model_Runner.Generation.Reason_Name (Reason));
+         end loop;
+
+         for Stage in Model_Runner.Progress.Load_Stage loop
+            Reached
+              ("progress.loading."
+               & T.To_Lower (Model_Runner.Progress.Load_Stage'Image (Stage)));
+         end loop;
+
+         for Stage in Model_Runner.Progress.Generation_Stage loop
+            Reached
+              ("progress.generation."
+               & T.To_Lower
+                   (Model_Runner.Progress.Generation_Stage'Image (Stage)));
+         end loop;
+
+         Scan_Keys ("src/library");
+         Scan_Keys ("src/main");
+         Scan_Keys ("src/platform");
+
+         for Index in 1 .. Count loop
+            Result.Performed := Result.Performed + 1;
+            if not Keys (Index).Read then
+               Fail ("nothing reads the catalog key "
+                     & Keys (Index).Text (1 .. Keys (Index).Last));
             end if;
          end loop;
       end;

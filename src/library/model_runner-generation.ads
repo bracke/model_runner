@@ -1,5 +1,6 @@
 with Interfaces;
 
+with Model_Runner.Backend;
 with Model_Runner.Bytes;
 with Model_Runner.Cancellation;
 with Model_Runner.Clocks;
@@ -96,6 +97,16 @@ package Model_Runner.Generation is
       Prefill_Rate     : Long_Float := 0.0;
       Decode_Rate      : Long_Float := 0.0;
       Peak_Bytes       : Interfaces.Unsigned_64 := 0;
+
+      --  Which backend evaluated this run, and how many worker tasks it had.
+      --  Reported rather than derived by the caller: the caller asked for a
+      --  backend and a thread count, and what it asked for is not always what
+      --  it got -- a backend that does not run in parallel takes one worker
+      --  whatever --threads said. A run that cannot be told apart from a run
+      --  on the other backend is a run whose figures mean nothing.
+      Backend          : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
+      Workers          : Positive := 1;
       Text             : Model_Runner.Bytes.Byte_Array_Access := null;
       Text_Length      : Natural := 0;
       Error            : Model_Runner.Errors.Error_Info;

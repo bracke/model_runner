@@ -4,6 +4,7 @@ with Ada.Text_IO.Text_Streams;
 
 with Terminal_Styles;
 
+with Model_Runner.Backend;
 with Model_Runner.Clocks;
 with Model_Runner.Text;
 with Model_Runner.UTF8;
@@ -396,6 +397,12 @@ package body Model_Runner.Presentation is
       Put_Field (Item, "statistics.decode_duration", Seconds (Outcome.Decode_Ns));
       Put_Field (Item, "statistics.prefill_rate", Rate (Outcome.Prefill_Rate));
       Put_Field (Item, "statistics.decode_rate", Rate (Outcome.Decode_Rate));
+      Put_Field
+        (Item, "statistics.backend",
+         Model_Runner.Backend.Backend_Name (Outcome.Backend));
+      Put_Field
+        (Item, "statistics.workers",
+         T.Image (Long_Long_Integer (Outcome.Workers)));
       Put_Field
         (Item, "statistics.completion_reason",
          Message (Item, "completion." & Gen.Reason_Name (Outcome.Reason)));

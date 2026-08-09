@@ -1,12 +1,17 @@
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
+with Model_Runner.Backend.CPU;
 with Model_Runner.Numerics;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 
 package body Model_Runner.Generation is
+
+   package Workers_CPU renames Model_Runner.Backend.CPU;
+
+   use type Workers_CPU.Pool_Reference;
 
    use type Model_Runner.Bytes.Byte_Array_Access;
    use type Model_Runner.Errors.Error_Code;
@@ -243,6 +248,13 @@ package body Model_Runner.Generation is
          Cleanup;
          return;
       end if;
+
+      --  What actually ran this, recorded before the first product rather
+      --  than assumed by whoever reads the figures afterwards.
+      Outcome.Backend := L.Capability (Source).Kind;
+      Outcome.Workers :=
+        (if L.Workers (Session) = null then 1
+         else Positive (Workers_CPU.Worker_Total (L.Workers (Session).all)));
 
       --  Seed selection. An explicit seed wins; otherwise the entropy source
       --  chooses one and the choice is reported so the run can be repeated.

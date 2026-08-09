@@ -594,6 +594,55 @@ package body Model_Runner.CLI.Execute is
    --  inspect
    ---------------------------------------------------------------------------
 
+   --  What the chosen backend says it can do. Asked of the backend rather
+   --  than taken from the CPU pool's constants, so that a second backend's
+   --  numbers are the numbers used -- for the worker count and for whether a
+   --  batch is worth asking for.
+   --
+   --  @param Item Parsed command.
+   --  @return The capability record of the backend the command names.
+   function Selected_Capabilities
+     (Item : Opt.Command) return Model_Runner.Backend.Capabilities
+   is (case Item.Backend is
+         when Model_Runner.Backend.Backend_CPU =>
+           Workers_CPU.Describe (Workers_CPU.Max_Workers),
+         when Model_Runner.Backend.Backend_Reference =>
+           Model_Runner.Backend.Reference.Describe);
+
+   --  Worker count: an explicit --threads wins, otherwise the core count
+   --  bounded by what the backend accepts. One worker means serial
+   --  execution, and produces the same output as any other count.
+   --
+   --  Cores rather than processors, because on a machine with two
+   --  processors per core the second of each pair shares the first's
+   --  execution units. Measured on an eight-core Ryzen 7 7840U that
+   --  reports sixteen: twelve tokens take 2.20 s of wall with eight
+   --  workers and 2.22 s with fourteen, and 14.9 s of processor time
+   --  against 26.7 s. The extra workers buy nothing and cost nearly twice
+   --  the energy, which matters most on the battery this is likeliest to
+   --  run on. --threads still takes any number the backend accepts.
+   --
+   --  Shared with inspect, which reports it. A run and an inspection that
+   --  disagreed about the worker count would make the reported one useless.
+   --
+   --  @param Item Parsed command.
+   --  @return Worker tasks the run would use.
+   function Selected_Workers (Item : Opt.Command) return Positive is
+      Able : constant Model_Runner.Backend.Capabilities :=
+        Selected_Capabilities (Item);
+   begin
+      if not Able.Supports_Parallel then
+         return 1;
+      elsif Item.Threads > 0 then
+         return Positive'Min (Item.Threads, Able.Max_Workers);
+      else
+         --  The policy lives with the pool, which is what knows that a job
+         --  is cut into one more share than it has workers.
+         return Positive
+           (Workers_CPU.Default_Workers (Model_Runner.Platform.Core_Count));
+      end if;
+   end Selected_Workers;
+
    procedure Do_Inspect
      (Item    : Opt.Command;
       Screen  : in out Pres.Console;
@@ -816,6 +865,19 @@ package body Model_Runner.CLI.Execute is
          end if;
       end;
 
+      --  What would evaluate this model, which is not a property of the file
+      --  but of the command that was typed. It is reported here because the
+      --  answer stopped being obvious when a second backend arrived: --backend
+      --  reference takes one worker whatever --threads says, and a caller who
+      --  cannot see that has no way to tell a slow run from a wrong one.
+      Pres.Put_Heading (Screen, "cli.inspect.heading.execution");
+      Pres.Put_Field
+        (Screen, "cli.inspect.label.backend",
+         Model_Runner.Backend.Backend_Name (Item.Backend));
+      Pres.Put_Field
+        (Screen, "cli.inspect.label.workers",
+         T.Image (Long_Long_Integer (Selected_Workers (Item))));
+
       --  Optional detail listings. Neither dumps a vocabulary by default.
       if Item.Show_Metadata then
          Pres.Put_Heading (Screen, "cli.inspect.heading.metadata");
@@ -925,16 +987,6 @@ package body Model_Runner.CLI.Execute is
       --  Everything from model loading onwards, parameterized by the worker
       --  pool so that the pool can be declared in a frame whose exit waits
       --  for its workers.
-      --  What the chosen backend says it can do. Asked here rather than
-      --  taking the CPU pool's constants, so that a second backend's numbers
-      --  are the numbers used -- for the worker count and for whether a
-      --  batch is worth asking for.
-      Chosen : constant Model_Runner.Backend.Capabilities :=
-        (case Item.Backend is
-           when Model_Runner.Backend.Backend_CPU =>
-             Workers_CPU.Describe (Workers_CPU.Max_Workers),
-           when Model_Runner.Backend.Backend_Reference =>
-             Model_Runner.Backend.Reference.Describe);
 
       procedure Run_With (Team : Workers_CPU.Pool_Reference) is
       begin
@@ -1202,34 +1254,7 @@ package body Model_Runner.CLI.Execute is
          Cleanup;
       end Run_With;
 
-      --  Worker count: an explicit --threads wins, otherwise the core count
-      --  bounded by what the backend accepts. One worker means serial
-      --  execution, and produces the same output as any other count.
-      --
-      --  Cores rather than processors, because on a machine with two
-      --  processors per core the second of each pair shares the first's
-      --  execution units. Measured on an eight-core Ryzen 7 7840U that
-      --  reports sixteen: twelve tokens take 2.20 s of wall with eight
-      --  workers and 2.22 s with fourteen, and 14.9 s of processor time
-      --  against 26.7 s. The extra workers buy nothing and cost nearly twice
-      --  the energy, which matters most on the battery this is likeliest to
-      --  run on. --threads still takes any number the backend accepts.
-      function Chosen_Workers return Natural is
-      begin
-         if not Chosen.Supports_Parallel then
-            return 1;
-         elsif Item.Threads > 0 then
-            return Natural'Min (Item.Threads, Chosen.Max_Workers);
-         else
-            --  The policy lives with the pool, which is what knows that a
-            --  job is cut into one more share than it has workers.
-            return Natural
-              (Workers_CPU.Default_Workers
-                 (Model_Runner.Platform.Core_Count));
-         end if;
-      end Chosen_Workers;
-
-      Team_Size : constant Natural := Chosen_Workers;
+      Team_Size : constant Natural := Selected_Workers (Item);
 
    begin
       --  Which backend runs this. There is one, and going through the choice

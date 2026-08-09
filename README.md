@@ -38,10 +38,15 @@ Tokenizer
   tokenizer model         llama
   vocabulary              16
   byte fallback           no
+  beginning token         1
+  end token               2
   chat template           present and supported
 Memory
   model weights           5024
   session at this context 5880
+Execution
+  backend                 cpu
+  worker tasks            7
 
 $ model_runner run tiny-model.gguf --raw --prompt "ab" --seed 42 --temperature 0 --max-tokens 6
  bcaaaa

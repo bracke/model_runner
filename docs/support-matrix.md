@@ -168,6 +168,7 @@ a partition are what `cpu` has and what `reference` deliberately has not.
 | Memory accounting | Every category is charged: weights, converted weights, KV cache, activations, logits, sampling workspace, token buffers, template buffers, metadata and vocabulary storage. `--memory-limit` bounds the model and the session |
 | Capability checking | Every field of the backend's `Capabilities` is asked by something: the formats and the alignment per tensor while a model loads, matrix-vector once when it is prepared, batching when a batch is evaluated, and the worker count when the pool is sized. The `reference` backend declines two of them outright, which is what made the machinery answer for itself; disclaiming any of the others refuses, naming the capability. Five fields that could only ever hold one value were removed rather than wired |
 | Backend selection | `--backend NAME`, matched against the backends this build has and refused by name otherwise: `cpu` and `reference` |
+| Backend reporting | `inspect` names the backend a run would use and the worker count it would take; `--show-stats` names the backend the run did use and the workers it had. Reported rather than inferred from the command line: a backend that does not run in parallel takes one worker whatever `--threads` said |
 
 ## Locales
 

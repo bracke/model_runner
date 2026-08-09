@@ -512,11 +512,67 @@ package body Tests.Catalog_Cases is
    --  every placeholder and protocol token intact. That is what makes it
    --  useful: a message that renders unchanged is one that bypassed the
    --  catalog.
+   --
+   --  Every English key, not the diagnostics alone. This walked Error_Code
+   --  and so covered 148 of 343 keys; the 195 it skipped -- help, inspect,
+   --  statistics, interactive, progress -- are the ones a reader sees most,
+   --  and they are exactly where a string that never went through the
+   --  catalog would hide. Ten dead keys sat in that gap, translated into
+   --  three locales, until something else found them.
+   --
+   --  The keys are read from the catalog file rather than asked of the
+   --  runtime, because there is no operation that enumerates them and one
+   --  added for a test would be a registry of its own.
    procedure Pseudo_Locale (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T2);
+
+      Room  : constant := 512;
+      Width : constant := 96;
+
+      type Key_Text is record
+         Text : String (1 .. Width) := [others => ' '];
+         Last : Natural := 0;
+      end record;
+
       English : Loc.Catalog;
       Pseudo  : Loc.Catalog;
-      Checked : Natural := 0;
+      Held    : array (1 .. Room) of Key_Text;
+      Count   : Natural := 0;
+      Walked  : Natural := 0;
+
+      --  Catalog_Path names the file, not the directory holding it.
+      File : constant String := Model_Runner.Platform.Catalog_Path;
+
+      --  The key of a catalog line in the named locale, or empty.
+      function Key_Of (Line, Locale : String) return String is
+         Prefix : constant String := Locale & ".";
+      begin
+         if Line'Length <= Prefix'Length
+           or else Line (Line'First .. Line'First + Prefix'Length - 1) /= Prefix
+         then
+            return "";
+         end if;
+         for Index in Line'First + Prefix'Length .. Line'Last loop
+            if Line (Index) = ' ' then
+               return Line (Line'First + Prefix'Length .. Index - 1);
+            end if;
+         end loop;
+         return "";
+      end Key_Of;
+
+      --  Count the placeholders of a rendered message.
+      function Braces (Text : String) return Natural is
+         Total : Natural := 0;
+      begin
+         for Index in Text'Range loop
+            if Text (Index) = '{' then
+               Total := Total + 1;
+            end if;
+         end loop;
+         return Total;
+      end Braces;
+
+      Source : Ada.Text_IO.File_Type;
    begin
       Loc.Open (English, Model_Runner.Platform.Catalog_Path, "en");
       Loc.Open (Pseudo, Model_Runner.Platform.Catalog_Path, "qps");
@@ -524,44 +580,65 @@ package body Tests.Catalog_Cases is
               "the catalog did not load");
       Assert (Loc.Locale (Pseudo) = "qps", "the pseudo-locale did not resolve");
 
-      for Code in E.Error_Code loop
-         if Code /= E.No_Error then
-            declare
-               Key   : constant String := E.Message_Key (Code);
-               Plain : constant String :=
-                 Loc.Text (English, Key, All_Arguments);
-               Fake  : constant String :=
-                 Loc.Text (Pseudo, Key, All_Arguments);
-            begin
-               Assert (Loc.Has (Pseudo, Key),
-                       "the pseudo-locale is missing " & Key);
-               Assert (Fake /= Plain,
-                       Key & " renders identically in the pseudo-locale, so it"
-                       & " would hide an untranslated string");
+      Ada.Text_IO.Open (Source, Ada.Text_IO.In_File, File);
+      while not Ada.Text_IO.End_Of_File (Source) loop
+         declare
+            Line : constant String := Ada.Text_IO.Get_Line (Source);
+            Key  : constant String := Key_Of (Line, "en");
+         begin
+            if Key /= "" then
+               declare
+                  Plain : constant String :=
+                    Loc.Text (English, Key, All_Arguments);
+                  Fake  : constant String :=
+                    Loc.Text (Pseudo, Key, All_Arguments);
+               begin
+                  Assert (Loc.Has (Pseudo, Key),
+                          "the pseudo-locale is missing " & Key);
+                  Assert (Fake /= Plain,
+                          Key & " renders identically in the pseudo-locale, so"
+                          & " it would hide an untranslated string");
+                  Assert (Braces (Fake) = Braces (Plain),
+                          Key & " lost a placeholder in the pseudo-locale");
+                  Walked := Walked + 1;
 
-               --  Every placeholder must survive, or the message would lose
-               --  the value it was supposed to show.
-               Checked := 0;
-               for Index in Plain'Range loop
-                  if Plain (Index) = '{' then
-                     Checked := Checked + 1;
+                  if Count < Room and then Key'Length <= Width then
+                     Count := Count + 1;
+                     Held (Count).Last := Key'Length;
+                     Held (Count).Text (1 .. Key'Length) := Key;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      Ada.Text_IO.Close (Source);
+
+      Assert (Walked > 300,
+              "the catalog walk found" & Natural'Image (Walked)
+              & " English keys, so it no longer matches the file it reads");
+
+      --  And nothing the other way: a pseudo-localized message whose English
+      --  original is gone is a translation of something nobody can ask for.
+      Ada.Text_IO.Open (Source, Ada.Text_IO.In_File, File);
+      while not Ada.Text_IO.End_Of_File (Source) loop
+         declare
+            Line  : constant String := Ada.Text_IO.Get_Line (Source);
+            Key   : constant String := Key_Of (Line, "qps");
+            Known : Boolean := False;
+         begin
+            if Key /= "" then
+               for Index in 1 .. Count loop
+                  if Held (Index).Text (1 .. Held (Index).Last) = Key then
+                     Known := True;
                   end if;
                end loop;
-
-               declare
-                  Braces : Natural := 0;
-               begin
-                  for Index in Fake'Range loop
-                     if Fake (Index) = '{' then
-                        Braces := Braces + 1;
-                     end if;
-                  end loop;
-                  Assert (Braces = Checked,
-                          Key & " lost a placeholder in the pseudo-locale");
-               end;
-            end;
-         end if;
+               Assert (Known,
+                       "the pseudo-locale carries " & Key
+                       & ", which English does not have");
+            end if;
+         end;
       end loop;
+      Ada.Text_IO.Close (Source);
 
       --  Protocol tokens survive pseudo-localization.
       declare
