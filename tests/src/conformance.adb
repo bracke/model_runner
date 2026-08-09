@@ -206,7 +206,30 @@ package body Conformance is
          end loop;
       end loop;
 
-      Result.Ran := Result.Sequences = 624;
+      --  Every combination the loops above visit, times the four sequences
+      --  each one compares.
+      --
+      --  A literal here was edited nine times in one day -- 32, 96, 144,
+      --  192, 336, 384, 528, 576, 624 -- and a literal can only confirm what
+      --  somebody last typed: a format that quietly failed to load lowered
+      --  the count until the number was edited to match, which is the exact
+      --  failure this is meant to catch. It happened twice.
+      declare
+         Formats : constant Natural :=
+           Tiny_Model.Weight_Format'Pos (Tiny_Model.Weight_Format'Last) + 1;
+         Backends : constant Natural :=
+           Model_Runner.Backend.Backend_Kind'Pos
+             (Model_Runner.Backend.Backend_Kind'Last) + 1;
+         Repacks : constant Natural :=
+           L.Repack_Mode'Pos (L.Repack_Mode'Last) + 1;
+
+         --  Two architectures, and four sequences per combination.
+         Expected : constant Natural :=
+           Formats * 2 * Backends * Repacks * 4;
+      begin
+         Result.Ran := Result.Sequences = Expected;
+      end;
+
    end Run;
 
 end Conformance;

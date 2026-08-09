@@ -25,7 +25,7 @@ package body Tiny_Model is
 
    procedure Build
      (Result    : out Model_Runner.Bytes.Byte_Array_Access;
-      Format    : Weight_Format := Float32;
+      Format    : Weight_Format := F32;
       End_Token : Natural := 2;
       Adds_Beginning : Boolean := True;
       Room      : Positive := Context;

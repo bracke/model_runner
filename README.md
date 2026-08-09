@@ -443,11 +443,11 @@ therefore cannot be common to both.
 
 ```
 conformance: sequences 624, logits compared 6656,
-             worst absolute 2.99283966764818E-06,
+             worst absolute 3.46898714553845E-06,
              worst relative 8.94395650089654E-04,
              rounded logits compared 3328,
-             rounded worst absolute 2.53853988407743E-01,
-             rounded worst relative 1.34086800307472E+00,
+             rounded worst absolute 1.36861269753309E-01,
+             rounded worst relative 1.15330975240755E+00,
              outside tolerance 0
 ```
 
@@ -462,17 +462,19 @@ outside it.
 The rounded figures are `--repack bf16`, counted apart because mixing them in
 would let the lossy path's error hide the exact path's. They are the number
 that flag never had: rounding every weight to eight mantissa bits moves a
-logit **on these fixtures** by up to **0.254**, and a logit close to zero moves
+logit **on these fixtures** by up to **0.137**, and a logit close to zero moves
 by almost all of itself, which is what the relative figure says.
 
 On this fixture is not a small qualification. Rounding error accumulates with
 the length of a dot product and the depth of the stack, and the widest fixture is
 256 wide and two deep where a small real model is two thousand wide and
-twenty-two deep. The figure went 0.032, 0.064, 0.090 and then 0.254 as the fixtures
-grew wider and their weights coarser -- which is the shape of the thing:
-wider means more terms means more accumulated rounding, and the three-bit
-superblock, whose weights are the coarsest here, moves furthest when they are
-rounded again. The figure bounds what was measured, not what the flag does
+twenty-two deep. The figure has read 0.032, 0.064, 0.090, 0.254 and now 0.137 as the fixtures
+changed -- which is the shape of the thing rather than a number to trust to
+three places: wider means more terms means more accumulated rounding, coarser
+weights mean a rounding step that matters more, and halving the feed-forward
+width of the widest fixtures brought it down again. What it says is that the
+flag costs a tenth of a logit or so on a model this size, and that a model of
+a useful size is where the question actually gets answered. The figure bounds what was measured, not what the flag does
 to a model you have. What exists for real models is behaviour rather than
 logits: sixty greedy tokens from TinyLlama Q8_0 and forty from Q4_K come out
 identical either way, which is worth knowing and is not a bound.

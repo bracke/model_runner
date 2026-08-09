@@ -111,7 +111,7 @@ package body Fuzzing is
         (Image,
          Format => (if Case_Number mod 2 = 0
                     then Tiny_Model.Q8_0
-                    else Tiny_Model.Float32));
+                    else Tiny_Model.F32));
 
       declare
          Kind   : constant Interfaces.Unsigned_64 := Draw (Stream, 7);

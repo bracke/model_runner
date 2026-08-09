@@ -15,6 +15,7 @@ with Docs_Generation;
 with Library_Surface;
 with Reserved_Codes;
 with Template_Registry;
+with Tiny_Model;
 with Tool_Commands;
 
 with Model_Runner;
@@ -749,6 +750,81 @@ package body Checks is
          if Named = 0 then
             Fail ("no fixture paths were found in the tests; the check no "
                   & "longer matches the sources it reads");
+         end if;
+      end;
+
+      --  Every format the engine decodes has a fixture that carries it.
+      --
+      --  A format arrives with a decoder, a row in the support matrix, a row
+      --  in the README and a name -- and all four of those are checked. What
+      --  was not checked is whether anything can build a file that uses it,
+      --  and without that there is no conformance sequence for it: the
+      --  engine decodes it and nothing independent ever reads what it
+      --  decoded. Nine of thirteen formats were in that state, and the only
+      --  reason they are not still is that somebody wrote nine encoders.
+      --
+      --  The fixture names its formats as the engine names them, so this is
+      --  a comparison of two enumerations rather than a table to keep.
+      declare
+         Missing : Natural := 0;
+      begin
+         for Format in Model_Runner.GGUF.Tensor_Type loop
+            if Model_Runner.Quantization.Is_Decodable (Format) then
+               declare
+                  Wanted : constant String :=
+                    T.To_Lower (Model_Runner.GGUF.Type_Name (Format));
+                  Found  : Boolean := False;
+               begin
+                  for Built in Tiny_Model.Weight_Format loop
+                     if T.To_Lower (Tiny_Model.Weight_Format'Image (Built))
+                        = Wanted
+                     then
+                        Found := True;
+                     end if;
+                  end loop;
+
+                  Result.Performed := Result.Performed + 1;
+                  if not Found then
+                     Missing := Missing + 1;
+                     Fail ("the engine decodes "
+                           & Model_Runner.GGUF.Type_Name (Format)
+                           & " and the fixture cannot build one, so nothing "
+                           & "independent reads what it decodes");
+                  end if;
+               end;
+            end if;
+         end loop;
+
+         --  And nothing the fixture builds that the engine cannot read,
+         --  which would be a sequence that proves nothing.
+         for Built in Tiny_Model.Weight_Format loop
+            declare
+               Named : constant String :=
+                 T.To_Lower (Tiny_Model.Weight_Format'Image (Built));
+               Found : Boolean := False;
+            begin
+               for Format in Model_Runner.GGUF.Tensor_Type loop
+                  if Model_Runner.Quantization.Is_Decodable (Format)
+                    and then T.To_Lower
+                               (Model_Runner.GGUF.Type_Name (Format)) = Named
+                  then
+                     Found := True;
+                  end if;
+               end loop;
+
+               Result.Performed := Result.Performed + 1;
+               if not Found then
+                  Fail ("the fixture builds " & Named
+                        & ", which the engine does not decode");
+               end if;
+            end;
+         end loop;
+
+         Result.Performed := Result.Performed + 1;
+         if Missing > 0 then
+            Fail (Natural'Image (Missing)
+                  & " decodable formats have no fixture; conformance covers "
+                  & "what the fixture can build and nothing else");
          end if;
       end;
 

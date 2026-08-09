@@ -64,7 +64,7 @@ package Tiny_Model is
    --  Which format the weight matrices use. The norms and the small vectors
    --  stay binary32 in both, as they do in a real quantized model.
    type Weight_Format is
-     (Float32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0,
+     (F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0,
       Q2_K, Q3_K, Q4_K, Q5_K, Q6_K);
 
    --  A quantized row is a whole number of thirty-two element blocks, so a
@@ -80,8 +80,14 @@ package Tiny_Model is
    --  was unreachable here: every claim about quantized weights, including
    --  what repacking to brain floats costs, was measured on binary32 and
    --  Q8_0 alone.
+   --  256 is the smallest embedding a k-quant row can have, so it is what
+   --  these are. The feed-forward width was 512 and is 256 for the same
+   --  reason the rest of this fixture is small: the independent
+   --  implementation it is compared against computes in Long_Float without
+   --  a pool, and halving that width took the conformance run from 53
+   --  seconds to 36 without giving up a single comparison.
    Deep_Embedding    : constant := 256;
-   Deep_Feed_Forward : constant := 512;
+   Deep_Feed_Forward : constant := 256;
    Deep_Head_Size    : constant := 128;
 
    --  Build the fixture in memory.
@@ -104,7 +110,7 @@ package Tiny_Model is
    --    for is refused rather than read.
    procedure Build
      (Result         : out Model_Runner.Bytes.Byte_Array_Access;
-      Format         : Weight_Format := Float32;
+      Format         : Weight_Format := F32;
       End_Token      : Natural := 2;
       Adds_Beginning : Boolean := True;
       Room           : Positive := Context;

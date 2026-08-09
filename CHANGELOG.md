@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The checklist fails when the engine decodes a format the fixture cannot
+  build. A format arrives with a decoder, a matrix row, a README row and a
+  name, and all four of those were checked; whether anything could build a
+  file that used it was not, and without that there is no conformance
+  sequence for it. Nine of thirteen formats were in that state this morning.
+  Both directions are held: a fixture format the engine cannot read fails
+  too.
+
+- The conformance run computes how many sequences it should have run. The
+  literal was edited nine times in one day -- 32, 96, 144, 192, 336, 384,
+  528, 576, 624 -- and a literal can only confirm what somebody last typed:
+  twice, a format failed to load, the count fell, and the number was edited
+  to match. Skipping one repacking mode now fails the run rather than
+  passing it.
+
+- The widest fixtures have a 256-wide feed-forward rather than 512, which
+  took the conformance run from 53 seconds to 36 without giving up a
+  comparison. The cost is all in the independent implementation, which
+  computes in Long_Float without a pool: the narrow formats together take
+  0.04 seconds and each deep one about ten.
+
 - Conformance covers every format the engine decodes: all thirteen, in 624
   sequences. The fixture writes each and the reference reads each, both
   worked out from the layouts rather than by calling the engine, so a
