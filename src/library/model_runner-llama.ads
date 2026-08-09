@@ -123,6 +123,9 @@ package Model_Runner.Llama is
    --    checked against what that backend can read, so a model carrying a
    --    format it cannot take is refused here with
    --    Backend_Unsupported_Format naming the tensor and the format.
+   --  @param Repack Decode every weight matrix once into binary32 and
+   --    evaluate from that copy. Four bytes a weight against about one, and
+   --    a memory limit counts it; it cannot change what the model says.
    --  @param Status Success, or the first diagnostic that stopped preparation.
 
    procedure Prepare
@@ -135,6 +138,7 @@ package Model_Runner.Llama is
       Observer : Model_Runner.Progress.Observer_Reference := null;
       Backend  : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
+      Repack   : Boolean := False;
       Status   : out Model_Runner.Errors.Error_Info);
 
    --  What the backend this model was prepared for can do.
@@ -444,20 +448,20 @@ private
 
    type Layer is record
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
-      Query          : Model_Runner.Tensors.View;
-      Key            : Model_Runner.Tensors.View;
-      Value          : Model_Runner.Tensors.View;
+      Query : aliased Model_Runner.Tensors.View;
+      Key : aliased Model_Runner.Tensors.View;
+      Value : aliased Model_Runner.Tensors.View;
 
       --  Added to the projections after they are computed. Null for an
       --  architecture that has none, which is what Llama has.
       Query_Bias     : Model_Runner.Tensors.Real_Array_Access;
       Key_Bias       : Model_Runner.Tensors.Real_Array_Access;
       Value_Bias     : Model_Runner.Tensors.Real_Array_Access;
-      Attention_Out  : Model_Runner.Tensors.View;
+      Attention_Out : aliased Model_Runner.Tensors.View;
       Feed_Norm      : Model_Runner.Tensors.Real_Array_Access;
-      Gate           : Model_Runner.Tensors.View;
-      Up             : Model_Runner.Tensors.View;
-      Down           : Model_Runner.Tensors.View;
+      Gate : aliased Model_Runner.Tensors.View;
+      Up : aliased Model_Runner.Tensors.View;
+      Down : aliased Model_Runner.Tensors.View;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -469,9 +473,15 @@ private
       Settings    : Configuration;
       Arena       : Model_Runner.Bytes.Byte_Array_Access := null;
       Arena_Base  : Model_Runner.Bytes.Byte_Count := 0;
+
+      --  The decoded copy of the weight matrices, when one was asked for.
+      --  Every matrix view then refers into this instead of into the file's
+      --  own bytes, and the file's arena stays mapped for whatever was not
+      --  repacked.
+      Repacked    : Model_Runner.Bytes.Byte_Array_Access := null;
       Layers      : Layer_Array_Access := null;
-      Embeddings  : Model_Runner.Tensors.View;
-      Output      : Model_Runner.Tensors.View;
+      Embeddings  : aliased Model_Runner.Tensors.View;
+      Output      : aliased Model_Runner.Tensors.View;
       Output_Norm : Model_Runner.Tensors.Real_Array_Access;
       Words       : aliased Model_Runner.Tokenizer.Vocabulary;
       Chat        : aliased Model_Runner.Templates.Compiled;

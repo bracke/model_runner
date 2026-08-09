@@ -29,12 +29,14 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 37) of Registry_Row :=
+   Registry : constant array (1 .. 38) of Registry_Row :=
      [
       (Text ("--prompt"), [Command_Run => True, others => False], Text ("prompt")),
       (Text ("--prompt-file"), [Command_Run => True, others => False], Text ("prompt_file")),
       (Text ("--interactive"), [Command_Run => True, others => False], Text ("interactive")),
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
+      (Text ("--repack"), [Command_Run => True, others => False],
+       Text ("repack")),
       (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
       (Text ("--system-file"), [Command_Run => True, others => False], Text ("system_file")),
       (Text ("--max-tokens"), [Command_Run => True, others => False], Text ("max_tokens")),
@@ -819,6 +821,14 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Prompt_Kind := Prompt_Interactive;
+
+                  elsif Name = "--repack" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Repack := True;
 
                   elsif Name = "--raw" then
                      No_Value (Name, Value_Present,

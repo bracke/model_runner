@@ -216,6 +216,11 @@ package Model_Runner.CLI.Options is
       Show_Stats : Boolean := False;
       Stats_Set  : Boolean := False;
       Color      : Color_Mode := Color_Auto;
+
+      --  Decode the weight matrices once into binary32 rather than decoding
+      --  a span of them on every pass. Four bytes a weight against about
+      --  one, for a faster product and the same answer.
+      Repack     : Boolean := False;
       Locale     : Model_Runner.Text.Bounded;
 
       --  Inspect modes.

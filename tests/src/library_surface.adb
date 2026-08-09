@@ -3,9 +3,8 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 33) of Text_Access :=
+   Held : constant array (1 .. 32) of Text_Access :=
      [new String'("Get_F16"),
-      new String'("Put_F32"),
       new String'("Put_U16"),
       new String'("Put_U64"),
       new String'("Tensor_Code"),

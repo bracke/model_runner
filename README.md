@@ -566,12 +566,6 @@ Named in the specification, absent here:
   machine code. Binding to a host call through `Interfaces.C` is not writing in
   another language and is allowed, which is how `mmap` and `isatty` are
   reached. See below for what that does and does not buy.
-- **Repacking.** The weight matrices are consumed in the layout the file
-  stores them in — nothing is unpacked into a second copy for speed. The norm
-  vectors are the exception: they are dequantized once when the model is
-  prepared, and the accounting counts that under converted weights, which is
-  what a test compares against the weight total to hold the rest.
-
 ## Speed
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
@@ -740,6 +734,40 @@ for q4_k and 3.1x for f32. The rest of the twelve is the worker pool and the
 batching, which is the honest way to read the figure: `reference` is between
 two and three times slower than the same loop written for speed, and the
 remaining factor is the parallelism it has none of.
+
+### Repacking, and why it is off
+
+`--repack` decodes every weight matrix once into binary32 and evaluates from
+that copy, instead of decoding a span of it on every pass. It cannot change
+what the model says: the values written are the ones the decoder produces, in
+the order the kernels read them, so the arithmetic that follows is the same
+arithmetic, and a test holds the logits to the bit. A memory limit counts the
+copy like anything else, because four bytes a weight against about one is the
+whole of the trade.
+
+The kernels say it should win. A binary32 row product measures 0.26 ns an
+element against 0.37 for Q8_0 and 0.69 for Q2_K, because nothing has to be
+unpacked before it can be multiplied. Twelve tokens from the seven-token
+prompt, generation only, on this machine:
+
+| weights | as stored | repacked | repacked size |
+|---|---|---|---|
+| Q8_0 | 1.11 s | 1.34 s | 1.1 GB → 4.4 GB |
+| Q4_K | 1.11 s | 1.44 s | 0.67 GB → 4.4 GB |
+| Q2_K | 1.52 s | 1.34 s | 0.43 GB → 4.4 GB |
+
+So it loses on two of three, wins twelve per cent on the third, and costs ten
+seconds of decoding at load every time. The kernel figures are measured on a
+64 MB matrix and the model is 4.4 GB repacked: at that size the product is
+waiting for memory rather than for the decoder, and quadrupling the bytes to
+save the unpacking is a bad trade. Only Q2_K, whose decode is dearest and
+whose file is smallest, comes out ahead — and it pays ten times its size for
+twelve per cent.
+
+That is why it is a flag and not a default, and why the paragraph this
+replaced said the weights are consumed in the layout the file stores them in.
+The measurement is the answer to a question the code could not settle by
+itself.
 
 ### Batched prefill
 

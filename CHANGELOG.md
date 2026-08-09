@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `--repack` decodes every weight matrix once into binary32 and evaluates
+  from that copy, instead of decoding a span of it on every pass. It cannot
+  change what the model says -- the values written are the ones the decoder
+  produces, in the order the kernels read them -- and a test holds the logits
+  to the bit. A memory limit counts the copy, because four bytes a weight
+  against about one is the whole of the trade.
+
+  Measured, it usually loses: twelve tokens of generation take 1.34 s
+  repacked against 1.11 s stored for Q8_0, 1.44 against 1.11 for Q4_K, and
+  1.34 against 1.52 for Q2_K -- so two losses, one twelve per cent win, and
+  ten seconds of decoding at load in every case. The kernel figures say a
+  binary32 product is the fastest per element, and they are measured on 64 MB
+  where the model is 4.4 GB repacked: at that size the product waits for
+  memory, not for the decoder. That is why it is a flag and not a default,
+  and it is written down in the README where the old "not implemented"
+  paragraph was.
+
 - `inspect` reports which backend would evaluate the model and how many
   worker tasks it would take, and `--show-stats` reports which one did and
   how many it had. Neither is read back off the command line: `--backend

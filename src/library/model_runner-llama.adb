@@ -539,6 +539,7 @@ package body Model_Runner.Llama is
       Observer : Model_Runner.Progress.Observer_Reference := null;
       Backend  : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
+      Repack   : Boolean := False;
       Status   : out E.Error_Info)
    is
       Ignored : E.Error_Info;
@@ -811,6 +812,143 @@ package body Model_Runner.Llama is
          end if;
       end;
 
+      --  Decode the weight matrices once, if that was asked for.
+      --
+      --  Every matrix then refers into a second buffer holding binary32,
+      --  and nothing else changes: the values written are the ones the
+      --  decoder produces, in the order the kernels read them, so what
+      --  follows is the same arithmetic on the same numbers. What it costs
+      --  is four bytes a weight against about one, which is why it is asked
+      --  for rather than done.
+      if Repack then
+         declare
+            Needed : B.Byte_Count := 0;
+            Filled : B.Byte_Count := 0;
+
+            --  Every matrix this model holds. A norm is already a decoded
+            --  vector and a bias is too, so neither is here.
+            type View_Access is access all T.View;
+            type View_List is array (Positive range <>) of View_Access;
+
+            function Matrices return View_List is
+               Room  : View_List (1 .. 2 + 7 * Item.Settings.Layers);
+               Count : Natural := 0;
+
+               procedure Add (Where : View_Access) is
+               begin
+                  if T.Is_Present (Where.all) then
+                     Count := Count + 1;
+                     Room (Count) := Where;
+                  end if;
+               end Add;
+            begin
+               Add (Item.Embeddings'Access);
+               Add (Item.Output'Access);
+
+               for Index in Item.Layers'Range loop
+                  Add (Item.Layers (Index).Query'Access);
+                  Add (Item.Layers (Index).Key'Access);
+                  Add (Item.Layers (Index).Value'Access);
+                  Add (Item.Layers (Index).Attention_Out'Access);
+                  Add (Item.Layers (Index).Gate'Access);
+                  Add (Item.Layers (Index).Up'Access);
+                  Add (Item.Layers (Index).Down'Access);
+               end loop;
+
+               return Room (1 .. Count);
+            end Matrices;
+
+            Held : constant View_List := Matrices;
+         begin
+            for Where of Held loop
+               Needed := Needed
+                 + B.Byte_Count (Where.all.Rows)
+                   * B.Byte_Count (Where.all.Columns) * 4;
+            end loop;
+
+            --  Asked for before it is taken, like the weights themselves.
+            --  Repacking is four bytes a weight where the file holds about
+            --  one, so a memory limit that the model fits under is a limit
+            --  the repacked copy may not, and a caller who set one meant it.
+            Mem.Check_Allocation
+              (Item.Accounting, Mem.Converted_Weights,
+               Interfaces.Unsigned_64 (Needed), Status);
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
+
+            B.Allocate (Needed, Item.Repacked);
+            if Item.Repacked = null then
+               Fail (E.Make (E.Memory_Allocation_Failed));
+               return;
+            end if;
+
+            Mem.Record_Allocation
+              (Item.Accounting, Mem.Converted_Weights,
+               Interfaces.Unsigned_64 (Needed));
+            Mem.Record_Conversion
+              (Item.Accounting, Interfaces.Unsigned_64 (Needed));
+
+            for Where of Held loop
+               declare
+                  Rows    : constant Element_Count := Where.all.Rows;
+                  Columns : constant Element_Count := Where.all.Columns;
+                  Base    : constant B.Byte_Count := Filled;
+                  Row     : T.Real_Array (0 .. Columns - 1) :=
+                    [others => 0.0];
+                  Fresh   : T.View;
+               begin
+                  for Index in 0 .. Rows - 1 loop
+                     T.Dequantize_Row (Where.all, Index, Row, Status);
+                     if E.Is_Error (Status) then
+                        Fail (Status);
+                        return;
+                     end if;
+
+                     for Column in Row'Range loop
+                        declare
+                           At_Byte : constant B.Byte_Count :=
+                             Base
+                             + (B.Byte_Count (Index) * B.Byte_Count (Columns)
+                                + B.Byte_Count (Column)) * 4;
+                        begin
+                           Item.Repacked.all
+                             (Item.Repacked.all'First + At_Byte
+                              .. Item.Repacked.all'First + At_Byte + 3) :=
+                             B.Put_F32 (Row (Column));
+                        end;
+                     end loop;
+
+                     --  A large model takes a while to decode, and a caller
+                     --  that asked to cancel should not wait for all of it.
+                     if C.Is_Cancelled (Cancel) then
+                        Fail (E.Make (E.Generation_Cancelled));
+                        return;
+                     end if;
+                  end loop;
+
+                  T.Make
+                    (Format  => Model_Runner.GGUF.Type_F32,
+                     Rows    => Rows,
+                     Columns => Columns,
+                     Data    => Item.Repacked,
+                     Offset  => Base,
+                     Result  => Fresh,
+                     Status  => Status);
+                  if E.Is_Error (Status) then
+                     Fail (Status);
+                     return;
+                  end if;
+
+                  Where.all := Fresh;
+                  Filled := Filled
+                    + B.Byte_Count (Rows) * B.Byte_Count (Columns) * 4;
+               end;
+            end loop;
+         end;
+      end if;
+
       P.Publish (Observer, P.Load_Progress (P.Finalizing_Model));
       Item.Ready := True;
       P.Publish (Observer, P.Load_Progress (P.Model_Ready));
@@ -925,6 +1063,7 @@ package body Model_Runner.Llama is
 
       T.Free (Item.Output_Norm);
       B.Free (Item.Arena);
+      B.Free (Item.Repacked);
       Item.Arena_Base := 0;
       Item.Embeddings := T.Empty_View;
       Item.Output := T.Empty_View;

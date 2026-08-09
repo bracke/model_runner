@@ -1306,7 +1306,8 @@ package body Tests.CLI_Cases is
    procedure Start
      (Item    : in out Harness;
       Backend : Model_Runner.Backend.Backend_Kind :=
-        Model_Runner.Backend.Backend_CPU)
+        Model_Runner.Backend.Backend_CPU;
+      Repack  : Boolean := False)
    is
       Status : E.Error_Info;
    begin
@@ -1314,7 +1315,7 @@ package body Tests.CLI_Cases is
       Assert (E.Is_Ok (Status), "tiny model did not parse");
       L.Prepare
         (Item.Ready, Item.Parsed, Item.Source, Backend => Backend,
-         Status => Status);
+         Repack => Repack, Status => Status);
       Assert (E.Is_Ok (Status), "tiny model did not prepare");
    end Start;
 
@@ -2017,6 +2018,68 @@ package body Tests.CLI_Cases is
    --  vectorize; each of those was done for speed and each is a way the
    --  answer could be wrong for a reason that is hard to see. The reference
    --  backend has none of them: a row, decoded whole, multiplied one element
+   --  Repacking changes what the weights cost, not what they say.
+   --
+   --  --repack decodes every matrix once into binary32 and evaluates from
+   --  that, instead of decoding a span of it on every pass. The values
+   --  written are the ones the decoder produces, in the order the kernels
+   --  read them, so the arithmetic that follows is the same arithmetic --
+   --  and the logits must agree to the bit, not to a tolerance. A tolerance
+   --  here would accept a repacking that quietly rounded, which is the one
+   --  thing this must not do.
+
+   procedure Repacking_Changes_No_Logit
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      subtype Logit_Row is
+        Model_Runner.Numerics.Real_Array
+          (0 .. Model_Runner.Numerics.Element_Count
+                  (Tiny_Model.Vocabulary - 1));
+
+      Image   : B.Byte_Array_Access;
+      Dropped : E.Error_Info;
+   begin
+      --  Quantized, because that is where repacking does anything: an F32
+      --  file is already what repacking would write.
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0, Room => 64);
+
+      declare
+         Held : aliased constant B.Byte_Array := Image.all;
+
+         function Logits_With (Repack : Boolean) return Logit_Row is
+            Under   : Harness (Held'Access);
+            Session : L.Session;
+            Room    : Logit_Row := [others => 0.0];
+            Status  : E.Error_Info;
+         begin
+            Start (Under, Repack => Repack);
+
+            L.Open (Session, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            L.Evaluate (Session, Under.Ready, 4, Room, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation failed");
+
+            L.Close (Session);
+            return Room;
+         end Logits_With;
+
+         Plain    : constant Logit_Row := Logits_With (False);
+         Repacked : constant Logit_Row := Logits_With (True);
+      begin
+         for Index in Plain'Range loop
+            Assert (Plain (Index) = Repacked (Index),
+                    "repacking moved logit"
+                    & Model_Runner.Numerics.Element_Count'Image (Index));
+         end loop;
+      end;
+
+      B.Free (Image);
+      pragma Unreferenced (Dropped);
+   end Repacking_Changes_No_Logit;
+
    --  at a time, summed wide, on the calling task.
    --
    --  So a caller with a file that produces suspicious text can ask again
@@ -5863,6 +5926,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Every_Backend_Can_Be_Named'Access,
          "every backend this build has can be named on the command line");
+      Register_Routine
+        (T, Repacking_Changes_No_Logit'Access,
+         "repacking the weights changes no logit, to the bit");
       Register_Routine
         (T, Backends_Agree'Access,
          "the two backends produce the same logits");
