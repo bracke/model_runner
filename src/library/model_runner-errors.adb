@@ -207,7 +207,6 @@ package body Model_Runner.Errors is
             | Arch_Unsupported_Feature
             | Tensor_Format_Unsupported
             | Backend_Unsupported_Format
-            | Backend_Unsupported_Operation
             | Backend_Capability_Missing
             | Conversation_System_Unsupported
             | Internal_Not_Implemented =>

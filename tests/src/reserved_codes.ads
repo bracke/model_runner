@@ -17,10 +17,19 @@ with Model_Runner.Errors;
 --  tensor format the engine cannot decode is refused by Tensor and by the
 --  architecture profile, each naming the format.
 --
---  Unreachable: the condition cannot arise. There is no --backend for
---  CLI_Invalid_Backend to reject, no merge table in a SentencePiece
---  vocabulary, and Conversation.Role is an enumeration, so no value of it can
---  be invalid.
+--  Unreachable: the condition cannot arise. There is no merge table in a
+--  SentencePiece vocabulary, and Conversation.Role is an enumeration, so no
+--  value of it can be invalid.
+--
+--  A third kind used to be here without being named: codes kept against a
+--  feature that later arrived and was given a different diagnostic.
+--  CLI_Invalid_Backend was reserved because there was no --backend to
+--  reject; there is now, and it reports Backend_Unknown, which says which
+--  backend and that this build does not have it. Backend_Unsupported_Operation
+--  was the same shape of duplicate for Backend_Capability_Missing, which
+--  names the capability. Both were removed rather than left waiting: a
+--  reserved code that a working feature has already superseded is not
+--  reserved for anything.
 --
 --  This list is the curated statement and the repository checks verify it
 --  against the sources: a code that starts being produced fails until it is

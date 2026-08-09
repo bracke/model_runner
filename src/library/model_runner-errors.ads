@@ -82,7 +82,6 @@ package Model_Runner.Errors is
       CLI_Unexpected_Operand,
       CLI_Invalid_Locale,
       CLI_Invalid_Color_Mode,
-      CLI_Invalid_Backend,
       CLI_Invalid_Mapping_Mode,
       CLI_No_Prompt_Available,
       CLI_Interactive_Unavailable,
@@ -191,7 +190,6 @@ package Model_Runner.Errors is
       --  Execution backend.
       Backend_Unknown,
       Backend_Unsupported_Format,
-      Backend_Unsupported_Operation,
       Backend_Capability_Missing,
       Backend_Worker_Failed,
       Backend_Queue_Full,

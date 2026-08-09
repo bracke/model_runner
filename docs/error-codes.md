@@ -33,11 +33,10 @@ ordinal is never reused, not because they might appear.
 | `MR-CLI-0013` | `error.cli.unexpected_operand` | recovery_user_correctable | 2 | raised |
 | `MR-CLI-0014` | `error.cli.invalid_locale` | recovery_user_correctable | 2 | reserved |
 | `MR-CLI-0015` | `error.cli.invalid_color_mode` | recovery_user_correctable | 2 | raised |
-| `MR-CLI-0016` | `error.cli.invalid_backend` | recovery_user_correctable | 2 | reserved |
-| `MR-CLI-0017` | `error.cli.invalid_mapping_mode` | recovery_user_correctable | 2 | reserved |
-| `MR-CLI-0018` | `error.cli.no_prompt_available` | recovery_user_correctable | 2 | raised |
-| `MR-CLI-0019` | `error.cli.interactive_unavailable` | recovery_user_correctable | 2 | raised |
-| `MR-CLI-0020` | `error.cli.invalid_environment_value` | recovery_user_correctable | 2 | raised |
+| `MR-CLI-0016` | `error.cli.invalid_mapping_mode` | recovery_user_correctable | 2 | reserved |
+| `MR-CLI-0017` | `error.cli.no_prompt_available` | recovery_user_correctable | 2 | raised |
+| `MR-CLI-0018` | `error.cli.interactive_unavailable` | recovery_user_correctable | 2 | raised |
+| `MR-CLI-0019` | `error.cli.invalid_environment_value` | recovery_user_correctable | 2 | raised |
 
 ## IO
 
@@ -163,12 +162,11 @@ ordinal is never reused, not because they might appear.
 | --- | --- | --- | --- | --- |
 | `MR-BACKEND-0001` | `error.backend.unknown` | recovery_none | 2 | raised |
 | `MR-BACKEND-0002` | `error.backend.unsupported_format` | recovery_unsupported | 4 | raised |
-| `MR-BACKEND-0003` | `error.backend.unsupported_operation` | recovery_unsupported | 4 | reserved |
-| `MR-BACKEND-0004` | `error.backend.capability_missing` | recovery_unsupported | 4 | raised |
-| `MR-BACKEND-0005` | `error.backend.worker_failed` | recovery_none | 8 | raised |
-| `MR-BACKEND-0006` | `error.backend.queue_full` | recovery_resource_limited | 8 | reserved |
-| `MR-BACKEND-0007` | `error.backend.closed` | recovery_none | 8 | raised |
-| `MR-BACKEND-0008` | `error.backend.invalid_worker_count` | recovery_none | 8 | reserved |
+| `MR-BACKEND-0003` | `error.backend.capability_missing` | recovery_unsupported | 4 | raised |
+| `MR-BACKEND-0004` | `error.backend.worker_failed` | recovery_none | 8 | raised |
+| `MR-BACKEND-0005` | `error.backend.queue_full` | recovery_resource_limited | 8 | reserved |
+| `MR-BACKEND-0006` | `error.backend.closed` | recovery_none | 8 | raised |
+| `MR-BACKEND-0007` | `error.backend.invalid_worker_count` | recovery_none | 8 | reserved |
 
 ## MEM
 

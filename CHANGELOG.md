@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- Two diagnostics were removed rather than left reserved.
+  `CLI_Invalid_Backend` was kept against the day `--backend` existed; it does
+  now, and reports `Backend_Unknown`, which says which backend and that this
+  build does not have it. `Backend_Unsupported_Operation` was the same shape
+  of duplicate for `Backend_Capability_Missing`, which names the capability.
+  A reserved code that a working feature has already superseded is not
+  reserved for anything.
+
 - The CPU backend said it does not batch, while every prefill went through
   its `Dispatch_Batch`. `Capabilities` is a table the code publishes about
   the code and nothing in the program consults it -- `Describe` has no caller
@@ -371,7 +379,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 149 diagnostic
+- Localization through `messages`, with a catalog entry for all 147 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

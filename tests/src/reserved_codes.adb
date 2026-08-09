@@ -13,7 +13,6 @@ package body Reserved_Codes is
       --  list.
       case Code is
          when E.CLI_Invalid_Locale
-            | E.CLI_Invalid_Backend
             | E.CLI_Invalid_Mapping_Mode
             | E.IO_Write_Failed
             | E.IO_Output_Closed
@@ -29,7 +28,6 @@ package body Reserved_Codes is
             | E.Tensor_Rank_Too_High
             | E.Tensor_Invalid_Stride
             | E.Tensor_Read_Only
-            | E.Backend_Unsupported_Operation
             | E.Backend_Queue_Full
             | E.Backend_Invalid_Worker_Count
             | E.Memory_Invalid_Limit
