@@ -90,6 +90,12 @@ package Model_Runner.GGUF.Containers is
    --  @return Entry count.
    function Metadata_Count (Item : Container) return Natural;
 
+   --  Bytes of metadata text and values this container holds.
+   --
+   --  @param Item Container to measure.
+   --  @return Bytes in use, zero when nothing is parsed.
+   function Metadata_Bytes (Item : Container) return U64;
+
    --  Key of a metadata entry.
    --
    --  @param Item Container to inspect.

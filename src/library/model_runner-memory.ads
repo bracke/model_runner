@@ -22,6 +22,18 @@ package Model_Runner.Memory is
 
    --  What an allocation is for. Reported in statistics and in memory-limit
    --  diagnostics so that a user can tell which part of the plan is too large.
+   --  Where memory goes.
+   --
+   --  Every category here is charged by something. A category nothing
+   --  charges is a line of a report reading zero for memory the program is
+   --  holding, and a limit that does not count it -- nine of eleven were in
+   --  that position, including the KV cache, which is the largest thing a
+   --  session allocates.
+   --
+   --  Temporary_Workspace was removed rather than charged. The buffers it
+   --  named are allocated and released within one call, so charging one
+   --  would record a number that is true for the length of a statement, and
+   --  the limits that size those buffers already bound them.
    type Category is
      (Model_Weights,
       Converted_Weights,
@@ -32,8 +44,7 @@ package Model_Runner.Memory is
       Token_Buffers,
       Template_Buffers,
       Metadata_Storage,
-      Tokenizer_Storage,
-      Temporary_Workspace);
+      Tokenizer_Storage);
 
    type Category_Totals is array (Category) of U64;
 

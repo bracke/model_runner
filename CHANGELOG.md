@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `--memory-limit` bounds the session as well as the model. It set the
+  model's limit only, and a session's limit defaults to unlimited, so a
+  caller asking for a hundred megabytes could be given a model inside it and
+  then a KV cache of any size at all. The KV cache grows with the context and
+  is the largest thing a session allocates.
+
+- Nine of eleven accounting categories were charged by nothing. The session
+  plan computed every one of its figures and threw them away, so the account
+  read zero for the KV cache while the session held it, and the vocabulary's
+  storage and the container's metadata -- megabytes each on a real model --
+  were counted nowhere. All of them are charged now, and `Accounting` reports
+  what a model and a session hold.
+
+- `Temporary_Workspace` was removed rather than charged: the buffers it named
+  are allocated and released within one call, and the limits that size them
+  already bound them.
+
+- The release checklist fails when an accounting category is declared and
+  charged by nothing.
+
 - `Prompt_Rendered` is reported. It was declared and published by nothing:
   generation is handed a prompt already rendered and never sees the
   conversation it came from, so only its caller could ever say so, and its

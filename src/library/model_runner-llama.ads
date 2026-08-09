@@ -114,6 +114,13 @@ package Model_Runner.Llama is
         Model_Runner.Backend.Backend_CPU;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  What a prepared model holds, by category.
+   --
+   --  @param Item Prepared model.
+   --  @return The account, all zero before preparation.
+   function Accounting
+     (Item : Model) return Model_Runner.Memory.Account;
+
    --  Release a model. Idempotent.
    --
    --  @param Item Model to release.
@@ -268,6 +275,13 @@ package Model_Runner.Llama is
    function Workers
      (Item : Session) return Model_Runner.Backend.CPU.Pool_Reference;
 
+   --  What an open session holds, by category.
+   --
+   --  @param Item Open session.
+   --  @return The account, all zero before the session opens.
+   function Accounting
+     (Item : Session) return Model_Runner.Memory.Account;
+
    --  Close a session. Idempotent.
    --
    --  @param Item Session to close.
@@ -414,6 +428,12 @@ private
    type Token_History_Access is access Token_History;
 
    type Session is limited new Ada.Finalization.Limited_Controlled with record
+      --  What this session holds, by category. The plan computes every one
+      --  of these before anything is allocated; recording them is what makes
+      --  a memory report say where the memory went, and what lets a limit
+      --  count the largest thing a session has.
+      Accounting : Model_Runner.Memory.Account;
+
       Current    : Session_State := Closed;
       Owner      : access Model'Class := null;
       Context    : Natural := 0;

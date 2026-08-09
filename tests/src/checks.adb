@@ -554,6 +554,123 @@ package body Checks is
                 "a two-worker pool says it does not run in parallel");
       end;
 
+      --  Every accounting category this program declares is charged.
+      --
+      --  A category nothing charges is a line of a memory report that reads
+      --  zero for memory the program is holding, and a limit that does not
+      --  count it. Seven of ten were in that position, including the KV
+      --  cache, which is the largest thing a session allocates.
+      --
+      --  Read out of the enumeration and looked for in a charge. The
+      --  category name appearing in a comment does not count, which is why
+      --  this looks for it after a dot.
+      declare
+         Spec : constant String :=
+           Contents ("src/library/model_runner-memory.ads");
+         Body_Text : constant String :=
+           Contents ("src/library/model_runner-llama.adb")
+           & Contents ("src/library/model_runner-generation.adb")
+           & Contents ("src/library/model_runner-gguf-containers-reader.adb")
+           & Contents ("src/library/model_runner-tokenizer.adb")
+           & Contents ("src/library/model_runner-cli-execute.adb");
+         Opening : constant String := "type Category is";
+
+         --  Whether Text charges Name: the name after a dot, with no
+         --  identifier character running on after it.
+         function Charged (Text, Name : String) return Boolean is
+            Token : constant String := "." & Name;
+         begin
+            if Text'Length < Token'Length then
+               return False;
+            end if;
+            for Index in Text'First .. Text'Last - Token'Length + 1 loop
+               if Text (Index .. Index + Token'Length - 1) = Token
+                 and then (Index + Token'Length > Text'Last
+                           or else not (Text (Index + Token'Length)
+                                          in 'A' .. 'Z' | 'a' .. 'z'
+                                             | '0' .. '9' | '_'))
+               then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Charged;
+         From    : Natural := 0;
+         Upto    : Natural := 0;
+         Named   : Natural := 0;
+      begin
+         for Index in Spec'First .. Spec'Last - Opening'Length + 1 loop
+            if Spec (Index .. Index + Opening'Length - 1) = Opening then
+               From := Index + Opening'Length;
+               exit;
+            end if;
+         end loop;
+
+         if From /= 0 then
+            for Index in From .. Spec'Last - 1 loop
+               if Spec (Index .. Index + 1) = ");" then
+                  Upto := Index;
+                  exit;
+               end if;
+            end loop;
+         end if;
+
+         Result.Performed := Result.Performed + 1;
+         if From = 0 or else Upto = 0 then
+            Fail ("Memory.Category has no values to check; the check no "
+                  & "longer matches the source it reads");
+         end if;
+
+         declare
+            Cursor : Natural := From;
+         begin
+            while Cursor <= Upto loop
+               declare
+                  Start : Natural := Cursor;
+               begin
+                  while Start <= Upto
+                    and then not (Spec (Start) in 'A' .. 'Z')
+                  loop
+                     Start := Start + 1;
+                  end loop;
+                  exit when Start > Upto;
+
+                  declare
+                     Stop : Natural := Start;
+                  begin
+                     while Stop <= Upto
+                       and then (Spec (Stop) in 'A' .. 'Z'
+                                 or else Spec (Stop) in 'a' .. 'z'
+                                 or else Spec (Stop) = '_')
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+
+                     Named := Named + 1;
+                     Result.Performed := Result.Performed + 1;
+
+                     --  With nothing running on after it: KV_Cache passed
+                     --  the first version of this check because the plan
+                     --  has a field called KV_Cache_Bytes, which is the
+                     --  size of the thing and not a charge for it.
+                     if not Charged (Body_Text, Spec (Start .. Stop - 1)) then
+                        Fail ("the accounting category "
+                              & Spec (Start .. Stop - 1)
+                              & " is declared and charged by nothing");
+                     end if;
+                     Cursor := Stop;
+                  end;
+               end;
+            end loop;
+         end;
+
+         Result.Performed := Result.Performed + 1;
+         if Named = 0 then
+            Fail ("no accounting categories were found; the check no longer "
+                  & "matches the source it reads");
+         end if;
+      end;
+
       --  Every progress stage this program declares is published somewhere.
       --
       --  A stage nobody publishes is a stage an observer waits for forever.

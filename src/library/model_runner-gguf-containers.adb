@@ -106,6 +106,13 @@ package body Model_Runner.GGUF.Containers is
    function Metadata_Count (Item : Container) return Natural
    is (Natural (Item.Entries.Length));
 
+   ---------------------
+   -- Metadata_Bytes --
+   ---------------------
+
+   function Metadata_Bytes (Item : Container) return U64
+   is (U64 (Item.Pool_Used));
+
    -------------------
    -- Metadata_Key --
    -------------------

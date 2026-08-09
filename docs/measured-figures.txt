@@ -63,6 +63,14 @@
 # load, outside the window as above. The Prompt_Rendered event is in the
 # command layer, which no group here fingerprints.
 #
+# The memory accounting at session open: a handful of additions, once per
+# session, and session open is inside the window the twelve-token figure
+# spans. Measured, not argued. A-B-A on the same tree, three runs each:
+# with it 8.77 8.89 8.65, without one of the charges 8.73 9.04 9.06, with it
+# again 8.71 9.08 8.68. The spread is wider than any difference between the
+# states. These runs are on the 131-token prompt and include load, so they
+# are not the published figure and are not offered as one.
+#
 # Anything touching these files that is not outside the measured window gets
 # a re-measure like that one.
 
@@ -70,7 +78,7 @@
 kernels EAF68F33E8E77C31 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure and the batch-size table under "Speed"
-engine DBC0F429EB40DF00 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine 55CA9E3299A1AA08 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 0A8A39491ED15B68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

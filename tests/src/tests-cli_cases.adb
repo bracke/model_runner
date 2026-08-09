@@ -19,6 +19,7 @@ with Model_Runner.Errors;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
 with Model_Runner.Presentation;
+with Model_Runner.Memory;
 with Model_Runner.Progress;
 with Model_Runner.Limits;
 with Model_Runner.GGUF.Containers.Reader;
@@ -1272,6 +1273,156 @@ package body Tests.CLI_Cases is
       L.Prepare (Item.Ready, Item.Parsed, Item.Source, Status => Status);
       Assert (E.Is_Ok (Status), "tiny model did not prepare");
    end Start;
+
+   --  A session's memory is counted, and the limit counts it.
+   --
+   --  Nine of eleven accounting categories were charged by nothing, so a
+   --  report of where memory went named the weights and read zero for
+   --  everything else -- including the KV cache, which is the largest thing
+   --  a session allocates and grows with the context.
+   --
+   --  And --memory-limit set the model's bound only. A caller asking for a
+   --  hundred megabytes could be given a model inside it and then a session
+   --  of any size at all, which is the part that mattered.
+   procedure Session_Memory_Is_Counted
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Mem renames Model_Runner.Memory;
+      use type Mem.U64;
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Room => 256);
+
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Rig     : Harness (Held'Access);
+         Session : L.Session;
+         Status  : E.Error_Info;
+      begin
+         Start (Rig);
+         L.Open (Session, Rig.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         --  Every category a session fills is filled.
+         declare
+            Account : constant Mem.Account := L.Accounting (Session);
+            Empty   : Natural := 0;
+         begin
+            for Kind in Mem.KV_Cache .. Mem.Template_Buffers loop
+               if Account.By_Category (Kind) = 0 then
+                  Empty := Empty + 1;
+                  Assert (False,
+                          "a session holds nothing under "
+                          & Mem.Category'Image (Kind));
+               end if;
+            end loop;
+            Assert (Empty = 0, "a session left categories at zero");
+
+            Assert (Account.By_Category (Mem.KV_Cache) > 0,
+                    "the KV cache is not counted");
+            Assert (Account.Current >= Account.By_Category (Mem.KV_Cache),
+                    "the total is smaller than the largest thing in it");
+         end;
+
+         L.Close (Session);
+
+         --  And the model's own two.
+         declare
+            Account : constant Mem.Account := L.Accounting (Rig.Ready);
+         begin
+            Assert (Account.By_Category (Mem.Model_Weights) > 0,
+                    "the weights are not counted");
+            Assert (Account.By_Category (Mem.Tokenizer_Storage) > 0,
+                    "the vocabulary's storage is not counted");
+            Assert (Account.By_Category (Mem.Metadata_Storage) > 0,
+                    "the container's metadata is not counted");
+         end;
+
+         L.Close (Rig.Ready, Status);
+         Containers.Close (Rig.Parsed);
+      end;
+
+      --  A limit below what the session needs refuses it, naming the
+      --  category. The same limit above it does not.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Rig    : Harness (Held'Access);
+         Tight  : L.Session;
+         Loose  : L.Session;
+         Bounds : Model_Runner.Limits.Session_Limits :=
+           Model_Runner.Limits.Default_Session_Limits;
+         Status : E.Error_Info;
+      begin
+         Start (Rig);
+
+         Bounds.Max_Session_Bytes := 1;
+         L.Open (Tight, Rig.Ready, Session_Bounds => Bounds,
+                 Status => Status);
+         Assert (Status.Code = E.Memory_Limit_Exceeded,
+                 "a session of one byte was allowed: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Bounds.Max_Session_Bytes := 1024 * 1024 * 1024;
+         L.Open (Loose, Rig.Ready, Session_Bounds => Bounds,
+                 Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a session inside a generous limit was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         L.Close (Loose);
+
+         L.Close (Rig.Ready, Status);
+         Containers.Close (Rig.Parsed);
+      end;
+
+      --  And the command line reaches it. A limit above what the weights
+      --  need and below what the session needs has to be refused: before
+      --  --memory-limit bounded the session, that run succeeded and the
+      --  caller was given a session of whatever size it liked.
+      declare
+         Path   : constant String := "obj/memory-model.gguf";
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         Tiny_Model.Write (Path, Room => 256);
+
+         Add (Source, "run");
+         Add (Source, Path);
+         Add (Source, "--prompt");
+         Add (Source, "hi");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+         Add (Source, "--memory-limit");
+         Add (Source, "20000");
+
+         Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, "obj/memory.txt");
+         Ada.Text_IO.Set_Error (Handle);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+               Ada.Text_IO.Close (Handle);
+               raise;
+         end;
+         Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+         Ada.Text_IO.Close (Handle);
+
+         Assert (Status = E.Exit_Resource,
+                 "a limit the session exceeds was accepted; status"
+                 & Natural'Image (Status));
+
+         declare
+            Said : constant String :=
+              Project_Tools.Files.Read_Raw_File ("obj/memory.txt");
+         begin
+            Assert (Project_Tools.Text.Contains (Said, "kv_cache"),
+                    "the refusal did not name the category: " & Said);
+         end;
+      end;
+   end Session_Memory_Is_Counted;
 
    --  How many workers run a generation does not change what it produces.
    --
@@ -4463,6 +4614,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Trace_And_Diagnostic_Render'Access,
          "the progress trace and a diagnostic render");
+      Register_Routine
+        (T, Session_Memory_Is_Counted'Access,
+         "a session's memory is counted and the limit counts it");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");

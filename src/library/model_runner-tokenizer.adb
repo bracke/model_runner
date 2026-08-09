@@ -87,6 +87,13 @@ package body Model_Runner.Tokenizer is
    function Size (Item : Vocabulary) return Natural
    is (Natural (Item.Entries.Length));
 
+   -------------------
+   -- Storage_Bytes --
+   -------------------
+
+   function Storage_Bytes (Item : Vocabulary) return Natural
+   is (Item.Pool_Used);
+
    ----------
    -- Kind --
    ----------

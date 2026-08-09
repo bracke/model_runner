@@ -284,6 +284,24 @@ package body Model_Runner.CLI.Execute is
       return Result;
    end Model_Bounds;
 
+   --  Limits applied to a session, from the same command line.
+   --
+   --  --memory-limit bounded the model and nothing else. A session holds the
+   --  KV cache, which grows with the context and is the largest thing it
+   --  allocates, so a caller asking for a hundred megabytes could be given a
+   --  model inside it and then a session of any size at all.
+   function Session_Bounds
+     (Item : Opt.Command) return Model_Runner.Limits.Session_Limits
+   is
+      Result : Model_Runner.Limits.Session_Limits :=
+        Model_Runner.Limits.Default_Session_Limits;
+   begin
+      if Item.Memory_Limit /= 0 then
+         Result.Max_Session_Bytes := Item.Memory_Limit;
+      end if;
+      return Result;
+   end Session_Bounds;
+
    --  Load and validate a container, and prepare a model when asked.
    procedure Load
      (Item      : Opt.Command;
@@ -902,6 +920,7 @@ package body Model_Runner.CLI.Execute is
 
       L.Open
         (Session, Prepared, Item.Context_Size,
+         Session_Bounds => Session_Bounds (Item),
          Workers => Team, Status => Condition);
       if E.Is_Error (Condition) then
          Fail (Condition);

@@ -98,6 +98,16 @@ package Model_Runner.Tokenizer is
    --  @return Token count.
    function Size (Item : Vocabulary) return Natural;
 
+   --  Bytes of token text this vocabulary holds.
+   --
+   --  A real vocabulary is tens of thousands of strings and megabytes of
+   --  pool. It was allocated and never accounted for, so a memory report
+   --  read zero against the category named for it.
+   --
+   --  @param Item Vocabulary to measure.
+   --  @return Bytes in use, zero when the vocabulary is not loaded.
+   function Storage_Bytes (Item : Vocabulary) return Natural;
+
    --  Tokenizer model the vocabulary was loaded from.
    --
    --  @param Item Vocabulary to inspect.

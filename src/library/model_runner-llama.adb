@@ -574,6 +574,17 @@ package body Model_Runner.Llama is
 
       Item.Settings.Vocabulary := Model_Runner.Tokenizer.Size (Item.Words);
 
+      --  The vocabulary's own storage and the container's metadata pool.
+      --  Both are megabytes on a real model and neither was counted, so the
+      --  account said the program held the weights and nothing else.
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Tokenizer_Storage,
+         Interfaces.Unsigned_64
+           (Model_Runner.Tokenizer.Storage_Bytes (Item.Words)));
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Metadata_Storage,
+         Containers.Metadata_Bytes (Source));
+
       --  Chat template. An embedded template is untrusted data: it is compiled
       --  and validated here, before anything can be generated with it. A
       --  template outside the supported subset leaves the model usable in raw
@@ -753,6 +764,16 @@ package body Model_Runner.Llama is
    -----------
    -- Close --
    -----------
+
+   ----------------
+   -- Accounting --
+   ----------------
+
+   function Accounting (Item : Model) return Mem.Account
+   is (Item.Accounting);
+
+   function Accounting (Item : Session) return Mem.Account
+   is (Item.Accounting);
 
    procedure Close
      (Item   : in out Model;
@@ -967,6 +988,28 @@ package body Model_Runner.Llama is
       if E.Is_Error (Status) then
          return;
       end if;
+
+      --  What the plan says, recorded where a report can find it. Every
+      --  figure here was already computed and then thrown away, so the
+      --  account read zero for the KV cache while the session held it.
+      Mem.Initialize
+        (Item.Accounting, Model_Runner.Limits.Default_Model_Limits,
+         Session_Bounds.Max_Session_Bytes);
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.KV_Cache, Item.Plan.KV_Cache_Bytes);
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Activations,
+         Item.Plan.Activation_Bytes + Item.Plan.Batch_Bytes);
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Logits, Item.Plan.Logits_Bytes);
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Sampling_Workspace, Item.Plan.Sampling_Bytes);
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Token_Buffers,
+         Item.Plan.Token_History_Bytes + Item.Plan.Decoder_Bytes);
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Template_Buffers,
+         Item.Plan.Rendering_Bytes + Item.Plan.Stop_Bytes);
 
       if Session_Bounds.Max_Session_Bytes /= 0
         and then Item.Plan.Total_Resident > Session_Bounds.Max_Session_Bytes
