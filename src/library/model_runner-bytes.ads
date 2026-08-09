@@ -32,7 +32,6 @@ package Model_Runner.Bytes is
 
    type Byte_Array_Access is access Byte_Array;
 
-   Empty_Bytes : constant Byte_Array (1 .. 0) := [others => 0];
 
    --  Release a heap byte buffer and clear the reference.
    --

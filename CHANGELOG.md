@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `CLI.Options.Max_Path` is gone. It said a path was bounded at four
+  thousand and ninety-six characters; the type that holds one stops at five
+  hundred and twelve, so the stated limit was not merely unenforced but
+  wrong. `Bytes.Empty_Bytes` is gone with it, as a constant nothing read.
+
+- The release checklist covers public constants as well as operations. A
+  limit written into a spec is read as a limit that holds, and this session
+  has found four claims of that shape unenforced.
+
 - A session reset clears the token history. `Bytes.Wipe` said it was used to
   clear prompt and generated-text buffers on session reset; it was called by
   nothing, and it could not have done that job -- the conversation is held as

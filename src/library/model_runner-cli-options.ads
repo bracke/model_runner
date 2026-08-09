@@ -95,7 +95,6 @@ package Model_Runner.CLI.Options is
    --  How much diagnostic output to produce.
    type Verbosity is (Quiet, Normal, Verbose);
 
-   Max_Path : constant := 4096;
 
    type Text_Access is access String;
 

@@ -913,6 +913,21 @@ package body Checks is
             function Part_Of_A_Word (Letter : Character) return Boolean
             is (Letter in 'A' .. 'Z' or else Letter in 'a' .. 'z'
                 or else Letter in '0' .. '9' or else Letter = '_');
+
+            --  Whether a colon that is not part of ":=" comes next.
+            function Colon_Follows (Text : String; From : Natural)
+              return Boolean
+            is
+               Scan : Natural := From;
+            begin
+               while Scan <= Text'Last and then Text (Scan) = ' ' loop
+                  Scan := Scan + 1;
+               end loop;
+               return Scan <= Text'Last
+                 and then Text (Scan) = ':'
+                 and then (Scan = Text'Last
+                           or else Text (Scan + 1) /= '=');
+            end Colon_Follows;
          begin
             if Text'Length < Name'Length then
                return False;
@@ -932,8 +947,15 @@ package body Checks is
                      --  right and was not: a function without parameters is
                      --  called by naming it, so half the accessors in this
                      --  crate read as dead.
-                     if After > Text'Last
-                       or else not Part_Of_A_Word (Text (After))
+                     --
+                     --  A name followed by a colon is being declared, not
+                     --  used, and a constant's own declaration line has
+                     --  nothing before the name to give it away. Not ":="
+                     --  though: that is an assignment, and assigning to
+                     --  something is using it.
+                     if (After > Text'Last
+                         or else not Part_Of_A_Word (Text (After)))
+                       and then not (Colon_Follows (Text, Index + Name'Length))
                      then
                         while Start > Text'First
                           and then Text (Start - 1) /= Character'Val (10)
@@ -1018,6 +1040,14 @@ package body Checks is
                                  "procedure ")
                         then
                            Head := Line'First + 13;
+
+                        --  And a named constant, which carries a promise of
+                        --  its own: a limit written into a spec is read as a
+                        --  limit that holds. One said paths were bounded at
+                        --  four thousand characters while the type holding
+                        --  them stopped at five hundred and twelve.
+                        elsif Holds (Line, ": constant") then
+                           Head := Line'First + 3;
                         end if;
                      end if;
 
@@ -1064,8 +1094,16 @@ package body Checks is
 
          procedure Examine_All is new For_Each_Source (Examine);
       begin
+         --  Every platform, not the one this build happens to use. A
+         --  constant read only by the Windows body is read; leaving those
+         --  out reported the mapping limit as dead because the POSIX body
+         --  is where it is tested.
          Gather_All ("src/library");
          Gather_All ("src/platform/linux");
+         Gather_All ("src/platform/macos");
+         Gather_All ("src/platform/posix");
+         Gather_All ("src/platform/windows");
+         Gather_All ("src/platform/unsupported");
          Gather_All ("tests/src");
          Examine_All ("src/library");
 
