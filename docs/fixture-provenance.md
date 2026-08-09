@@ -27,6 +27,17 @@ No test reads it. It is not a fixture in the sense the file above is; it is
 the input to a published measurement, and a published measurement whose input
 is not written down is an anecdote.
 
+### `tests/fixtures/speed-prompt-short.txt`
+
+The same, for the headline figure at the top of the README's speed section.
+That figure said "from a short prompt" and named no prompt, so it could not
+be reproduced: running the long prompt above gives four times the number,
+which tells a reader only that they guessed the input wrong. Six tokens
+under the TinyLlama tokenizer, so that almost all of the time measured is
+generation rather than prompt evaluation, which is what the figure is about.
+
+No test reads it either. `tests speed` does.
+
 ## Models that are **not** committed
 
 The following model is used for the optional `tests external-model` comparison.

@@ -558,28 +558,48 @@ Named in the specification, absent here:
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
-chooses for itself. From a short prompt, twelve tokens take **2.07 s** --
-about 1.1 s evaluating the prompt and 1.1 s generating -- and 14.2 s of
-processor time, the median of three runs. Loading the model costs a further
-0.8 s of wall that this figure does not include, because the two are worth
+chooses for itself. From the seven-token prompt in
+`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.28 s** --
+0.26 s evaluating the prompt and 1.02 s generating -- and 9.3 s of processor
+time, the median of three runs. Loading the model costs a further 0.6 s of
+wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
 
-These used to be quoted at fourteen threads, which was more than this machine
-can use and is no longer what it chooses; at that setting the wall figure was
-the same and the processor figure was 24.5 s. The wall figure has been 2.2 s
-throughout, and was published as such.
+The run is
 
-The processor figure was published as 16.0 s, which was wrong when it was
-written -- not a regression since. Building the commit that published it and
-running it again gives 24.8 s at fourteen threads, which is what this build
-gives at fourteen threads. What made it 14.4 s was choosing eight instead.
+```
+model_runner run MODEL --raw --prompt-file tests/fixtures/speed-prompt-short.txt \
+  --seed 1 --temperature 0 --max-tokens 12 --show-stats
+```
+
+and `tests speed --model MODEL` takes the same measurement three times and
+reports the median, so the figure above is a command rather than a memory.
+The processor figure is the one number here the tool does not produce:
+totalling processor time across the worker tasks needs a host call this
+crate would have to bind per platform, and `/usr/bin/time` already gives it.
+
+This paragraph used to say 2.07 s, about 1.1 s of it evaluating the prompt,
+and 14.2 s of processor time, from "a short prompt" that was never named.
+Neither the prompt nor the figure could be recovered: the repository's own
+long prompt gives four times the number, and a short one gives a quarter of
+the stated prompt-evaluation time. What made 1.1 s plausible was the chat
+template, which turns a six-word prompt into twenty-eight tokens -- but a
+templated run of this model stops at its end-of-sequence token after seven
+tokens, so it is not a twelve-token measurement at all. The figures above
+are `--raw`, which is why they are lower and why they can be taken again.
+
+The worker count is what that processor figure is about. The same run at
+fourteen threads takes 2.03 s of wall against 2.09 s and 17.2 s of processor
+time against 9.4 s: twice the energy for nothing, which is why the program
+chooses one worker per core rather than one per processor. The wall figures
+here include loading, which the split above excludes.
 
 A job is cut into one more piece than the pool has workers, because the task
 that submits it takes the last piece rather than waiting; the figures below
 count those pieces, and so does the benchmark. Eight of them is this machine
 fully occupied, since it has eight cores -- reported as sixteen processors,
-which is not the same thing. Eight shares take 2.21 s for 14.6 s of processor
-time and sixteen take 2.20 s for 27.4 s: the second worker on a core shares
+which is not the same thing. Eight shares take 2.09 s for 9.4 s of processor
+time and sixteen take 2.08 s for 17.5 s: the second worker on a core shares
 the first one's execution units, so it buys no wall and costs its own
 processor time. There are only 2015 matrix products in a run this size, so
 handing each of them out costs milliseconds in total; what the pool does with

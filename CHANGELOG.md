@@ -25,6 +25,24 @@ Keep a Changelog and the project uses semantic versioning.
   to make. The README's stream table did not mention `inspect` at all; it
   does now.
 
+- The headline speed figure names its input and can be taken again. It said
+  "from a short prompt" and named no prompt, no token count and no worker
+  count, so it could not be reproduced: the repository's own long prompt
+  gives four times the number and a short one gives a quarter of the stated
+  prompt-evaluation time. What made the published split plausible was the
+  chat template, which turns six words into twenty-eight tokens -- and a
+  templated run of this model stops at its end-of-sequence token after seven
+  tokens, so it was not a twelve-token measurement. The figure is now the
+  seven-token prompt in `tests/fixtures/speed-prompt-short.txt`, run with
+  `--raw`, and the command is printed beside it: 1.28 s, 0.26 s evaluating
+  and 1.02 s generating, 9.3 s of processor time. The worker-count and
+  share-count figures beside it are re-measured in the same configuration.
+
+- `tests speed --model PATH` takes that measurement three times and reports
+  the median, so the fingerprint duty -- re-measure and record what you get
+  -- is a command rather than an instruction. It needs a model the caller
+  already has; nothing is downloaded and a missing file is a skip.
+
 - The reference backend takes about twelve times as long, not forty. The
   figure was published when the backend was added, taken by hand and never
   checked; re-measuring it on the machine and model the other figures use

@@ -26,9 +26,11 @@ with Model_Runner.Tokenizer;
 with Model_Runner.Limits;
 with Model_Runner.Text;
 with Model_Runner.Errors;
+with Model_Runner.Platform;
 with Project_Tools.Files;
 with Project_Tools.Text;
 with Packaging;
+with Speed_Run;
 with Fuzzing;
 with Tiny_Model;
 
@@ -488,6 +490,54 @@ begin
          end if;
       end;
 
+   elsif Command = "speed" then
+      --  Take the published speed figures again. Needs a model the caller
+      --  already has; nothing is downloaded and a missing file is a skip.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         function Number (Name : String; Default : Positive) return Positive is
+         begin
+            return Positive'Value (Option (Name, ""));
+         exception
+            when others =>
+               return Default;
+         end Number;
+
+         Result  : Speed_Run.Report;
+         Refused : constant Boolean :=
+           Unknown_Option (" --model --prompt-file --max-tokens --threads "
+                           & "--repeats ");
+      begin
+         if not Refused then
+            Speed_Run.Run
+              (Path        => Option ("--model", ""),
+               Prompt_Path =>
+                 Option ("--prompt-file",
+                         "../tests/fixtures/speed-prompt-short.txt"),
+               Tokens      => Number ("--max-tokens", 12),
+               Threads     => Number ("--threads",
+                                      Model_Runner.Platform.Core_Count - 1),
+               Repeats     => Number ("--repeats", 3),
+               Result      => Result);
+
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
+
+            if not Result.Ran and then not Result.Missing then
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            end if;
+         end if;
+      end;
+
    elsif Command = "benchmark" then
       --  Measure the kernels. Not part of the mandatory suite: it reports
       --  numbers rather than passing or failing.
@@ -533,7 +583,7 @@ begin
         (Ada.Text_IO.Standard_Error, "unknown command: " & Command);
       Ada.Text_IO.Put_Line
         (Ada.Text_IO.Standard_Error, "usage: tests [test | check [ROOT] | fuzz [--seed N] [--cases N]"
-         & " | fixtures [DIR]]");
+         & " | speed --model PATH | fixtures [DIR]]");
       Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
    end if;
 end Tests_Main;
