@@ -12,6 +12,7 @@ with Project_Tools.Text;
 with Project_Tools.Tree_Checks;
 
 with Docs_Generation;
+with Library_Surface;
 with Reserved_Codes;
 with Template_Registry;
 
@@ -578,6 +579,394 @@ package body Checks is
                      & Keys (Index).Text (1 .. Keys (Index).Last));
             end if;
          end loop;
+      end;
+
+      --  Every public operation has a reader in the program, not only in
+      --  the tests.
+      --
+      --  There has been a check that every public operation has a reader
+      --  since the registries were first asked of the code, and the tests
+      --  counted as readers. So an operation the program never calls passed
+      --  it, and about thirty did: the check read as though the surface were
+      --  in use. An operation only its own tests call is not tested code, it
+      --  is a test fixture with a public name.
+      --
+      --  A reader is a mention that is not a declaration, a body header, an
+      --  end line or a comment. Where a name is common enough to be somebody
+      --  else's too -- Open, Close, Text -- that overcounts, which fails
+      --  towards saying an operation is used. This check is for the ones
+      --  nothing uses at all.
+      declare
+         Room  : constant := 400;
+         Width : constant := 64;
+         Named : constant := 64;
+
+         type Operation is record
+            Name : String (1 .. Width) := [others => ' '];
+            Last : Natural := 0;
+            File : String (1 .. Named) := [others => ' '];
+            Kept : Natural := 0;
+            Read : Boolean := False;
+         end record;
+
+         Held  : array (1 .. Room) of Operation;
+         Count : Natural := 0;
+
+         --  Report whether a line declares, defines or ends a subprogram, or
+         --  is a comment. Those mention a name without reading it.
+         function Is_Definition (Line : String) return Boolean is
+            From : Natural := Line'First;
+         begin
+            while From <= Line'Last and then Line (From) = ' ' loop
+               From := From + 1;
+            end loop;
+            if From > Line'Last then
+               return True;
+            end if;
+            declare
+               Rest : constant String := Line (From .. Line'Last);
+
+               function Opens (Word : String) return Boolean
+               is (Rest'Length >= Word'Length
+                   and then Rest (Rest'First .. Rest'First + Word'Length - 1)
+                            = Word);
+            begin
+               return Opens ("function ") or else Opens ("procedure ")
+                 or else Opens ("end ") or else Opens ("--")
+                 or else Opens ("overriding");
+            end;
+         end Is_Definition;
+
+         --  Collect the public operations a spec declares.
+         procedure Visit_Spec (Relative : String) is
+            Text   : constant String := Contents (Relative);
+            Cursor : Natural := Text'First;
+            Hidden : Boolean := False;
+         begin
+            if Relative'Length < 4
+              or else Relative (Relative'Last - 3 .. Relative'Last) /= ".ads"
+            then
+               return;
+            end if;
+
+            while Cursor <= Text'Last loop
+               declare
+                  Stop : Natural := Cursor;
+               begin
+                  while Stop <= Text'Last
+                    and then Text (Stop) /= Character'Val (10)
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  declare
+                     Line : constant String := Text (Cursor .. Stop - 1);
+                  begin
+                     if Line = "private" then
+                        Hidden := True;
+                     end if;
+
+                     --  Three spaces exactly: an operation of this package
+                     --  rather than one nested inside another declaration.
+                     if not Hidden
+                       and then Line'Length > 14
+                       and then Line (Line'First .. Line'First + 2) = "   "
+                       and then Line (Line'First + 3) /= ' '
+                       and then (Line (Line'First + 3 .. Line'First + 11)
+                                   = "function "
+                                 or else Line (Line'First + 3
+                                               .. Line'First + 12)
+                                           = "procedure ")
+                     then
+                        declare
+                           From : constant Natural :=
+                             (if Line (Line'First + 3) = 'f'
+                              then Line'First + 12 else Line'First + 13);
+                           To   : Natural := From;
+                        begin
+                           while To <= Line'Last
+                             and then Line (To) in 'A' .. 'Z' | 'a' .. 'z'
+                                                 | '0' .. '9' | '_'
+                           loop
+                              To := To + 1;
+                           end loop;
+
+                           if To > From
+                             and then Count < Room
+                             and then To - From <= Width
+                           then
+                              declare
+                                 Size : constant Natural :=
+                                   Natural'Min (Named, Relative'Length);
+                              begin
+                                 Count := Count + 1;
+                                 Held (Count).Last := To - From;
+                                 Held (Count).Name (1 .. To - From) :=
+                                   Line (From .. To - 1);
+                                 Held (Count).Kept := Size;
+                                 Held (Count).File (1 .. Size) :=
+                                   Relative (Relative'First
+                                             .. Relative'First + Size - 1);
+                              end;
+                           end if;
+                        end;
+                     end if;
+                  end;
+
+                  Cursor := Stop + 1;
+               end;
+            end loop;
+         end Visit_Spec;
+
+         --  Mark every operation a production source reads.
+         procedure Visit_Readers (Relative : String) is
+            Text   : constant String := Contents (Relative);
+            Cursor : Natural := Text'First;
+         begin
+            while Cursor <= Text'Last loop
+               declare
+                  Stop : Natural := Cursor;
+               begin
+                  while Stop <= Text'Last
+                    and then Text (Stop) /= Character'Val (10)
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  declare
+                     Line : constant String := Text (Cursor .. Stop - 1);
+                  begin
+                     if not Is_Definition (Line) then
+                        for Index in 1 .. Count loop
+                           if not Held (Index).Read
+                             and then Holds
+                                        (Line,
+                                         Held (Index).Name
+                                           (1 .. Held (Index).Last))
+                           then
+                              Held (Index).Read := True;
+                           end if;
+                        end loop;
+                     end if;
+                  end;
+
+                  Cursor := Stop + 1;
+               end;
+            end loop;
+         end Visit_Readers;
+
+         procedure Collect is new For_Each_Source (Visit_Spec);
+         procedure Read_Them is new For_Each_Source (Visit_Readers);
+      begin
+         Collect ("src/library");
+         Collect ("src/main");
+         Read_Them ("src/library");
+         Read_Them ("src/main");
+         Read_Them ("src/platform");
+
+         Result.Performed := Result.Performed + 1;
+         if Count < 200 then
+            Fail ("only" & Natural'Image (Count) & " public operations were "
+                  & "found; the check no longer matches the specs it reads");
+         end if;
+
+         for Index in 1 .. Count loop
+            Result.Performed := Result.Performed + 1;
+            if not Held (Index).Read
+              and then not Library_Surface.Is_Listed
+                             (Held (Index).Name (1 .. Held (Index).Last))
+            then
+               Fail (Held (Index).File (1 .. Held (Index).Kept) & " declares "
+                     & Held (Index).Name (1 .. Held (Index).Last)
+                     & ", which nothing in the program calls and which "
+                     & "Library_Surface does not list");
+            end if;
+         end loop;
+
+         --  And the list cannot outlive what it describes. An operation that
+         --  starts being called, or that is renamed or removed, has to come
+         --  off it -- otherwise the list would drift into the same
+         --  unexamined state it was written to end.
+         for Index in 1 .. Library_Surface.Count loop
+            declare
+               Name  : constant String := Library_Surface.Item (Index);
+               Found : Boolean := False;
+            begin
+               Result.Performed := Result.Performed + 1;
+               for Which in 1 .. Count loop
+                  if Held (Which).Name (1 .. Held (Which).Last) = Name then
+                     Found := True;
+                     if Held (Which).Read then
+                        Fail ("Library_Surface lists " & Name
+                              & ", which the program now calls");
+                     end if;
+                  end if;
+               end loop;
+
+               if not Found then
+                  Fail ("Library_Surface lists " & Name
+                        & ", which no public spec declares");
+               end if;
+            end;
+         end loop;
+      end;
+
+      --  And the other way: every message key the code names is in the
+      --  catalog.
+      --
+      --  The check above walks the catalog and asks what reads each key. It
+      --  cannot see a key the code names that the catalog does not have, and
+      --  that failure ships: the emergency form renders the identifier in
+      --  angle brackets, so a mistyped label prints
+      --  <cli.inspect.label.wrkers> where a word should be, in every locale
+      --  at once. Nothing failed when that was tried.
+      --
+      --  The keys are taken from the calls that consume them rather than
+      --  from every string in the sources, because a GGUF metadata key looks
+      --  exactly like a message key and is not one. A key built by
+      --  concatenation ends at a dot and is left to the families above.
+      declare
+         Catalog : constant String :=
+           Contents ("resources/messages/catalog.txt");
+
+         Seen : Natural := 0;
+
+         --  Report whether the catalog carries an English entry.
+         function Has_Entry (Key : String) return Boolean
+         is (Holds (Catalog, Character'Val (10) & "en." & Key & " ="));
+
+         --  Report whether a name at this position is a whole word.
+         function Standalone
+           (Text : String; From, To : Natural) return Boolean
+         is ((From = Text'First
+              or else (Text (From - 1) not in 'A' .. 'Z' | 'a' .. 'z'
+                                            | '0' .. '9' | '_'))
+             and then (To = Text'Last
+                       or else (Text (To + 1) not in 'A' .. 'Z' | 'a' .. 'z'
+                                                   | '0' .. '9' | '_')));
+
+         --  Report whether this position sits inside a comment.
+         function In_Comment (Text : String; At_Index : Natural) return Boolean
+         is
+            Index : Natural := At_Index;
+         begin
+            while Index > Text'First loop
+               exit when Text (Index - 1) = Character'Val (10);
+               if Index - 1 > Text'First
+                 and then Text (Index - 2 .. Index - 1) = "--"
+               then
+                  return True;
+               end if;
+               Index := Index - 1;
+            end loop;
+            return False;
+         end In_Comment;
+
+         --  Check every call of one operation in one source.
+         procedure Scan_Calls (Text, Name, Relative : String) is
+            Index : Natural := Text'First;
+         begin
+            if Text'Length <= Name'Length then
+               return;
+            end if;
+            while Index <= Text'Last - Name'Length + 1 loop
+               if Text (Index .. Index + Name'Length - 1) = Name
+                 and then Standalone (Text, Index, Index + Name'Length - 1)
+                 and then not In_Comment (Text, Index)
+               then
+                  --  The first two arguments, and only what sits directly
+                  --  in them. A key is the first argument or the one after
+                  --  the console; a literal nested inside a call at that
+                  --  position is somebody else's argument -- the name of a
+                  --  placeholder, most often -- and not a key at all.
+                  declare
+                     Stop   : Natural := Index + Name'Length;
+                     Depth  : Natural := 0;
+                     Commas : Natural := 0;
+                     First  : Natural := 0;
+                     Last   : Natural := 0;
+                  begin
+                     while Stop <= Text'Last
+                       and then Text (Stop) /= ';'
+                       and then Stop - Index < 400
+                     loop
+                        case Text (Stop) is
+                           when '(' =>
+                              Depth := Depth + 1;
+                           when ')' =>
+                              exit when Depth <= 1;
+                              Depth := Depth - 1;
+                           when ',' =>
+                              if Depth = 1 then
+                                 Commas := Commas + 1;
+                                 exit when Commas >= 2;
+                              end if;
+                           when '"' =>
+                              if Depth = 1 then
+                                 First := Stop + 1;
+                                 Last := First;
+                                 while Last <= Text'Last
+                                   and then Text (Last) /= '"'
+                                 loop
+                                    Last := Last + 1;
+                                 end loop;
+                                 exit;
+                              end if;
+                           when others =>
+                              null;
+                        end case;
+                        Stop := Stop + 1;
+                     end loop;
+
+                     if First > 0 and then Last > First then
+                        declare
+                           Key : constant String := Text (First .. Last - 1);
+                        begin
+                           --  A key assembled from an enumeration ends at the
+                           --  dot; those are answered by the families above.
+                           if Key (Key'Last) /= '.' then
+                              Seen := Seen + 1;
+                              Result.Performed := Result.Performed + 1;
+                              if not Has_Entry (Key) then
+                                 Fail (Relative & " names the message key "
+                                       & Key & ", which the catalog does not "
+                                       & "have");
+                              end if;
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end if;
+               Index := Index + 1;
+            end loop;
+         end Scan_Calls;
+
+         --  The operations whose first string argument is a message key.
+         procedure Visit_Calls (Relative : String) is
+            Text : constant String := Contents (Relative);
+         begin
+            Scan_Calls (Text, "Put_Message", Relative);
+            Scan_Calls (Text, "Message_Value", Relative);
+            Scan_Calls (Text, "Put_Heading", Relative);
+            Scan_Calls (Text, "Put_Field", Relative);
+            Scan_Calls (Text, "Put_Note", Relative);
+            Scan_Calls (Text, "Put_Prompt", Relative);
+            Scan_Calls (Text, "Put_Option", Relative);
+            Scan_Calls (Text, "Warn", Relative);
+         end Visit_Calls;
+
+         procedure Scan_Sources is new For_Each_Source (Visit_Calls);
+      begin
+         Scan_Sources ("src/library");
+         Scan_Sources ("src/main");
+         Scan_Sources ("src/platform");
+
+         Result.Performed := Result.Performed + 1;
+         if Seen < 50 then
+            Fail ("only" & Natural'Image (Seen) & " message keys were found "
+                  & "in the sources; the check no longer matches the calls "
+                  & "it reads");
+         end if;
       end;
 
       --  Documentation registries agree with the code.

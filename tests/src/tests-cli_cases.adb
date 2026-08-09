@@ -4842,6 +4842,156 @@ package body Tests.CLI_Cases is
    -- Register_Tests --
    --------------------
 
+   ------------------------------------
+   -- Runs_Report_Which_Backend_Ran --
+   ------------------------------------
+
+   --  Both commands say which backend answers and how many workers it has.
+   --
+   --  Two backends produce the same logits and differ by about forty times in
+   --  wall clock, so which one ran is the first thing anyone reading a
+   --  timing needs to know, and it used to be knowable only by remembering
+   --  what was typed. Neither figure is read back off the command line:
+   --  --backend reference takes one worker whatever --threads asked for, and
+   --  a report that repeated the request rather than the outcome would be
+   --  worth nothing exactly when it mattered.
+   --
+   --  inspect answers for the run that would happen and statistics for the
+   --  run that did, so both are asked here; when the worker choice lived in
+   --  one of them they could have disagreed.
+
+   procedure Runs_Report_Which_Backend_Ran
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Back renames Model_Runner.Backend;
+      use Ada.Text_IO;
+      use type Back.Backend_Kind;
+
+      Model  : constant String := "obj/report-model.gguf";
+      Stream : constant String := "obj/report-output.txt";
+
+      --  Everything the command wrote to both streams.
+      function Output_Of (Source : in out Fixed_Arguments) return String is
+         Handle : File_Type;
+         Status : Natural;
+      begin
+         Create (Handle, Out_File, Stream);
+         Set_Output (Handle);
+         Set_Error (Handle);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               Set_Output (Standard_Output);
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Output (Standard_Output);
+         Set_Error (Standard_Error);
+         Close (Handle);
+         return Project_Tools.Files.Read_Raw_File (Stream);
+      end Output_Of;
+
+      --  The value of a labelled field, or empty when there is no such line.
+      --  The labels are padded to a column, so the value is what is left
+      --  once the label and the padding are taken off.
+      function Field (Text, Label : String) return String is
+         Head  : constant String := "  " & Label;
+         From  : Natural := Text'First;
+      begin
+         while From <= Text'Last loop
+            declare
+               Stop : Natural := From;
+            begin
+               while Stop <= Text'Last
+                 and then Text (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line : constant String := Text (From .. Stop - 1);
+               begin
+                  if Line'Length > Head'Length
+                    and then Line (Line'First .. Line'First + Head'Length - 1)
+                             = Head
+                    and then Line (Line'First + Head'Length) = ' '
+                  then
+                     return T.Trim (Line (Line'First + Head'Length .. Line'Last));
+                  end if;
+               end;
+
+               From := Stop + 1;
+            end;
+         end loop;
+         return "";
+      end Field;
+
+      --  An inspection, which reports what a run would use.
+      function Inspected (Kind : Back.Backend_Kind) return String is
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "inspect");
+         Add (Source, Model);
+         Add (Source, "--backend");
+         Add (Source, Back.Backend_Name (Kind));
+         Add (Source, "--threads");
+         Add (Source, "3");
+         return Output_Of (Source);
+      end Inspected;
+
+      --  A run with statistics, which reports what it did use.
+      function Ran (Kind : Back.Backend_Kind) return String is
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--backend");
+         Add (Source, Back.Backend_Name (Kind));
+         Add (Source, "--threads");
+         Add (Source, "3");
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         Add (Source, "--show-stats");
+         return Output_Of (Source);
+      end Ran;
+   begin
+      Tiny_Model.Write (Model, Room => 256);
+
+      for Kind in Back.Backend_Kind loop
+         declare
+            Name    : constant String := Back.Backend_Name (Kind);
+            Looked  : constant String := Inspected (Kind);
+            Worked  : constant String := Ran (Kind);
+
+            --  Three were asked for; the backend that cannot run in parallel
+            --  gets one, and says one.
+            Expected : constant String :=
+              (if Kind = Back.Backend_Reference then "1" else "3");
+         begin
+            Assert (Field (Looked, "backend") = Name,
+                    "inspect reported backend """
+                    & Field (Looked, "backend") & """ for " & Name);
+            Assert (Field (Looked, "worker tasks") = Expected,
+                    "inspect reported """ & Field (Looked, "worker tasks")
+                    & """ worker tasks for " & Name & ", not " & Expected);
+
+            Assert (Field (Worked, "backend") = Name,
+                    "the statistics reported backend """
+                    & Field (Worked, "backend") & """ for " & Name);
+            Assert (Field (Worked, "worker tasks") = Expected,
+                    "the statistics reported """
+                    & Field (Worked, "worker tasks") & """ worker tasks for "
+                    & Name & ", not " & Expected);
+         end;
+      end loop;
+   end Runs_Report_Which_Backend_Ran;
+
    ---------------------------------------
    -- Published_Transcripts_Are_Real --
    ---------------------------------------
@@ -5482,6 +5632,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Published_Transcripts_Are_Real'Access,
          "the transcripts the README publishes are what the program prints");
+      Register_Routine
+        (T, Runs_Report_Which_Backend_Ran'Access,
+         "a run and an inspection both say which backend answers and with "
+         & "how many workers");
       Register_Routine
         (T, Beginning_Marker_Follows_The_Vocabulary'Access,
          "a vocabulary that declares it wants no beginning marker is not "
