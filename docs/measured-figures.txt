@@ -113,6 +113,11 @@
 # Anything touching these files that is not outside the measured window gets
 # a re-measure like that one, or a comparison like this one.
 
+# Re-measure the two groups below with `tests benchmark`, which takes the
+# median of three rounds itself. The pinned figures need
+# `taskset -c 0-7 tests benchmark` on this machine -- one processor per core,
+# read from the thread_siblings_list files; the README says so and why.
+#
 # covers: the row-product table under "Kernels"
 kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 

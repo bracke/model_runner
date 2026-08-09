@@ -126,18 +126,51 @@ package body Benchmarks is
       end case;
    end Tame_Scales;
 
-   --  Report one measurement.
-   procedure Report
+   type Rate_Array is array (Positive range <>) of Long_Float;
+
+   --  The middle of a set of rounds.
+   --
+   --  Every figure this tool feeds is published as a median of three, and
+   --  this tool reported one pass. The spread is not small: the same number
+   --  came out 11136, 12574 and 12944 Me/s on three consecutive runs, so a
+   --  single pass read against a published median is worth about ten per
+   --  cent either way -- enough to look like a regression that is not there,
+   --  and enough to hide one that is. Taking the median here is the
+   --  difference between a tool that answers the question and one that
+   --  leaves the last step to whoever remembers it.
+   function Middle (Values : Rate_Array) return Long_Float is
+      Sorted : Rate_Array := Values;
+   begin
+      for Outer in Sorted'First .. Sorted'Last - 1 loop
+         for Inner in Sorted'First .. Sorted'Last - 1 loop
+            if Sorted (Inner) > Sorted (Inner + 1) then
+               declare
+                  Held : constant Long_Float := Sorted (Inner);
+               begin
+                  Sorted (Inner) := Sorted (Inner + 1);
+                  Sorted (Inner + 1) := Held;
+               end;
+            end if;
+         end loop;
+      end loop;
+      return Sorted (Sorted'First + Sorted'Length / 2);
+   end Middle;
+
+   --  Elements per second, or zero when nothing was timed.
+   function Rate_Of
+     (Elements : Long_Long_Integer; Elapsed : Duration) return Long_Float
+   is (if Long_Float (Elapsed) > 0.0
+       then Long_Float (Elements) / Long_Float (Elapsed)
+       else 0.0);
+
+   --  Report one rate.
+   procedure Report_Rate
      (Name     : String;
-      Elements : Long_Long_Integer;
-      Elapsed  : Duration;
+      Rate     : Long_Float;
       Relative : Long_Float := 0.0)
    is
       package IO renames Ada.Text_IO;
 
-      Seconds : constant Long_Float := Long_Float (Elapsed);
-      Rate    : constant Long_Float :=
-        (if Seconds > 0.0 then Long_Float (Elements) / Seconds else 0.0);
       Label   : String (1 .. 34) := [others => ' '];
       Room    : constant Natural := Natural'Min (Name'Length, Label'Length);
    begin
@@ -159,13 +192,24 @@ package body Benchmarks is
            ("   " & Long_Float'Image (Relative / Rate) & " x a copied byte");
       end if;
       IO.New_Line;
+   end Report_Rate;
+
+   --  Report one measurement.
+   procedure Report
+     (Name     : String;
+      Elements : Long_Long_Integer;
+      Elapsed  : Duration;
+      Relative : Long_Float := 0.0)
+   is
+   begin
+      Report_Rate (Name, Rate_Of (Elements, Elapsed), Relative);
    end Report;
 
    ---------
    -- Run --
    ---------
 
-   procedure Run (Seconds : Duration := 0.5) is
+   procedure Run (Seconds : Duration := 0.5; Rounds : Positive := 3) is
       package IO renames Ada.Text_IO;
       use type Ada.Real_Time.Time;
 
@@ -212,6 +256,7 @@ package body Benchmarks is
          Started  : Ada.Real_Time.Time;
          Done     : N.Element_Count := 0;
          Guard    : N.Real := 0.0;
+         Rates    : Rate_Array (1 .. Rounds) := [others => 0.0];
       begin
          B.Allocate (Bytes_Per_Row * B.Byte_Count (Rows), Data);
          if Data = null then
@@ -236,28 +281,34 @@ package body Benchmarks is
             Vector (Index) := N.Real (Index mod 17) * 0.125 - 1.0;
          end loop;
 
-         Started := Ada.Real_Time.Clock;
-         loop
-            if Use_Row_Dot then
-               for Row in 0 .. Rows - 1 loop
-                  Target (Row) := T.Row_Dot (Item, Row, Vector);
-               end loop;
-               Guard := Guard + Target (0);
-            else
-               for Row in 0 .. Rows - 1 loop
-                  T.Dequantize_Row (Item, Row, Scratch, Status);
-               end loop;
-               Guard := Guard + Scratch (0);
-            end if;
+         for Pass in Rates'Range loop
+            Done := 0;
+            Started := Ada.Real_Time.Clock;
+            loop
+               if Use_Row_Dot then
+                  for Row in 0 .. Rows - 1 loop
+                     Target (Row) := T.Row_Dot (Item, Row, Vector);
+                  end loop;
+                  Guard := Guard + Target (0);
+               else
+                  for Row in 0 .. Rows - 1 loop
+                     T.Dequantize_Row (Item, Row, Scratch, Status);
+                  end loop;
+                  Guard := Guard + Scratch (0);
+               end if;
 
-            Done := Done + Rows * Columns;
-            exit when Ada.Real_Time.To_Duration
-              (Ada.Real_Time.Clock - Started) >= Seconds;
+               Done := Done + Rows * Columns;
+               exit when Ada.Real_Time.To_Duration
+                 (Ada.Real_Time.Clock - Started) >= Seconds;
+            end loop;
+
+            Rates (Pass) :=
+              Rate_Of (Long_Long_Integer (Done),
+                       Ada.Real_Time.To_Duration
+                         (Ada.Real_Time.Clock - Started));
          end loop;
 
-         Report
-           (Name, Long_Long_Integer (Done),
-            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started));
+         Report_Rate (Name, Middle (Rates));
 
          --  Keep the result live so the loop cannot be optimized away.
          if Guard = N.Real'Last then
@@ -282,39 +333,46 @@ package body Benchmarks is
          Done    : N.Element_Count := 0;
          Guard   : N.Real := 0.0;
          Ok      : Boolean;
+         Rates   : Rate_Array (1 .. Rounds) := [others => 0.0];
       begin
          for Index in Values'Range loop
             Values (Index) := N.Real (Index mod 23) * 0.125 - 1.0;
          end loop;
 
-         Started := Ada.Real_Time.Clock;
-         loop
-            case Which is
-               when 'S' =>
-                  Target := Values;
-                  Model_Runner.Kernels.Softmax (Target, Ok);
-                  Guard := Guard + Target (0);
-               when 'N' =>
-                  Model_Runner.Kernels.RMS_Norm
-                    (Values, Weight, 1.0E-5, Target);
-                  Guard := Guard + Target (0);
-               when 'L' =>
-                  Target := Values;
-                  Model_Runner.Kernels.SiLU (Target);
-                  Guard := Guard + Target (0);
-               when others =>
-                  Guard := Guard
-                    + Model_Runner.Kernels.Dot (Values, Weight);
-            end case;
+         for Pass in Rates'Range loop
+            Done := 0;
+            Started := Ada.Real_Time.Clock;
+            loop
+               case Which is
+                  when 'S' =>
+                     Target := Values;
+                     Model_Runner.Kernels.Softmax (Target, Ok);
+                     Guard := Guard + Target (0);
+                  when 'N' =>
+                     Model_Runner.Kernels.RMS_Norm
+                       (Values, Weight, 1.0E-5, Target);
+                     Guard := Guard + Target (0);
+                  when 'L' =>
+                     Target := Values;
+                     Model_Runner.Kernels.SiLU (Target);
+                     Guard := Guard + Target (0);
+                  when others =>
+                     Guard := Guard
+                       + Model_Runner.Kernels.Dot (Values, Weight);
+               end case;
 
-            Done := Done + Length;
-            exit when Ada.Real_Time.To_Duration
-              (Ada.Real_Time.Clock - Started) >= Seconds;
+               Done := Done + Length;
+               exit when Ada.Real_Time.To_Duration
+                 (Ada.Real_Time.Clock - Started) >= Seconds;
+            end loop;
+
+            Rates (Pass) :=
+              Rate_Of (Long_Long_Integer (Done),
+                       Ada.Real_Time.To_Duration
+                         (Ada.Real_Time.Clock - Started));
          end loop;
 
-         Report
-           (Name, Long_Long_Integer (Done),
-            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started));
+         Report_Rate (Name, Middle (Rates));
 
          if Guard = N.Real'Last then
             IO.Put_Line ("");
@@ -372,7 +430,7 @@ package body Benchmarks is
          Fast, Slow : Long_Float := 0.0;
 
          --  Passes per second of one product, by whichever backend.
-         function Rate_Of (Reference : Boolean) return Long_Float is
+         function Passes_Of (Reference : Boolean) return Long_Float is
             Started : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
             Passes  : Long_Long_Integer := 0;
             Elapsed : Duration := 0.0;
@@ -396,7 +454,7 @@ package body Benchmarks is
                return 0.0;
             end if;
             return Long_Float (Passes) / Long_Float (Elapsed);
-         end Rate_Of;
+         end Passes_Of;
       begin
          T.Allocate (Columns, Inputs);
          T.Allocate (Rows, Outputs);
@@ -418,8 +476,17 @@ package body Benchmarks is
             Inputs.all (Index) := N.Real (Index mod 17) * 0.125 - 1.0;
          end loop;
 
-         Fast := Rate_Of (Reference => False);
-         Slow := Rate_Of (Reference => True);
+         declare
+            Quick : Rate_Array (1 .. Rounds) := [others => 0.0];
+            Plain : Rate_Array (1 .. Rounds) := [others => 0.0];
+         begin
+            for Pass in Quick'Range loop
+               Quick (Pass) := Passes_Of (Reference => False);
+               Plain (Pass) := Passes_Of (Reference => True);
+            end loop;
+            Fast := Middle (Quick);
+            Slow := Middle (Plain);
+         end;
 
          if Fast > 0.0 and then Slow > 0.0 then
             IO.Put_Line
@@ -488,27 +555,37 @@ package body Benchmarks is
                Team : aliased Model_Runner.Backend.CPU.Pool
                  (Model_Runner.Backend.CPU.Worker_Count
                     (Integer'Max (1, Shares - 1)));
+               Rates : Rate_Array (1 .. Rounds) := [others => 0.0];
                Where : constant Model_Runner.Backend.CPU.Pool_Reference :=
                  (if Shares = 1 then null else Team'Unchecked_Access);
             begin
-               Started := Ada.Real_Time.Clock;
-               loop
-                  Model_Runner.Backend.CPU.Dispatch_Batch
-                    (Where, Item, Inputs, Vectors_Per_Pass, Outputs, Status);
-                  exit when E.Is_Error (Status);
-                  Passes := Passes + 1;
-                  Elapsed := Ada.Real_Time.To_Duration
-                    (Ada.Real_Time.Clock - Started);
-                  exit when Elapsed >= Seconds;
+               for Pass in Rates'Range loop
+                  Passes := 0;
+                  Started := Ada.Real_Time.Clock;
+                  loop
+                     Model_Runner.Backend.CPU.Dispatch_Batch
+                       (Where, Item, Inputs, Vectors_Per_Pass, Outputs,
+                        Status);
+                     exit when E.Is_Error (Status);
+                     Passes := Passes + 1;
+                     Elapsed := Ada.Real_Time.To_Duration
+                       (Ada.Real_Time.Clock - Started);
+                     exit when Elapsed >= Seconds;
+                  end loop;
+
+                  if Elapsed > 0.0 and then Passes > 0 then
+                     Rates (Pass) :=
+                       Long_Float (Passes)
+                       * Long_Float (Long_Long_Integer (Rows)
+                                     * Long_Long_Integer (Columns)
+                                     * Long_Long_Integer (Vectors_Per_Pass))
+                       / Long_Float (Elapsed);
+                  end if;
                end loop;
 
-               if Elapsed > 0.0 and then Passes > 0 then
-                  Rate :=
-                    Long_Float (Passes)
-                    * Long_Float (Long_Long_Integer (Rows)
-                                  * Long_Long_Integer (Columns)
-                                  * Long_Long_Integer (Vectors_Per_Pass))
-                    / Long_Float (Elapsed);
+               Rate := Middle (Rates);
+
+               if Rate > 0.0 then
                   if Shares = 1 then
                      Serial := Rate;
                   end if;
@@ -537,9 +614,9 @@ package body Benchmarks is
       --  run to run while this was being written. The best of several is the
       --  round that was interrupted least, which is the one that says most
       --  about the code.
-      Rounds : constant := 5;
+      Parse_Rounds : constant := 5;
 
-      Round_Seconds : constant Duration := Seconds / Rounds;
+      Round_Seconds : constant Duration := Seconds / Parse_Rounds;
 
       --  A reference measured in this same run, under the same conditions.
       --
@@ -644,7 +721,7 @@ package body Benchmarks is
 
          Fill (From.all);
 
-         for Round in 1 .. Rounds loop
+         for Round in 1 .. Parse_Rounds loop
             --  The reference first, then the parse, in the same round.
             Copy_Rate := Copy_Round (From, Into, Round_Seconds / 2);
 
@@ -716,6 +793,7 @@ package body Benchmarks is
          Started : Ada.Real_Time.Time;
          Done    : N.Element_Count := 0;
          Guard   : N.Real := 0.0;
+         Rates   : Rate_Array (1 .. Rounds) := [others => 0.0];
       begin
          B.Allocate (Width * Count, Data);
          if Data = null then
@@ -724,21 +802,27 @@ package body Benchmarks is
          Fill (Data.all);
          Tame_Scales (Data.all, Format, Count);
 
-         Started := Ada.Real_Time.Clock;
-         loop
-            for Index in 0 .. Count - 1 loop
-               Q.Decode_Block (Format, Data.all, Index * Width, Block, Ok);
-               Guard := Guard + Block (0);
+         for Pass in Rates'Range loop
+            Done := 0;
+            Started := Ada.Real_Time.Clock;
+            loop
+               for Index in 0 .. Count - 1 loop
+                  Q.Decode_Block (Format, Data.all, Index * Width, Block, Ok);
+                  Guard := Guard + Block (0);
+               end loop;
+
+               Done := Done + N.Element_Count (Count) * Per_Block;
+               exit when Ada.Real_Time.To_Duration
+                 (Ada.Real_Time.Clock - Started) >= Seconds;
             end loop;
 
-            Done := Done + N.Element_Count (Count) * Per_Block;
-            exit when Ada.Real_Time.To_Duration
-              (Ada.Real_Time.Clock - Started) >= Seconds;
+            Rates (Pass) :=
+              Rate_Of (Long_Long_Integer (Done),
+                       Ada.Real_Time.To_Duration
+                         (Ada.Real_Time.Clock - Started));
          end loop;
 
-         Report
-           (Name, Long_Long_Integer (Done),
-            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started));
+         Report_Rate (Name, Middle (Rates));
 
          if Guard = N.Real'Last then
             IO.Put_Line ("");

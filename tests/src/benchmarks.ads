@@ -12,7 +12,13 @@ package Benchmarks is
 
    --  Measure the row kernels and report to standard output.
    --
-   --  @param Seconds Approximate time to spend on each measurement.
-   procedure Run (Seconds : Duration := 0.5);
+   --  Each measurement is taken Rounds times and the median is reported.
+   --  Every figure this feeds is published as a median of three and this
+   --  reported a single pass, which on a laptop part is worth about ten per
+   --  cent either way -- enough to read as a regression that is not there.
+   --
+   --  @param Seconds Approximate time to spend on each round.
+   --  @param Rounds How many rounds to take the median of.
+   procedure Run (Seconds : Duration := 0.5; Rounds : Positive := 3);
 
 end Benchmarks;

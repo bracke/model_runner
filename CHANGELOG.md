@@ -38,6 +38,25 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- `tests benchmark` reports the median of three rounds. It reported a single
+  pass while every figure it feeds is published as a median of three, so the
+  last step was left to whoever remembered it -- and on this part the spread
+  is about a tenth: the same number came out 11136, 12574 and 12944 Me/s on
+  three consecutive runs. A single pass read against a published median can
+  look like a regression that is not there, and can hide one that is.
+
+- `tests benchmark` takes `--seconds` and `--rounds`. `Run` had a `Seconds`
+  parameter that nothing on the command line could reach, so the one knob
+  that would steady a figure existed and could not be asked for.
+
+- The pinned figures say how to pin. `taskset -c 0-7 tests benchmark` on this
+  machine, with the reason the list is 0 to 7 and the file to read it from on
+  another machine. It was the one measurement here that no documented means
+  could reproduce, and it is in a group whose fingerprint fires like the
+  rest. Re-taken that way, eight shares reads 13134 Me/s against seven at
+  12532; the older 9326 needs the commit before the change and is quoted as
+  history rather than as something to reproduce.
+
 - The batch-size table is measured the same way as the figure above it. It
   was rendered through the chat template while that figure was raw, and
   neither said which: its caption's "131-token prompt" was the file's 110

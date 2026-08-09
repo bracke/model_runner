@@ -606,14 +606,30 @@ handing each of them out costs milliseconds in total; what the pool does with
 them, however, mattered a great deal, and is the next paragraph.
 
 One core was being wasted, and finding out why took pinning the process to one
-processor per core so it had nowhere to hide. Pinned, seven shares reached
+processor per core so it had nowhere to hide. On this machine that is
+
+```
+taskset -c 0-7 tests benchmark
+```
+
+because its siblings are *n* and *n + 8* --
+`/sys/devices/system/cpu/cpu0/topology/thread_siblings_list` says `0,8` --
+so processors 0 to 7 are eight distinct cores. The list is per machine and
+the file is where to read it. That command was not written down until after
+the figures below had been published, which left the one measurement here
+that a reader could not take again. Pinned, seven shares reached
 5.0x and eight fell to 3.7x -- adding a worker made it slower. The task that
 submits a matrix product used to wait for the workers to finish
 it, so with one worker per core there was always one more runnable task than
 there were cores, the operating system took a core from a worker, and the
 whole job waited for that worker because a job is not done until its slowest
 share is. It now takes the last share itself instead of waiting. Pinned, eight
-shares went from 9326 Me/s to 14182.
+shares went from 9326 Me/s to 14182. Taken again with the command above, and
+with the tool taking its own medians, eight shares reads 13134 Me/s against
+seven at 12532 -- the point being that eight no longer falls below seven,
+which is what the change was for. The 9326 is history: it needs the commit
+before the change, and it is quoted here as the reason rather than as
+something a reader can reproduce.
 
 Unpinned the gain is small, six per cent, because the spare task could take a
 processor on a core that already had one and that is cheap. Pinned is what a
@@ -776,7 +792,16 @@ element, and an instruction set without a per-lane shift cannot vectorize that
 loop. Baseline x86-64 has none, and building for a host that does measured
 slower everywhere else.
 
-Medians of three runs. What every measured figure in this section was taken
+Medians of three rounds, which `tests benchmark` now takes itself: it reports
+the median of three half-second rounds per measurement, and `--rounds` and
+`--seconds` change either. It used to report a single pass while every figure
+it feeds was published as a median of three, and the last step was left to
+whoever remembered it. That is not a rounding matter on a 15 W part -- the
+same number came out 11136, 12574 and 12944 Me/s on three consecutive runs,
+so a single pass read against a published median is worth about a tenth
+either way, in whichever direction flatters or alarms.
+
+What every measured figure in this section was taken
 against is recorded in
 [docs/measured-figures.txt](docs/measured-figures.txt), which names each group
 of figures and the sources it depends on. `tests check` fails when those

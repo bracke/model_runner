@@ -542,7 +542,45 @@ begin
    elsif Command = "benchmark" then
       --  Measure the kernels. Not part of the mandatory suite: it reports
       --  numbers rather than passing or failing.
-      Benchmarks.Run;
+      --
+      --  Both knobs reach the caller now. Run had a Seconds parameter that
+      --  nothing on the command line could set, so a reader who wanted a
+      --  figure steadier than a half-second sample had no way to ask for
+      --  one -- and the spread over a half second is about a tenth.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         function Number (Name : String; Default : Positive) return Positive is
+         begin
+            return Positive'Value (Option (Name, ""));
+         exception
+            when others =>
+               return Default;
+         end Number;
+
+         Refused : constant Boolean :=
+           Unknown_Option (" --seconds --rounds ");
+      begin
+         if not Refused then
+            --  Half a second a round when nothing is asked for, which is
+            --  what the published figures were taken at; whole seconds when
+            --  a steadier number is wanted.
+            Benchmarks.Run
+              (Seconds =>
+                 (if Option ("--seconds", "") = ""
+                  then 0.5
+                  else Duration (Number ("--seconds", 1))),
+               Rounds  => Number ("--rounds", 3));
+         end if;
+      end;
 
    elsif Command = "package" then
       --  Assemble the distributable archive. Nothing is built here and
@@ -584,7 +622,8 @@ begin
         (Ada.Text_IO.Standard_Error, "unknown command: " & Command);
       Ada.Text_IO.Put_Line
         (Ada.Text_IO.Standard_Error, "usage: tests [test | check [ROOT] | fuzz [--seed N] [--cases N]"
-         & " | speed --model PATH | fixtures [DIR]]");
+         & " | speed --model PATH | benchmark [--seconds N] [--rounds N]"
+         & " | fixtures [DIR]]");
       Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
    end if;
 end Tests_Main;
