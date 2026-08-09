@@ -8,8 +8,6 @@ package body Template_Registry is
    package E renames Model_Runner.Errors;
    package Tmpl renames Model_Runner.Templates;
 
-   LF : constant Character := Character'Val (10);
-
    --  A name for every variable slot the table holds, and one more, so that
    --  the row about the name table is exercised rather than described.
    function Too_Many_Names return String is

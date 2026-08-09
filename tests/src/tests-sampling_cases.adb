@@ -741,34 +741,34 @@ package body Tests.Sampling_Cases is
          declare
             Name : constant String := Tmpl.Format_Name (Format);
          begin
-         Tmpl.Compile (Item, Tmpl.Built_In (Name), Status => Status);
-         Assert (E.Is_Ok (Status),
-                 "the " & Name & " format did not compile");
+            Tmpl.Compile (Item, Tmpl.Built_In (Name), Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the " & Name & " format did not compile");
 
-         Tmpl.Render
-           (Item, Messages, "<bos>", "<eos>", True, Room, Last, Status);
-         Assert (E.Is_Ok (Status),
-                 "the " & Name & " format did not render");
+            Tmpl.Render
+              (Item, Messages, "<bos>", "<eos>", True, Room, Last, Status);
+            Assert (E.Is_Ok (Status),
+                    "the " & Name & " format did not render");
 
-         --  Whatever the markers are, the message has to be in there and the
-         --  turn has to be opened for the assistant to answer.
-         declare
-            Text : constant String := Room (1 .. Last);
-            Held : Boolean := False;
-         begin
-            for Index in Text'First .. Text'Last - 1 loop
-               if Text (Index .. Index + 1) = "Hi" then
-                  Held := True;
-               end if;
-            end loop;
-            Assert (Held,
-                    "the " & Name & " format dropped the message: "
-                    & Text);
-            Assert (Last > 10,
-                    "the " & Name & " format rendered almost nothing");
-         end;
+            --  Whatever the markers are, the message has to be in there and
+            --  the turn has to be opened for the assistant to answer.
+            declare
+               Text : constant String := Room (1 .. Last);
+               Held : Boolean := False;
+            begin
+               for Index in Text'First .. Text'Last - 1 loop
+                  if Text (Index .. Index + 1) = "Hi" then
+                     Held := True;
+                  end if;
+               end loop;
+               Assert (Held,
+                       "the " & Name & " format dropped the message: "
+                       & Text);
+               Assert (Last > 10,
+                       "the " & Name & " format rendered almost nothing");
+            end;
 
-         Tmpl.Close (Item);
+            Tmpl.Close (Item);
          end;
       end loop;
 
@@ -792,7 +792,6 @@ package body Tests.Sampling_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      use type N.Real;
 
       Head_Size : constant N.Element_Count := 4;
 

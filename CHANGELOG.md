@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The aggregate release checklist runs `tests check` as one step. It ran the
+  suite, the conformance comparison and a fuzzing campaign as four separate
+  steps, which was a second definition of what must pass, kept in step with
+  the first by hand. The long two-thousand-case campaign stays, because that
+  one is the checklist's own addition rather than a repeat.
+
+- Six compiler warnings and layout faults in the test sources, all introduced
+  during this session's work and none visible to `tests check`: the aggregate
+  checklist requires the build to produce an empty stderr log, and it is the
+  only thing that reads them.
+
 - `tests check` runs the suite. Calling it the gate while a hundred and
   sixty-four tests were a command somebody had to remember was the same
   mistake as leaving conformance outside, made in the sentence that fixed

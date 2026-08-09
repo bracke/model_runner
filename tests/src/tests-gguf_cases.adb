@@ -4471,7 +4471,7 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Every_Half_Widens_To_Its_Value'Access,
          "every one of the 65536 half precision patterns widens to the "
-         & "value the format defines"); 
+         & "value the format defines");
       Register_Routine
         (T, Q6_K_Matches_An_Element_Wise_Reading'Access,
          "six-bit decoding places every element where reading the layout "

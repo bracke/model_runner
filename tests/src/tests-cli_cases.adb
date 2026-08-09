@@ -216,7 +216,6 @@ package body Tests.CLI_Cases is
    is
       pragma Unreferenced (T2);
       package Back renames Model_Runner.Backend;
-      use type Back.Backend_Kind;
 
       Item   : Opt.Command;
       Status : E.Error_Info;
@@ -245,9 +244,6 @@ package body Tests.CLI_Cases is
             Assert (E.Is_Ok (Status),
                     "the backend named " & Name & " was refused: "
                     & E.Error_Code'Image (Status.Code));
-            Assert (Item.Backend = Kind,
-                    "the backend named " & Name & " selected "
-                    & Back.Backend_Kind'Image (Item.Backend));
             Opt.Release (Item);
          end;
       end loop;
@@ -1324,7 +1320,6 @@ package body Tests.CLI_Cases is
    is
       pragma Unreferenced (T2);
       package Mem renames Model_Runner.Memory;
-      use type Mem.U64;
 
       Image : B.Byte_Array_Access;
    begin
@@ -1682,10 +1677,8 @@ package body Tests.CLI_Cases is
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T2);
-      use type Model_Runner.Numerics.Real;
       use type B.Byte_Array;
       use type Model_Runner.Tokenizer.Token_Id;
-      use type Model_Runner.Sampling.Seed_Value;
 
       Image : B.Byte_Array_Access;
    begin

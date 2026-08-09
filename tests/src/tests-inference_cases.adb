@@ -1220,6 +1220,7 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
-         & "refused with, not as a bare failure");   end Register_Tests;
+         & "refused with, not as a bare failure");
+   end Register_Tests;
 
 end Tests.Inference_Cases;

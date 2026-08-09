@@ -86,26 +86,27 @@ begin
      ("build the tests crate", Root & "/tests", Alr,
       GNAT.OS_Lib.Argument_List'[1 => new String'("build")]);
 
+   --  One step, because tests check is one gate: it runs the suite, the
+   --  repository and layering checks, the conformance comparison against the
+   --  independently written forward pass, and a short fuzzing campaign, and
+   --  it fails when a test is written and registered by nothing or when the
+   --  suite has shrunk.
+   --
+   --  Those four used to be four steps here. That was not wrong, but it was
+   --  a second definition of what must pass, kept in step with the first by
+   --  hand -- and this repository has spent a great deal of effort removing
+   --  exactly that arrangement everywhere else it appeared.
    Project_Tools.Release_Checks.Run
-     ("repository, dependency and layering checks", Root & "/tests",
+     ("suite, repository checks, conformance and fuzzing", Root & "/tests",
       "./bin/tests", [1 => new String'("check")]);
 
+   --  The long campaign, which is this checklist's own addition. The gate
+   --  asks whether the parser still refuses what it should; two thousand
+   --  cases are for finding a way to break it that nobody has found yet, and
+   --  that is worth a release's time rather than a developer's.
    Project_Tools.Release_Checks.Run
-     ("test suite", Root & "/tests", "./bin/tests",
-      GNAT.OS_Lib.Argument_List'[1 => new String'("test")]);
-
-   --  The engine against an independently written forward pass. This is what
-   --  says the arithmetic is right; the reference comparison against another
-   --  runtime, which says the conventions are right, needs a model file and
-   --  so cannot run here.
-   Project_Tools.Release_Checks.Run
-     ("conformance against the reference implementation", Root & "/tests",
-      "./bin/tests", [1 => new String'("conformance")]);
-
-   --  Malformed containers must produce controlled outcomes, never an escaped
-   --  exception and never a wrongly accepted file.
-   Project_Tools.Release_Checks.Run
-     ("container fuzzing", Root & "/tests", "./bin/tests",
+     ("container fuzzing, long campaign", Root & "/tests",
+      "./bin/tests",
       GNAT.OS_Lib.Argument_List'[new String'("fuzz"), new String'("--seed"), new String'("1"),
        new String'("--cases"), new String'("2000")]);
 

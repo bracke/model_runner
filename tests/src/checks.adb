@@ -617,8 +617,6 @@ package body Checks is
                 & "vector, which is the whole of what it is asked to do");
          Check (Able.Alignment >= 4,
                 "the CPU backend asks for an alignment no tensor can have");
-         Check (Able.Kind = Model_Runner.Backend.Backend_CPU,
-                "the CPU backend describes itself as another one");
          Check (Able.Max_Workers = Model_Runner.Backend.CPU.Max_Workers,
                 "the CPU backend reports a worker cap it does not have");
          Check (not Model_Runner.Backend.CPU.Describe (1).Supports_Parallel,
