@@ -79,6 +79,10 @@
 # The replaced-file check in Prepare: one stat of the file, once per model
 # load, outside the window as above.
 #
+# Clearing the token history on reset, and recording a conversion: both
+# happen once per reset and once per converted tensor at load, outside the
+# window as above.
+#
 # Anything touching these files that is not outside the measured window gets
 # a re-measure like that one.
 
@@ -86,7 +90,7 @@
 kernels EAF68F33E8E77C31 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure and the batch-size table under "Speed"
-engine 1655A1ECBD97A1AB src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine 0270B7BC56CDB2E6 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 0A8A39491ED15B68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

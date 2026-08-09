@@ -475,6 +475,8 @@ package body Model_Runner.Llama is
       Mem.Record_Allocation
         (Item.Accounting, Mem.Converted_Weights,
          Interfaces.Unsigned_64 (Width) * 4);
+      Mem.Record_Conversion
+        (Item.Accounting, Interfaces.Unsigned_64 (Width) * 4);
 
       T.Dequantize_Row (Weight, 0, Result.all, Status);
       if E.Is_Error (Status) then
@@ -1199,6 +1201,15 @@ package body Model_Runner.Llama is
       --  Only the logical contents are invalidated. The cache and scratch
       --  buffers stay allocated so that a reset costs nothing and the next
       --  turn does not have to plan memory again.
+      --
+      --  Their contents do not stay. A reset is a caller saying the previous
+      --  conversation is over, and the tokens of it sat in the history until
+      --  something happened to write over them. Bytes.Wipe was written for
+      --  this and its documentation said it was used on session reset; it
+      --  was called by nothing.
+      if Item.History /= null then
+         Item.History.all := [others => Model_Runner.Tokenizer.No_Token];
+      end if;
       Item.Committed := 0;
       if Item.Current /= Closed then
          Item.Current := Ready;

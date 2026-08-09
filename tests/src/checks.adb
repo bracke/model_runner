@@ -883,6 +883,200 @@ package body Checks is
          end if;
       end;
 
+      --  Every public subprogram has a caller.
+      --
+      --  An operation nothing calls is an operation nothing tests, and when
+      --  its own documentation says where it is used it is worse than
+      --  untested: Size_Changed said it was called before the tensor-loading
+      --  stage, was called by nothing, and the reserved-codes list recorded
+      --  the diagnostic it would have raised as unreachable on the strength
+      --  of that sentence.
+      --
+      --  Written as a check because hand-scanning for this does not work.
+      --  Four greps for it gave four different wrong answers, each confident.
+      declare
+         Bodies : Ada.Strings.Unbounded.Unbounded_String;
+         Names  : Natural := 0;
+
+         procedure Gather (Relative : String) is
+         begin
+            Ada.Strings.Unbounded.Append (Bodies, Contents (Relative));
+            Ada.Strings.Unbounded.Append (Bodies, Character'Val (10));
+         end Gather;
+
+         procedure Gather_All is new For_Each_Source (Gather);
+
+         --  Whether Text calls Name: the name, not part of a longer word,
+         --  followed by an opening bracket or a semicolon, on a line that is
+         --  not itself a declaration of it and not a comment.
+         function Called (Text, Name : String) return Boolean is
+            function Part_Of_A_Word (Letter : Character) return Boolean
+            is (Letter in 'A' .. 'Z' or else Letter in 'a' .. 'z'
+                or else Letter in '0' .. '9' or else Letter = '_');
+         begin
+            if Text'Length < Name'Length then
+               return False;
+            end if;
+
+            for Index in Text'First .. Text'Last - Name'Length + 1 loop
+               if Text (Index .. Index + Name'Length - 1) = Name
+                 and then (Index = Text'First
+                           or else not Part_Of_A_Word (Text (Index - 1)))
+               then
+                  declare
+                     After : constant Natural := Index + Name'Length;
+                     Start : Natural := Index;
+                  begin
+                     --  Any mention on a line that is not a declaration is
+                     --  a use. Requiring a bracket after the name looked
+                     --  right and was not: a function without parameters is
+                     --  called by naming it, so half the accessors in this
+                     --  crate read as dead.
+                     if After > Text'Last
+                       or else not Part_Of_A_Word (Text (After))
+                     then
+                        while Start > Text'First
+                          and then Text (Start - 1) /= Character'Val (10)
+                        loop
+                           Start := Start - 1;
+                        end loop;
+
+                        declare
+                           Line : constant String :=
+                             T.Trim (Text (Start .. Index - 1));
+                        begin
+                           if Line'Length < 2
+                             or else (Line (Line'First .. Line'First + 1)
+                                        /= "--"
+                                      and then not T.Starts_With
+                                                     (Line, "function")
+                                      and then not T.Starts_With
+                                                     (Line, "procedure")
+                                      and then not T.Starts_With
+                                                     (Line, "overriding")
+                                      and then not T.Starts_With
+                                                     (Line, "end")
+                                      and then not T.Starts_With
+                                                     (Line, "with"))
+                           then
+                              return True;
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end loop;
+            return False;
+         end Called;
+
+         --  Public operations kept without a caller, and why. An operation
+         --  that only a user of this crate would call belongs here; one that
+         --  is simply unused does not, and gets removed instead.
+         function Excused (Name : String) return Boolean
+         is (Name in "Run_Process" | "Physical_Cores" | "Host_Name"
+                     | "No_Color_Requested" | "Failure_Name" | "Interrupts");
+
+         procedure Examine (Relative : String) is
+            Text   : constant String := Contents (Relative);
+            Cursor : Natural := Text'First;
+         begin
+            --  Specs only. A body declares its own helpers at the same
+            --  indentation and they are nobody's public interface.
+            if Relative'Length < 4
+              or else Relative (Relative'Last - 3 .. Relative'Last) /= ".ads"
+              or else Text'Length = 0
+            then
+               return;
+            end if;
+
+            while Cursor <= Text'Last loop
+               declare
+                  Stop : Natural := Cursor;
+               begin
+                  while Stop <= Text'Last
+                    and then Text (Stop) /= Character'Val (10)
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  declare
+                     Line : constant String := Text (Cursor .. Stop - 1);
+                     Head : Natural := 0;
+                  begin
+                     --  A public declaration: three spaces of indentation,
+                     --  which is what the package level uses here.
+                     if Line'Length > 14
+                       and then Line (Line'First .. Line'First + 2) = "   "
+                       and then Line (Line'First + 3) /= ' '
+                     then
+                        if T.Starts_With
+                             (Line (Line'First + 3 .. Line'Last), "function ")
+                        then
+                           Head := Line'First + 12;
+                        elsif T.Starts_With
+                                (Line (Line'First + 3 .. Line'Last),
+                                 "procedure ")
+                        then
+                           Head := Line'First + 13;
+                        end if;
+                     end if;
+
+                     if Head /= 0 and then Head <= Line'Last then
+                        declare
+                           Tail : Natural := Head;
+                        begin
+                           while Tail <= Line'Last
+                             and then (Line (Tail) in 'A' .. 'Z'
+                                       or else Line (Tail) in 'a' .. 'z'
+                                       or else Line (Tail) in '0' .. '9'
+                                       or else Line (Tail) = '_')
+                           loop
+                              Tail := Tail + 1;
+                           end loop;
+
+                           if Tail > Head then
+                              declare
+                                 Name : constant String :=
+                                   Line (Head .. Tail - 1);
+                              begin
+                                 Names := Names + 1;
+                                 Result.Performed := Result.Performed + 1;
+                                 if not Excused (Name)
+                                   and then not Called
+                                                  (Ada.Strings.Unbounded
+                                                     .To_String (Bodies),
+                                                   Name)
+                                 then
+                                    Fail ("the public operation " & Name
+                                          & " in " & Relative
+                                          & " is called by nothing");
+                                 end if;
+                              end;
+                           end if;
+                        end;
+                     end if;
+                  end;
+
+                  Cursor := Stop + 1;
+               end;
+            end loop;
+         end Examine;
+
+         procedure Examine_All is new For_Each_Source (Examine);
+      begin
+         Gather_All ("src/library");
+         Gather_All ("src/platform/linux");
+         Gather_All ("tests/src");
+         Examine_All ("src/library");
+
+         Result.Performed := Result.Performed + 1;
+         if Names = 0 then
+            Fail ("no public operations were found; the check no longer "
+                  & "matches the tree it reads");
+         end if;
+
+      end;
+
       --  Every progress stage this program declares is published somewhere.
       --
       --  A stage nobody publishes is a stage an observer waits for forever.

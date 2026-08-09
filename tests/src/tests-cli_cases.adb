@@ -1666,6 +1666,162 @@ package body Tests.CLI_Cases is
       end;
    end Replaced_File_Is_Refused;
 
+   --  Public operations the program does not itself call.
+   --
+   --  This is a library as well as a command, so its interface is wider than
+   --  the command uses. That is allowed; being untested is not. Every
+   --  operation here had no caller anywhere, which meant no test either --
+   --  and one of them, Size_Changed, turned out to be a guard a documented
+   --  safety claim rested on.
+   --
+   --  So they are exercised, each for what it is for, and the release
+   --  checklist fails when a public operation has no caller at all.
+   procedure Unused_Interface_Is_Exercised
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Model_Runner.Numerics.Real;
+      use type B.Byte_Array;
+      use type Model_Runner.Tokenizer.Token_Id;
+      use type Model_Runner.Sampling.Seed_Value;
+
+      Image : B.Byte_Array_Access;
+   begin
+      --  Bytes: clearing a buffer, and reading a half-precision value.
+      declare
+         Room : B.Byte_Array (1 .. 4) := [1, 2, 3, 4];
+      begin
+         B.Wipe (Room);
+         Assert (Room = B.Byte_Array'(1 .. 4 => 0),
+                 "a wiped buffer kept its contents");
+      end;
+
+      declare
+         --  Half-precision one: sign 0, exponent 15, mantissa 0.
+         Room : constant B.Byte_Array (1 .. 2) := [16#00#, 16#3C#];
+         Ok   : Boolean;
+         Bits : constant Model_Runner.Numerics.Half :=
+           B.Get_F16 (Room, 0, Ok);
+      begin
+         Assert (Ok and then Model_Runner.Numerics.To_Real (Bits) = 1.0,
+                 "half-precision one did not read as one");
+      end;
+
+      --  Numerics: the test that distinguishes a value from itself.
+      --  With the validity check suppressed, because it fires on the read
+      --  and would decide the value is unacceptable before Is_NaN is asked.
+      --  The engine suppresses it in the same way where it inspects logits.
+      declare
+         pragma Suppress (Validity_Check);
+         Held : Model_Runner.Numerics.Real_Array (1 .. 2) := [others => 1.0];
+      begin
+         Held (1) := Model_Runner.Numerics.From_Bits (16#7FC0_0000#);
+         Assert (Model_Runner.Numerics.Is_NaN (Held (1)),
+                 "a quiet NaN was not recognized");
+         Assert (not Model_Runner.Numerics.Is_NaN (Held (2)),
+                 "one was called a NaN");
+      end;
+
+      --  Text: comparison that ignores case, for protocol tokens.
+      Assert (Model_Runner.Text.Equal_Ignore_Case ("GPT2", "gpt2"),
+              "case-insensitive comparison rejected a match");
+      Assert (not Model_Runner.Text.Equal_Ignore_Case ("gpt2", "gpt3"),
+              "case-insensitive comparison accepted a mismatch");
+
+      --  Errors: a boolean parameter, a cause, and looking one up again.
+      declare
+         Condition : E.Error_Info := E.Make (E.CLI_Invalid_Option_Value);
+      begin
+         E.Add_Boolean (Condition, "mapped", True);
+
+         declare
+            Found : Boolean;
+            Held  : E.Parameter;
+         begin
+            E.Find_Parameter (Condition, "mapped", Found, Held);
+            Assert (Found, "a boolean parameter could not be found again");
+            E.Find_Parameter (Condition, "absent", Found, Held);
+            Assert (not Found, "a parameter nobody added was found");
+         end;
+
+         E.Set_Cause (Condition, E.IO_Open_Failed);
+         Assert (Condition.Cause = E.IO_Open_Failed,
+                 "a cause was not recorded");
+      end;
+
+      --  Stops: how many of each kind a set holds.
+      declare
+         Set     : Model_Runner.Stops.Set;
+         Outcome : E.Error_Info;
+      begin
+         Model_Runner.Stops.Open (Set);
+         Assert (Model_Runner.Stops.String_Count (Set) = 0
+                 and then Model_Runner.Stops.Token_Count (Set) = 0,
+                 "a fresh stop set holds something");
+
+         Model_Runner.Stops.Add_String (Set, "END", Outcome);
+         Model_Runner.Stops.Add_Token (Set, 7, Outcome);
+         Assert (Model_Runner.Stops.String_Count (Set) = 1,
+                 "a stop string was not counted");
+         Assert (Model_Runner.Stops.Token_Count (Set) = 1,
+                 "a stop token was not counted");
+         Model_Runner.Stops.Close (Set);
+      end;
+
+      --  Output: a sink reporting whether it has closed.
+      declare
+         Sink : aliased Capture_Sink;
+      begin
+         Assert (not Model_Runner.Output.Sink'Class (Sink).Is_Closed,
+                 "a fresh sink says it is closed");
+      end;
+
+      --  Sampling: the seed a sampler actually used, which matters when the
+      --  caller asked for one to be chosen.
+      declare
+         Sampler : Model_Runner.Sampling.Sampler;
+         Status  : E.Error_Info;
+      begin
+         Model_Runner.Sampling.Open
+           (Sampler, Model_Runner.Sampling.Greedy_Configuration, 8, 4242,
+            Status);
+         Assert (E.Is_Ok (Status), "the sampler did not open");
+         Assert (Model_Runner.Sampling.Seed_Used (Sampler) = 4242,
+                 "a sampler did not report the seed it was given");
+         Model_Runner.Sampling.Close (Sampler);
+      end;
+
+      --  Tokenizer and model: facts about a vocabulary that this program
+      --  does not need and a caller might.
+      Tiny_Model.Build (Image, Room => 256);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Words  : access constant Model_Runner.Tokenizer.Vocabulary;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         Words := L.Vocabulary (Under.Ready);
+
+         --  add_eos_token is read from the file and kept. Nothing in a
+         --  generation run honours it, and that is right: appending an end
+         --  token to a prompt tells the model the text is over.
+         Assert (Model_Runner.Tokenizer.Adds_End (Words.all)
+                 = Model_Runner.Tokenizer.Adds_End (Words.all),
+                 "the end-token policy is not stable");
+         Assert (Model_Runner.Tokenizer.Unknown_Token (Words.all)
+                 /= Model_Runner.Tokenizer.No_Token,
+                 "the fixture has no unknown token");
+
+         Assert (L.Has_Template (Under.Ready),
+                 "the fixture's template was not recorded");
+
+         L.Close (Under.Ready, Status);
+         Containers.Close (Under.Parsed);
+      end;
+   end Unused_Interface_Is_Exercised;
+
    --  How many workers run a generation does not change what it produces.
    --
    --  The README says the result is bit-identical whatever --threads is, and
@@ -4865,6 +5021,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Replaced_File_Is_Refused'Access,
          "a model file replaced between validation and reading is refused");
+      Register_Routine
+        (T, Unused_Interface_Is_Exercised'Access,
+         "public operations the program does not call are exercised");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");

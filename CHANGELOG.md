@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- A session reset clears the token history. `Bytes.Wipe` said it was used to
+  clear prompt and generated-text buffers on session reset; it was called by
+  nothing, and it could not have done that job -- the conversation is held as
+  tokens and as text, neither of which is a byte array. The history is
+  cleared directly now and `Wipe` says what it actually is.
+
+- `Memory.Record_Conversion` is called where a tensor is converted, which is
+  what it was written for.
+
+- The release checklist fails when a public operation has no caller anywhere
+  -- in the program or in a test. This is a library as well as a command, so
+  its interface is wider than the command uses; being untested is a
+  different matter, and fifteen operations were in that position. They are
+  exercised now.
+
 - A model file replaced between validation and reading is refused with
   `MR-GGUF-0002`. The container is parsed and its shapes checked, and only
   then are the tensors read; a file replaced in that window -- a download

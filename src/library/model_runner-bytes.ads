@@ -51,7 +51,12 @@ package Model_Runner.Bytes is
 
    --  Overwrite a buffer with zeros.
    --
-   --  Used to clear prompt and generated-text buffers on session reset.
+   --  This said it was used to clear prompt and generated-text buffers on
+   --  session reset. It was called by nothing, and it could not have done
+   --  that job: the conversation is held as tokens and as text, neither of
+   --  which is a byte array. A session reset clears the token history
+   --  itself. What is left here is the primitive, for a caller with a byte
+   --  buffer to clear.
    --
    --  @param Item Buffer to clear.
    procedure Wipe (Item : in out Byte_Array);
