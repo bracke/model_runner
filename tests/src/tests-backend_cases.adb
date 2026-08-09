@@ -566,15 +566,16 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Cores_Are_Not_Above_Processors'Access,
          "the core count is at least one and never above the processor "
-         & "count, whatever the host reports"); 
+         & "count, whatever the host reports");
       Register_Routine
         (T, Shares_Cannot_Raise'Access,
          "a malformed request is refused by the range procedures rather "
          & "than raising, which is what makes the failure handlers a net "
-         & "and not a path"); 
+         & "and not a path");
       Register_Routine
         (T, Default_Team_Leaves_A_Share'Access,
          "the default worker count leaves a share for the task that submits "
-         & "the job, on every machine size"); end Register_Tests;
+         & "the job, on every machine size");
+   end Register_Tests;
 
 end Tests.Backend_Cases;

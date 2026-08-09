@@ -607,11 +607,11 @@ package body Model_Runner.CLI.Options is
                   Good : Boolean;
                begin
                   if Name = "--help" then
-                  No_Value (Name, Value_Present,
-                            Argument (Value_First .. Argument'Last), Good);
-                  if not Good then
-                     return;
-                  end if;
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
                      Result.Kind := Command_Help;
 
                   elsif Name = "--version" then

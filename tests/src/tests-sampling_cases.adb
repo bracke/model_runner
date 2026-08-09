@@ -1440,13 +1440,14 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Penalty_Range_Rejected'Access,
          "a penalty large enough to make every logit infinite is refused, "
-         & "and an ordinary negative one is not"); 
+         & "and an ordinary negative one is not");
       Register_Routine
         (T, Rotary_Pairings_Differ'Access,
          "the two rotary pairings rotate different elements");
       Register_Routine
         (T, Built_In_Formats_Compile'Access,
          "the chat formats this build carries compile and render through "
-         & "the same door as a model's own");  end Register_Tests;
+         & "the same door as a model's own");
+   end Register_Tests;
 
 end Tests.Sampling_Cases;

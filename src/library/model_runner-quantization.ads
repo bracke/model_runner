@@ -151,7 +151,6 @@ package Model_Runner.Quantization is
       Sums    : in out Model_Runner.Numerics.Wide_Real_Array;
       Ok      : out Boolean);
 
-
    --  Report whether this package decodes a format.
    --
    --  @param Format Format to test.

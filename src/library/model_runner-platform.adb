@@ -10,7 +10,6 @@ with Model_Runner.Text;
 
 package body Model_Runner.Platform is
 
-
    -----------------
    -- Is_Terminal --
    -----------------

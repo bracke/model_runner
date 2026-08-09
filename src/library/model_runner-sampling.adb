@@ -416,7 +416,7 @@ package body Model_Runner.Sampling is
          for Index in Logits'Range loop
             if not N.Is_Finite (Logits (Index)) then
                Status := E.Make (E.Sampling_Non_Finite_Logit);
-            E.Add_Integer
+               E.Add_Integer
                  (Status, "token", Long_Long_Integer (Index - Logits'First));
                return;
             end if;

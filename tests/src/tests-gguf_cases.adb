@@ -4475,14 +4475,15 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Q6_K_Matches_An_Element_Wise_Reading'Access,
          "six-bit decoding places every element where reading the layout "
-         & "element by element says it goes"); 
+         & "element by element says it goes");
       Register_Routine
         (T, K_Quants_Match_An_Element_Wise_Reading'Access,
          "four-bit and five-bit decoding place every element where reading "
-         & "the layout element by element says it goes"); 
+         & "the layout element by element says it goes");
       Register_Routine
         (T, Newer_Formats_Match_An_Element_Wise_Reading'Access,
          "the formats added most recently place every element where reading "
-         & "the layout element by element says it goes");end Register_Tests;
+         & "the layout element by element says it goes");
+   end Register_Tests;
 
 end Tests.GGUF_Cases;

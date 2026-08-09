@@ -78,7 +78,6 @@ package body Model_Runner.Presentation is
    --  Finish any partially drawn progress line before something else is
    --  written to the same stream.
 
-
    --------------
    -- Put_Line --
    --------------

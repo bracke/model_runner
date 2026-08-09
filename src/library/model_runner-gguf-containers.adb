@@ -11,7 +11,6 @@ package body Model_Runner.GGUF.Containers is
    --  the kernels give. Bounds and range checking are untouched.
    pragma Suppress (Validity_Check);
 
-
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Bytes.Byte_Count;
    use type Model_Runner.Bytes.Byte_Array_Access;
@@ -937,6 +936,5 @@ package body Model_Runner.GGUF.Containers is
       when others =>
          return Type_Word (Kind);
    end Value_Image;
-
 
 end Model_Runner.GGUF.Containers;

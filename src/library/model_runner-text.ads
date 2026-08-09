@@ -31,7 +31,7 @@ package Model_Runner.Text is
    --  @param Left Left operand.
    --  @param Right Right operand.
    --  @return True when both hold the same characters.
-   function "=" (Left, Right : Bounded) return Boolean
+   overriding function "=" (Left, Right : Bounded) return Boolean
    is (Left.Last = Right.Last
        and then Left.Data (1 .. Left.Last) = Right.Data (1 .. Right.Last));
 

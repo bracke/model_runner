@@ -16,7 +16,6 @@ package body Model_Runner.Tokenizer is
    --  the kernels give. Bounds and range checking are untouched.
    pragma Suppress (Validity_Check);
 
-
    use type Model_Runner.Errors.Error_Code;
 
    package E renames Model_Runner.Errors;
@@ -683,7 +682,6 @@ package body Model_Runner.Tokenizer is
       --  cut faithfully rather than cutting it wrongly.
       function Cut_At
         (Text : String; From : Positive; Rule : Cut_Rule) return Natural;
-
 
    end BPE;
 

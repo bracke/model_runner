@@ -5247,10 +5247,11 @@ package body Tests.CLI_Cases is
 
       Register_Routine
         (T, Published_Transcripts_Are_Real'Access,
-         "the transcripts the README publishes are what the program prints"); 
+         "the transcripts the README publishes are what the program prints");
       Register_Routine
         (T, Beginning_Marker_Follows_The_Vocabulary'Access,
          "a vocabulary that declares it wants no beginning marker is not "
-         & "given one");  end Register_Tests;
+         & "given one");
+   end Register_Tests;
 
 end Tests.CLI_Cases;

@@ -89,14 +89,24 @@
 # 9.04, with the choice again 8.94 9.03 8.86. The spread is wider than any
 # difference between the states.
 #
+# Re-indenting three files to clear compiler style warnings moved all three
+# groups at once. Not measured, and not argued either: the release build's
+# instructions were compared before and after, and every difference is an
+# immediate constant in exception-raising code -- the line number a raise
+# reports, moved because blank lines were removed above it. Nothing that
+# computes anything changed, which is a stronger statement than a timing and
+# cheaper to make.
+#
+#   objdump -d --no-show-raw-insn obj/release/<unit>.o
+#
 # Anything touching these files that is not outside the measured window gets
-# a re-measure like that one.
+# a re-measure like that one, or a comparison like this one.
 
 # covers: the row-product table under "Kernels"
-kernels EAF68F33E8E77C31 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure and the batch-size table under "Speed"
-engine D567F68654AEFD3B src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine 2A8521C76EC67FCC src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
-scaling 0A8A39491ED15B68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
+scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

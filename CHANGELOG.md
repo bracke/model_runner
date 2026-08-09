@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The gate reads the build's diagnostic logs, for the library as well as the
+  tests and the tools. Nothing had ever read the library's: forty-nine style
+  faults and warnings were waiting under `obj`, because the only thing that
+  looked at build logs looked at the other two trees. All are fixed, and a
+  warning left behind now fails the gate.
+
+  A caveat the check cannot remove: those logs are written where the build
+  ran, so a tree built only from `tests` leaves the library's logs stale. The
+  release checklist builds the library first, which is why it is the one that
+  found them.
+
 - The aggregate release checklist runs `tests check` as one step. It ran the
   suite, the conformance comparison and a fuzzing campaign as four separate
   steps, which was a second definition of what must pass, kept in step with

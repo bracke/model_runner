@@ -11,7 +11,6 @@ package body Model_Runner.Bytes is
    --  are untouched.
    pragma Suppress (Validity_Check);
 
-
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;

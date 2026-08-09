@@ -109,7 +109,6 @@ package Model_Runner.Llama is
       Bounds : Model_Runner.Limits.Model_Limits;
       Status : out Model_Runner.Errors.Error_Info);
 
-
    --  Load, validate and prepare a model from an open byte source.
    --
    --  The source must stay open for the life of the model.

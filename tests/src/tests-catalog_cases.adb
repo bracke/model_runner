@@ -902,6 +902,7 @@ package body Tests.Catalog_Cases is
       Register_Routine
         (T, Real_Diagnostics_Render_In_Full'Access,
          "a diagnostic from a broken file renders as a sentence rather than "
-         & "as its own message key");   end Register_Tests;
+         & "as its own message key");
+   end Register_Tests;
 
 end Tests.Catalog_Cases;

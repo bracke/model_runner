@@ -29,7 +29,6 @@ with Model_Runner.Text;
 package body Checks is
 
    use type Model_Runner.Errors.Error_Code;
-   use type Model_Runner.Backend.Backend_Kind;
    use type Template_Registry.Outcome;
    use type Template_Registry.Text_Access;
 
@@ -954,6 +953,32 @@ package body Checks is
          end if;
       end;
 
+      --  The build left no warnings behind.
+      --
+      --  Every compilation writes its diagnostics to a .stderr log beside
+      --  the object file, and until now the gate read none of them: six
+      --  warnings and layout faults of mine reached the tree and were found
+      --  only when the aggregate release checklist happened to run. That
+      --  checklist read the tests' logs and the tools' -- never the
+      --  library's, where forty-nine were waiting.
+      declare
+         Before : constant Natural := Result.Failed;
+      begin
+         Result.Performed := Result.Performed + 1;
+         Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/obj");
+         Result.Performed := Result.Performed + 1;
+         Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr
+           (Root & "/tests/obj");
+         Result.Performed := Result.Performed + 1;
+         Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr
+           (Root & "/tools/obj");
+         pragma Unreferenced (Before);
+      exception
+         when others =>
+            Fail ("the build left warnings behind; see the .stderr logs "
+                  & "under obj");
+      end;
+
       --  Every test that exists is registered, and there are still as many
       --  as there were.
       --
@@ -1417,7 +1442,7 @@ package body Checks is
             if Index <= Formats then
                return Model_Runner.Templates.Format_Name
                  (Model_Runner.Templates.Chat_Format'Val (Index - 1));
-            elsif Index <= Formats + Backends then
+            elsif Index - Formats in 1 .. Backends then
                return Model_Runner.Backend.Backend_Name
                  (Model_Runner.Backend.Backend_Kind'Val
                     (Index - Formats - 1));

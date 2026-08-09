@@ -4,7 +4,6 @@ with Ada.Unchecked_Deallocation;
 with Interfaces;
 
 with Model_Runner.Arithmetic;
-with Model_Runner.Kernels;
 with Model_Runner.Text;
 
 package body Model_Runner.Llama is
@@ -18,7 +17,6 @@ package body Model_Runner.Llama is
    --  an exception -- reported, since nothing may escape, as the engine
    --  finding a defect in itself. Bounds and range checking are untouched.
    pragma Suppress (Validity_Check);
-
 
    use type Model_Runner.Errors.Error_Code;
 

@@ -110,7 +110,9 @@ begin
       GNAT.OS_Lib.Argument_List'[new String'("fuzz"), new String'("--seed"), new String'("1"),
        new String'("--cases"), new String'("2000")]);
 
-   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/tests/obj");
+   --  The gate reads these now, and the library's as well, which this never
+   --  did: forty-nine warnings were waiting under model_runner/obj because
+   --  the only thing that looked at build logs looked at the other two trees.
    Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/tools/obj");
 
    Put_Line ("model_runner aggregate release checklist passed");

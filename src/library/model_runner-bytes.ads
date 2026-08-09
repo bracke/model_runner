@@ -32,7 +32,6 @@ package Model_Runner.Bytes is
 
    type Byte_Array_Access is access Byte_Array;
 
-
    --  Release a heap byte buffer and clear the reference.
    --
    --  Idempotent: releasing a null reference does nothing.
