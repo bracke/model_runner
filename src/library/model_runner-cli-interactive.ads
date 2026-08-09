@@ -49,6 +49,22 @@ package Model_Runner.CLI.Interactive is
       Set_System,
       Unknown);
 
+   --  The word a caller types for an interactive command.
+   --
+   --  The words were matched in one chain, listed again in another, and
+   --  written a third time inside the help lines of three locales, with
+   --  nothing relating the three. Renaming one meant editing all of them
+   --  and nothing would have said so: every locale would have gone on
+   --  advertising a command the parser refuses.
+   --
+   --  The help line of a command is "cli.interactive.help." and this word
+   --  without its slash, which is why the two cannot drift apart.
+   --
+   --  @param Kind Command to name.
+   --  @return The word including its slash, or an empty string for
+   --    Not_A_Command and Unknown, which are not typed.
+   function Command_Word (Kind : Command_Kind) return String;
+
    --  Where the argument of a command sits in the line.
    type Parsed_Command is record
       Kind  : Command_Kind := Not_A_Command;

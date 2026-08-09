@@ -21,6 +21,7 @@ with Model_Runner;
 with Model_Runner.Errors;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
+with Model_Runner.CLI.Interactive;
 with Model_Runner.CLI.Options;
 with Model_Runner.GGUF;
 with Model_Runner.Generation;
@@ -42,6 +43,7 @@ package body Checks is
    package Opt renames Model_Runner.CLI.Options;
 
    use type Opt.Command_Kind;
+   use type Model_Runner.CLI.Interactive.Command_Kind;
    package Files renames Project_Tools.Files;
    package T renames Model_Runner.Text;
 
@@ -639,6 +641,20 @@ package body Checks is
             end if;
          end loop;
 
+         --  A sixth: one help line per interactive command, built from the
+         --  word the enumeration carries.
+         for Kind in Model_Runner.CLI.Interactive.Command_Kind loop
+            declare
+               Word : constant String :=
+                 Model_Runner.CLI.Interactive.Command_Word (Kind);
+            begin
+               if Word /= "" then
+                  Reached ("cli.interactive.help."
+                           & Word (Word'First + 1 .. Word'Last));
+               end if;
+            end;
+         end loop;
+
          --  A fifth: the general help's line for each command, and each
          --  topic's usage and summary, built from the command word.
          for Kind in Opt.Command_Kind loop
@@ -659,6 +675,119 @@ package body Checks is
                      & Keys (Index).Text (1 .. Keys (Index).Last));
             end if;
          end loop;
+      end;
+
+      --  Every interactive command has a word, a help line, and a help
+      --  line that names it -- in every locale.
+      --
+      --  The interactive command set was three lists: an enumeration, a
+      --  chain matching seven words, and seven catalog keys written out in
+      --  order, with nothing relating them. It was the only command
+      --  enumeration in the program that answered to no check, so an eighth
+      --  command would have compiled, parsed and dispatched without
+      --  appearing in the one screen that lists them.
+      --
+      --  The words are written a fourth time inside the help text itself --
+      --  "/stats          show the statistics of the last turn" -- once per
+      --  locale. A renamed command would have left every translation
+      --  advertising something the parser refuses, so the line must carry
+      --  the word it documents.
+      declare
+         Catalog : constant String :=
+           Contents ("resources/messages/catalog.txt");
+
+         --  The value of a key in one locale, or an empty string.
+         function Line_Of (Locale, Key : String) return String is
+            Needle : constant String :=
+              Character'Val (10) & Locale & "." & Key & " = ";
+            From   : Natural := 0;
+         begin
+            if Catalog'Length < Needle'Length then
+               return "";
+            end if;
+            for Index in Catalog'First
+                         .. Catalog'Last - Needle'Length + 1
+            loop
+               if Catalog (Index .. Index + Needle'Length - 1) = Needle then
+                  From := Index + Needle'Length;
+                  exit;
+               end if;
+            end loop;
+            if From = 0 then
+               return "";
+            end if;
+            for Index in From .. Catalog'Last loop
+               if Catalog (Index) = Character'Val (10) then
+                  return Catalog (From .. Index - 1);
+               end if;
+            end loop;
+            return Catalog (From .. Catalog'Last);
+         end Line_Of;
+      begin
+         for Kind in Model_Runner.CLI.Interactive.Command_Kind loop
+            declare
+               Word : constant String :=
+                 Model_Runner.CLI.Interactive.Command_Word (Kind);
+            begin
+               if Word /= "" then
+                  Result.Performed := Result.Performed + 1;
+                  if Word (Word'First) /= '/' then
+                     Fail ("the interactive command " & Word
+                           & " does not begin with a slash");
+                  end if;
+
+                  --  Round-tripped through the parser, so the word the
+                  --  enumeration carries is the word that is answered.
+                  Result.Performed := Result.Performed + 1;
+                  if Model_Runner.CLI.Interactive.Parse (Word).Kind /= Kind
+                  then
+                     Fail ("the interactive command " & Word
+                           & " is not parsed as itself");
+                  end if;
+
+                  declare
+                     Key : constant String :=
+                       "cli.interactive.help."
+                       & Word (Word'First + 1 .. Word'Last);
+                  begin
+                     for Locale in 1 .. 3 loop
+                        declare
+                           Name : constant String :=
+                             (case Locale is
+                                when 1 => "en",
+                                when 2 => "da",
+                                when others => "qps");
+                           Shown : constant String := Line_Of (Name, Key);
+                        begin
+                           --  Danish carries a subset and inherits the
+                           --  rest, so a line it does not have is not
+                           --  missing. English and the pseudo-locale carry
+                           --  everything.
+                           Result.Performed := Result.Performed + 1;
+                           if Shown = "" then
+                              if Name /= "da" then
+                                 Fail ("the interactive command " & Word
+                                       & " has no help line in " & Name);
+                              end if;
+                           elsif not Holds (Shown, Word) then
+                              Fail ("the " & Name & " help line for " & Word
+                                    & " does not name it: " & Shown);
+                           end if;
+                        end;
+                     end loop;
+                  end;
+               end if;
+            end;
+         end loop;
+
+         --  And a word no command has is answered as unknown rather than
+         --  mistaken for one.
+         Result.Performed := Result.Performed + 1;
+         if Model_Runner.CLI.Interactive.Parse ("/nonsense").Kind
+            /= Model_Runner.CLI.Interactive.Unknown
+         then
+            Fail ("an interactive command nobody has was recognized");
+         end if;
       end;
 
       --  Every command has a help topic, and every topic is a command.

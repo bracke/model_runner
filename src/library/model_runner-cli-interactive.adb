@@ -16,6 +16,21 @@ with Model_Runner.UTF8;
 
 package body Model_Runner.CLI.Interactive is
 
+   ------------------
+   -- Command_Word --
+   ------------------
+
+   function Command_Word (Kind : Command_Kind) return String
+   is (case Kind is
+         when Not_A_Command | Unknown => "",
+         when Leave      => "/exit",
+         when Reset      => "/reset",
+         when Help       => "/help",
+         when Settings   => "/settings",
+         when Statistics => "/stats",
+         when Context    => "/context",
+         when Set_System => "/system");
+
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
 
@@ -170,23 +185,20 @@ package body Model_Runner.CLI.Interactive is
             Last := 0;
          end if;
 
-         if Word = "/exit" then
-            return (Leave, 0, 0);
-         elsif Word = "/reset" then
-            return (Reset, 0, 0);
-         elsif Word = "/help" then
-            return (Help, 0, 0);
-         elsif Word = "/settings" then
-            return (Settings, 0, 0);
-         elsif Word = "/stats" then
-            return (Statistics, 0, 0);
-         elsif Word = "/context" then
-            return (Context, 0, 0);
-         elsif Word = "/system" then
-            return (Set_System, First, Last);
-         else
-            return (Unknown, 0, 0);
-         end if;
+         --  Matched against the words the enumeration carries rather than
+         --  a chain beside it. Only one command takes what follows it.
+         for Kind in Command_Kind loop
+            if Command_Word (Kind) /= "" and then Word = Command_Word (Kind)
+            then
+               if Kind = Set_System then
+                  return (Set_System, First, Last);
+               else
+                  return (Kind, 0, 0);
+               end if;
+            end if;
+         end loop;
+
+         return (Unknown, 0, 0);
       end;
    end Parse;
 
@@ -290,13 +302,21 @@ package body Model_Runner.CLI.Interactive is
             Pres.Put_Note (Screen, "cli.interactive.reset_done");
 
          elsif Asked.Kind = Help then
-            Pres.Put_Note (Screen, "cli.interactive.help.exit");
-            Pres.Put_Note (Screen, "cli.interactive.help.reset");
-            Pres.Put_Note (Screen, "cli.interactive.help.help");
-            Pres.Put_Note (Screen, "cli.interactive.help.settings");
-            Pres.Put_Note (Screen, "cli.interactive.help.stats");
-            Pres.Put_Note (Screen, "cli.interactive.help.context");
-            Pres.Put_Note (Screen, "cli.interactive.help.system");
+            --  One line per command the enumeration carries, so a command
+            --  added without a line fails the checklist rather than going
+            --  unmentioned in the only place that lists them.
+            for Kind in Command_Kind loop
+               if Command_Word (Kind) /= "" then
+                  declare
+                     Word : constant String := Command_Word (Kind);
+                  begin
+                     Pres.Put_Note
+                       (Screen,
+                        "cli.interactive.help."
+                        & Word (Word'First + 1 .. Word'Last));
+                  end;
+               end if;
+            end loop;
 
          elsif Asked.Kind = Settings then
             Show_Settings;

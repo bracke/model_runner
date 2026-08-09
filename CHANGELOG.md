@@ -38,6 +38,22 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- The interactive commands are one list. `Command_Kind` named seven, a chain
+  matched seven words beside it, and `/help` printed seven catalog keys
+  written out in order, with nothing relating the three -- so an eighth
+  command would have compiled, parsed and dispatched without appearing in
+  the only screen that lists them, and this was the one command enumeration
+  in the program that answered to no check. The word lives on the
+  enumeration now; the parser matches against it and `/help` builds its
+  keys from it.
+
+- Every interactive command's help line must name the command, in every
+  locale that carries the line. The words were written a fourth time inside
+  the help text itself, so renaming one would have left every translation
+  advertising something the parser refuses. Changing the Danish line for
+  `/stats` fails; renaming the command without touching the catalog fails
+  three times.
+
 - `model_runner help NONSENSE` is a usage error. It printed the general help
   and exited successfully, so a mistyped topic was answered with a screen
   the reader had not asked for, while the same word typed as a command was
