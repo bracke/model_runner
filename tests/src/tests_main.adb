@@ -30,6 +30,7 @@ with Model_Runner.Platform;
 with Project_Tools.Files;
 with Project_Tools.Text;
 with Packaging;
+with Pristine;
 with Speed_Run;
 with Tool_Commands;
 with Fuzzing;
@@ -529,6 +530,25 @@ begin
            (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
 
          if not Result.Ran and then not Result.Missing then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
+   elsif Command = "pristine" then
+      --  Build and check a clone of what git carries. Minutes, and it needs
+      --  git and Alire; it fetches nothing, because every pin is a path.
+      declare
+         Root : constant String :=
+           (if Ada.Command_Line.Argument_Count >= 2
+            then Ada.Command_Line.Argument (2)
+            else "..");
+         Result : Pristine.Report;
+      begin
+         Pristine.Run (Root, Result);
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, Pristine.Summary (Result));
+
+         if not Result.Ran then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;

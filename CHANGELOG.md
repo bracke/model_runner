@@ -38,6 +38,23 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- `tests pristine` clones what git carries beside its siblings, builds it,
+  and runs the suite and the repository checks there -- twenty-three seconds,
+  nothing fetched, every pin a path. The clean-checkout property was prose in
+  the README and a sequence typed by hand; it is the one arrangement where
+  the repository is what a reader gets, and the one where the suite failed
+  for forty pushes while passing here. Removing every fixture write and
+  committing it makes the command say the suite fails on a tree holding only
+  what git carries, and leaves the clone where it says.
+
+- The number of checks a run performs has a floor. It is the number quoted in
+  every report of a run and nothing pinned it, so a check that stopped
+  running, a scan that stopped finding, or a tree with fewer files in it
+  would all have read as a clean run. A floor rather than a figure, because
+  one check weighs every file in the tree: a clone counts four fewer than the
+  tree it came from, which is a generated config and an editor's settings,
+  and that is now written where the counting happens.
+
 - No test names a model file under `fixtures/` by hand. That path is ignored
   by git -- a model file is not committed unless its licence plainly allows
   it -- so a model read from there must come through

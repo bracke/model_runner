@@ -133,7 +133,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Two, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long — see below for the measurement — for asking a suspicious result again by different code |
-| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests tokenize`, `tests docs`, `tests fixtures`, `tests package` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
+| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests tokenize`, `tests docs`, `tests fixtures`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
 ## Building and testing
@@ -179,14 +179,20 @@ alr build --release
 cd tests && alr build && ./bin/tests test
 ```
 
-I have not reduced that to a single verified command line, and would rather say
-so than print one that does not work. What is verified is that the steps above
-work on a tree holding only what git carries: clone, symlink the siblings,
-`alr update`, `alr build`, then the same two in `tests`. The suite and the
-repository checks both pass there. That is worth doing by hand before a
-release, because it is the only arrangement in which the repository is what a
-reader gets -- and the one arrangement in which the suite failed for forty
-pushes while passing here.
+I have not reduced that to a single verified command line for a reader
+starting from nothing, and would rather say so than print one that does not
+work. From a tree that already has the siblings, `tests pristine` is that
+command: it clones what git carries beside them -- so every path pin resolves
+without copying or linking -- resolves the pins, builds, and runs the suite
+and the repository checks in the clone, in about twenty seconds. It removes
+the clone when it passes and leaves it where it says when it does not.
+
+That is the only arrangement in which the repository is what a reader gets,
+and it is the arrangement in which the suite failed for forty consecutive
+pushes while passing here. Run it before a release. It is not part of the
+release checklist, because it clones from git and therefore sees only what is
+committed -- a checklist run before the commit would be answering about the
+previous one.
 
 Two things are generated rather than committed, so a clone does not have them
 until something makes them:

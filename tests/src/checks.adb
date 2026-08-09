@@ -3755,6 +3755,13 @@ package body Checks is
                      end if;
 
                   elsif Dirs.Kind (Item) = Dirs.Ordinary_File then
+                     --  One check per file, so the total this run reports
+                     --  moves with what the tree holds: a generated config,
+                     --  an editor's settings, a fixture the suite wrote. A
+                     --  clone of this repository counts four fewer than the
+                     --  tree it was cloned from, and that is why. The number
+                     --  is a tally, not a fingerprint; the floor at the end
+                     --  of this run is what holds it to meaning something.
                      Result.Performed := Result.Performed + 1;
 
                      if Dirs.Size (Item) > Limit then
@@ -4079,6 +4086,32 @@ package body Checks is
                   From := Stop + 1;
                end;
             end loop;
+         end if;
+      end;
+
+      --  The tally is held to a floor.
+      --
+      --  This number is quoted in every report of a run, and nothing pinned
+      --  it: a check that stopped running, a scan that stopped finding, or a
+      --  tree that yielded fewer files would all have read as a clean run.
+      --  Two other floors exist here for exactly that -- the sources the walk
+      --  must reach, and the tests the suite must register -- and both were
+      --  written after something went quietly missing.
+      --
+      --  A floor rather than a figure, because the total legitimately moves:
+      --  one of these checks weighs every file in the tree, so a generated
+      --  config or a fixture the suite wrote changes it by a few either way.
+      --  Well under the count so that ordinary work is not an event, and far
+      --  enough above zero that a run which stops checking cannot pass.
+      declare
+         Fewest_Checks : constant := 3_000;
+      begin
+         Result.Performed := Result.Performed + 1;
+         if Result.Performed < Fewest_Checks then
+            Fail ("this run performed" & Natural'Image (Result.Performed)
+                  & " checks, fewer than the" & Natural'Image (Fewest_Checks)
+                  & " this repository has; something stopped checking rather "
+                  & "than found nothing to say");
          end if;
       end;
 
