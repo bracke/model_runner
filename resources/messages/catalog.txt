@@ -52,7 +52,7 @@ en.help.run.verbose =   --verbose               report progress and detail on st
 en.help.run.show_stats =   --show-stats            report generation statistics
 en.help.run.no_stats =   --no-stats              do not report generation statistics
 en.help.run.locale =   --locale NAME           locale for program messages
-en.help.run.color =   --color=MODE            auto, always or never
+en.help.run.color =   --color=MODE            colour output: {value}
 en.help.run.streams = Generated text goes to standard output. Diagnostics, progress and statistics go to standard error.
 en.help.run.privacy = A prompt given with --prompt may be visible to other local processes. Use --prompt-file or standard input for sensitive text.
 
@@ -63,7 +63,7 @@ en.help.inspect.metadata =   --metadata              list metadata keys, types a
 en.help.inspect.tensors =   --tensors               list tensor names, shapes and formats
 en.help.inspect.validate =   --validate              validate only, reporting nothing else
 en.help.inspect.locale =   --locale NAME           locale for program messages
-en.help.inspect.color =   --color=MODE            auto, always or never
+en.help.inspect.color =   --color=MODE            colour output: {value}
 
 en.help.help.usage = Usage: model_runner help [COMMAND]
 en.help.help.summary = Show help for the program or for one command.
@@ -407,7 +407,7 @@ da.help.run.verbose = --verbose               vis status og detaljer på standar
 da.help.run.show_stats = --show-stats            vis statistik for genereringen
 da.help.run.no_stats = --no-stats              vis ikke statistik for genereringen
 da.help.run.locale = --locale NAVN           sprog for programmets beskeder
-da.help.run.color = --color=TILSTAND        auto, always eller never
+da.help.run.color = --color=TILSTAND        farvet output: {value}
 da.help.run.streams = Den genererede tekst går til standarduddata. Meldinger, status og statistik går til standardfejl.
 da.help.run.privacy = En prompt givet med --prompt kan være synlig for andre processer på maskinen. Brug --prompt-file eller standardinddata til følsom tekst.
 da.help.inspect.usage = Brug: model_runner inspect MODEL [tilvalg]
@@ -417,7 +417,7 @@ da.help.inspect.metadata = --metadata              vis metadatanogler, typer og 
 da.help.inspect.tensors = --tensors               vis tensorernes navne, former og formater
 da.help.inspect.validate = --validate              validér kun, og vis intet andet
 da.help.inspect.locale = --locale NAVN           sprog for programmets beskeder
-da.help.inspect.color = --color=TILSTAND        auto, always eller never
+da.help.inspect.color = --color=TILSTAND        farvet output: {value}
 da.help.help.usage = Brug: model_runner help [KOMMANDO]
 da.help.help.summary = Vis hjælp til programmet eller til en enkelt kommando.
 da.help.version.usage = Brug: model_runner version
@@ -632,7 +632,7 @@ qps.help.run.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß �
 qps.help.run.show_stats = ⟦  --show-stats            ŕépóŕŧ géñéŕáŧíóñ ßŧáŧíßŧíçß⟧
 qps.help.run.no_stats = ⟦  --no-stats              ðó ñóŧ ŕépóŕŧ géñéŕáŧíóñ ßŧáŧíßŧíçß⟧
 qps.help.run.locale = ⟦  --locale ÑÁMÉ           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
-qps.help.run.color = ⟦  --color=MODE            áúŧó, áĺwáýß óŕ ñévéŕ⟧
+qps.help.run.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
 qps.help.run.streams = ⟦Géñéŕáŧéð ŧéxŧ góéß ŧó ßŧáñðáŕð óúŧpúŧ. Ðíágñóßŧíçß, pŕógŕéßß áñð ßŧáŧíßŧíçß gó ŧó ßŧáñðáŕð éŕŕóŕ.⟧
 qps.help.run.privacy = ⟦Á pŕómpŧ gívéñ wíŧh --prompt máý bé víßíbĺé ŧó óŧhéŕ ĺóçáĺ pŕóçéßßéß. Úßé --prompt-file óŕ ßŧáñðáŕð íñpúŧ fóŕ ßéñßíŧívé ŧéxŧ.⟧
 qps.help.inspect.usage = ⟦Úßágé: model_runner íñßpéçŧ MÓÐÉĹ [ópŧíóñß]⟧
@@ -642,7 +642,7 @@ qps.help.inspect.metadata = ⟦  --metadata              ĺíßŧ méŧáðáŧ�
 qps.help.inspect.tensors = ⟦  --tensors               ĺíßŧ ŧéñßóŕ ñáméß, ßhápéß áñð fóŕmáŧß⟧
 qps.help.inspect.validate = ⟦  --validate              váĺíðáŧé óñĺý, ŕépóŕŧíñg ñóŧhíñg éĺßé⟧
 qps.help.inspect.locale = ⟦  --locale ÑÁMÉ           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
-qps.help.inspect.color = ⟦  --color=MODE            áúŧó, áĺwáýß óŕ ñévéŕ⟧
+qps.help.inspect.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
 qps.help.help.usage = ⟦Úßágé: model_runner héĺp [ÇÓMMÁÑÐ]⟧
 qps.help.help.summary = ⟦Šhów héĺp fóŕ ŧhé pŕógŕám óŕ fóŕ óñé çómmáñð.⟧
 qps.help.version.usage = ⟦Úßágé: model_runner véŕßíóñ⟧

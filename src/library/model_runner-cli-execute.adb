@@ -456,11 +456,12 @@ package body Model_Runner.CLI.Execute is
              Loc.Named ("help.run.verbose", ""),
              Loc.Named ("help.run.show_stats", ""),
              Loc.Named ("help.run.no_stats", ""),
-             Loc.Named ("help.run.locale", ""),
-             Loc.Named ("help.run.color", "")]);
+             Loc.Named ("help.run.locale", "")]);
          --  Named apart from the block above because it carries a value:
          --  the backends this build has, read from the enumeration so that
          --  the help cannot list one that is not there or miss one that is.
+         Screen.Put_Message
+           ("help.run.color", [Loc.Named ("value", Opt.Color_Names)]);
          Screen.Put_Message
            ("help.run.chat_template", [Loc.Named ("value", Format_Names)]);
          Screen.Put_Message
@@ -480,8 +481,9 @@ package body Model_Runner.CLI.Execute is
            ([Loc.Named ("help.inspect.metadata", ""),
              Loc.Named ("help.inspect.tensors", ""),
              Loc.Named ("help.inspect.validate", ""),
-             Loc.Named ("help.inspect.locale", ""),
-             Loc.Named ("help.inspect.color", "")]);
+             Loc.Named ("help.inspect.locale", "")]);
+         Screen.Put_Message
+           ("help.inspect.color", [Loc.Named ("value", Opt.Color_Names)]);
 
       elsif Topic = "version" then
          Screen.Put_Message ("help.version.usage");

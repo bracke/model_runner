@@ -19,8 +19,10 @@ with Model_Runner;
 with Model_Runner.Errors;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
+with Model_Runner.CLI.Options;
 with Model_Runner.GGUF;
 with Model_Runner.Quantization;
+with Model_Runner.Templates;
 with Model_Runner.Text;
 
 package body Checks is
@@ -550,6 +552,158 @@ package body Checks is
                 "a one-worker pool says it runs in parallel");
          Check (Model_Runner.Backend.CPU.Describe (2).Supports_Parallel,
                 "a two-worker pool says it does not run in parallel");
+      end;
+
+      --  No help line writes out a list the code can generate.
+      --
+      --  Four value sets went stale one at a time this way, each found only
+      --  after it had drifted: the tokenizer vocabularies, the decodable
+      --  formats, "llama3 or chatml", and "auto, always or never" -- the
+      --  last of which survived being fixed in the error message and stayed
+      --  in the help beside it, in three locales, twice.
+      --
+      --  The names are asked of the code and looked for in the catalog. A
+      --  help line that offers them has to take them as a parameter instead,
+      --  which is the only form that cannot go stale.
+      declare
+         --  Every name the program can put in a list for itself.
+         function Offered (Index : Positive) return String is
+            Formats  : constant Natural :=
+              Model_Runner.Templates.Chat_Format'Pos
+                (Model_Runner.Templates.Chat_Format'Last) + 1;
+            Backends : constant Natural :=
+              Model_Runner.Backend.Backend_Kind'Pos
+                (Model_Runner.Backend.Backend_Kind'Last) + 1;
+         begin
+            if Index <= Formats then
+               return Model_Runner.Templates.Format_Name
+                 (Model_Runner.Templates.Chat_Format'Val (Index - 1));
+            elsif Index <= Formats + Backends then
+               return Model_Runner.Backend.Backend_Name
+                 (Model_Runner.Backend.Backend_Kind'Val
+                    (Index - Formats - 1));
+            else
+               return Model_Runner.CLI.Options.Color_Name
+                 (Model_Runner.CLI.Options.Color_Mode'Val
+                    (Index - Formats - Backends - 1));
+            end if;
+         end Offered;
+
+         Formats : constant Natural :=
+           Model_Runner.Templates.Chat_Format'Pos
+             (Model_Runner.Templates.Chat_Format'Last) + 1;
+         Backends : constant Natural :=
+           Model_Runner.Backend.Backend_Kind'Pos
+             (Model_Runner.Backend.Backend_Kind'Last) + 1;
+
+         Total : constant Natural :=
+           Model_Runner.Templates.Chat_Format'Pos
+             (Model_Runner.Templates.Chat_Format'Last) + 1
+           + Model_Runner.Backend.Backend_Kind'Pos
+               (Model_Runner.Backend.Backend_Kind'Last) + 1
+           + Model_Runner.CLI.Options.Color_Mode'Pos
+               (Model_Runner.CLI.Options.Color_Mode'Last) + 1;
+
+         Catalog : constant String :=
+           Contents ("resources/messages/catalog.txt");
+         Cursor  : Natural := Catalog'First;
+         Lines   : Natural := 0;
+
+         function Part_Of_A_Word (Letter : Character) return Boolean
+         is (Letter in 'A' .. 'Z' or else Letter in 'a' .. 'z'
+             or else Letter in '0' .. '9' or else Letter = '_');
+
+         --  Whether Text holds Token with nothing alphanumeric beside it.
+         function Holds_Word (Text, Token : String) return Boolean is
+         begin
+            if Text'Length < Token'Length then
+               return False;
+            end if;
+            for Index in Text'First .. Text'Last - Token'Length + 1 loop
+               if Text (Index .. Index + Token'Length - 1) = Token
+                 and then (Index = Text'First
+                           or else not Part_Of_A_Word (Text (Index - 1)))
+                 and then (Index + Token'Length > Text'Last
+                           or else not Part_Of_A_Word
+                                        (Text (Index + Token'Length)))
+               then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Holds_Word;
+      begin
+         while Cursor <= Catalog'Last loop
+            declare
+               Stop : Natural := Cursor;
+            begin
+               while Stop <= Catalog'Last
+                 and then Catalog (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line : constant String := Catalog (Cursor .. Stop - 1);
+               begin
+                  if Holds (Line, ".help.") then
+                     Lines := Lines + 1;
+
+                     --  Two names from one set, not one. A help line saying
+                     --  "never memory-map the model file" is using the
+                     --  English word, and a rule that cannot tell the
+                     --  difference is a rule nobody will keep. Two of them
+                     --  side by side is a list, and a list is the thing that
+                     --  goes stale.
+                     --
+                     --  A set with one member is therefore never caught.
+                     --  That is the cost of not crying wolf, and the smaller
+                     --  risk: one name cannot fall out of step with the rest
+                     --  of a list it has to itself.
+                     for Group in 1 .. 3 loop
+                        declare
+                           From  : constant Positive :=
+                             (case Group is
+                                when 1 => 1,
+                                when 2 => Formats + 1,
+                                when others => Formats + Backends + 1);
+                           Upto  : constant Natural :=
+                             (case Group is
+                                when 1 => Formats,
+                                when 2 => Formats + Backends,
+                                when others => Total);
+                           Seen  : Natural := 0;
+                           First : Natural := 0;
+                        begin
+                           for Index in From .. Upto loop
+                              if Holds_Word (Line, Offered (Index)) then
+                                 Seen := Seen + 1;
+                                 if First = 0 then
+                                    First := Index;
+                                 end if;
+                              end if;
+                           end loop;
+
+                           Result.Performed := Result.Performed + 1;
+                           if Seen >= 2 then
+                              Fail ("a help line lists values the program "
+                                    & "can list for itself, starting with "
+                                    & Offered (First) & ": " & Line);
+                           end if;
+                        end;
+                     end loop;
+                  end if;
+               end;
+
+               Cursor := Stop + 1;
+            end;
+         end loop;
+
+         Result.Performed := Result.Performed + 1;
+         if Lines = 0 then
+            Fail ("no help lines were found in the catalog; the check no "
+                  & "longer matches the file it reads");
+         end if;
       end;
 
       --  Every capability field is read by something.

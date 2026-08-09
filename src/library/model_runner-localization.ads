@@ -80,17 +80,25 @@ package Model_Runner.Localization is
    --  @return True when ordinary lookups can succeed.
    function Is_Ready (Item : Catalog) return Boolean;
 
-   --  Locale the catalog resolved to.
+   --  Locale the catalog was opened for.
+   --
+   --  This is what was asked for, whether or not this build carries it. A
+   --  locale nobody has still answers here, which is what a caller wanting
+   --  to echo the request back needs; Answering_Locale is what actually
+   --  replied. The two were one sentence apart in this file and the warning
+   --  about an unavailable locale used this one, so it said that zz was
+   --  unavailable and that zz was being used.
    --
    --  @param Item Catalog to inspect.
-   --  @return Resolved locale identifier; never localized.
+   --  @return Requested locale identifier; never localized.
    function Locale (Item : Catalog) return String;
 
    --  Report whether the requested locale was unavailable and a fallback was
    --  used, so that the presentation layer can warn once.
    --
    --  @param Item Catalog to inspect.
-   --  @return True when the resolved locale differs from the requested one.
+   --  @return True when the locale that answers differs from the one asked
+   --    for, which is Answering_Locale against Locale.
    function Used_Fallback (Item : Catalog) return Boolean;
 
    --  Locale that actually answered when the requested one was probed.

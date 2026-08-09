@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The `--color` help lists its modes from the enumeration, in `run` and in
+  `inspect`. Only the error message was changed when the modes were made to
+  come from one place; the help beside it went on writing "auto, always or
+  never" in three locales, twice.
+
+  The release checklist now fails when any help line lists two names the
+  program can list for itself. Two, not one, because "never memory-map the
+  model file" is the English word and a rule that cannot tell the difference
+  is a rule nobody keeps.
+
+- `Localization.Locale` said it reported the locale the catalog resolved to
+  and reports the one that was asked for. That sentence is what the
+  unavailable-locale warning was written from, which is how it came to say
+  that zz was unavailable and that zz was being used.
+
 - `--locale` says when it could not give you the locale you asked for. An
   unavailable one fell back to English and said so only under `--verbose`, so
   `--locale de` produced English output and no reason. A locale named on the
