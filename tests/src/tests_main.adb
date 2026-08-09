@@ -523,6 +523,11 @@ begin
             Threads     => Number ("--threads",
                                    Model_Runner.Platform.Core_Count - 1),
             Batch       => Number ("--batch-size", 32),
+
+            --  Named with a value like every other option this command
+            --  takes, so that a reader who saw --repack in the README does
+            --  not have to guess whether it is a flag here.
+            Repack      => Option ("--repack", "no") /= "no",
             Repeats     => Number ("--repeats", 3),
             Result      => Result);
 

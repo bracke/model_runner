@@ -16,6 +16,11 @@ with Model_Runner.Text;
 package Model_Runner.Progress is
 
    --  Stages of the model-loading pipeline, in the order they occur.
+   --  Repacking_Weights is published only when repacking was asked for, and
+   --  then for as long as it takes to decode every matrix -- about ten
+   --  seconds for a one-gigabyte model. Without a stage of its own the trace
+   --  went from reading tensors to finalizing with nothing in between, which
+   --  was the longest silence in a load and the least explained.
    type Load_Stage is
      (Opening_Model,
       Reading_Header,
@@ -28,6 +33,7 @@ package Model_Runner.Progress is
       Selecting_Backend,
       Planning_Memory,
       Preparing_Tensors,
+      Repacking_Weights,
       Finalizing_Model,
       Model_Ready);
 

@@ -821,6 +821,8 @@ package body Model_Runner.Llama is
       --  is four bytes a weight against about one, which is why it is asked
       --  for rather than done.
       if Repack then
+         P.Publish (Observer, P.Load_Progress (P.Repacking_Weights));
+
          declare
             Needed : B.Byte_Count := 0;
             Filled : B.Byte_Count := 0;

@@ -868,8 +868,28 @@ package body Model_Runner.CLI.Execute is
                if E.Is_Ok (Detail2) then
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.session_bytes",
-                     T.Image (Long_Long_Integer (Plan.Total_Resident)), Pres.Answer);
+                     T.Image (Long_Long_Integer (Plan.Total_Resident)),
+                     Pres.Answer);
                end if;
+
+               --  What --repack would need, which is the one number a caller
+               --  weighing that flag has to have and could get only by trying
+               --  it and watching. Every matrix becomes four bytes a weight;
+               --  the vectors are decoded already and are not repacked.
+               declare
+                  Repacked : Interfaces.Unsigned_64 := 0;
+               begin
+                  for Index in 1 .. Containers.Tensor_Count (Container) loop
+                     if Containers.Tensor_Rank (Container, Index) >= 2 then
+                        Repacked := Repacked
+                          + Containers.Tensor_Elements (Container, Index) * 4;
+                     end if;
+                  end loop;
+
+                  Pres.Put_Field
+                    (Screen, "cli.inspect.label.repacked_bytes",
+                     T.Image (Long_Long_Integer (Repacked)), Pres.Answer);
+               end;
             end;
          end if;
       end;

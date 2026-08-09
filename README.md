@@ -757,7 +757,9 @@ prompt, generation only, on this machine:
 | Q2_K | 1.52 s | 1.34 s | 0.43 GB → 4.4 GB |
 
 So it loses on two of three, wins twelve per cent on the third, and costs ten
-seconds of decoding at load every time. The kernel figures are measured on a
+seconds of decoding at load every time. `tests speed --model PATH --repack
+yes` takes that comparison again, and `inspect` says what the copy would need
+for a given file, beside what the file itself takes. The kernel figures are measured on a
 64 MB matrix and the model is 4.4 GB repacked: at that size the product is
 waiting for memory rather than for the decoder, and quadrupling the bytes to
 save the unpacking is a bad trade. Only Q2_K, whose decode is dearest and

@@ -101,6 +101,7 @@ package body Speed_Run is
       Tokens      : Positive;
       Threads     : Positive;
       Batch       : Positive;
+      Repack      : Boolean;
       Repeats     : Positive;
       Result      : out Report)
    is
@@ -161,7 +162,8 @@ package body Speed_Run is
             return;
          end if;
 
-         L.Prepare (Engine, Container, Source, Status => Status);
+         L.Prepare
+           (Engine, Container, Source, Repack => Repack, Status => Status);
          if E.Is_Error (Status) then
             Containers.Close (Container);
             Files.Close (Source);

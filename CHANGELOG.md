@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The load trace says when it is repacking. Ten seconds of decoding sat
+  between "reading tensors" and "finalizing model" with nothing in between,
+  which was the longest silence in a load and the least explained.
+
+- `tests speed --repack yes` takes the repacking comparison, so the figures
+  in the README can be taken again by the tool rather than by hand -- the
+  same gap the reference-backend ratio had.
+
+- `inspect` reports what repacking would need, beside what the file needs.
+  It was the one number a caller weighing the flag had to have, and the only
+  way to get it was to try it and watch.
+
 - `--repack` decodes every weight matrix once into binary32 and evaluates
   from that copy, instead of decoding a span of it on every pass. It cannot
   change what the model says -- the values written are the ones the decoder

@@ -898,9 +898,16 @@ package body Tests.CLI_Cases is
 
       --  Every load stage this build can report has a line of its own, and a
       --  verbose run reaches all of them.
+      --
+      --  With --repack, because one stage is published only when repacking
+      --  was asked for. A run without it would reach every stage but that
+      --  one, and a check that skipped the stage it could not reach would
+      --  stop being the check it is: the point is that no stage is declared
+      --  and shown by nothing.
       declare
          Screen : constant String :=
-           Traced ("run " & Model & " --prompt hi --max-tokens 1 --verbose");
+           Traced ("run " & Model
+                   & " --prompt hi --max-tokens 1 --repack --verbose");
       begin
          for Stage in Model_Runner.Progress.Load_Stage loop
             declare
