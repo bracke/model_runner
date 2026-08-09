@@ -134,24 +134,58 @@ package body Checks is
          with procedure Visit (Relative : String);
       procedure For_Each_Source (Directory : String);
 
+      --  Every source beneath a directory, however deep.
+      --
+      --  This used to search one level, so a caller had to name every host
+      --  directory: three of the five were named, and the two holding the
+      --  bodies that actually run were not. Worse, three scans were given
+      --  src/platform, which holds no sources of its own -- they visited
+      --  nothing and reported nothing, which is indistinguishable from
+      --  finding nothing wrong. A caller names a root now and the walk finds
+      --  what is under it, so there is no list of directories to keep and
+      --  none to get wrong.
       procedure For_Each_Source (Directory : String) is
-         Search : Dirs.Search_Type;
-         Item   : Dirs.Directory_Entry_Type;
+
+         procedure Walk (Where : String) is
+            Search : Dirs.Search_Type;
+            Item   : Dirs.Directory_Entry_Type;
+         begin
+            if not Files.Directory_Exists (Path (Where)) then
+               return;
+            end if;
+
+            Dirs.Start_Search
+              (Search, Path (Where), "*.ad[sb]",
+               [Dirs.Ordinary_File => True, others => False]);
+
+            while Dirs.More_Entries (Search) loop
+               Dirs.Get_Next_Entry (Search, Item);
+               Visit (Hostkit.Fs.Join (Where, Dirs.Simple_Name (Item)));
+            end loop;
+
+            Dirs.End_Search (Search);
+
+            --  Then the directories below, which is where the host bodies
+            --  live.
+            Dirs.Start_Search
+              (Search, Path (Where), "",
+               [Dirs.Directory => True, others => False]);
+
+            while Dirs.More_Entries (Search) loop
+               Dirs.Get_Next_Entry (Search, Item);
+               declare
+                  Name : constant String := Dirs.Simple_Name (Item);
+               begin
+                  if Name /= "." and then Name /= ".." then
+                     Walk (Hostkit.Fs.Join (Where, Name));
+                  end if;
+               end;
+            end loop;
+
+            Dirs.End_Search (Search);
+         end Walk;
       begin
-         if not Files.Directory_Exists (Path (Directory)) then
-            return;
-         end if;
-
-         Dirs.Start_Search
-           (Search, Path (Directory), "*.ad[sb]",
-            [Dirs.Ordinary_File => True, others => False]);
-
-         while Dirs.More_Entries (Search) loop
-            Dirs.Get_Next_Entry (Search, Item);
-            Visit (Hostkit.Fs.Join (Directory, Dirs.Simple_Name (Item)));
-         end loop;
-
-         Dirs.End_Search (Search);
+         Walk (Directory);
       end For_Each_Source;
 
    begin
@@ -256,15 +290,12 @@ package body Checks is
          procedure Scan_Production is
            new For_Each_Source (Visit_Production);
       begin
-         Scan_Production ("src/library");
-         Scan_Production ("src/main");
-
-         --  One body per host, and each is production code held to the same
-         --  rules. Left out, a platform body could reach a forbidden layer or
-         --  drift in style and nothing would say so.
-         Scan_Production ("src/platform/posix");
-         Scan_Production ("src/platform/windows");
-         Scan_Production ("src/platform/unsupported");
+         --  Every host body too: each is production code held to the same
+         --  rules, and left out, one could reach a forbidden layer and
+         --  nothing would say so. They used to be named one directory at a
+         --  time and two of the five were not on the list, which is why the
+         --  walk goes down from the root instead.
+         Scan_Production ("src");
       end;
 
       --  Ordinary Ada, all the way down.
@@ -332,14 +363,13 @@ package body Checks is
 
          procedure Scan_Lower is new For_Each_Source (Visit_Lower);
       begin
-         Scan_Lower ("src/library");
-         Scan_Lower ("src/platform/posix");
-         Scan_Lower ("src/platform/windows");
-         Scan_Lower ("src/platform/unsupported");
+         Scan_Lower ("src");
       end;
 
       --  Style: the documented line-length budget.
       declare
+         Files_Seen : Natural := 0;
+
          procedure Visit_Length (Relative : String) is
             Text  : constant String := Contents (Relative);
             Width : Natural := 0;
@@ -355,6 +385,7 @@ package body Checks is
                end if;
             end loop;
             Worst := Natural'Max (Worst, Width);
+            Files_Seen := Files_Seen + 1;
 
             if Worst > Max_Line then
                Fail (Relative & " has a line of" & Natural'Image (Worst)
@@ -363,10 +394,29 @@ package body Checks is
          end Visit_Length;
 
          procedure Scan_Length is new For_Each_Source (Visit_Length);
+
+         --  Every Ada source in the repository passes through here, so this
+         --  is where the walk itself is held to finding them.
+         --
+         --  A scan that visits nothing reports nothing, and nothing is what
+         --  a clean run looks like. Three scans were handed a directory that
+         --  holds only subdirectories and were silent for it; the walk goes
+         --  down from a root now, and this fails if it ever stops arriving
+         --  anywhere. The floor is well under the count so that adding or
+         --  removing a source is not an event, and well over zero so that a
+         --  walk that finds a fraction of the tree cannot pass.
+         Fewest_Sources : constant := 120;
       begin
-         Scan_Length ("src/library");
-         Scan_Length ("src/main");
+         Scan_Length ("src");
          Scan_Length ("tests/src");
+         Scan_Length ("tools/src");
+
+         Result.Performed := Result.Performed + 1;
+         if Files_Seen < Fewest_Sources then
+            Fail ("the source walk visited" & Natural'Image (Files_Seen)
+                  & " files, fewer than the" & Natural'Image (Fewest_Sources)
+                  & " this repository has; it is no longer reaching the tree");
+         end if;
       end;
 
       --  Documentation: every public specification opens with a comment.
@@ -400,7 +450,9 @@ package body Checks is
 
          procedure Scan_Doc is new For_Each_Source (Visit_Doc);
       begin
-         Scan_Doc ("src/library");
+         Scan_Doc ("src");
+         Scan_Doc ("tests/src");
+         Scan_Doc ("tools/src");
       end;
 
       --  Diagnostic registry: every code has a catalog entry. The catalog file
@@ -568,9 +620,7 @@ package body Checks is
                    (Model_Runner.Progress.Generation_Stage'Image (Stage)));
          end loop;
 
-         Scan_Keys ("src/library");
-         Scan_Keys ("src/main");
-         Scan_Keys ("src/platform");
+         Scan_Keys ("src");
 
          for Index in 1 .. Count loop
             Result.Performed := Result.Performed + 1;
@@ -758,11 +808,8 @@ package body Checks is
          procedure Collect is new For_Each_Source (Visit_Spec);
          procedure Read_Them is new For_Each_Source (Visit_Readers);
       begin
-         Collect ("src/library");
-         Collect ("src/main");
-         Read_Them ("src/library");
-         Read_Them ("src/main");
-         Read_Them ("src/platform");
+         Collect ("src");
+         Read_Them ("src");
 
          Result.Performed := Result.Performed + 1;
          if Count < 200 then
@@ -957,9 +1004,7 @@ package body Checks is
 
          procedure Scan_Sources is new For_Each_Source (Visit_Calls);
       begin
-         Scan_Sources ("src/library");
-         Scan_Sources ("src/main");
-         Scan_Sources ("src/platform");
+         Scan_Sources ("src");
 
          Result.Performed := Result.Performed + 1;
          if Seen < 50 then
@@ -2939,8 +2984,7 @@ package body Checks is
             end if;
          end loop;
 
-         Scan_Suppliers ("src/library");
-         Scan_Suppliers ("src/main");
+         Scan_Suppliers ("src");
 
          for Index in 1 .. Used loop
             Result.Performed := Result.Performed + 1;
@@ -3169,11 +3213,7 @@ package body Checks is
 
          procedure Scan_Environment is new For_Each_Source (Visit_Environment);
       begin
-         Scan_Environment ("src/library");
-         Scan_Environment ("src/main");
-         Scan_Environment ("src/platform/posix");
-         Scan_Environment ("src/platform/windows");
-         Scan_Environment ("src/platform/unsupported");
+         Scan_Environment ("src");
       end;
 
       --  The published performance figures still describe this code.
