@@ -36,6 +36,22 @@ package body Model_Runner.Presentation is
       Item.Mode := Mode;
       Item.Capabilities := Capabilities;
       Item.Level := Level;
+
+      --  Terminal_Styles keeps a colour policy of its own, and its own
+      --  policy defaults to auto and judges auto by whether standard output
+      --  is a terminal. That gated everything a second time, after this
+      --  console had already decided: --color always wrote no colour at all
+      --  whenever the destination was not a terminal, which is the only
+      --  arrangement in which always differs from auto. Three modes
+      --  collapsed to two and the one a caller reaches for when piping to a
+      --  pager was the one that did nothing.
+      --
+      --  A global judged by one stream cannot answer a question asked per
+      --  stream, and this console knows the mode, the destination and
+      --  whether NO_COLOR was set. So the library is told to emit what it is
+      --  asked for and the decision stays here, in Styles, where all three
+      --  of those are in hand.
+      Terminal_Styles.Set_Color_Policy (Terminal_Styles.Color_Always);
    end Open;
 
    --  Report whether a destination may carry escape sequences.
@@ -71,6 +87,14 @@ package body Model_Runner.Presentation is
          when Diagnostic => Item.Capabilities.Error_Is_Terminal);
 
    --  Whether a line going to this stream may carry escape sequences.
+   --
+   --  This is the whole decision. It used to be half of one: what it
+   --  answered was then handed to Terminal_Styles along with the stream's
+   --  terminal state, which gated the styling a second time -- so
+   --  --color always produced nothing whenever the destination was not a
+   --  terminal, which is the only arrangement in which it differs from
+   --  auto. Three modes collapsed to two, and the mode a caller reaches for
+   --  when piping to a pager was the one that did nothing.
    function Styles (Item : Console; Where : Destination) return Boolean
    is (Styled (Item, Attached (Item, Where)));
 
@@ -176,9 +200,7 @@ package body Model_Runner.Presentation is
       Write_Line
         (Item, Where,
          (if Styles (Item, Where)
-          then Terminal_Styles.Decorate
-                 (Label, Terminal_Styles.Role_Header,
-                  Attached (Item, Where))
+          then Terminal_Styles.Decorate (Label, Terminal_Styles.Role_Header)
           else Label));
    end Put_Heading;
 
@@ -205,9 +227,7 @@ package body Model_Runner.Presentation is
         (Item, Where,
          "  "
          & (if Styles (Item, Where)
-            then Terminal_Styles.Decorate
-                   (Label, Terminal_Styles.Role_Muted,
-                    Attached (Item, Where))
+            then Terminal_Styles.Decorate (Label, Terminal_Styles.Role_Muted)
             else Label)
          & String'(1 .. Padding => ' ')
          & Value);
@@ -233,9 +253,7 @@ package body Model_Runner.Presentation is
         (Item, Where,
          "  "
          & (if Styles (Item, Where)
-            then Terminal_Styles.Decorate
-                   (Label, Terminal_Styles.Role_Muted,
-                    Attached (Item, Where))
+            then Terminal_Styles.Decorate (Label, Terminal_Styles.Role_Muted)
             else Label)
          & String'(1 .. Padding => ' ')
          & Value);
@@ -320,8 +338,7 @@ package body Model_Runner.Presentation is
             [Loc.Named
                ("severity",
                 (if Styles_Diagnostics (Item)
-                 then Terminal_Styles.Decorate
-                        (Severity, Role, Item.Capabilities.Error_Is_Terminal)
+                 then Terminal_Styles.Decorate (Severity, Role)
                  else Severity)),
              Loc.Named ("code", E.Diagnostic_Code (Condition.Code)),
              Loc.Named ("detail", Detail)]));
@@ -390,8 +407,7 @@ package body Model_Runner.Presentation is
                ("severity",
                 (if Styles_Diagnostics (Item)
                  then Terminal_Styles.Decorate
-                        (Severity, Terminal_Styles.Role_Warning,
-                         Item.Capabilities.Error_Is_Terminal)
+                        (Severity, Terminal_Styles.Role_Warning)
                  else Severity)),
              Loc.Named ("detail", Message (Item, Key, Arguments))]));
    end Warn;

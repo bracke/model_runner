@@ -25,6 +25,16 @@ Keep a Changelog and the project uses semantic versioning.
   to make. The README's stream table did not mention `inspect` at all; it
   does now.
 
+- `--color always` colours a destination that is not a terminal, which is
+  the only arrangement in which it differs from `auto`. The decision was
+  made here and then made again by `terminal_styles`, whose own policy
+  defaults to auto and judges auto by whether standard output is a terminal;
+  the second gate won, so three modes were two and the mode a caller reaches
+  for when piping to a pager did nothing. A global judged by one stream
+  cannot answer a question asked per stream, so the library is told to emit
+  what it is asked for and the decision stays where the mode, the
+  destination and `NO_COLOR` are all in hand.
+
 - Styling asks the stream a line is going to. Every styling decision asked
   whether standard error was a terminal, whatever stream the line was for,
   so moving the inspection report to standard output made

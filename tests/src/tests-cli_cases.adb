@@ -4879,7 +4879,12 @@ package body Tests.CLI_Cases is
 
       --  Write one heading and one field to each stream, with the terminals
       --  arranged as the caller says.
-      procedure Wrote (Answer_Is_Terminal, Error_Is_Terminal : Boolean) is
+      procedure Wrote
+        (Answer_Is_Terminal : Boolean;
+         Error_Is_Terminal  : Boolean;
+         Mode               : Opt.Color_Mode := Opt.Color_Auto;
+         Suppressed         : Boolean := False)
+      is
          Catalog : aliased Model_Runner.Localization.Catalog;
          Screen  : Model_Runner.Presentation.Console;
          Answer, Errors : File_Type;
@@ -4888,11 +4893,11 @@ package body Tests.CLI_Cases is
            (Catalog, Model_Runner.Platform.Catalog_Path, "en");
 
          Model_Runner.Presentation.Open
-           (Screen, Catalog'Unchecked_Access, Opt.Color_Auto,
+           (Screen, Catalog'Unchecked_Access, Mode,
             (Output_Is_Terminal => Answer_Is_Terminal,
              Error_Is_Terminal  => Error_Is_Terminal,
              Input_Is_Terminal  => False,
-             Colour_Suppressed  => False),
+             Colour_Suppressed  => Suppressed),
             Opt.Normal);
 
          Create (Answer, Out_File, Out_Path);
@@ -4960,6 +4965,34 @@ package body Tests.CLI_Cases is
               "a report going to a file carried escape sequences");
       Assert (Coloured (Complained),
               "a diagnostic going to a terminal was not styled");
+
+      --  And the three modes are three. --color always wrote nothing
+      --  whenever the destination was not a terminal, which is the only
+      --  arrangement in which it differs from auto: the decision was made
+      --  here and then made again by Terminal_Styles, whose own policy
+      --  defaults to auto and judges auto by standard output.
+      Wrote (Answer_Is_Terminal => False, Error_Is_Terminal => False,
+             Mode => Opt.Color_Always);
+      Assert (Coloured (Answered) and then Coloured (Complained),
+              "--color always wrote no colour to a stream that is not a "
+              & "terminal, which is the only thing it is for");
+
+      Wrote (Answer_Is_Terminal => True, Error_Is_Terminal => True,
+             Mode => Opt.Color_Never);
+      Assert (not Coloured (Answered) and then not Coloured (Complained),
+              "--color never wrote colour to a terminal");
+
+      --  NO_COLOR is honoured by auto and overridden by an explicit always,
+      --  which is what asking for it means.
+      Wrote (Answer_Is_Terminal => True, Error_Is_Terminal => True,
+             Mode => Opt.Color_Auto, Suppressed => True);
+      Assert (not Coloured (Answered) and then not Coloured (Complained),
+              "a suppressed colour setting was ignored under auto");
+
+      Wrote (Answer_Is_Terminal => True, Error_Is_Terminal => True,
+             Mode => Opt.Color_Always, Suppressed => True);
+      Assert (Coloured (Answered) and then Coloured (Complained),
+              "an explicit --color always was overridden by NO_COLOR");
    end Styling_Follows_Its_Stream;
 
    ----------------------------
