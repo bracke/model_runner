@@ -153,6 +153,15 @@ package body Model_Runner.Generation is
             Finished := True;
             Outcome.Reason := Reason;
             Outcome.Error := Condition;
+
+            --  And the session goes back to being ready. It is ready:
+            --  what became of the request is in the result, and the next
+            --  request may be asked of the same session. A failure is
+            --  Llama's to record, because after one nothing further can be
+            --  asked at all.
+            if Reason /= Runtime_Error then
+               L.Enter (Session, L.Ready);
+            end if;
          end if;
       end Conclude;
 
@@ -394,6 +403,7 @@ package body Model_Runner.Generation is
         (Observer,
          P.Generation_Progress
            (P.Prefill_Started, 0, Interfaces.Unsigned_64 (Prompt_Count)));
+      L.Enter (Session, L.Evaluating_Prompt);
       Started := Model_Runner.Clocks.Read (Time);
 
       --  Tokens already in the cache still shape the repetition penalty, so
@@ -461,6 +471,7 @@ package body Model_Runner.Generation is
 
       if not Finished then
          P.Publish (Observer, P.Generation_Progress (P.Generation_Started));
+         L.Enter (Session, L.Generating);
 
          Decode_Loop :
          for Produced in 1 .. Item.Max_Tokens loop

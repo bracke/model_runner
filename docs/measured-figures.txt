@@ -71,6 +71,11 @@
 # states. These runs are on the 131-token prompt and include load, so they
 # are not the published figure and are not offered as one.
 #
+# The session phases: an assignment at each phase boundary, inside the
+# window. Measured: with them 8.66 8.35 9.07, with Enter doing nothing 9.09
+# 9.38 8.88, with them again 8.84 8.97 9.12. Two evaluator assignments were
+# also removed, which is why the middle state is not the faster one.
+#
 # Anything touching these files that is not outside the measured window gets
 # a re-measure like that one.
 
@@ -78,7 +83,7 @@
 kernels EAF68F33E8E77C31 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure and the batch-size table under "Speed"
-engine 55CA9E3299A1AA08 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine F2B10FC4213EF046 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 0A8A39491ED15B68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- A session reports whether it is reading a prompt or writing a reply.
+  `Evaluating_Prompt` was declared and entered by nothing: the evaluator set
+  `Generating` whether the tokens were a prompt or a reply, because it cannot
+  tell the difference, and the caller who can never said so.
+
+- `Completed` and `Cancelled` are gone from `Session_State`. They described
+  what became of a request, which its result records, while the session that
+  ran it is ready for the next one -- so they could not have been entered
+  correctly even once. A session now returns to `Ready` when a request ends.
+
+- The release checklist fails when a session state is declared and entered by
+  nothing.
+
 - `Recovery_Class` was computed for every diagnostic and read once, for one
   of its five values. Three quarters of that table was consulted by nothing.
 

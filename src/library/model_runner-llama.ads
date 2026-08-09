@@ -208,12 +208,18 @@ package Model_Runner.Llama is
    --  States a session moves through. Every operation checks the state and
    --  reports Lifecycle_Invalid_State rather than acting on a session that
    --  cannot serve the request.
+   --  Where a session is.
+   --
+   --  A phase of the session, not of a request. Completed and Cancelled were
+   --  declared here and reachable by nothing, and they could not have been
+   --  reached correctly: a request that finishes or is cancelled leaves the
+   --  session ready for the next one, and what became of the request is in
+   --  the result it produced. A session that has failed is a different
+   --  matter, because nothing further can be asked of it.
    type Session_State is
      (Ready,
       Evaluating_Prompt,
       Generating,
-      Completed,
-      Cancelled,
       Failed,
       Closed);
 
@@ -274,6 +280,23 @@ package Model_Runner.Llama is
    --  @return Pool reference, or null for serial execution.
    function Workers
      (Item : Session) return Model_Runner.Backend.CPU.Pool_Reference;
+
+   --  Record what phase a session is in.
+   --
+   --  The session knows it has been asked to evaluate and to sample; only
+   --  the caller running the request knows whether a batch is a prompt being
+   --  read or a reply being written, or how the request ended. Three of the
+   --  seven states this type declares were reachable by nobody until the
+   --  caller could say so.
+   --
+   --  Refused unless the session is open, so that a phase cannot be recorded
+   --  against a session that has failed or closed.
+   --
+   --  @param Item Open session.
+   --  @param Phase Phase to record.
+   procedure Enter
+     (Item  : in out Session;
+      Phase : Session_State);
 
    --  What an open session holds, by category.
    --

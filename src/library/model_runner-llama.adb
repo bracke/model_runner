@@ -775,6 +775,24 @@ package body Model_Runner.Llama is
    function Accounting (Item : Session) return Mem.Account
    is (Item.Accounting);
 
+   -----------
+   -- Enter --
+   -----------
+
+   --  Evaluating does not name a phase. It used to set Generating, whether
+   --  the tokens being evaluated were a prompt being read or a reply being
+   --  written, because the evaluator cannot tell the difference -- so a
+   --  session reading a prompt said it was generating, and the state that
+   --  meant "reading a prompt" was reachable by nobody.
+   procedure Enter (Item : in out Session; Phase : Session_State) is
+   begin
+      --  A failed or closed session stays where it is. A phase recorded over
+      --  a failure would lose the one fact worth keeping about it.
+      if Item.Current in Ready | Evaluating_Prompt | Generating then
+         Item.Current := Phase;
+      end if;
+   end Enter;
+
    procedure Close
      (Item   : in out Model;
       Status : out E.Error_Info) is
@@ -1396,7 +1414,6 @@ package body Model_Runner.Llama is
       --  layer of this token has succeeded.
       Item.History.all (Item.Committed) := Token;
       Item.Committed := Item.Committed + 1;
-      Item.Current := Generating;
       Status := E.Success;
    exception
       when others =>
@@ -1768,7 +1785,6 @@ package body Model_Runner.Llama is
            Tokens (Tokens'First + Natural (Which));
       end loop;
       Item.Committed := Item.Committed + Natural (Count);
-      Item.Current := Generating;
       Status := E.Success;
       Release;
    exception

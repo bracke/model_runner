@@ -1457,6 +1457,110 @@ package body Tests.CLI_Cases is
       end;
    end Session_Memory_Is_Counted;
 
+   --  A session reports the phase it is in.
+   --
+   --  Three of seven states were entered by nothing. Two of them --
+   --  Completed and Cancelled -- could not have been entered correctly
+   --  either: they describe what became of a request, which the result
+   --  records, while the session that ran it is ready for the next one.
+   --  Those two are gone. The third, Evaluating_Prompt, is a real phase
+   --  that only the caller running the request could know about.
+   procedure Session_Reports_Its_Phase
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type L.Session_State;
+      use type Model_Runner.Progress.Event_Kind;
+
+      --  An observer that reads the session's state at each stage, which is
+      --  the only moment a phase is visible from outside.
+      type Watcher (Owner : access L.Session) is limited
+        new Model_Runner.Progress.Observer with record
+         At_Prefill : L.Session_State := L.Closed;
+         At_Decode  : L.Session_State := L.Closed;
+      end record;
+
+      overriding procedure Notify
+        (Self : in out Watcher; Item : Model_Runner.Progress.Event);
+
+      overriding procedure Notify
+        (Self : in out Watcher; Item : Model_Runner.Progress.Event) is
+      begin
+         if Item.Kind = Model_Runner.Progress.Generation_Event then
+            case Item.Generation is
+               when Model_Runner.Progress.Prefill_Progress =>
+                  Self.At_Prefill := L.State (Self.Owner.all);
+               when Model_Runner.Progress.Token_Produced =>
+                  Self.At_Decode := L.State (Self.Owner.all);
+               when others =>
+                  null;
+            end case;
+         end if;
+      end Notify;
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Room => 256);
+
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Under   : Harness (Held'Access);
+         Session : aliased L.Session;
+         Stop    : Model_Runner.Stops.Set;
+         Sink    : aliased Capture_Sink;
+         Request : Gen.Request;
+         Outcome : Gen.Result;
+         Status  : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Session, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+         Model_Runner.Stops.Open (Stop);
+
+         Assert (L.State (Session) = L.Ready,
+                 "a fresh session is not ready");
+
+         declare
+            Seen : aliased Watcher (Session'Access);
+         begin
+            Request.Max_Tokens := 2;
+            Request.Batch_Size := 4;
+            Gen.Generate
+              (Under.Ready, Session, "hello there", Request, Stop,
+               Sink'Unchecked_Access, Seen'Unchecked_Access, null, null, null,
+               Outcome => Outcome);
+
+            Assert (E.Is_Ok (Outcome.Error),
+                    "the request failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Assert (Seen.At_Prefill = L.Evaluating_Prompt,
+                    "a session reading a prompt reported "
+                    & L.Session_State'Image (Seen.At_Prefill));
+            Assert (Seen.At_Decode = L.Generating,
+                    "a session writing a reply reported "
+                    & L.Session_State'Image (Seen.At_Decode));
+
+            Gen.Release (Outcome);
+         end;
+
+         --  And afterwards it is ready again, because what became of the
+         --  request is in the result and the session may be used for the
+         --  next one.
+         Assert (L.State (Session) = L.Ready,
+                 "a session that finished a request reported "
+                 & L.Session_State'Image (L.State (Session)));
+
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Session);
+         Assert (L.State (Session) = L.Closed,
+                 "a closed session does not say so");
+
+         L.Close (Under.Ready, Status);
+         Containers.Close (Under.Parsed);
+      end;
+   end Session_Reports_Its_Phase;
+
    --  How many workers run a generation does not change what it produces.
    --
    --  The README says the result is bit-identical whatever --threads is, and
@@ -4650,6 +4754,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Session_Memory_Is_Counted'Access,
          "a session's memory is counted and the limit counts it");
+      Register_Routine
+        (T, Session_Reports_Its_Phase'Access,
+         "a session reports the phase it is in");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");

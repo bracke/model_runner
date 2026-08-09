@@ -682,6 +682,90 @@ package body Checks is
          Each_Value ("Severity_Level");
       end;
 
+      --  And the session's own states, which are declared elsewhere and were
+      --  the last enumeration of this kind with nothing watching it. Three
+      --  of seven were entered by nobody, and two of those could not have
+      --  been entered correctly: they described a request and not a session.
+      declare
+         Spec : constant String :=
+           Contents ("src/library/model_runner-llama.ads");
+         Body_Text : constant String :=
+           Contents ("src/library/model_runner-llama.adb")
+           & Contents ("src/library/model_runner-generation.adb");
+         Opening : constant String := "type Session_State is";
+         From    : Natural := 0;
+         Upto    : Natural := 0;
+         Named   : Natural := 0;
+      begin
+         for Index in Spec'First .. Spec'Last - Opening'Length + 1 loop
+            if Spec (Index .. Index + Opening'Length - 1) = Opening then
+               From := Index + Opening'Length;
+               exit;
+            end if;
+         end loop;
+         if From /= 0 then
+            for Index in From .. Spec'Last - 1 loop
+               if Spec (Index .. Index + 1) = ");" then
+                  Upto := Index;
+                  exit;
+               end if;
+            end loop;
+         end if;
+
+         Result.Performed := Result.Performed + 1;
+         if From = 0 or else Upto = 0 then
+            Fail ("Session_State has no values to check; the check no longer "
+                  & "matches the source it reads");
+         end if;
+
+         declare
+            Cursor : Natural := From;
+         begin
+            while Cursor <= Upto loop
+               declare
+                  Start : Natural := Cursor;
+               begin
+                  while Start <= Upto
+                    and then not (Spec (Start) in 'A' .. 'Z')
+                  loop
+                     Start := Start + 1;
+                  end loop;
+                  exit when Start > Upto;
+
+                  declare
+                     Stop : Natural := Start;
+                  begin
+                     while Stop <= Upto
+                       and then (Spec (Stop) in 'A' .. 'Z'
+                                 or else Spec (Stop) in 'a' .. 'z'
+                                 or else Spec (Stop) = '_')
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+
+                     Named := Named + 1;
+                     Result.Performed := Result.Performed + 1;
+                     if not Holds (Body_Text, ":= " & Spec (Start .. Stop - 1))
+                       and then not Holds
+                                      (Body_Text,
+                                       ", L." & Spec (Start .. Stop - 1))
+                     then
+                        Fail ("the session state " & Spec (Start .. Stop - 1)
+                              & " is declared and entered by nothing");
+                     end if;
+                     Cursor := Stop;
+                  end;
+               end;
+            end loop;
+         end;
+
+         Result.Performed := Result.Performed + 1;
+         if Named = 0 then
+            Fail ("no session states were found; the check no longer matches "
+                  & "the source it reads");
+         end if;
+      end;
+
       --  Every accounting category this program declares is charged.
       --
       --  A category nothing charges is a line of a memory report that reads
