@@ -38,6 +38,21 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- `model_runner help NONSENSE` is a usage error. It printed the general help
+  and exited successfully, so a mistyped topic was answered with a screen
+  the reader had not asked for, while the same word typed as a command was
+  refused by name and exited 2. A topic is a command name, and one that
+  names no command is refused the same way.
+
+- The help screens are dispatched on the command rather than on the word,
+  and the list of commands in the general help is built from the
+  enumeration. The chain named four topics beside a `Command_Kind` naming
+  exactly those four, with nothing relating them: a fifth command would
+  have compiled, dispatched, taken options and had no help at all. The
+  checklist now requires a usage line, a summary, an options heading and a
+  line in the general help for every command, and that every command word
+  names its own command.
+
 - The catalog check reads the root it was given. It opened the catalog
   beside the executable while every other check here reads the file under
   the root `tests check [ROOT]` names, so pointed at another tree it

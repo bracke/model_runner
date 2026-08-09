@@ -639,6 +639,17 @@ package body Checks is
             end if;
          end loop;
 
+         --  A fifth: the general help's line for each command, and each
+         --  topic's usage and summary, built from the command word.
+         for Kind in Opt.Command_Kind loop
+            if Kind /= Opt.Command_None then
+               Reached ("cli.general.command." & Opt.Command_Word (Kind));
+               Reached ("help." & Opt.Command_Word (Kind) & ".usage");
+               Reached ("help." & Opt.Command_Word (Kind) & ".summary");
+               Reached ("help." & Opt.Command_Word (Kind) & ".options");
+            end if;
+         end loop;
+
          Scan_Keys ("src");
 
          for Index in 1 .. Count loop
@@ -648,6 +659,71 @@ package body Checks is
                      & Keys (Index).Text (1 .. Keys (Index).Last));
             end if;
          end loop;
+      end;
+
+      --  Every command has a help topic, and every topic is a command.
+      --
+      --  `help nonsense` printed the general help and exited successfully,
+      --  so a mistyped topic was answered with a screen the reader had not
+      --  asked for, while the same word typed as a command was refused by
+      --  name. Behind that were two lists: a chain naming four topics, and
+      --  a Command_Kind naming exactly those four, with nothing relating
+      --  them -- a fifth command would have compiled, dispatched, taken
+      --  options and had no help at all.
+      declare
+         Catalog : constant String :=
+           Contents ("resources/messages/catalog.txt");
+
+         function Documented (Key : String) return Boolean
+         is (Holds (Catalog, Character'Val (10) & "en." & Key & " ="));
+      begin
+         for Kind in Opt.Command_Kind loop
+            if Kind /= Opt.Command_None then
+               declare
+                  Word : constant String := Opt.Command_Word (Kind);
+               begin
+                  --  A word to type, and the two lines every topic shows.
+                  Result.Performed := Result.Performed + 1;
+                  if Word = "" then
+                     Fail ("a command has no word to type: "
+                           & Opt.Command_Kind'Image (Kind));
+                  end if;
+
+                  Result.Performed := Result.Performed + 1;
+                  if not Documented ("help." & Word & ".usage") then
+                     Fail ("the " & Word
+                           & " command has no help.usage line");
+                  end if;
+
+                  Result.Performed := Result.Performed + 1;
+                  if not Documented ("help." & Word & ".summary") then
+                     Fail ("the " & Word
+                           & " command has no help.summary line");
+                  end if;
+
+                  --  And a line in the list of commands the general help
+                  --  prints, which is built from this same enumeration.
+                  Result.Performed := Result.Performed + 1;
+                  if not Documented ("cli.general.command." & Word) then
+                     Fail ("the " & Word
+                           & " command is missing from the general help");
+                  end if;
+
+                  --  The word round-trips, so a topic names its command.
+                  Result.Performed := Result.Performed + 1;
+                  if Opt.Command_Of (Word) /= Kind then
+                     Fail ("the word " & Word & " does not name "
+                           & Opt.Command_Kind'Image (Kind));
+                  end if;
+               end;
+            end if;
+         end loop;
+
+         --  A word no command has is no topic either.
+         Result.Performed := Result.Performed + 1;
+         if Opt.Command_Of ("nonsense") /= Opt.Command_None then
+            Fail ("a word no command has was read as a command");
+         end if;
       end;
 
       --  The program answers for its own options.

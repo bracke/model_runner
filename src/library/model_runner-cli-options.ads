@@ -91,6 +91,22 @@ package Model_Runner.CLI.Options is
    --  @return The suffix, or an empty string for an option no help lists.
    function Option_Help (Index : Positive) return String;
 
+   --  The word a caller types for a command.
+   --
+   --  Never localized: it is protocol. A diagnostic naming a translated
+   --  command word would tell the reader to type something the parser
+   --  refuses.
+   --
+   --  @param Kind Command to name.
+   --  @return The word, or an empty string for no command.
+   function Command_Word (Kind : Command_Kind) return String;
+
+   --  The command a word names.
+   --
+   --  @param Word Word as typed.
+   --  @return The command, or Command_None when no command has that word.
+   function Command_Of (Word : String) return Command_Kind;
+
    --  Report whether a command takes an option.
    --
    --  Every option used to be accepted by every command: `inspect m.gguf

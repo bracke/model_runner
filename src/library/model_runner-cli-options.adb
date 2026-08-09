@@ -104,9 +104,6 @@ package body Model_Runner.CLI.Options is
    -- Command_Word --
    ------------------
 
-   --  The word a caller types for a command. Never localized: it is
-   --  protocol, and a diagnostic naming a translated command word tells the
-   --  reader to type something the parser will refuse.
    function Command_Word (Kind : Command_Kind) return String
    is (case Kind is
          when Command_None    => "",
@@ -114,6 +111,20 @@ package body Model_Runner.CLI.Options is
          when Command_Inspect => "inspect",
          when Command_Help    => "help",
          when Command_Version => "version");
+
+   ----------------
+   -- Command_Of --
+   ----------------
+
+   function Command_Of (Word : String) return Command_Kind is
+   begin
+      for Kind in Command_Kind loop
+         if Kind /= Command_None and then Command_Word (Kind) = Word then
+            return Kind;
+         end if;
+      end loop;
+      return Command_None;
+   end Command_Of;
 
    -------------
    -- Accepts --
@@ -1251,6 +1262,16 @@ package body Model_Runner.CLI.Options is
                      when Command_Run | Command_Inspect =>
                         Result.Model_Path := T.To_Bounded (Argument);
                      when Command_Help =>
+                        --  A topic is a command name. `help inspekt` used
+                        --  to print the general help and exit successfully,
+                        --  so a reader who mistyped a topic was answered a
+                        --  question they had not asked and told nothing --
+                        --  while the same word as a command was refused by
+                        --  name.
+                        if Command_Of (Argument) = Command_None then
+                           Fail (E.CLI_Unknown_Command, "", Argument);
+                           return;
+                        end if;
                         Result.Help_Topic := T.To_Bounded (Argument);
                      when others =>
                         Fail (E.CLI_Unexpected_Operand, "", Argument);

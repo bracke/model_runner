@@ -52,6 +52,8 @@ package body Model_Runner.CLI.Execute is
    package L renames Model_Runner.Llama;
    package Loc renames Model_Runner.Localization;
    package Opt renames Model_Runner.CLI.Options;
+
+   use type Opt.Command_Kind;
    package Pres renames Model_Runner.Presentation;
    package Workers_CPU renames Model_Runner.Backend.CPU;
    package T renames Model_Runner.Text;
@@ -534,60 +536,67 @@ package body Model_Runner.CLI.Execute is
          end loop;
       end Options_Of;
 
-      procedure Block (Keys : Loc.Argument_List) is
-      begin
-         for Entry_Value of Keys loop
-            Screen.Put_Option
-              (T.To_String (Entry_Value.Name),
-               [Loc.Named ("value", T.To_String (Entry_Value.Value))]);
-         end loop;
-      end Block;
    begin
-      if Topic = "run" then
-         Screen.Put_Message ("help.run.usage");
-         Screen.Put_Line ("");
-         Screen.Put_Message ("help.run.summary");
-         Screen.Put_Line ("");
-         Screen.Put_Message ("help.run.options");
-         Options_Of (Opt.Command_Run, "run");
+      --  Dispatched on the command a topic names rather than on the word,
+      --  and every screen builds its keys from that command's word. The
+      --  chain here used to name the four topics beside a Command_Kind that
+      --  already named exactly those four, so a fifth command would have
+      --  compiled, dispatched, taken options -- and had no help.
+      case Opt.Command_Of (Topic) is
+         when Opt.Command_Run | Opt.Command_Inspect =>
+            declare
+               Kind : constant Opt.Command_Kind := Opt.Command_Of (Topic);
+               Word : constant String := Opt.Command_Word (Kind);
+            begin
+               Screen.Put_Message ("help." & Word & ".usage");
+               Screen.Put_Line ("");
+               Screen.Put_Message ("help." & Word & ".summary");
+               Screen.Put_Line ("");
+               Screen.Put_Message ("help." & Word & ".options");
+               Options_Of (Kind, Word);
 
-         Screen.Put_Line ("");
-         Screen.Put_Message ("help.run.streams");
-         Screen.Put_Message ("help.run.privacy");
+               --  Where the output goes and what is never written down are
+               --  properties of a run, and are said where a run is
+               --  explained.
+               if Kind = Opt.Command_Run then
+                  Screen.Put_Line ("");
+                  Screen.Put_Message ("help.run.streams");
+                  Screen.Put_Message ("help.run.privacy");
+               end if;
+            end;
 
-      elsif Topic = "inspect" then
-         Screen.Put_Message ("help.inspect.usage");
-         Screen.Put_Line ("");
-         Screen.Put_Message ("help.inspect.summary");
-         Screen.Put_Line ("");
-         Screen.Put_Message ("help.inspect.options");
-         Options_Of (Opt.Command_Inspect, "inspect");
+         when Opt.Command_Help | Opt.Command_Version =>
+            declare
+               Word : constant String :=
+                 Opt.Command_Word (Opt.Command_Of (Topic));
+            begin
+               Screen.Put_Message ("help." & Word & ".usage");
+               Screen.Put_Line ("");
+               Screen.Put_Message ("help." & Word & ".summary");
+            end;
 
-      elsif Topic = "version" then
-         Screen.Put_Message ("help.version.usage");
-         Screen.Put_Line ("");
-         Screen.Put_Message ("help.version.summary");
+         when Opt.Command_None =>
+            --  No topic. A topic naming no command never reaches here: the
+            --  parser refuses it the way it refuses the same word typed as
+            --  a command.
+            Screen.Put_Message ("application.summary");
+            Screen.Put_Line ("");
+            Screen.Put_Message ("cli.general.usage");
+            Screen.Put_Line ("");
+            Screen.Put_Message ("cli.general.commands");
 
-      elsif Topic = "help" then
-         Screen.Put_Message ("help.help.usage");
-         Screen.Put_Line ("");
-         Screen.Put_Message ("help.help.summary");
+            for Kind in Opt.Command_Kind loop
+               if Kind /= Opt.Command_None then
+                  Screen.Put_Option
+                    ("cli.general.command." & Opt.Command_Word (Kind),
+                     [Loc.Named ("value", "")]);
+               end if;
+            end loop;
 
-      else
-         Screen.Put_Message ("application.summary");
-         Screen.Put_Line ("");
-         Screen.Put_Message ("cli.general.usage");
-         Screen.Put_Line ("");
-         Screen.Put_Message ("cli.general.commands");
-         Block
-           ([Loc.Named ("cli.general.command.run", ""),
-             Loc.Named ("cli.general.command.inspect", ""),
-             Loc.Named ("cli.general.command.help", ""),
-             Loc.Named ("cli.general.command.version", "")]);
-         Screen.Put_Line ("");
-         Screen.Put_Message ("cli.general.more");
-         Screen.Put_Message ("cli.general.exit_statuses");
-      end if;
+            Screen.Put_Line ("");
+            Screen.Put_Message ("cli.general.more");
+            Screen.Put_Message ("cli.general.exit_statuses");
+      end case;
    end Show_Help;
 
    ---------------------------------------------------------------------------
