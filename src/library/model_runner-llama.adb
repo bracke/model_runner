@@ -631,6 +631,17 @@ package body Model_Runner.Llama is
             Interfaces.Unsigned_64 (Length));
          Item.Arena_Base := B.Byte_Count (Containers.Data_Offset (Source));
 
+         --  The file is validated, and now it is read. Between those two
+         --  moments it may have been replaced -- a download finishing over
+         --  it, a build writing a new quantization to the same path -- and
+         --  what would then be read is a different file wearing the shape of
+         --  the one that was checked. Asked here because here is the last
+         --  moment it is still true that nothing has been read.
+         if Bytes.Changed then
+            Fail (E.Make (E.GGUF_File_Changed));
+            return;
+         end if;
+
          P.Publish (Observer, P.Load_Progress (P.Preparing_Tensors));
          Bytes.Read (Item.Arena_Base, Item.Arena.all, Status);
          if E.Is_Error (Status) then

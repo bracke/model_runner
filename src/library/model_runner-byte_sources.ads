@@ -56,6 +56,22 @@ package Model_Runner.Byte_Sources is
    --  @return Source name, possibly empty.
    function Name (Self : Source) return String is abstract;
 
+   --  Report whether the bytes behind this source have changed since it was
+   --  opened.
+   --
+   --  Asked before the tensor-loading stage, which is the point where a file
+   --  replaced since validation would be read as though it were the file
+   --  that was validated. A source with nothing behind it that can change --
+   --  a buffer in memory -- answers False, which is why this has a default
+   --  rather than being abstract.
+   --
+   --  It cannot see an in-place edit of the same length. That is not a
+   --  reason to skip the check, only a reason not to describe it as one.
+   --
+   --  @param Self Source to inspect.
+   --  @return True when the source is no longer what was opened.
+   function Changed (Self : Source) return Boolean is abstract;
+
    type Source_Reference is access all Source'Class;
 
 end Model_Runner.Byte_Sources;

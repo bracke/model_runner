@@ -84,7 +84,7 @@ ordinal is never reused, not because they might appear.
 | `MR-GGUF-0026` | `error.gguf.missing_metadata_key` | recovery_none | 3 | raised |
 | `MR-GGUF-0027` | `error.gguf.metadata_type_mismatch` | recovery_none | 3 | raised |
 | `MR-GGUF-0028` | `error.gguf.metadata_out_of_range` | recovery_none | 3 | raised |
-| `MR-GGUF-0029` | `error.gguf.file_changed` | recovery_none | 3 | reserved |
+| `MR-GGUF-0029` | `error.gguf.file_changed` | recovery_none | 3 | raised |
 
 ## TOK
 

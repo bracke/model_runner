@@ -1561,6 +1561,111 @@ package body Tests.CLI_Cases is
       end;
    end Session_Reports_Its_Phase;
 
+   --  A model file replaced between validation and reading is refused.
+   --
+   --  The container is parsed, the shapes are checked, and only then are the
+   --  tensors read. A file replaced in between -- a download finishing over
+   --  it, a build writing a new quantization to the same path -- would be
+   --  read as though it were the file that was checked.
+   --
+   --  Size_Changed was written for this and its own documentation said it
+   --  was used before the tensor-loading stage. It was called by nothing,
+   --  and GGUF_File_Changed sat on the list of diagnostics this program
+   --  declares and never produces.
+   procedure Replaced_File_Is_Refused
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Files renames Model_Runner.Byte_Sources.Files;
+      use Ada.Streams;
+
+      Path : constant String := "obj/replaced-model.gguf";
+
+      --  Append Extra bytes to the file, which is the cheapest change that
+      --  is visible without reading it.
+      --
+      --  Written through a second copy and renamed over the first, because
+      --  Stream_IO refuses to reopen a file this process already has open
+      --  and the whole point is that the source stays open across it. That
+      --  is also what actually happens in the field: a download or a build
+      --  writes beside the file and moves it into place.
+      procedure Grow (Extra : Positive) is
+         From, Into : Stream_IO.File_Type;
+         Block      : Stream_Element_Array (1 .. 65_536);
+         Last       : Stream_Element_Offset;
+         Padding    : constant Stream_Element_Array
+           (1 .. Stream_Element_Offset (Extra)) := [others => 0];
+      begin
+         Stream_IO.Open (From, Stream_IO.In_File, Path & ".seed");
+         Stream_IO.Create (Into, Stream_IO.Out_File, Path & ".next");
+         loop
+            Stream_IO.Read (From, Block, Last);
+            exit when Last < Block'First;
+            Stream_IO.Write (Into, Block (1 .. Last));
+         end loop;
+         Stream_IO.Write (Into, Padding);
+         Stream_IO.Close (Into);
+         Stream_IO.Close (From);
+         Ada.Directories.Delete_File (Path);
+         Ada.Directories.Rename (Path & ".next", Path);
+      end Grow;
+   begin
+      Tiny_Model.Write (Path, Room => 256);
+      Tiny_Model.Write (Path & ".seed", Room => 256);
+
+      --  Unchanged, it prepares.
+      declare
+         Source : Files.File_Source;
+         Parsed : Containers.Container;
+         Ready  : L.Model;
+         Status : E.Error_Info;
+      begin
+         Files.Open (Source, Path, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not open");
+         Assert (not Source.Changed, "an untouched file reported a change");
+
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         L.Prepare (Ready, Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "an untouched file was refused: "
+                 & E.Error_Code'Image (Status.Code));
+
+         L.Close (Ready, Status);
+         Containers.Close (Parsed);
+         Files.Close (Source);
+      end;
+
+      --  Replaced after validation, it is not.
+      declare
+         Source : Files.File_Source;
+         Parsed : Containers.Container;
+         Ready  : L.Model;
+         Status : E.Error_Info;
+      begin
+         Files.Open (Source, Path, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not reopen");
+
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse again");
+
+         --  Between the checking and the reading, which is the whole window
+         --  this guards.
+         Grow (4096);
+         Assert (Source.Changed, "a grown file reported no change");
+
+         L.Prepare (Ready, Parsed, Source, Status => Status);
+         Assert (Status.Code = E.GGUF_File_Changed,
+                 "a file replaced after validation was read anyway: "
+                 & E.Error_Code'Image (Status.Code));
+
+         L.Close (Ready, Status);
+         Containers.Close (Parsed);
+         Files.Close (Source);
+      end;
+   end Replaced_File_Is_Refused;
+
    --  How many workers run a generation does not change what it produces.
    --
    --  The README says the result is bit-identical whatever --threads is, and
@@ -4757,6 +4862,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Session_Reports_Its_Phase'Access,
          "a session reports the phase it is in");
+      Register_Routine
+        (T, Replaced_File_Is_Refused'Access,
+         "a model file replaced between validation and reading is refused");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");

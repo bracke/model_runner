@@ -36,6 +36,15 @@ package Model_Runner.Byte_Sources.Memory is
    --  @return Always False.
    overriding function Is_Mapped (Self : Buffer_Source) return Boolean;
 
+   --  Report that a buffer cannot change behind the reader.
+   --
+   --  There is nothing behind it: the bytes are the caller's and this source
+   --  only reads them. A file has to be asked; this does not.
+   --
+   --  @param Self Source instance.
+   --  @return Always False.
+   overriding function Changed (Self : Buffer_Source) return Boolean;
+
    --  Stable identifier of an in-memory source.
    --
    --  @param Self Source instance.

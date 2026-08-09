@@ -58,6 +58,16 @@ package body Model_Runner.Byte_Sources.Memory is
       return False;
    end Is_Mapped;
 
+   -------------
+   -- Changed --
+   -------------
+
+   overriding function Changed (Self : Buffer_Source) return Boolean is
+      pragma Unreferenced (Self);
+   begin
+      return False;
+   end Changed;
+
    ----------
    -- Name --
    ----------

@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- A model file replaced between validation and reading is refused with
+  `MR-GGUF-0002`. The container is parsed and its shapes checked, and only
+  then are the tensors read; a file replaced in that window -- a download
+  finishing over it, a build writing a new quantization to the same path --
+  was read as though it were the file that had been checked.
+
+  `Size_Changed` was written for exactly this and its own documentation said
+  it was used before the tensor-loading stage. Nothing called it, and
+  `GGUF_File_Changed` sat on the list of diagnostics this program declares
+  and never produces. Every byte source answers `Changed` now, so the engine
+  asks rather than the caller remembering to.
+
 - A session reports whether it is reading a prompt or writing a reply.
   `Evaluating_Prompt` was declared and entered by nothing: the evaluator set
   `Generating` whether the tokens were a prompt or a reply, because it cannot

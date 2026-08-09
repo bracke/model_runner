@@ -53,14 +53,23 @@ package Model_Runner.Byte_Sources.Files is
 
    --  Report whether the file has changed size since it was opened.
    --
-   --  Used before the tensor-loading stage as a cheap check that the file was
-   --  not replaced between validation and preparation. It cannot detect an
-   --  in-place edit of the same length; the open handle covers that case on
-   --  hosts where a replaced path leaves the original inode reachable.
+   --  This is the file's answer to Byte_Sources.Changed, which model
+   --  preparation asks before it reads the tensors -- a cheap check that the
+   --  file was not replaced between validation and preparation. It cannot
+   --  detect an in-place edit of the same length; the open handle covers
+   --  that case on hosts where a replaced path leaves the original inode
+   --  reachable.
    --
    --  @param Item Source to inspect.
    --  @return True when the size on disk differs from the size at Open.
    function Size_Changed (Item : File_Source) return Boolean;
+
+   --  See Byte_Sources.Changed.
+   --
+   --  @param Self Source to inspect.
+   --  @return True when the file has changed size since it was opened.
+   overriding function Changed (Self : File_Source) return Boolean
+   is (Size_Changed (Self));
 
    --  Size of the open file.
    --
