@@ -418,14 +418,20 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 16, logits compared 256,
+conformance: sequences 32, logits compared 512,
              worst absolute 1.22573368138701E-06,
              worst relative 8.26692137016013E-04,
              outside tolerance 0
 ```
 
-Both architectures, both weight formats. Tolerance is 1e-3 relative with a
-1e-4 absolute floor, and nothing is outside it.
+Both architectures, both weight formats, both backends. Tolerance is 1e-3
+relative with a 1e-4 absolute floor, and nothing is outside it.
+
+Running the reference backend through the same comparison is worth the
+seconds it costs: that the two backends agree with each other says the fast
+path's partitioning and batching change nothing, and that both agree with an
+independently written forward pass says the arithmetic is right. The second
+is the stronger statement and it used to be made about only one of them.
 
 The relative figure is dominated by one logit that is very close to zero,
 where a difference of six ten-millionths is a large fraction of a small

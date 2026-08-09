@@ -1150,9 +1150,11 @@ package body Model_Runner.CLI.Execute is
                --  is for; --batch-size is a performance control and this is
                --  the performance the chosen backend has.
                Request.Batch_Size :=
-                 (if Chosen.Supports_Batched then Item.Batch_Size else 1);
+                 (if L.Capability (Prepared).Supports_Batched
+                  then Item.Batch_Size
+                  else 1);
 
-               if not Chosen.Supports_Batched
+               if not L.Capability (Prepared).Supports_Batched
                  and then Item.Batch_Size /= 1
                  and then Item.Level = Opt.Verbose
                then
@@ -1160,7 +1162,8 @@ package body Model_Runner.CLI.Execute is
                     (Screen, "warning.backend_no_batching",
                      [Loc.Named
                         ("value",
-                         Model_Runner.Backend.Backend_Name (Chosen.Kind))]);
+                         Model_Runner.Backend.Backend_Name
+                           (L.Capability (Prepared).Kind))]);
                end if;
                Request.Retain_Text := False;
                Request.Add_Beginning := Item.Raw;

@@ -7,6 +7,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Tokenizer;
 
 with Reference_Transformer;
+with Model_Runner.Backend;
 with Tiny_Model;
 
 package body Conformance is
@@ -32,7 +33,13 @@ package body Conformance is
       --  attention reads several past positions.
       type Sequence is array (Positive range <>) of Natural;
 
-      procedure Compare (Tokens : Sequence) is
+      --  Compare one sequence, evaluated by the named backend, against the
+      --  independent implementation.
+      procedure Compare
+        (Tokens  : Sequence;
+         Backend : Model_Runner.Backend.Backend_Kind :=
+           Model_Runner.Backend.Backend_CPU)
+      is
          Held      : aliased constant B.Byte_Array := Image.all;
          Source    : Model_Runner.Byte_Sources.Memory.Buffer_Source
            (Held'Access);
@@ -48,7 +55,8 @@ package body Conformance is
             return;
          end if;
 
-         L.Prepare (Engine, Parsed, Source, Status => Status);
+         L.Prepare
+           (Engine, Parsed, Source, Backend => Backend, Status => Status);
          if E.Is_Error (Status) then
             Containers.Close (Parsed);
             return;
@@ -147,20 +155,27 @@ package body Conformance is
       --  each attention projection and in which elements the rotation
       --  pairs; both are arithmetic, and neither had anything independent
       --  to be checked against until the reference learned them too.
-      for Qwen in Boolean loop
-         for Format in Tiny_Model.Weight_Format loop
-            Tiny_Model.Build (Image, Format, Qwen => Qwen);
+      --  And every backend. The reference backend agreeing with the CPU one
+      --  says the fast path's partitioning and batching change nothing; both
+      --  of them agreeing with the independent implementation says the
+      --  arithmetic is right. The second is the stronger statement and it
+      --  was only ever made about one of the two.
+      for Backend in Model_Runner.Backend.Backend_Kind loop
+         for Qwen in Boolean loop
+            for Format in Tiny_Model.Weight_Format loop
+               Tiny_Model.Build (Image, Format, Qwen => Qwen);
 
-            Compare (Sequence'(1 => 4));
-            Compare (Sequence'(4, 5));
-            Compare (Sequence'(1, 4, 5, 6, 7));
-            Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8));
+               Compare (Sequence'(1 => 4), Backend);
+               Compare (Sequence'(4, 5), Backend);
+               Compare (Sequence'(1, 4, 5, 6, 7), Backend);
+               Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend);
 
-            B.Free (Image);
+               B.Free (Image);
+            end loop;
          end loop;
       end loop;
 
-      Result.Ran := Result.Sequences = 16;
+      Result.Ran := Result.Sequences = 32;
    end Run;
 
 end Conformance;

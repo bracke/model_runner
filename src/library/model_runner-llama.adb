@@ -835,6 +835,14 @@ package body Model_Runner.Llama is
    function Accounting (Item : Model) return Mem.Account
    is (Item.Accounting);
 
+   ----------------
+   -- Capability --
+   ----------------
+
+   function Capability
+     (Item : Model) return Model_Runner.Backend.Capabilities
+   is (Item.Able);
+
    function Accounting (Item : Session) return Mem.Account
    is (Item.Accounting);
 

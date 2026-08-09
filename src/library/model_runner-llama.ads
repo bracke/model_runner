@@ -137,6 +137,18 @@ package Model_Runner.Llama is
         Model_Runner.Backend.Backend_CPU;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  What the backend this model was prepared for can do.
+   --
+   --  A caller building a request asks this rather than assuming: a backend
+   --  that cannot batch is given one token at a time, which is a decision
+   --  about what to ask for and not a failure. Two paths build requests, and
+   --  when the clamp lived in one of them the other refused its first turn.
+   --
+   --  @param Item Prepared model.
+   --  @return The capability record, all defaults before preparation.
+   function Capability
+     (Item : Model) return Model_Runner.Backend.Capabilities;
+
    --  What a prepared model holds, by category.
    --
    --  @param Item Prepared model.

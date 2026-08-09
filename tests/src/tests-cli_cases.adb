@@ -2085,6 +2085,145 @@ package body Tests.CLI_Cases is
       end;
    end Backends_Agree;
 
+   --  A backend that cannot batch is asked for one token at a time.
+   --
+   --  Both paths that build a request have to make that clamp, and when it
+   --  was written into one of them the other refused its first turn:
+   --  --interactive --backend reference met the capability check and stopped.
+   --  A capability is for deciding what to ask, not for failing what was
+   --  asked, and a decision made in one of two places is a decision made in
+   --  neither.
+   procedure Slow_Backend_Is_Asked_For_One
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Back renames Model_Runner.Backend;
+      use Ada.Text_IO;
+
+      Model : constant String := "obj/clamp-model.gguf";
+   begin
+      Tiny_Model.Write (Model, Room => 256);
+
+      --  The single-shot path, through the whole command, with the batch
+      --  size left at its default.
+      declare
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Handle : File_Type;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--backend");
+         Add (Source, Back.Backend_Name (Back.Backend_Reference));
+         Add (Source, "--prompt");
+         Add (Source, "hi");
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+
+         Create (Handle, Out_File, "obj/clamp.txt");
+         Set_Error (Handle);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Assert (Status = 0,
+                 "a run on the backend that cannot batch failed with status"
+                 & Natural'Image (Status) & ": "
+                 & Project_Tools.Files.Read_Raw_File ("obj/clamp.txt"));
+      end;
+
+      --  And the interactive path, which builds its own request.
+      declare
+         Image   : B.Byte_Array_Access;
+         Input   : constant String := "obj/clamp-in.txt";
+         Handle  : File_Type;
+      begin
+         Tiny_Model.Build (Image, Room => 256);
+
+         Create (Handle, Out_File, Input);
+         Put_Line (Handle, "hello");
+         Put_Line (Handle, "");
+         Put_Line (Handle, "/stats");
+         Put_Line (Handle, "/exit");
+         Close (Handle);
+
+         declare
+            Held    : aliased constant B.Byte_Array := Image.all;
+            Rig     : Harness (Held'Access);
+            Session : L.Session;
+            Catalog : aliased Model_Runner.Localization.Catalog;
+            Screen  : aliased Model_Runner.Presentation.Console;
+            Options : Opt.Command;
+            From    : File_Type;
+            Err     : File_Type;
+            Status  : Natural := 0;
+            Outcome : E.Error_Info;
+         begin
+            Start (Rig, Back.Backend_Reference);
+            L.Open (Session, Rig.Ready, Status => Outcome);
+            Assert (E.Is_Ok (Outcome), "the session did not open");
+
+            Model_Runner.Localization.Open
+              (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+            Model_Runner.Presentation.Open
+              (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+               (Output_Is_Terminal => False,
+                Error_Is_Terminal  => False,
+                Input_Is_Terminal  => False,
+                Colour_Suppressed  => True),
+               Opt.Normal);
+
+            Options.Max_Tokens := 2;
+            Options.Sampling.Temperature := 0.0;
+            Options.Show_Stats := True;
+
+            Open (From, In_File, Input);
+            Create (Err, Out_File, "obj/clamp-err.txt");
+            Set_Input (From);
+            Set_Error (Err);
+            begin
+               Model_Runner.CLI.Interactive.Run
+                 (Options, Screen, Rig.Ready, Session, Status);
+            exception
+               when others =>
+                  Set_Input (Standard_Input);
+                  Set_Error (Standard_Error);
+                  Close (From);
+                  Close (Err);
+                  raise;
+            end;
+            Set_Input (Standard_Input);
+            Set_Error (Standard_Error);
+            Close (From);
+            Close (Err);
+
+            --  A completed turn, not a refusal. /stats says which it was.
+            declare
+               Said : constant String :=
+                 Project_Tools.Files.Read_Raw_File ("obj/clamp-err.txt");
+               None : constant String :=
+                 Model_Runner.Localization.Text
+                   (Catalog, "cli.interactive.no_stats");
+            begin
+               Assert (not Project_Tools.Text.Contains (Said, None),
+                       "an interactive turn on the backend that cannot "
+                       & "batch did not complete: " & Said);
+            end;
+
+            L.Close (Session);
+            L.Close (Rig.Ready, Outcome);
+            Containers.Close (Rig.Parsed);
+         end;
+      end;
+   end Slow_Backend_Is_Asked_For_One;
+
    --  How many workers run a generation does not change what it produces.
    --
    --  The README says the result is bit-identical whatever --threads is, and
@@ -5265,6 +5404,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Backends_Agree'Access,
          "the two backends produce the same logits");
+      Register_Routine
+        (T, Slow_Backend_Is_Asked_For_One'Access,
+         "a backend that cannot batch is asked for one token at a time");
       Register_Routine
         (T, Every_Chat_Format_Can_Be_Named'Access,
          "every chat format this build carries can be named on the command "

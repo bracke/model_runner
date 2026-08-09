@@ -371,7 +371,17 @@ package body Model_Runner.CLI.Interactive is
          Request.Sampling := Item.Sampling;
          Request.Seed := Item.Seed;
          Request.Has_Seed := Item.Has_Seed;
-         Request.Batch_Size := Item.Batch_Size;
+         --  What the backend can be asked for, not what was asked. The
+         --  same clamp the single-shot path makes: a backend that does not
+         --  batch is given one token at a time rather than refused, and a
+         --  capability is for deciding what to ask.
+         --
+         --  The clamp was written once and this path was left without it,
+         --  so --interactive --backend reference refused its first turn.
+         Request.Batch_Size :=
+           (if L.Capability (Prepared).Supports_Batched
+            then Item.Batch_Size
+            else 1);
          Request.Add_Beginning := False;
          Request.Retain_Text := True;
          --  The rendered conversation grows by an appended turn, so the cache

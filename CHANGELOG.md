@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- Interactive mode clamps the batch size to what the backend can do.
+  `--interactive --backend reference` refused its first turn: the clamp was
+  written into the single-shot path and the interactive one builds its own
+  request. Both ask `Llama.Capability` now, so the decision has one home
+  rather than two.
+
+- `tests conformance` runs both backends, so the independent implementation
+  checks the reference backend too. That the two backends agree says the
+  fast path's partitioning and batching change nothing; that both agree with
+  a third implementation says the arithmetic is right, and that was being
+  said about only one of them.
+
 - The gate reads the build's diagnostic logs, for the library as well as the
   tests and the tools. Nothing had ever read the library's: forty-nine style
   faults and warnings were waiting under `obj`, because the only thing that

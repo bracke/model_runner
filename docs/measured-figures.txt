@@ -106,6 +106,10 @@
 # and the spread between repeats is wider than the difference between the
 # states.
 #
+# The Capability accessor, read once per request when the batch size is
+# clamped: with it 8.59 8.71 8.72, without it 8.65 8.77 8.97, with it again
+# 8.76 8.78 8.84.
+#
 # Anything touching these files that is not outside the measured window gets
 # a re-measure like that one, or a comparison like this one.
 
@@ -113,7 +117,7 @@
 kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure and the batch-size table under "Speed"
-engine 20163C76F0327D65 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine 7D2A01708913FEED src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
