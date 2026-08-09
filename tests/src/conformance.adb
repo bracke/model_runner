@@ -143,18 +143,24 @@ package body Conformance is
       --  added, nothing offline compared quantized inference against an
       --  independent implementation, and the only check on it was two tokens
       --  recorded from another runtime against a model that is not committed.
-      for Format in Tiny_Model.Weight_Format loop
-         Tiny_Model.Build (Image, Format);
+      --  And both architectures. Qwen2 differs from Llama in a bias on
+      --  each attention projection and in which elements the rotation
+      --  pairs; both are arithmetic, and neither had anything independent
+      --  to be checked against until the reference learned them too.
+      for Qwen in Boolean loop
+         for Format in Tiny_Model.Weight_Format loop
+            Tiny_Model.Build (Image, Format, Qwen => Qwen);
 
-         Compare (Sequence'(1 => 4));
-         Compare (Sequence'(4, 5));
-         Compare (Sequence'(1, 4, 5, 6, 7));
-         Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8));
+            Compare (Sequence'(1 => 4));
+            Compare (Sequence'(4, 5));
+            Compare (Sequence'(1, 4, 5, 6, 7));
+            Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8));
 
-         B.Free (Image);
+            B.Free (Image);
+         end loop;
       end loop;
 
-      Result.Ran := Result.Sequences = 8;
+      Result.Ran := Result.Sequences = 16;
    end Run;
 
 end Conformance;

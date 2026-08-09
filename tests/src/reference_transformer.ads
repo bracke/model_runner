@@ -84,11 +84,19 @@ private
    type Matrix_Access is access Matrix;
    type Vector_Access is access Real_Vector;
 
+   --  The architectures this reference implements. It has to be the same
+   --  set the engine implements, or a conformance run compares two
+   --  different functions and blames the engine for the difference.
+   type Architecture is (Llama, Qwen2);
+
    type Layer is record
       Attention_Norm : Vector_Access := null;
       Query          : Matrix_Access := null;
       Key            : Matrix_Access := null;
       Value          : Matrix_Access := null;
+      Query_Bias     : Vector_Access := null;
+      Key_Bias       : Vector_Access := null;
+      Value_Bias     : Vector_Access := null;
       Attention_Out  : Matrix_Access := null;
       Feed_Norm      : Vector_Access := null;
       Gate           : Matrix_Access := null;
@@ -101,6 +109,7 @@ private
 
    type Model is limited record
       Loaded       : Boolean := False;
+      Kind         : Architecture := Llama;
       Embedding    : Natural := 0;
       Feed_Forward : Natural := 0;
       Layers       : Natural := 0;

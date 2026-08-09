@@ -141,6 +141,10 @@ package body Reference_Transformer is
    -- Load --
    ----------
 
+   --  The prefix a model's metadata keys carry.
+   function Prefix (Item : Model) return String
+   is (case Item.Kind is when Llama => "llama.", when Qwen2 => "qwen2.");
+
    procedure Load
      (Item   : in out Model;
       Source : Containers.Container;
@@ -252,17 +256,32 @@ package body Reference_Transformer is
       Close (Item);
       Ok := False;
 
-      if Containers.String_Value (Source, "general.architecture") /= "llama" then
-         return;
-      end if;
+      --  The architectures this reference knows, which must be the ones the
+      --  engine knows: a conformance run compares two implementations of
+      --  the same function, and a reference that computes a different one
+      --  reports the engine as wrong. Qwen2 was added to the engine and not
+      --  to here, so its arithmetic had nothing independent to be checked
+      --  against at all.
+      declare
+         Named : constant String :=
+           Containers.String_Value (Source, "general.architecture");
+      begin
+         if Named = "llama" then
+            Item.Kind := Llama;
+         elsif Named = "qwen2" then
+            Item.Kind := Qwen2;
+         else
+            return;
+         end if;
+      end;
 
-      Item.Embedding := Metadata (Source, "llama.embedding_length", 0);
-      Item.Feed_Forward := Metadata (Source, "llama.feed_forward_length", 0);
-      Item.Layers := Metadata (Source, "llama.block_count", 0);
-      Item.Heads := Metadata (Source, "llama.attention.head_count", 0);
+      Item.Embedding := Metadata (Source, Prefix (Item) & "embedding_length", 0);
+      Item.Feed_Forward := Metadata (Source, Prefix (Item) & "feed_forward_length", 0);
+      Item.Layers := Metadata (Source, Prefix (Item) & "block_count", 0);
+      Item.Heads := Metadata (Source, Prefix (Item) & "attention.head_count", 0);
       Item.KV_Heads :=
-        Metadata (Source, "llama.attention.head_count_kv", Item.Heads);
-      Item.Context := Metadata (Source, "llama.context_length", 0);
+        Metadata (Source, Prefix (Item) & "attention.head_count_kv", Item.Heads);
+      Item.Context := Metadata (Source, Prefix (Item) & "context_length", 0);
 
       if Item.Embedding = 0 or else Item.Layers = 0 or else Item.Heads = 0
         or else Item.Embedding mod Item.Heads /= 0
@@ -274,21 +293,21 @@ package body Reference_Transformer is
 
       Item.Head_Size := Item.Embedding / Item.Heads;
       Item.Rotary :=
-        Metadata (Source, "llama.rope.dimension_count", Item.Head_Size);
+        Metadata (Source, Prefix (Item) & "rope.dimension_count", Item.Head_Size);
 
       declare
          Value  : Model_Runner.Numerics.Wide_Real;
          Status : Model_Runner.Errors.Error_Info;
       begin
          Containers.Get_Float
-           (Source, "llama.attention.layer_norm_rms_epsilon",
+           (Source, Prefix (Item) & "attention.layer_norm_rms_epsilon",
             0.0, 1.0, Value, Status);
          if Model_Runner.Errors.Is_Ok (Status) then
             Item.Epsilon := Long_Float (Value);
          end if;
 
          Containers.Get_Float
-           (Source, "llama.rope.freq_base", 1.0, 1.0E12, Value, Status);
+           (Source, Prefix (Item) & "rope.freq_base", 1.0, 1.0E12, Value, Status);
          if Model_Runner.Errors.Is_Ok (Status) then
             Item.Rope_Base := Long_Float (Value);
          end if;
@@ -339,6 +358,28 @@ package body Reference_Transformer is
               Read_Matrix (Layer_Name (Index, "attn_v.weight"), Present);
             if not Present then
                return;
+            end if;
+
+            --  The projection biases, required for the architecture that
+            --  has them and absent from the one that does not.
+            if Item.Kind = Qwen2 then
+               Current.Query_Bias :=
+                 Read_Vector (Layer_Name (Index, "attn_q.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Key_Bias :=
+                 Read_Vector (Layer_Name (Index, "attn_k.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Value_Bias :=
+                 Read_Vector (Layer_Name (Index, "attn_v.bias"), Present);
+               if not Present then
+                  return;
+               end if;
             end if;
 
             Current.Attention_Out :=
@@ -502,8 +543,19 @@ package body Reference_Transformer is
                              / Long_Float (Item.Rotary));
                   Angle : constant Long_Float :=
                     Long_Float (Position) * Frequency;
-                  Even  : constant Natural := Head * Item.Head_Size + 2 * Pair;
-                  Odd   : constant Natural := Even + 1;
+                  --  Llama pairs an element with its neighbour; Qwen2
+                  --  pairs it with the one half a rotation later. Written
+                  --  out here rather than shared with the engine: the point
+                  --  of this implementation is to be arrived at separately,
+                  --  and a shared rotation would agree with itself.
+                  Even  : constant Natural :=
+                    (if Item.Kind = Llama
+                     then Head * Item.Head_Size + 2 * Pair
+                     else Head * Item.Head_Size + Pair);
+                  Odd   : constant Natural :=
+                    (if Item.Kind = Llama
+                     then Even + 1
+                     else Even + Item.Rotary / 2);
                   Left  : constant Long_Float := Vector (Even);
                   Right : constant Long_Float := Vector (Odd);
                begin
@@ -555,6 +607,24 @@ package body Reference_Transformer is
                Project (Current.Query.all, Normed, Query);
                Project (Current.Key.all, Normed, Key_Row);
                Project (Current.Value.all, Normed, Val_Row);
+
+               --  The bias belongs to the projection, so it is added to
+               --  what the projection produced and before the rotation acts
+               --  on it. That ordering is the one thing the engine's own
+               --  tests cannot check, because a fixture has nothing to be
+               --  right against; this is the something.
+               if Current.Query_Bias /= null then
+                  for Index in Query'Range loop
+                     Query (Index) :=
+                       Query (Index) + Current.Query_Bias.all (Index);
+                  end loop;
+                  for Index in Key_Row'Range loop
+                     Key_Row (Index) :=
+                       Key_Row (Index) + Current.Key_Bias.all (Index);
+                     Val_Row (Index) :=
+                       Val_Row (Index) + Current.Value_Bias.all (Index);
+                  end loop;
+               end if;
 
                Rotate (Query, Item.Heads, Step);
                Rotate (Key_Row, Item.KV_Heads, Step);

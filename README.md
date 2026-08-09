@@ -417,14 +417,23 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 8, logits compared 128,
+conformance: sequences 16, logits compared 256,
              worst absolute 1.22573368138701E-06,
-             worst relative 1.22468576261539E-05,
+             worst relative 8.26692137016013E-04,
              outside tolerance 0
 ```
 
-Tolerance is 1e-3 relative with a 1e-4 absolute floor, so the observed worst
-case is about eighty times inside it.
+Both architectures, both weight formats. Tolerance is 1e-3 relative with a
+1e-4 absolute floor, and nothing is outside it.
+
+The relative figure is dominated by one logit that is very close to zero,
+where a difference of six ten-millionths is a large fraction of a small
+number. Measured apart, `llama` reaches 1.22e-06 absolute and 1.22e-05
+relative, and `qwen2` reaches 6.08e-07 absolute and 8.27e-04 relative -- so
+the architecture with the larger relative figure is the one whose two
+implementations agree more closely in absolute terms. That is worth saying
+because the relative number moved seventy-fold when `qwen2` was added and it
+would otherwise read as a regression.
 
 Those digits are what the run prints, and `tests conformance` checks that this
 file still quotes them. It had gone stale twice before that check existed: the

@@ -41,7 +41,7 @@ container validation and is rejected by `Model_Runner.Tensors.Make` with
 | Architecture | State |
 | --- | --- |
 | `llama` | Implemented |
-| `qwen2` | Implemented: the same shape with a bias on each attention projection and the split rotary pairing. The biases are required, not optional |
+| `qwen2` | Implemented: the same shape with a bias on each attention projection and the split rotary pairing. The biases are required, not optional. Both architectures are compared against an independent implementation by `tests conformance` |
 | Everything else | Rejected: `MR-ARCH-0002` |
 
 Explicitly rejected features: mixture of experts, sliding-window attention,

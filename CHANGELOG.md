@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `Reference_Transformer` reads `qwen2` too, so `tests conformance` compares
+  both architectures against an independent implementation. It knew only the
+  interleaved rotary and no attention bias, which meant the architecture
+  added yesterday had nothing independent to be checked against -- and the
+  ordering of the bias against the rotation was the one thing the fixtures
+  could not see. Moving the bias to after the rotation now puts ninety
+  logits outside tolerance.
+
+  The published relative divergence moved seventy-fold and the README says
+  why: it is one logit close to zero. In absolute terms the two
+  implementations agree more closely on `qwen2` than on `llama`.
+
 - The `Llama` package said "exactly one architecture is supported", fourteen
   lines above the enumeration that lists two. The README's capability row
   described only that one. Both say what the build reads, and the release
