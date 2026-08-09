@@ -38,6 +38,16 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- The tests tool answers for its own commands. It has eleven; its usage line
+  named six, so mistyping one told you about half the tool, and the README's
+  tooling row named a different seven -- missing `tests speed`, which a
+  section of that same file had told readers to run since the day before.
+  Both lists sat beside a dispatch chain neither could see. The set is a
+  registry now: the usage line is built from it, and the checklist holds the
+  dispatch and the README against it in both directions. `tests` with no
+  command prints every command, what it takes and one line on what it is
+  for.
+
 - `tests benchmark` reports the median of three rounds. It reported a single
   pass while every figure it feeds is published as a median of three, so the
   last step was left to whoever remembered it -- and on this part the spread

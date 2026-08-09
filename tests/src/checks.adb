@@ -15,6 +15,7 @@ with Docs_Generation;
 with Library_Surface;
 with Reserved_Codes;
 with Template_Registry;
+with Tool_Commands;
 
 with Model_Runner;
 with Model_Runner.Errors;
@@ -629,6 +630,93 @@ package body Checks is
                      & Keys (Index).Text (1 .. Keys (Index).Last));
             end if;
          end loop;
+      end;
+
+      --  The tests tool answers for its own commands.
+      --
+      --  Every registry in this repository is asked of the code, and the
+      --  crate that does the asking could not say what its own commands
+      --  were. There were two hand-kept lists: the usage line named six of
+      --  eleven, so mistyping a command told you about half the tool, and
+      --  the README's tooling row named a different seven -- missing the
+      --  command a section of that same file tells readers to run, added
+      --  the day before. Both sat beside a dispatch chain neither could see.
+      declare
+         Tool   : constant String := Contents ("tests/src/tests_main.adb");
+         Readme : constant String := Contents ("README.md");
+
+         --  Every command the dispatch answers, as a literal it compares
+         --  against. A command answered by nothing is a line in a list.
+         Found : Natural := 0;
+      begin
+         Result.Performed := Result.Performed + 1;
+         if Tool'Length = 0 then
+            Fail ("tests/src/tests_main.adb is missing; the command check no "
+                  & "longer reads the tool it describes");
+         end if;
+
+         for Index in 1 .. Tool_Commands.Count loop
+            declare
+               Name : constant String := Tool_Commands.Item (Index).Name.all;
+            begin
+               Result.Performed := Result.Performed + 1;
+               if not Holds (Tool, "Command = """ & Name & """") then
+                  Fail ("Tool_Commands lists " & Name
+                        & ", which the tool does not dispatch");
+               end if;
+
+               Result.Performed := Result.Performed + 1;
+               if not Holds (Readme, "`tests " & Name & "`") then
+                  Fail ("the tests tool answers " & Name
+                        & ", which the README does not name");
+               end if;
+            end;
+         end loop;
+
+         --  And the other way, from the dispatch chain back to the list.
+         declare
+            Needle : constant String := "Command = """;
+            Index  : Natural := Tool'First;
+         begin
+            while Index <= Tool'Last - Needle'Length loop
+               if Tool (Index .. Index + Needle'Length - 1) = Needle then
+                  declare
+                     From : constant Natural := Index + Needle'Length;
+                     Stop : Natural := From;
+                     Seen : Boolean := False;
+                  begin
+                     while Stop <= Tool'Last and then Tool (Stop) /= '"' loop
+                        Stop := Stop + 1;
+                     end loop;
+
+                     declare
+                        Name : constant String := Tool (From .. Stop - 1);
+                     begin
+                        Found := Found + 1;
+                        for Which in 1 .. Tool_Commands.Count loop
+                           if Tool_Commands.Item (Which).Name.all = Name then
+                              Seen := True;
+                           end if;
+                        end loop;
+
+                        Result.Performed := Result.Performed + 1;
+                        if not Seen then
+                           Fail ("the tool dispatches " & Name
+                                 & ", which Tool_Commands does not list");
+                        end if;
+                     end;
+                  end;
+               end if;
+               Index := Index + 1;
+            end loop;
+         end;
+
+         Result.Performed := Result.Performed + 1;
+         if Found /= Tool_Commands.Count then
+            Fail ("the tool dispatches" & Natural'Image (Found)
+                  & " commands and Tool_Commands lists"
+                  & Natural'Image (Tool_Commands.Count));
+         end if;
       end;
 
       --  Every public operation has a reader in the program, not only in

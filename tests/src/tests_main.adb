@@ -31,6 +31,7 @@ with Project_Tools.Files;
 with Project_Tools.Text;
 with Packaging;
 with Speed_Run;
+with Tool_Commands;
 with Fuzzing;
 with Tiny_Model;
 
@@ -621,9 +622,7 @@ begin
       Ada.Text_IO.Put_Line
         (Ada.Text_IO.Standard_Error, "unknown command: " & Command);
       Ada.Text_IO.Put_Line
-        (Ada.Text_IO.Standard_Error, "usage: tests [test | check [ROOT] | fuzz [--seed N] [--cases N]"
-         & " | speed --model PATH | benchmark [--seconds N] [--rounds N]"
-         & " | fixtures [DIR]]");
+        (Ada.Text_IO.Standard_Error, Tool_Commands.Usage_Line);
       Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
    end if;
 end Tests_Main;
