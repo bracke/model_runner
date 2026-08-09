@@ -478,7 +478,8 @@ package body Checks is
 
          --  The architecture table, from its heading to the next one.
          function Architecture_Table return String is
-            Opening : constant String := "## Architecture";
+            Opening : constant String :=
+              "## Architecture" & Character'Val (10);
             From    : Natural := 0;
          begin
             if Matrix'Length < Opening'Length then
@@ -504,10 +505,82 @@ package body Checks is
          end Architecture_Table;
 
          Architectures : constant String := Architecture_Table;
+
+         --  The backend section, from its heading to the next one.
+         function Backend_Table return String is
+            Opening : constant String := "## Backend" & Character'Val (10);
+            From    : Natural := 0;
+         begin
+            if Matrix'Length < Opening'Length then
+               return "";
+            end if;
+            for Index in Matrix'First .. Matrix'Last - Opening'Length + 1 loop
+               if Matrix (Index .. Index + Opening'Length - 1) = Opening then
+                  From := Index + Opening'Length;
+                  exit;
+               end if;
+            end loop;
+            if From = 0 then
+               return "";
+            end if;
+            for Index in From .. Matrix'Last - 2 loop
+               if Matrix (Index) = Character'Val (10)
+                 and then Matrix (Index + 1 .. Index + 2) = "##"
+               then
+                  return Matrix (From .. Index);
+               end if;
+            end loop;
+            return Matrix (From .. Matrix'Last);
+         end Backend_Table;
+
+         Backends : constant String := Backend_Table;
       begin
          Result.Performed := Result.Performed + 1;
          if Listed = "" then
             Fail ("README.md has no quantization row; the check no longer "
+                  & "matches the document it reads");
+         end if;
+
+         --  Every backend this build has has a row of its own in the
+         --  matrix's backend table, and is named in the README's row.
+         --
+         --  The backends were checked in the help line and on the version
+         --  screen, which is where they are listed, and not in the tables
+         --  that describe what they do. So the section describing them went
+         --  on describing one: worker pools and partitions and bounded
+         --  queues, flat, as though the reference backend had any of them.
+         for Kind in Model_Runner.Backend.Backend_Kind loop
+            declare
+               Name : constant String :=
+                 Model_Runner.Backend.Backend_Name (Kind);
+            begin
+               Result.Performed := Result.Performed + 1;
+               if not Holds (Backends,
+                             Character'Val (10) & "| `" & Name & "` |")
+               then
+                  Fail ("this build has the " & Name
+                        & " backend but the backend table in "
+                        & "docs/support-matrix.md has no row for it");
+               end if;
+
+               Result.Performed := Result.Performed + 1;
+               if not Holds_Word (Row (Readme, "| Backends |"), Name) then
+                  Fail ("this build has the " & Name
+                        & " backend but the README's backend row does not "
+                        & "name it");
+               end if;
+            end;
+         end loop;
+
+         Result.Performed := Result.Performed + 1;
+         if Backends = "" then
+            Fail ("docs/support-matrix.md has no backend section; the check "
+                  & "no longer matches the document it reads");
+         end if;
+
+         Result.Performed := Result.Performed + 1;
+         if Row (Readme, "| Backends |") = "" then
+            Fail ("README.md has no backend row; the check no longer "
                   & "matches the document it reads");
          end if;
 
@@ -525,7 +598,9 @@ package body Checks is
                --  of the whole file for the word and a search for a row
                --  carrying it.
                Result.Performed := Result.Performed + 1;
-               if not Holds (Architectures, "| `" & Name & "` |") then
+               if not Holds (Architectures,
+                             Character'Val (10) & "| `" & Name & "` |")
+               then
                   Fail ("this build reads " & Name
                         & " but the architecture table in "
                         & "docs/support-matrix.md has no row for it");

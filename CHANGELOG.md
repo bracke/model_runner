@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The backend section of the support matrix and the README's backend row
+  described one backend. Worker pools, partitioned rows, bounded queues and
+  batched prefill were listed flat, as capabilities of "the backend", when
+  every one of them belongs to `cpu` and the `reference` backend
+  deliberately has none of them. Each capability now says which backend it
+  belongs to.
+
+- The release checklist fails when a backend this build has is missing from
+  that table or from the README's row. Backends were checked where they are
+  listed -- the help line, the version screen -- and not where they are
+  described, which is how the description outlived them.
+
 - Interactive mode clamps the batch size to what the backend can do.
   `--interactive --backend reference` refused its first turn: the clamp was
   written into the single-shot path and the interactive one builds its own

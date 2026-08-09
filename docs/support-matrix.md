@@ -143,22 +143,31 @@ the choice.
 
 ## Backend
 
-| Capability | State |
+Two, selected with `--backend`. The rows below say which of them each
+capability belongs to, because most of them belong to one: a worker pool and
+a partition are what `cpu` has and what `reference` deliberately has not.
+
+| Backend | State |
 | --- | --- |
-| Ada worker pool with reusable tasks | Implemented |
-| Deterministic row partitioning | Implemented |
-| Single-worker mode | Implemented |
-| Bounded work queue | Implemented (one job outstanding) |
-| Worker-failure propagation | Implemented |
-| Clean shutdown, rejection while closing | Implemented |
-| Batched prefill | Implemented, `--batch-size`, capped at 128 tokens |
-| Noncontiguous views | Not implemented |
+| `cpu` | Worker pool, partitioned rows, batched prefill, span decoding. The default |
+| `reference` | One row at a time, decoded whole, multiplied element by element, summed wide, on the calling task. No pool, no partition, no batching. Produces the same logits as `cpu` and takes about forty times as long; it exists so that a suspicious result on a caller's own model can be asked again by different code |
+
+| Capability | Backend | State |
+| --- | --- | --- |
+| Ada worker pool with reusable tasks | `cpu` | Implemented |
+| Deterministic row partitioning | `cpu` | Implemented |
+| Single-worker mode | `cpu` | Implemented |
+| Bounded work queue | `cpu` | Implemented (one job outstanding) |
+| Worker-failure propagation | `cpu` | Implemented |
+| Clean shutdown, rejection while closing | `cpu` | Implemented |
+| Batched prefill | `cpu` | Implemented, `--batch-size`, capped at 128 tokens |
+| Evaluation on the calling task, no pool | `reference` | Implemented |
+| One reading of the weights per vector | `reference` | Implemented; `--batch-size` is clamped to one and said so under `--verbose` |
+| Noncontiguous views | both | Not implemented |
 | Replaced-file detection | The file is asked whether it changed before its tensors are read; a size that differs from the one validated is refused with `MR-GGUF-0002`. An in-place edit of the same length is not detected |
 | Memory accounting | Every category is charged: weights, converted weights, KV cache, activations, logits, sampling workspace, token buffers, template buffers, metadata and vocabulary storage. `--memory-limit` bounds the model and the session |
-| Capability checking | Every field of the backend's `Capabilities` is asked by something: the formats and the alignment per tensor while a model loads, matrix-vector once when it is prepared, batching when a batch is evaluated, and the worker count when the pool is sized. No shipped configuration refuses anything -- the one backend claims what the engine needs -- but disclaiming any of them does refuse, naming the capability. Five fields that could only ever hold one value were removed rather than wired |
+| Capability checking | Every field of the backend's `Capabilities` is asked by something: the formats and the alignment per tensor while a model loads, matrix-vector once when it is prepared, batching when a batch is evaluated, and the worker count when the pool is sized. The `reference` backend declines two of them outright, which is what made the machinery answer for itself; disclaiming any of the others refuses, naming the capability. Five fields that could only ever hold one value were removed rather than wired |
 | Backend selection | `--backend NAME`, matched against the backends this build has and refused by name otherwise: `cpu` and `reference` |
-| `cpu` backend | Worker pool, partitioned rows, batched prefill, span decoding |
-| `reference` backend | One row at a time, decoded whole, multiplied element by element, summed wide, on the calling task. No pool, no partition, no batching. Produces the same logits as `cpu` and takes about forty times as long; it exists so that a suspicious result on a caller's own model can be asked again by different code |
 
 ## Locales
 
