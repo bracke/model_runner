@@ -711,6 +711,87 @@ package body Checks is
             end loop;
          end;
 
+         --  The two things a reader is told about a command must agree: the
+         --  usage line says what it takes and the tool refuses what is not
+         --  in the option list, and those were separate strings written by
+         --  hand a day apart. Every option named in one must be in the
+         --  other.
+         for Index in 1 .. Tool_Commands.Count loop
+            declare
+               Entry_Value : constant Tool_Commands.Command :=
+                 Tool_Commands.Item (Index);
+               Shown : constant String := Entry_Value.Takes.all;
+               Taken : constant String := Entry_Value.Options.all;
+               From  : Natural := Shown'First;
+            begin
+               --  Every --option in the usage text is one the tool accepts.
+               while From <= Shown'Last - 2 loop
+                  if Shown (From .. From + 1) = "--" then
+                     declare
+                        Stop : Natural := From + 2;
+                     begin
+                        while Stop <= Shown'Last
+                          and then Shown (Stop) not in ' ' | '=' | ']'
+                        loop
+                           Stop := Stop + 1;
+                        end loop;
+
+                        declare
+                           Named : constant String :=
+                             Shown (From .. Stop - 1);
+                        begin
+                           Result.Performed := Result.Performed + 1;
+                           if not Holds (Taken, " " & Named & " ") then
+                              Fail ("the usage line for "
+                                    & Entry_Value.Name.all & " shows "
+                                    & Named
+                                    & ", which it does not accept");
+                           end if;
+                        end;
+                        From := Stop;
+                     end;
+                  else
+                     From := From + 1;
+                  end if;
+               end loop;
+
+               --  And every option it accepts is shown.
+               declare
+                  Start : Natural := Taken'First;
+               begin
+                  while Start <= Taken'Last - 2 loop
+                     if Taken (Start .. Start + 1) = "--" then
+                        declare
+                           Stop : Natural := Start + 2;
+                        begin
+                           while Stop <= Taken'Last
+                             and then Taken (Stop) /= ' '
+                           loop
+                              Stop := Stop + 1;
+                           end loop;
+
+                           declare
+                              Named : constant String :=
+                                Taken (Start .. Stop - 1);
+                           begin
+                              Result.Performed := Result.Performed + 1;
+                              if not Holds (Shown, Named) then
+                                 Fail (Entry_Value.Name.all & " accepts "
+                                       & Named
+                                       & ", which its usage line does not "
+                                       & "show");
+                              end if;
+                           end;
+                           Start := Stop;
+                        end;
+                     else
+                        Start := Start + 1;
+                     end if;
+                  end loop;
+               end;
+            end;
+         end loop;
+
          Result.Performed := Result.Performed + 1;
          if Found /= Tool_Commands.Count then
             Fail ("the tool dispatches" & Natural'Image (Found)

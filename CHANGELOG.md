@@ -38,6 +38,23 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- Every command of the tests tool refuses an option it does not take, and
+  the check happens once rather than in each command. Five of eleven checked
+  and six did not: `tests check --nonsense` ran the whole gate without a
+  word, `tests docs --nonsense` read the typo as a directory and failed at
+  writing it, and `tests fixtures --nonsense` died with an unhandled
+  exception and a stack trace. The option lists are in the registry beside
+  the commands, one place reads them before dispatch, and a command with no
+  options says so rather than printing an empty list.
+
+- The usage text and the option list of a command must agree. They were two
+  hand-written strings, added a day apart, saying the same thing about the
+  same command with nothing holding them together -- which is the fault the
+  registry was introduced to end, one level further down. An option shown
+  and not accepted fails, and an option accepted and not shown fails; the
+  first one found was `tokenize`, whose usage said `--text` where the
+  command takes `--prompt`.
+
 - The tests tool answers for its own commands. It has eleven; its usage line
   named six, so mistyping one told you about half the tool, and the README's
   tooling row named a different seven -- missing `tests speed`, which a

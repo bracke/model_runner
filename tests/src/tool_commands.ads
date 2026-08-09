@@ -28,6 +28,12 @@ package Tool_Commands is
 
       --  One line, for a reader deciding whether this is the one they want.
       Summary : access constant String;
+
+      --  The options it accepts, each surrounded by spaces, so that a
+      --  membership test is a substring test. Empty for a command that
+      --  takes only positional arguments -- and empty means every option is
+      --  refused, not that none is checked.
+      Options : access constant String;
    end record;
 
    --  Number of commands.
@@ -45,5 +51,19 @@ package Tool_Commands is
    --
    --  @return One line naming every command and what it takes.
    function Usage_Line return String;
+
+   --  The options a command accepts.
+   --
+   --  Five of eleven commands used to check their options and six did not,
+   --  each carrying its own copy of the list: `tests check --nonsense` ran
+   --  the whole gate without a word, `tests docs --nonsense` read the typo
+   --  as a directory and failed at writing, and `tests fixtures --nonsense`
+   --  died with a stack trace. The lists live here now and one place reads
+   --  them, so a command cannot forget to look.
+   --
+   --  @param Name Command word, as typed.
+   --  @return The option list, or a single space when the command takes no
+   --    options and when the name is not one this tool answers.
+   function Options_Of (Name : String) return String;
 
 end Tool_Commands;

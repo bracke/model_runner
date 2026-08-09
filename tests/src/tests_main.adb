@@ -104,7 +104,9 @@ procedure Tests_Main is
                Ada.Text_IO.Put_Line
                  (Ada.Text_IO.Standard_Error,
                   "unknown option: " & Argument
-                  & "; this command takes" & Known);
+                  & (if Known = " " or else Known = ""
+                     then "; this command takes no options"
+                     else "; this command takes" & Known));
                Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
                return True;
             end if;
@@ -115,6 +117,17 @@ procedure Tests_Main is
    end Unknown_Option;
 
 begin
+   --  Every command's options are checked in one place, from the registry,
+   --  before anything is dispatched. Five commands used to check their own
+   --  and six did not: `tests check --nonsense` ran the whole gate without a
+   --  word, `tests docs --nonsense` read the typo as a directory and failed
+   --  at writing it, and `tests fixtures --nonsense` died with a stack
+   --  trace. A command cannot forget to look now, because looking is not
+   --  something a command does.
+   if Unknown_Option (Tool_Commands.Options_Of (Command)) then
+      return;
+   end if;
+
    if Command = "test" then
       if Run_Suite (Reporter) /= AUnit.Success then
          Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
@@ -140,13 +153,8 @@ begin
 
          Seed   : constant Natural := Option ("--seed", 1);
          Cases  : constant Natural := Natural'Max (Option ("--cases", 500), 1);
-         Refused : constant Boolean := Unknown_Option (" --seed --cases ");
          Result : Fuzzing.Report;
       begin
-         if Refused then
-            return;
-         end if;
-
          Fuzzing.Run (Interfaces.Unsigned_64 (Seed), Cases, Result);
 
          Ada.Text_IO.Put_Line
@@ -346,7 +354,6 @@ begin
 
          Path   : constant String := Option ("--model", "");
          Prompt : constant String := Option ("--prompt", "Hello");
-         Refused : constant Boolean := Unknown_Option (" --model --prompt ");
 
          Source : Model_Runner.Byte_Sources.Files.File_Source;
          Item   : Model_Runner.GGUF.Containers.Container;
@@ -355,9 +362,7 @@ begin
          Tokens : Model_Runner.Tokenizer.Token_Array (1 .. 4096);
          Used   : Natural;
       begin
-         if Refused then
-            null;
-         elsif Path = "" then
+         if Path = "" then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error, "tokenize: --model is required");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
@@ -444,14 +449,7 @@ begin
 
          Path   : constant String := Option ("--model", "");
          Result : External_Model.Report;
-         Refused : constant Boolean :=
-           Unknown_Option (" --model --prompt --max-tokens --threads "
-                           & "--expect ");
       begin
-         if Refused then
-            return;
-         end if;
-
          External_Model.Run
            (Path    => Path,
             Prompt  => Option ("--prompt", "Hello"),
@@ -514,29 +512,24 @@ begin
          end Number;
 
          Result  : Speed_Run.Report;
-         Refused : constant Boolean :=
-           Unknown_Option (" --model --prompt-file --max-tokens --threads "
-                           & "--batch-size --repeats ");
       begin
-         if not Refused then
-            Speed_Run.Run
-              (Path        => Option ("--model", ""),
-               Prompt_Path =>
-                 Option ("--prompt-file",
-                         "../tests/fixtures/speed-prompt-short.txt"),
-               Tokens      => Number ("--max-tokens", 12),
-               Threads     => Number ("--threads",
-                                      Model_Runner.Platform.Core_Count - 1),
-               Batch       => Number ("--batch-size", 32),
-               Repeats     => Number ("--repeats", 3),
-               Result      => Result);
+         Speed_Run.Run
+           (Path        => Option ("--model", ""),
+            Prompt_Path =>
+              Option ("--prompt-file",
+                      "../tests/fixtures/speed-prompt-short.txt"),
+            Tokens      => Number ("--max-tokens", 12),
+            Threads     => Number ("--threads",
+                                   Model_Runner.Platform.Core_Count - 1),
+            Batch       => Number ("--batch-size", 32),
+            Repeats     => Number ("--repeats", 3),
+            Result      => Result);
 
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
 
-            if not Result.Ran and then not Result.Missing then
-               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-            end if;
+         if not Result.Ran and then not Result.Missing then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;
 
@@ -567,20 +560,16 @@ begin
                return Default;
          end Number;
 
-         Refused : constant Boolean :=
-           Unknown_Option (" --seconds --rounds ");
       begin
-         if not Refused then
-            --  Half a second a round when nothing is asked for, which is
-            --  what the published figures were taken at; whole seconds when
-            --  a steadier number is wanted.
-            Benchmarks.Run
-              (Seconds =>
-                 (if Option ("--seconds", "") = ""
-                  then 0.5
-                  else Duration (Number ("--seconds", 1))),
-               Rounds  => Number ("--rounds", 3));
-         end if;
+         --  Half a second a round when nothing is asked for, which is
+         --  what the published figures were taken at; whole seconds when a
+         --  steadier number is wanted.
+         Benchmarks.Run
+           (Seconds =>
+              (if Option ("--seconds", "") = ""
+               then 0.5
+               else Duration (Number ("--seconds", 1))),
+            Rounds  => Number ("--rounds", 3));
       end;
 
    elsif Command = "package" then

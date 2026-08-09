@@ -14,6 +14,15 @@ package body Tool_Commands is
 
    Nothing : aliased constant String := "";
 
+   Opts_None      : aliased constant String := " ";
+   Opts_Fuzz      : aliased constant String := " --seed --cases ";
+   Opts_Speed     : aliased constant String :=
+     " --model --prompt-file --max-tokens --threads --batch-size --repeats ";
+   Opts_Benchmark : aliased constant String := " --seconds --rounds ";
+   Opts_External  : aliased constant String :=
+     " --model --prompt --max-tokens --threads --expect ";
+   Opts_Tokenize  : aliased constant String := " --model --prompt ";
+
    Takes_Check     : aliased constant String := "[ROOT]";
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
    Takes_Speed     : aliased constant String :=
@@ -23,7 +32,7 @@ package body Tool_Commands is
    Takes_External  : aliased constant String :=
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"
      & " [--expect TEXT]";
-   Takes_Tokenize  : aliased constant String := "--model PATH --text TEXT";
+   Takes_Tokenize  : aliased constant String := "--model PATH --prompt TEXT";
    Takes_Docs      : aliased constant String := "[ROOT]";
    Takes_Fixtures  : aliased constant String := "[DIR]";
    Takes_Package   : aliased constant String := "[ROOT] [INTO]";
@@ -53,17 +62,28 @@ package body Tool_Commands is
      "assemble the distributable archive from what is already built";
 
    Held : constant array (1 .. 11) of Command :=
-     [(Name_Test'Access, Nothing'Access, Says_Test'Access),
-      (Name_Check'Access, Takes_Check'Access, Says_Check'Access),
-      (Name_Conformance'Access, Nothing'Access, Says_Conformance'Access),
-      (Name_Fuzz'Access, Takes_Fuzz'Access, Says_Fuzz'Access),
-      (Name_Speed'Access, Takes_Speed'Access, Says_Speed'Access),
-      (Name_Benchmark'Access, Takes_Benchmark'Access, Says_Benchmark'Access),
-      (Name_External'Access, Takes_External'Access, Says_External'Access),
-      (Name_Tokenize'Access, Takes_Tokenize'Access, Says_Tokenize'Access),
-      (Name_Docs'Access, Takes_Docs'Access, Says_Docs'Access),
-      (Name_Fixtures'Access, Takes_Fixtures'Access, Says_Fixtures'Access),
-      (Name_Package'Access, Takes_Package'Access, Says_Package'Access)];
+     [(Name_Test'Access, Nothing'Access, Says_Test'Access,
+       Opts_None'Access),
+      (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
+       Opts_None'Access),
+      (Name_Conformance'Access, Nothing'Access, Says_Conformance'Access,
+       Opts_None'Access),
+      (Name_Fuzz'Access, Takes_Fuzz'Access, Says_Fuzz'Access,
+       Opts_Fuzz'Access),
+      (Name_Speed'Access, Takes_Speed'Access, Says_Speed'Access,
+       Opts_Speed'Access),
+      (Name_Benchmark'Access, Takes_Benchmark'Access, Says_Benchmark'Access,
+       Opts_Benchmark'Access),
+      (Name_External'Access, Takes_External'Access, Says_External'Access,
+       Opts_External'Access),
+      (Name_Tokenize'Access, Takes_Tokenize'Access, Says_Tokenize'Access,
+       Opts_Tokenize'Access),
+      (Name_Docs'Access, Takes_Docs'Access, Says_Docs'Access,
+       Opts_None'Access),
+      (Name_Fixtures'Access, Takes_Fixtures'Access, Says_Fixtures'Access,
+       Opts_None'Access),
+      (Name_Package'Access, Takes_Package'Access, Says_Package'Access,
+       Opts_None'Access)];
 
    -----------
    -- Count --
@@ -76,6 +96,20 @@ package body Tool_Commands is
    ----------
 
    function Item (Index : Positive) return Command is (Held (Index));
+
+   ----------------
+   -- Options_Of --
+   ----------------
+
+   function Options_Of (Name : String) return String is
+   begin
+      for Index in Held'Range loop
+         if Held (Index).Name.all = Name then
+            return Held (Index).Options.all;
+         end if;
+      end loop;
+      return " ";
+   end Options_Of;
 
    ----------------
    -- Usage_Line --
