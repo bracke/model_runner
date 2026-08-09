@@ -21,6 +21,7 @@ with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.CLI.Options;
 with Model_Runner.GGUF;
+with Model_Runner.Llama;
 with Model_Runner.Quantization;
 with Model_Runner.Templates;
 with Model_Runner.Text;
@@ -475,10 +476,82 @@ package body Checks is
          end Row;
 
          Listed : constant String := Row (Readme, "| Quantization |");
+
+         --  The architecture table, from its heading to the next one.
+         function Architecture_Table return String is
+            Opening : constant String := "## Architecture";
+            From    : Natural := 0;
+         begin
+            if Matrix'Length < Opening'Length then
+               return "";
+            end if;
+            for Index in Matrix'First .. Matrix'Last - Opening'Length + 1 loop
+               if Matrix (Index .. Index + Opening'Length - 1) = Opening then
+                  From := Index + Opening'Length;
+                  exit;
+               end if;
+            end loop;
+            if From = 0 then
+               return "";
+            end if;
+            for Index in From .. Matrix'Last - 2 loop
+               if Matrix (Index) = Character'Val (10)
+                 and then Matrix (Index + 1 .. Index + 2) = "##"
+               then
+                  return Matrix (From .. Index);
+               end if;
+            end loop;
+            return Matrix (From .. Matrix'Last);
+         end Architecture_Table;
+
+         Architectures : constant String := Architecture_Table;
       begin
          Result.Performed := Result.Performed + 1;
          if Listed = "" then
             Fail ("README.md has no quantization row; the check no longer "
+                  & "matches the document it reads");
+         end if;
+
+         --  Every architecture this build reads is named where a reader
+         --  looks. It is the registry added most recently and the only one
+         --  that had no check, which is how the other four came to be wrong.
+         for Kind in Model_Runner.Llama.Architecture loop
+            declare
+               Name : constant String :=
+                 Model_Runner.Llama.Architecture_Name (Kind);
+            begin
+               --  In the architecture section, not anywhere. Qwen2 is
+               --  also the name of a tokenizer cutting rule and has a row
+               --  of its own in that table, which satisfied both a search
+               --  of the whole file for the word and a search for a row
+               --  carrying it.
+               Result.Performed := Result.Performed + 1;
+               if not Holds (Architectures, "| `" & Name & "` |") then
+                  Fail ("this build reads " & Name
+                        & " but the architecture table in "
+                        & "docs/support-matrix.md has no row for it");
+               end if;
+
+               Result.Performed := Result.Performed + 1;
+               if not Holds_Word (Row (Readme, "| Architecture profile |"),
+                                  Name)
+               then
+                  Fail ("this build reads " & Name
+                        & " but the README's architecture row does not name "
+                        & "it");
+               end if;
+            end;
+         end loop;
+
+         Result.Performed := Result.Performed + 1;
+         if Architectures = "" then
+            Fail ("docs/support-matrix.md has no architecture section; the "
+                  & "check no longer matches the document it reads");
+         end if;
+
+         Result.Performed := Result.Performed + 1;
+         if Row (Readme, "| Architecture profile |") = "" then
+            Fail ("README.md has no architecture row; the check no longer "
                   & "matches the document it reads");
          end if;
 

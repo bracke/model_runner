@@ -79,6 +79,38 @@ procedure Tests_Main is
         new String'("worst relative" & Long_Float'Image (Item.Worst_Rel)),
         new String'("outside tolerance" & Natural'Image (Item.Failures))]);
 
+   --  Refuse an option this command does not take.
+   --
+   --  These commands read their arguments by looking for the ones they know
+   --  and ignoring the rest, which reads as tolerant and is not: asking
+   --  tokenize for --text when it takes --prompt tokenized the default
+   --  prompt and printed it with no complaint, so the same answer came back
+   --  for every input while a real defect was being chased with it.
+   function Unknown_Option (Known : String) return Boolean is
+      Index : Positive := 2;
+   begin
+      while Index <= Ada.Command_Line.Argument_Count loop
+         declare
+            Argument : constant String := Ada.Command_Line.Argument (Index);
+         begin
+            if Argument'Length > 2
+              and then Argument (Argument'First .. Argument'First + 1) = "--"
+              and then not Project_Tools.Text.Contains
+                             (Known, " " & Argument & " ")
+            then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "unknown option: " & Argument
+                  & "; this command takes" & Known);
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               return True;
+            end if;
+         end;
+         Index := Index + 1;
+      end loop;
+      return False;
+   end Unknown_Option;
+
 begin
    if Command = "test" then
       if Run_Suite (Reporter) /= AUnit.Success then
@@ -105,8 +137,13 @@ begin
 
          Seed   : constant Natural := Option ("--seed", 1);
          Cases  : constant Natural := Natural'Max (Option ("--cases", 500), 1);
+         Refused : constant Boolean := Unknown_Option (" --seed --cases ");
          Result : Fuzzing.Report;
       begin
+         if Refused then
+            return;
+         end if;
+
          Fuzzing.Run (Interfaces.Unsigned_64 (Seed), Cases, Result);
 
          Ada.Text_IO.Put_Line
@@ -233,6 +270,7 @@ begin
 
          Path   : constant String := Option ("--model", "");
          Prompt : constant String := Option ("--prompt", "Hello");
+         Refused : constant Boolean := Unknown_Option (" --model --prompt ");
 
          Source : Model_Runner.Byte_Sources.Files.File_Source;
          Item   : Model_Runner.GGUF.Containers.Container;
@@ -241,7 +279,9 @@ begin
          Tokens : Model_Runner.Tokenizer.Token_Array (1 .. 4096);
          Used   : Natural;
       begin
-         if Path = "" then
+         if Refused then
+            null;
+         elsif Path = "" then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error, "tokenize: --model is required");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
@@ -328,7 +368,14 @@ begin
 
          Path   : constant String := Option ("--model", "");
          Result : External_Model.Report;
+         Refused : constant Boolean :=
+           Unknown_Option (" --model --prompt --max-tokens --threads "
+                           & "--expect ");
       begin
+         if Refused then
+            return;
+         end if;
+
          External_Model.Run
            (Path    => Path,
             Prompt  => Option ("--prompt", "Hello"),

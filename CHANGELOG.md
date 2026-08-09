@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The `Llama` package said "exactly one architecture is supported", fourteen
+  lines above the enumeration that lists two. The README's capability row
+  described only that one. Both say what the build reads, and the release
+  checklist fails when an architecture this build has is missing from the
+  matrix's architecture table or from the README's row.
+
+- The tests binary refuses an option its command does not take. It read the
+  arguments it knew and ignored the rest, so asking `tokenize` for `--text`
+  when it takes `--prompt` tokenized the default prompt and printed it with
+  no complaint -- the same answer for every input, while a real defect was
+  being chased with it.
+
 - `CLI.Options.Max_Path` is gone. It said a path was bounded at four
   thousand and ninety-six characters; the type that holds one stops at five
   hundred and twelve, so the stated limit was not merely unenforced but

@@ -17,11 +17,18 @@ with Model_Runner.Tokenizer;
 
 --  The supported Llama-compatible decoder-only profile.
 --
---  Exactly one architecture is supported and it is selected by the
---  general.architecture metadata value being "llama". Nothing infers an
---  architecture from a file name, and no related family -- Mistral, Mixtral,
---  Qwen, Gemma, Phi, Falcon and the rest -- is treated as Llama-compatible
+--  The architectures this profile reads are listed in Architecture, and each
+--  is selected by the general.architecture metadata value naming it. Nothing
+--  infers an architecture from a file name, and no related family -- Mistral,
+--  Mixtral, Gemma, Phi, Falcon and the rest -- is treated as compatible
 --  without its own support contract.
+--
+--  A second architecture belongs here rather than in a profile of its own
+--  when it is this shape with a difference, which is what Qwen2 is: the same
+--  normalization, attention and feed-forward, plus a bias on each attention
+--  projection and the other rotary pairing. One that differs in more than
+--  that gets its own profile, because a profile that answers for everything
+--  answers for nothing.
 --
 --  Rejected features. Mixture of experts, sliding-window attention, attention
 --  sinks, cross-attention, multimodal projections, recurrent state,
