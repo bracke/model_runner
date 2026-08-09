@@ -212,6 +212,16 @@ begin
             "  conformance: sequences" & Natural'Image (Agreed.Sequences)
             & ", outside tolerance" & Natural'Image (Agreed.Failures));
          if not Conformance.Is_Clean (Agreed) then
+            --  Is_Clean already asks whether the comparison ran, so a
+            --  reference that compared nothing fails here. Saying which of
+            --  the two it was costs a line and saves the reader guessing
+            --  from a count of zero.
+            if not Agreed.Ran then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "  fail: the conformance run compared nothing, so the "
+                  & "engine was not checked against the reference");
+            end if;
             Failed := True;
          end if;
 
@@ -222,9 +232,27 @@ begin
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error,
             "  fuzz: cases" & Natural'Image (Fuzzed.Cases)
+            & ", prepared" & Natural'Image (Fuzzed.Prepared)
+            & ", ran" & Natural'Image (Fuzzed.Ran)
             & ", escaped" & Natural'Image (Fuzzed.Escaped)
             & ", internal" & Natural'Image (Fuzzed.Internal));
+
+         --  Clean totals and nothing reaching the engine is a campaign that
+         --  proved nothing: every case stopping at the parser leaves the
+         --  checks past it untested rather than satisfied. Fuzzing says so
+         --  itself, and the first version of this gate did not ask -- which
+         --  is why no mutation of mine could make the fuzz half fail. I was
+         --  trying to make it catch a parser regression when what it was
+         --  failing to check was whether the campaign did anything at all.
          if not Fuzzing.Is_Clean (Fuzzed) then
+            Failed := True;
+         end if;
+
+         if not Fuzzing.Reached_The_Engine (Fuzzed) then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "  fail: no mutated file reached the engine, so the fuzz "
+               & "campaign checked only the parser");
             Failed := True;
          end if;
 

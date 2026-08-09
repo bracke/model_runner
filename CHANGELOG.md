@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The gate asks whether the fuzzing campaign reached the engine.
+  `Fuzzing.Reached_The_Engine` exists to say that clean totals mean nothing
+  if every case stopped at the parser, and the gate added an hour earlier
+  did not call it: a parser that refused everything left `escaped 0,
+  internal 0` and the gate green. It also prints `prepared` and `ran` now,
+  so a reader can see the same thing.
+
+  This is why no mutation could make the fuzz half fail. It was not failing
+  to catch a parser regression; it was failing to check that the campaign
+  did anything at all.
+
+- A gate failure says which of the two it was, rather than leaving the
+  reader to infer it from a count of zero.
+
 - `tests check` runs the conformance comparison and a short fuzzing campaign
   itself. Both were commands somebody had to remember: the strongest evidence
   this repository has that the arithmetic is right, and the only thing that
