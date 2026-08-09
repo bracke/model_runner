@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `Recovery_Class` was computed for every diagnostic and read once, for one
+  of its five values. Three quarters of that table was consulted by nothing.
+
+- `Param_Duration_Ns` and `Param_Shape` are gone: two formatting rules for
+  values no diagnostic reports.
+
+- The release checklist fails when a value of `Parameter_Kind`,
+  `Recovery_Class` or `Severity_Level` is declared and used by nothing.
+
 - `--memory-limit` bounds the session as well as the model. It set the
   model's limit only, and a session's limit defaults to unlimited, so a
   caller asking for a hundred megabytes could be given a model inside it and
@@ -205,6 +214,14 @@ Keep a Changelog and the project uses semantic versioning.
   the code.
 
 ### Added
+
+- A diagnostic ends with what can be done about it, chosen from the recovery
+  class every code already carried. A limit that was too small says to raise
+  it or ask for less; something this build does not support says where the
+  list of what it does support is; a usage error says where the usage is
+  written. A cancelled run and a closed pipe say nothing, because neither is
+  a mistake anybody made -- and neither does a path that is wrong, which is
+  not put right by reading the usage.
 
 - `version` reports what this build can take: the tensor formats it decodes,
   the backends it has and the chat formats it carries, all asked of the

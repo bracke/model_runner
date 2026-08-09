@@ -111,8 +111,9 @@ package body Model_Runner.CLI.Driver is
       Opt.Parse (Source, Item, Parsed);
 
       if E.Is_Error (Parsed) then
+         --  The hint comes from the diagnostic's own recovery class now,
+         --  inside Report. Printed here as well it appeared twice.
          Pres.Report (Screen, Parsed);
-         Pres.Put_Note (Screen, "diagnostic.hint.usage");
          Opt.Release (Item);
          Loc.Close (Catalog);
          Status := E.Exit_Status (Parsed);

@@ -407,6 +407,29 @@ package body Model_Runner.Errors is
    -- Exit_Status --
    -----------------
 
+   --------------------
+   -- Recovery_Hint --
+   --------------------
+
+   function Recovery_Hint (Code : Error_Code) return String is
+   begin
+      case Recovery (Code) is
+         when Recovery_None | Recovery_Terminal =>
+            return "";
+
+         when Recovery_User_Correctable =>
+            return (if Domain (Code) = Domain_CLI
+                    then "diagnostic.hint.usage"
+                    else "");
+
+         when Recovery_Resource_Limited =>
+            return "diagnostic.hint.resource";
+
+         when Recovery_Unsupported =>
+            return "diagnostic.hint.unsupported";
+      end case;
+   end Recovery_Hint;
+
    function Exit_Status (Item : Error_Info) return Natural is
    begin
       if Item.Code = No_Error or else Item.Code = Generation_Output_Closed then

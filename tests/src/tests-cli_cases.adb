@@ -972,6 +972,39 @@ package body Tests.CLI_Cases is
          end loop;
       end;
 
+      --  What a reader can do about it, chosen from the recovery class the
+      --  code already carried and nothing had read. The classification is
+      --  still only a classification, so this checks that each class that
+      --  has something to say says it: silencing one of them passes every
+      --  check that only asks whether the value is mentioned.
+      declare
+         Usage : constant String :=
+           Model_Runner.Localization.Text (Catalog, "diagnostic.hint.usage");
+         Room  : constant String :=
+           Model_Runner.Localization.Text
+             (Catalog, "diagnostic.hint.resource");
+
+         Bad_Option : constant String :=
+           Traced ("run " & Model & " --nope", Expect => 2);
+         Too_Small  : constant String :=
+           Traced ("run " & Model & " --prompt hi --max-tokens 1"
+                   & " --memory-limit 20000", Expect => 5);
+         Missing    : constant String :=
+           Traced ("run obj/absent-model.gguf --prompt hi", Expect => 6);
+      begin
+         Assert (Project_Tools.Text.Contains (Bad_Option, Usage),
+                 "a usage error did not say where usage is written");
+         Assert (Project_Tools.Text.Contains (Too_Small, Room),
+                 "a limit that was too small did not say what to do: "
+                 & Too_Small);
+
+         --  And a class with nothing useful to say says nothing. A path
+         --  that is wrong is not put right by reading the usage, which is
+         --  what the first version of this pointed the reader at.
+         Assert (not Project_Tools.Text.Contains (Missing, Usage),
+                 "a missing file was answered with the usage hint");
+      end;
+
       --  A cut-short copy of the fixture, for a diagnostic that has a file
       --  offset to report.
       declare

@@ -554,6 +554,134 @@ package body Checks is
                 "a two-worker pool says it does not run in parallel");
       end;
 
+      --  Every value of the error metadata enumerations is used.
+      --
+      --  Param_Duration_Ns was declared and named nowhere else at all: a
+      --  formatting rule for durations that no diagnostic asked for. Three
+      --  of the five recovery classes were computed for every code and read
+      --  by nothing, which is the same thing one layer up.
+      --
+      --  These are checked the way the accounting categories and the
+      --  progress stages are, and for the same reason: each was found by
+      --  hand after the ones beside it had already been fixed.
+      declare
+         Spec : constant String :=
+           Contents ("src/library/model_runner-errors.ads");
+         Body_Text : constant String :=
+           Contents ("src/library/model_runner-errors.adb")
+           & Contents ("src/library/model_runner-presentation.adb")
+           & Contents ("src/library/model_runner-cli-driver.adb")
+           & Contents ("src/library/model_runner-cli-execute.adb")
+           & Contents ("src/library/model_runner-gguf-containers-reader.adb")
+           & Contents ("src/library/model_runner-llama.adb")
+           & Contents ("src/library/model_runner-generation.adb")
+           & Contents ("src/library/model_runner-tokenizer.adb")
+           & Contents ("src/library/model_runner-templates.adb")
+           & Contents ("src/library/model_runner-sampling.adb");
+
+         --  Whether the name is used, with nothing running on after it. The
+         --  declaration itself is in the spec and the spec is not searched.
+         function Used (Name : String) return Boolean is
+         begin
+            if Body_Text'Length < Name'Length then
+               return False;
+            end if;
+            for Index in Body_Text'First .. Body_Text'Last - Name'Length + 1
+            loop
+               if Body_Text (Index .. Index + Name'Length - 1) = Name
+                 and then (Index = Body_Text'First
+                           or else not (Body_Text (Index - 1)
+                                          in 'A' .. 'Z' | 'a' .. 'z'
+                                             | '0' .. '9' | '_'))
+                 and then (Index + Name'Length > Body_Text'Last
+                           or else not (Body_Text (Index + Name'Length)
+                                          in 'A' .. 'Z' | 'a' .. 'z'
+                                             | '0' .. '9' | '_'))
+               then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Used;
+
+         procedure Each_Value (Kind : String) is
+            Opening : constant String := "type " & Kind & " is";
+            From    : Natural := 0;
+            Upto    : Natural := 0;
+            Named   : Natural := 0;
+         begin
+            for Index in Spec'First .. Spec'Last - Opening'Length + 1 loop
+               if Spec (Index .. Index + Opening'Length - 1) = Opening then
+                  From := Index + Opening'Length;
+                  exit;
+               end if;
+            end loop;
+            if From /= 0 then
+               for Index in From .. Spec'Last - 1 loop
+                  if Spec (Index .. Index + 1) = ");" then
+                     Upto := Index;
+                     exit;
+                  end if;
+               end loop;
+            end if;
+
+            Result.Performed := Result.Performed + 1;
+            if From = 0 or else Upto = 0 then
+               Fail (Kind & " has no values to check; the check no longer "
+                     & "matches the source it reads");
+               return;
+            end if;
+
+            declare
+               Cursor : Natural := From;
+            begin
+               while Cursor <= Upto loop
+                  declare
+                     Start : Natural := Cursor;
+                  begin
+                     while Start <= Upto
+                       and then not (Spec (Start) in 'A' .. 'Z')
+                     loop
+                        Start := Start + 1;
+                     end loop;
+                     exit when Start > Upto;
+
+                     declare
+                        Stop : Natural := Start;
+                     begin
+                        while Stop <= Upto
+                          and then (Spec (Stop) in 'A' .. 'Z'
+                                    or else Spec (Stop) in 'a' .. 'z'
+                                    or else Spec (Stop) = '_')
+                        loop
+                           Stop := Stop + 1;
+                        end loop;
+
+                        Named := Named + 1;
+                        Result.Performed := Result.Performed + 1;
+                        if not Used (Spec (Start .. Stop - 1)) then
+                           Fail ("the " & Kind & " value "
+                                 & Spec (Start .. Stop - 1)
+                                 & " is declared and used by nothing");
+                        end if;
+                        Cursor := Stop;
+                     end;
+                  end;
+               end loop;
+            end;
+
+            Result.Performed := Result.Performed + 1;
+            if Named = 0 then
+               Fail ("no " & Kind & " values were found; the check no longer "
+                     & "matches the source it reads");
+            end if;
+         end Each_Value;
+      begin
+         Each_Value ("Parameter_Kind");
+         Each_Value ("Recovery_Class");
+         Each_Value ("Severity_Level");
+      end;
+
       --  Every accounting category this program declares is charged.
       --
       --  A category nothing charges is a line of a memory report that reads

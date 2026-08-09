@@ -252,10 +252,8 @@ package Model_Runner.Errors is
       Param_Bytes,
       Param_Tokens,
       Param_Offset,
-      Param_Duration_Ns,
       Param_Boolean,
-      Param_Real,
-      Param_Shape);
+      Param_Real);
 
    --  One typed parameter.
    --
@@ -457,6 +455,23 @@ package Model_Runner.Errors is
    --  @param Code Diagnostic code.
    --  @return How a caller can respond to the condition.
    function Recovery (Code : Error_Code) return Recovery_Class;
+
+   --  Message key naming what a reader can do about a failure.
+   --
+   --  The recovery classification was computed for every diagnostic and read
+   --  once, for one of its five values, so most of it was a table nothing
+   --  consulted. It chooses the line a report ends with now.
+   --
+   --  The class decides, and for one of them the domain refines it: a bad
+   --  option and a missing file are both things the caller can put right,
+   --  and only one of them is put right by reading the usage. Pointing a
+   --  reader at help because their path was wrong is worse than saying
+   --  nothing.
+   --
+   --  @param Code Diagnostic to advise on.
+   --  @return Catalog key, or the empty string when there is nothing useful
+   --    to say -- a cancelled run and a closed pipe are not mistakes.
+   function Recovery_Hint (Code : Error_Code) return String;
 
    --  Process exit statuses. Centralized here so that every command maps a
    --  condition to a status the same way.

@@ -14,6 +14,7 @@ package body Model_Runner.Presentation is
    use type Model_Runner.CLI.Options.Verbosity;
 
    package E renames Model_Runner.Errors;
+   use type E.Severity_Level;
    package Gen renames Model_Runner.Generation;
    package Loc renames Model_Runner.Localization;
    package Opt renames Model_Runner.CLI.Options;
@@ -308,6 +309,20 @@ package body Model_Runner.Presentation is
                   [Loc.Named
                      ("detail", T.To_String (Condition.Frames (Index)))]));
          end loop;
+      end if;
+
+      --  What can be done about it, from the class the code already carries.
+      --  A cancelled run and a closed pipe get nothing, which is the honest
+      --  answer: neither is a mistake anybody made.
+      if Condition.Severity = E.Severity_Error then
+         declare
+            Hint : constant String :=
+              E.Recovery_Hint (Condition.Code);
+         begin
+            if Hint /= "" then
+               Put_Note (Item, Hint);
+            end if;
+         end;
       end if;
    end Report;
 
