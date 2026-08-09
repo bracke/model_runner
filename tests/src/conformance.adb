@@ -206,7 +206,7 @@ package body Conformance is
          end loop;
       end loop;
 
-      Result.Ran := Result.Sequences = 144;
+      Result.Ran := Result.Sequences = 192;
    end Run;
 
 end Conformance;

@@ -188,6 +188,18 @@ package Fixtures is
    --  @return The encoded bytes.
    function Encode_Q4_K (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Encode values as Q2_K: superblocks of 256, sixteen sub-blocks of
+   --  sixteen, each with a four-bit scale and a four-bit minimum sharing a
+   --  byte, and two bits an element.
+   --
+   --  Two bits name four levels, so this is the format that leans hardest on
+   --  its scales and the one where repacking to brain floats buys most --
+   --  and it was as unreachable from here as Q4_K was.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q2_K (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode binary16 values.
    --
    --  @param Values Values to encode.

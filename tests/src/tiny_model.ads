@@ -63,7 +63,7 @@ package Tiny_Model is
 
    --  Which format the weight matrices use. The norms and the small vectors
    --  stay binary32 in both, as they do in a real quantized model.
-   type Weight_Format is (Float32, Q8_0, Q4_K);
+   type Weight_Format is (Float32, Q8_0, Q4_K, Q2_K);
 
    --  A quantized row is a whole number of thirty-two element blocks, so a
    --  model whose widths are eight and twelve cannot be quantized at all.

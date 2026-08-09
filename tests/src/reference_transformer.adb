@@ -120,6 +120,75 @@ package body Reference_Transformer is
       return Scale * Long_Float (Quant);
    end Decode_Q8_0;
 
+   --  Decode one Q2_K element, independently of the engine.
+   --
+   --  The layout says: two hundred and fifty-six elements to a superblock of
+   --  eighty-four bytes. Sixteen bytes of packed scales -- a four-bit factor
+   --  and a four-bit offset sharing each byte, one pair per sixteen elements
+   --  -- then sixty-four bytes of quants at two bits each, then the two
+   --  half-precision factors. The sub-blocks are consumed in halves, then
+   --  groups, then the upper half of each group, and one byte carries the
+   --  same element of four groups.
+   function Decode_Q2_K
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 256);
+      Within : constant Natural := Index mod 256;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 84;
+
+      --  Which sub-block holds this element, undoing the reader's walk.
+      Half   : constant Natural := Within / 128;
+      Rest   : constant Natural := Within mod 128;
+      Group  : constant Natural := Rest / 32;
+      Upper  : constant Natural := (Rest mod 32) / 16;
+      In_Sub : constant Natural := Within mod 16;
+      Sub    : constant Natural := Half * 8 + Group * 2 + Upper;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      function Half_At (Offset : Interfaces.Unsigned_64) return Long_Float is
+         Raw      : constant Natural :=
+           Byte_At (Offset) + 256 * Byte_At (Offset + 1);
+         Sign     : constant Long_Float :=
+           (if Raw >= 16#8000# then -1.0 else 1.0);
+         Exponent : constant Integer := (Raw / 1024) mod 32;
+         Mantissa : constant Integer := Raw mod 1024;
+      begin
+         if Exponent = 0 then
+            return Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+         elsif Exponent = 31 then
+            return 0.0;
+         else
+            return Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+              * (2.0 ** (Exponent - 15));
+         end if;
+      end Half_At;
+
+      Packed  : constant Natural :=
+        Byte_At (At_Block + Interfaces.Unsigned_64 (Sub));
+      Factor  : constant Natural := Packed mod 16;
+      Lowest  : constant Natural := Packed / 16;
+
+      Quants  : constant Interfaces.Unsigned_64 := At_Block + 16;
+      From    : constant Interfaces.Unsigned_64 :=
+        Quants + Interfaces.Unsigned_64 (Half * 32 + Upper * 16)
+        + Interfaces.Unsigned_64 (In_Sub);
+      Level   : constant Natural :=
+        (Byte_At (From) / (2 ** (2 * Group))) mod 4;
+
+      D       : constant Long_Float := Half_At (At_Block + 80);
+      Minimum : constant Long_Float := Half_At (At_Block + 82);
+   begin
+      return D * Long_Float (Factor) * Long_Float (Level)
+        - Minimum * Long_Float (Lowest);
+   end Decode_Q2_K;
+
    --  Decode one Q4_K element, independently of the engine.
    --
    --  The layout says: two hundred and fifty-six elements to a superblock of
@@ -249,6 +318,7 @@ package body Reference_Transformer is
                    not in Model_Runner.GGUF.Type_F32
                         | Model_Runner.GGUF.Type_Q8_0
                         | Model_Runner.GGUF.Type_Q4_K
+                        | Model_Runner.GGUF.Type_Q2_K
          then
             return null;
          end if;
@@ -279,6 +349,16 @@ package body Reference_Transformer is
                           Offset
                           + Interfaces.Unsigned_64 (Row) * 34
                             * Interfaces.Unsigned_64 (Columns / 32),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_Q2_K
+                  then
+                     Result (Row, Column) :=
+                       Decode_Q2_K
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 84
+                            * Interfaces.Unsigned_64 (Columns / 256),
                           Column);
                   elsif Containers.Tensor_Format (Source, Index)
                           = Model_Runner.GGUF.Type_Q4_K

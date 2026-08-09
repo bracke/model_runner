@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The fixture builds both k-quants, and conformance compares them: 192
+  sequences where there were 96. Q2_K names four levels over sixteen
+  elements and leans hardest on its scales, which is why repacking helps it
+  most; it was as unreachable from here as Q4_K. Both encoders are held to
+  the engine's own reader by a round-trip test bounded by what the format
+  can carry rather than by a number chosen to pass, and the reference
+  transformer decodes both from the layout rather than by calling the
+  engine.
+
+  Writing them turned up a rule neither had followed: the stored minimum is
+  subtracted and cannot be negative, so a sub-block sitting entirely above
+  zero has to be anchored at zero. The first Q4_K encoder passed only
+  because every sub-block of the test data happened to include a negative
+  value.
+
+  The rounding figure went 0.032, then 0.064, then 0.090 as the fixtures got
+  wider and coarser -- which is the shape of the thing rather than a
+  surprise.
+
 - The fixture builds a k-quant, and conformance compares it: 144 sequences
   where there were 96. `Tiny_Model` built binary32 and Q8_0, so every claim
   about quantized weights -- including what repacking to brain floats costs

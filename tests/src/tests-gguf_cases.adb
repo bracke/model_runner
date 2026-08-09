@@ -3777,12 +3777,16 @@ package body Tests.GGUF_Cases is
       Decoded : N.Real_Array (0 .. 255) := [others => 0.0];
       Ok      : Boolean;
    begin
-      --  A spread with sign and scale, so that every sub-block gets its own
-      --  minimum and step rather than all of them sharing one.
+      --  A spread with sign, bounded, so that the tolerance below can be
+      --  what the format allows rather than a number chosen to pass: four
+      --  levels over a span of at most two is a sixth of two, and sixteen
+      --  levels is a thirtieth. Every sub-block gets its own minimum and
+      --  step, and some sit entirely above zero, which is the case the
+      --  encoders have to anchor.
       for Index in Values'Range loop
          Values (Index) :=
-           N.Real (Integer (Index) mod 37) * 0.125
-           - N.Real (Integer (Index) / 32) * 1.5;
+           N.Real (Integer (Index) mod 17) * 0.0625
+           - (if Integer (Index) / 16 mod 3 = 0 then 0.75 else 0.0);
       end loop;
 
       declare
@@ -3801,10 +3805,37 @@ package body Tests.GGUF_Cases is
 
          --  Four bits over a sub-block's range: a sixteenth of the widest
          --  span, and the spans here are at most about four and a half.
-         Assert (Widest < 0.25,
+         --  Sixteen levels over a span of at most 1.75: a thirtieth of it,
+         --  with room for the half-step at each end.
+         Assert (Widest < 0.07,
                  "the encoded values came back"
                  & N.Real'Image (Widest) & " away, which is more than four "
                  & "bits can explain");
+      end;
+
+      --  And the two-bit format, which names four levels over sixteen
+      --  elements: coarser by design, and held to what that allows rather
+      --  than to what four bits allowed.
+      declare
+         Encoded : constant B.Byte_Array := Fixtures.Encode_Q2_K (Values);
+         Widest  : N.Real := 0.0;
+      begin
+         Assert (Encoded'Length = 84, "a Q2_K superblock is 84 bytes");
+
+         Decoded := [others => 0.0];
+         Q.Decode_Blocks (G.Type_Q2_K, Encoded, 0, 1, Decoded, Ok);
+         Assert (Ok, "the engine could not read the encoded superblock");
+
+         for Index in Values'Range loop
+            Widest :=
+              N.Real'Max (Widest, abs (Values (Index) - Decoded (Index)));
+         end loop;
+
+         --  Four levels over the same span: a sixth of it.
+         Assert (Widest < 0.35,
+                 "the encoded values came back"
+                 & N.Real'Image (Widest) & " away, which is more than two "
+                 & "bits over sixteen elements can explain");
       end;
    end Fixture_Q4_K_Round_Trips;
 
@@ -4404,7 +4435,7 @@ package body Tests.GGUF_Cases is
    begin
       Register_Routine
         (T, Fixture_Q4_K_Round_Trips'Access,
-         "the fixture's Q4_K encoder is the inverse of the engine's reader");
+         "the fixture's k-quant encoders are the inverse of the engine's reader");
       Register_Routine
         (T, Valid_File_Parses'Access,
          "a well-formed container parses and reports its facts");

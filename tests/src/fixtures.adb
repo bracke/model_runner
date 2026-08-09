@@ -448,6 +448,140 @@ package body Fixtures is
    -- Encode_Q8_0 --
    ------------------
 
+   function Encode_Q2_K (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+
+      Blocks : constant N.Element_Count := Values'Length / 256;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 84 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 256;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 84;
+
+            --  Sixteen sub-blocks of sixteen, in the order the reader
+            --  consumes them: half, group, upper.
+            type Sub_Range is array (0 .. 15) of N.Real;
+            Low, Step : Sub_Range := [others => 0.0];
+
+            Widest, Deepest : N.Real := 0.0;
+
+            --  Where a sub-block's elements begin, which is not its index
+            --  times sixteen: the reader walks halves, then groups, then
+            --  the upper half of each group.
+            function Start_Of (Sub : Natural) return N.Element_Count is
+               Half  : constant Natural := Sub / 8;
+               Rest  : constant Natural := Sub mod 8;
+               Group : constant Natural := Rest / 2;
+               Upper : constant Natural := Rest mod 2;
+            begin
+               return N.Element_Count
+                 (Half * 128 + Group * 32 + Upper * 16);
+            end Start_Of;
+         begin
+            for Sub in 0 .. 15 loop
+               declare
+                  Base     : constant N.Element_Count :=
+                    First + Start_Of (Sub);
+                  Smallest : N.Real := Values (Base);
+                  Largest  : N.Real := Values (Base);
+               begin
+                  for Index in 0 .. 15 loop
+                     Smallest := N.Real'Min
+                       (Smallest, Values (Base + N.Element_Count (Index)));
+                     Largest := N.Real'Max
+                       (Largest, Values (Base + N.Element_Count (Index)));
+                  end loop;
+
+                  --  The reader computes factor * level - minimum, and the
+                  --  minimum it stores is a non-negative multiple. A
+                  --  sub-block whose smallest value is above zero is
+                  --  therefore anchored at zero rather than at its own
+                  --  smallest, which costs a little of the range and is
+                  --  what the format can say.
+                  Low (Sub) := N.Real'Min (Smallest, 0.0);
+                  Step (Sub) := (Largest - Low (Sub)) / 3.0;
+                  Widest := N.Real'Max (Widest, Step (Sub));
+                  Deepest := N.Real'Max (Deepest, abs Low (Sub));
+               end;
+            end loop;
+
+            declare
+               D    : constant N.Real :=
+                 (if Widest = 0.0 then 1.0 else Widest / 15.0);
+               DMin : constant N.Real :=
+                 (if Deepest = 0.0 then 1.0 else Deepest / 15.0);
+            begin
+               Result (At_Byte + 80 .. At_Byte + 81) := Encode_F16 ([1 => D]);
+               Result (At_Byte + 82 .. At_Byte + 83) :=
+                 Encode_F16 ([1 => DMin]);
+
+               for Sub in 0 .. 15 loop
+                  declare
+                     Factor : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Unsigned_8
+                         (N.Real'Min (15.0,
+                                      N.Real'Rounding (Step (Sub) / D)));
+                     Minimum : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Unsigned_8
+                         (N.Real'Min (15.0,
+                                      N.Real'Rounding (-Low (Sub) / DMin)));
+                  begin
+                     Result (At_Byte + B.Byte_Count (Sub)) :=
+                       Factor or Interfaces.Shift_Left (Minimum, 4);
+                  end;
+               end loop;
+
+               --  Two bits an element. One byte carries the same element of
+               --  four groups, which is why the shift is the group and the
+               --  byte is the element within its sixteen.
+               for Half in 0 .. 1 loop
+                  for Group in 0 .. 3 loop
+                     for Upper in 0 .. 1 loop
+                        declare
+                           Sub  : constant Natural :=
+                             Half * 8 + Group * 2 + Upper;
+                           From : constant B.Byte_Count :=
+                             At_Byte + 16
+                             + B.Byte_Count (Half * 32 + Upper * 16);
+                           Base : constant N.Element_Count :=
+                             First + Start_Of (Sub);
+                           Span : constant N.Real :=
+                             (if Step (Sub) = 0.0 then 1.0 else Step (Sub));
+                        begin
+                           for L in 0 .. 15 loop
+                              declare
+                                 Level : constant Interfaces.Unsigned_8 :=
+                                   Interfaces.Unsigned_8
+                                     (N.Real'Max
+                                        (0.0,
+                                         N.Real'Min
+                                           (3.0,
+                                            N.Real'Rounding
+                                              ((Values
+                                                  (Base
+                                                   + N.Element_Count (L))
+                                                - Low (Sub)) / Span))));
+                              begin
+                                 Result (From + B.Byte_Count (L)) :=
+                                   Result (From + B.Byte_Count (L))
+                                   or Interfaces.Shift_Left
+                                        (Level, 2 * Group);
+                              end;
+                           end loop;
+                        end;
+                     end loop;
+                  end loop;
+               end loop;
+            end;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Q2_K;
+
    function Encode_Q4_K (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
 
@@ -482,10 +616,13 @@ package body Fixtures is
                        (Largest, Values (Base + N.Element_Count (Index)));
                   end loop;
 
-                  Low (Sub) := Smallest;
-                  Step (Sub) := (Largest - Smallest) / 15.0;
+                  --  As in the two-bit encoder: the stored minimum is
+                  --  subtracted and cannot be negative, so a sub-block
+                  --  entirely above zero is anchored there.
+                  Low (Sub) := N.Real'Min (Smallest, 0.0);
+                  Step (Sub) := (Largest - Low (Sub)) / 15.0;
                   Widest := N.Real'Max (Widest, Step (Sub));
-                  Deepest := N.Real'Max (Deepest, abs Smallest);
+                  Deepest := N.Real'Max (Deepest, abs Low (Sub));
                end;
             end loop;
 

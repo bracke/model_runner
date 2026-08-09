@@ -442,31 +442,32 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 144, logits compared 1536,
+conformance: sequences 192, logits compared 2048,
              worst absolute 2.66391572001368E-06,
              worst relative 8.26692137016013E-04,
-             rounded logits compared 768,
-             rounded worst absolute 6.43864154673288E-02,
-             rounded worst relative 9.91448463391238E-01,
+             rounded logits compared 1024,
+             rounded worst absolute 8.99418639596608E-02,
+             rounded worst relative 1.34086800307472E+00,
              outside tolerance 0
 ```
 
-Both architectures, three weight formats -- binary32, Q8_0 and Q4_K -- both
-backends, and every repacking mode. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
+Both architectures, four weight formats -- binary32, Q8_0, Q4_K and Q2_K --
+both backends, and every repacking mode. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
 outside it.
 
 The rounded figures are `--repack bf16`, counted apart because mixing them in
 would let the lossy path's error hide the exact path's. They are the number
 that flag never had: rounding every weight to eight mantissa bits moves a
-logit **on these fixtures** by up to **0.064**, and a logit close to zero moves
+logit **on these fixtures** by up to **0.090**, and a logit close to zero moves
 by almost all of itself, which is what the relative figure says.
 
 On this fixture is not a small qualification. Rounding error accumulates with
 the length of a dot product and the depth of the stack, and the widest fixture is
 256 wide and two deep where a small real model is two thousand wide and
-twenty-two deep. Adding the k-quant fixture, which is eight times wider than
-the one before it, doubled the figure -- which is the shape of the thing:
-wider means more terms means more accumulated rounding. The figure bounds what was measured, not what the flag does
+twenty-two deep. Adding the k-quant fixtures, eight times wider than the ones
+before them, took the figure from 0.032 to 0.064 and then to 0.090 -- which
+is the shape of the thing: wider means more terms means more accumulated
+rounding, and coarser weights mean a rounding step that matters more. The figure bounds what was measured, not what the flag does
 to a model you have. What exists for real models is behaviour rather than
 logits: sixty greedy tokens from TinyLlama Q8_0 and forty from Q4_K come out
 identical either way, which is worth knowing and is not a bound.
