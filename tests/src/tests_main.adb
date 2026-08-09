@@ -515,7 +515,7 @@ begin
          Result  : Speed_Run.Report;
          Refused : constant Boolean :=
            Unknown_Option (" --model --prompt-file --max-tokens --threads "
-                           & "--repeats ");
+                           & "--batch-size --repeats ");
       begin
          if not Refused then
             Speed_Run.Run
@@ -526,6 +526,7 @@ begin
                Tokens      => Number ("--max-tokens", 12),
                Threads     => Number ("--threads",
                                       Model_Runner.Platform.Core_Count - 1),
+               Batch       => Number ("--batch-size", 32),
                Repeats     => Number ("--repeats", 3),
                Result      => Result);
 

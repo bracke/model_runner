@@ -717,21 +717,35 @@ a time — a test asserts exactly that, on the logits and on the cache left
 behind, and another asserts it at the kernel level for every quantization
 format.
 
-The 131-token prompt in `tests/fixtures/speed-prompt.txt`, at the chosen
-worker count. The last column is a hash of the generated text, which is the
-point: `--batch-size` is a performance control and must not change what the
-model says.
+`tests/fixtures/speed-prompt.txt` at the chosen worker count, `--raw`, which
+makes it 111 tokens: 110 of prompt and the beginning-of-text marker. The last
+column is a digest of the generated text, which is the point: `--batch-size`
+is a performance control and must not change what the model says.
+
+```
+tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt.txt \
+  --max-tokens 4 --batch-size N
+```
 
 | `--batch-size` | prompt evaluation | rate | output |
 |---|---|---|---|
-| 1 (one token at a time) | 13.16 s | 10.0 tokens/s | `7066666208f6fbe6` |
-| 2 | 10.34 s | 12.7 tokens/s | `7066666208f6fbe6` |
-| 4 | 8.66 s | 15.1 tokens/s | `7066666208f6fbe6` |
-| 8 | 7.53 s | 17.4 tokens/s | `7066666208f6fbe6` |
-| 16 | 7.20 s | 18.2 tokens/s | `7066666208f6fbe6` |
-| 32 (default) | 6.92 s | 18.9 tokens/s | `7066666208f6fbe6` |
-| 64 | 6.36 s | 20.6 tokens/s | `7066666208f6fbe6` |
-| 128 (cap) | 6.45 s | 20.3 tokens/s | `7066666208f6fbe6` |
+| 1 (one token at a time) | 10.99 s | 10.1 tokens/s | `387aafefc4fbea29` |
+| 2 | 8.64 s | 12.8 tokens/s | `387aafefc4fbea29` |
+| 4 | 7.34 s | 15.1 tokens/s | `387aafefc4fbea29` |
+| 8 | 6.54 s | 17.0 tokens/s | `387aafefc4fbea29` |
+| 16 | 6.05 s | 18.4 tokens/s | `387aafefc4fbea29` |
+| 32 (default) | 5.81 s | 19.1 tokens/s | `387aafefc4fbea29` |
+| 64 | 5.70 s | 19.5 tokens/s | `387aafefc4fbea29` |
+| 128 (cap) | 5.44 s | 20.4 tokens/s | `387aafefc4fbea29` |
+
+This table used to be measured through the chat template while the figure at
+the top of the section was measured raw, and neither said which. That is
+where its old caption's "131-token prompt" came from -- the file is 110
+tokens and the template wraps it to 131 -- so a reader who took the command
+printed above and pointed it at this prompt got numbers about a quarter
+lower than the table and nothing to explain the gap. Both are raw now. The
+templated numbers were 13.16 s down to 6.45 s across the same sweep; they
+were not wrong, they were answering a question the caption did not ask.
 
 Most of the benefit arrives by a batch of eight, and it flattens after
 thirty-two. Batching amortizes the cost of decoding the weights across the

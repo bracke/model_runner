@@ -19,13 +19,16 @@ layers, 2 attention heads, 1 key-value head, head size 4, context 16.
 ### `tests/fixtures/speed-prompt.txt`
 
 Written for this repository, and committed so that the batch-size table in the
-README can be reproduced rather than believed. It is 131 tokens under the
-TinyLlama tokenizer, which is what makes the numbers in that table comparable
-to each other and to whatever a reader measures.
+README can be reproduced rather than believed. It is 110 tokens under the
+TinyLlama tokenizer, 111 with the beginning-of-text marker the run adds,
+which is what makes the numbers in that table comparable to each other and to
+whatever a reader measures. It was described here as 131 tokens, which is
+what it becomes once the chat template wraps it -- the table was measured
+that way and did not say so.
 
-No test reads it. It is not a fixture in the sense the file above is; it is
-the input to a published measurement, and a published measurement whose input
-is not written down is an anecdote.
+No test reads it. `tests speed --prompt-file` does. It is not a fixture in
+the sense the file above is; it is the input to a published measurement, and
+a published measurement whose input is not written down is an anecdote.
 
 ### `tests/fixtures/speed-prompt-short.txt`
 

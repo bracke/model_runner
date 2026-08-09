@@ -13,6 +13,20 @@
 --  caller already has, so it is not part of the mandatory suite and nothing
 --  is downloaded; a missing file is a skip.
 --
+--  It reports a digest of the generated text as well as the times, because
+--  the batch-size table publishes one: --batch-size is a performance control
+--  and the column showing that it changes no output is the point of the
+--  table. A digest that moves between batch sizes is the table's claim
+--  failing, and it fails here rather than in a reader's head.
+--
+--  Every measurement it takes is --raw. The published figures were mixed:
+--  the headline one was raw and the batch table was rendered through the
+--  model's chat template, which is where its "131-token prompt" came from --
+--  the file is 110 tokens and the template wraps it. Neither table said
+--  which, so following one and reading the other was worth about a quarter
+--  of the number. What is measured here is the engine, and the template is
+--  not part of it.
+--
 --  It reports wall clock and the engine's own split between evaluating the
 --  prompt and generating. Processor time is not among them: totalling it
 --  across the worker tasks needs a host call this crate would have to bind
@@ -34,6 +48,8 @@ package Speed_Run is
       Prompt    : Natural := 0;   --  prompt tokens
       Produced  : Natural := 0;   --  tokens generated
 
+      Digest    : String (1 .. 16) := [others => '0'];
+
       Wall      : Duration := 0.0;
       Evaluate  : Duration := 0.0;
       Generate  : Duration := 0.0;
@@ -46,6 +62,7 @@ package Speed_Run is
    --  @param Prompt_Path File holding the prompt, read whole.
    --  @param Tokens How many tokens to generate.
    --  @param Threads Worker tasks; one means the serial path.
+   --  @param Batch Tokens per prefill batch, as --batch-size selects.
    --  @param Repeats How many times to run, for the median.
    --  @param Result What it measured.
    procedure Run
@@ -53,6 +70,7 @@ package Speed_Run is
       Prompt_Path : String;
       Tokens      : Positive;
       Threads     : Positive;
+      Batch       : Positive;
       Repeats     : Positive;
       Result      : out Report);
 

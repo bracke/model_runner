@@ -38,6 +38,18 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- The batch-size table is measured the same way as the figure above it. It
+  was rendered through the chat template while that figure was raw, and
+  neither said which: its caption's "131-token prompt" was the file's 110
+  tokens after the template wrapped them, so a reader following the printed
+  command got numbers about a quarter lower with nothing to explain the gap.
+  Both are raw now, and the table carries the command that produces it.
+
+- `tests speed` takes `--batch-size`, and reports a digest of what was
+  generated. The table's last column claims that `--batch-size` changes no
+  output; the claim now belongs to the thing that takes the measurement
+  rather than to whoever last read the table.
+
 - `tests speed --model PATH` takes that measurement three times and reports
   the median, so the fingerprint duty -- re-measure and record what you get
   -- is a command rather than an instruction. It needs a model the caller

@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Interfaces;
 with Ada.Real_Time;
 
 with Model_Runner.Backend.CPU;
@@ -26,9 +27,17 @@ package body Speed_Run is
    package T renames Model_Runner.Text;
 
    use type Ada.Real_Time.Time;
+   use type Interfaces.Unsigned_64;
 
-   --  Generated text is measured, not read, so it goes nowhere.
-   type Discard is limited new Model_Runner.Output.Sink with null record;
+   --  Generated text is not kept, but it is digested: the batch-size table
+   --  publishes a column showing that --batch-size changes no output, and a
+   --  claim like that belongs to whatever takes the measurement.
+   --
+   --  FNV-1a, which is not a checksum anybody should trust for anything
+   --  else. It is here to notice a difference, not to resist one.
+   type Discard is limited new Model_Runner.Output.Sink with record
+      Hash : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+   end record;
 
    overriding procedure Write
      (Self : in out Discard; Item : String; Closed : out Boolean);
@@ -36,10 +45,14 @@ package body Speed_Run is
    overriding function Is_Closed (Self : Discard) return Boolean;
 
    overriding procedure Write
-     (Self : in out Discard; Item : String; Closed : out Boolean)
-   is
-      pragma Unreferenced (Self, Item);
+     (Self : in out Discard; Item : String; Closed : out Boolean) is
    begin
+      for Index in Item'Range loop
+         Self.Hash :=
+           (Self.Hash xor Interfaces.Unsigned_64
+                            (Character'Pos (Item (Index))))
+           * 16#0000_0100_0000_01B3#;
+      end loop;
       Closed := False;
    end Write;
 
@@ -87,6 +100,7 @@ package body Speed_Run is
       Prompt_Path : String;
       Tokens      : Positive;
       Threads     : Positive;
+      Batch       : Positive;
       Repeats     : Positive;
       Result      : out Report)
    is
@@ -183,6 +197,7 @@ package body Speed_Run is
 
                   Model_Runner.Stops.Open (Stop);
                   Request.Max_Tokens := Tokens;
+                  Request.Batch_Size := Batch;
                   Request.Sampling :=
                     Model_Runner.Sampling.Greedy_Configuration;
                   Request.Seed := 1;
@@ -208,6 +223,20 @@ package body Speed_Run is
                       (Long_Float (Outcome.Decode_Ns)
                        / Long_Float
                            (Model_Runner.Clocks.Nanoseconds_Per_Second));
+
+                  --  Sixteen hexadecimal digits, most significant first.
+                  declare
+                     Figures : constant String := "0123456789abcdef";
+                     Left    : Interfaces.Unsigned_64 := Sink.Hash;
+                  begin
+                     for Place in reverse Result.Digest'Range loop
+                        Result.Digest (Place) :=
+                          Figures
+                            (Figures'First
+                             + Natural (Left mod 16));
+                        Left := Left / 16;
+                     end loop;
+                  end;
 
                   Result.Prompt := Outcome.Prompt_Tokens;
                   Result.Produced := Outcome.Generated_Tokens;
@@ -256,7 +285,7 @@ package body Speed_Run is
         & Seconds (Item.Wall) & " wall -- "
         & Seconds (Item.Evaluate) & " evaluating the prompt and "
         & Seconds (Item.Generate) & " generating; loading took "
-        & Seconds (Item.Load);
+        & Seconds (Item.Load) & "; output " & Item.Digest;
    end Summary;
 
 end Speed_Run;

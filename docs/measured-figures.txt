@@ -117,10 +117,13 @@
 kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure, the worker-count and share-count
-# comparisons, and the batch-size table under "Speed". Re-measure the first
-# three with `tests speed --model PATH`, which reports the median of three
-# runs of exactly the published run; the processor figures beside them come
-# from the operating system's timing tool, as the README says.
+# comparisons, and the batch-size table under "Speed". Re-measure all four
+# with `tests speed --model PATH`, which reports the median of three runs of
+# exactly the published run and prints a digest of what was generated; the
+# batch-size table is the same command with --prompt-file and --batch-size,
+# and both commands are printed beside their figures in the README. The
+# processor figures come from the operating system's timing tool, as the
+# README says.
 engine 7D2A01708913FEED src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
