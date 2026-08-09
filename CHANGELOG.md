@@ -38,6 +38,17 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- The repository checks load the catalog rather than only reading it. Every
+  other check reads it as text -- keys, readers, counts, help lines -- and
+  none of that notices a catalog the message runtime refuses, which it does
+  for the whole file at once: every locale stops loading, the program
+  renders identifiers in angle brackets, and nothing says why. It happened
+  while the option registry was being written, and surfaced as four
+  unrelated locale tests reporting that a catalog did not load, which is a
+  long way from the line that caused it. The locales are taken from the file
+  rather than listed, so one added is one checked, and each must render
+  rather than reach the emergency form.
+
 - `inspect` refuses an option it does not take. Every option reached every
   command: `inspect m.gguf --temperature 0.5 --interactive --raw` ran the
   inspection and said nothing, on a command whose help documented five

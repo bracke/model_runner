@@ -25,6 +25,8 @@ with Model_Runner.CLI.Options;
 with Model_Runner.GGUF;
 with Model_Runner.Generation;
 with Model_Runner.Llama;
+with Model_Runner.Localization;
+with Model_Runner.Platform;
 with Model_Runner.Progress;
 with Model_Runner.Quantization;
 with Model_Runner.Templates;
@@ -1154,6 +1156,125 @@ package body Checks is
                   Fail ("Library_Surface lists " & Name
                         & ", which no public spec declares");
                end if;
+            end;
+         end loop;
+      end;
+
+      --  The catalog parses, in every locale it carries.
+      --
+      --  Everything else here reads the catalog as text: keys, readers,
+      --  counts, help lines. None of that notices a catalog the message
+      --  runtime refuses, and refusing is total -- one bad line and every
+      --  locale stops loading, the program renders identifiers in angle
+      --  brackets, and nothing says why. Naming a placeholder {command}
+      --  did exactly that, and the fault surfaced as four unrelated locale
+      --  tests reporting that a catalog did not load, which is a long way
+      --  from the line that caused it.
+      --
+      --  The locales are taken from the file rather than listed, so one
+      --  added is one checked.
+      declare
+         Text_Body : constant String :=
+           Contents ("resources/messages/catalog.txt");
+
+         Room  : constant := 16;
+         Width : constant := 16;
+
+         type Locale_Name is record
+            Text : String (1 .. Width) := [others => ' '];
+            Last : Natural := 0;
+         end record;
+
+         Names : array (1 .. Room) of Locale_Name;
+         Count : Natural := 0;
+
+         --  Remember a locale prefix once.
+         procedure Note (Name : String) is
+         begin
+            if Name'Length = 0 or else Name'Length > Width then
+               return;
+            end if;
+            for Index in 1 .. Count loop
+               if Names (Index).Text (1 .. Names (Index).Last) = Name then
+                  return;
+               end if;
+            end loop;
+            if Count < Room then
+               Count := Count + 1;
+               Names (Count).Last := Name'Length;
+               Names (Count).Text (1 .. Name'Length) := Name;
+            end if;
+         end Note;
+
+         Cursor : Natural := Text_Body'First;
+      begin
+         while Cursor <= Text_Body'Last loop
+            declare
+               Stop : Natural := Cursor;
+            begin
+               while Stop <= Text_Body'Last
+                 and then Text_Body (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line : constant String := Text_Body (Cursor .. Stop - 1);
+               begin
+                  for Index in Line'Range loop
+                     exit when Line (Index) = ' ' or else Line (Index) = '=';
+                     if Line (Index) = '.' then
+                        Note (Line (Line'First .. Index - 1));
+                        exit;
+                     end if;
+                  end loop;
+               end;
+
+               Cursor := Stop + 1;
+            end;
+         end loop;
+
+         Result.Performed := Result.Performed + 1;
+         if Count = 0 then
+            Fail ("no locales were found in the catalog; the check no longer "
+                  & "matches the file it reads");
+         end if;
+
+         for Index in 1 .. Count loop
+            declare
+               Name : constant String :=
+                 Names (Index).Text (1 .. Names (Index).Last);
+               Held : Model_Runner.Localization.Catalog;
+            begin
+               Model_Runner.Localization.Open
+                 (Held, Model_Runner.Platform.Catalog_Path, Name);
+
+               Result.Performed := Result.Performed + 1;
+               if not Model_Runner.Localization.Is_Ready (Held) then
+                  Fail ("the message catalog does not parse in " & Name
+                        & "; the runtime refused it, which it does for the "
+                        & "whole file -- look for a line added since it last "
+                        & "loaded, and for a placeholder name the runtime "
+                        & "does not accept");
+               else
+                  --  And it renders rather than reaching the emergency
+                  --  form, which is what a caller would see instead.
+                  declare
+                     Shown : constant String :=
+                       Model_Runner.Localization.Text
+                         (Held, "application.name");
+                  begin
+                     Result.Performed := Result.Performed + 1;
+                     if Shown'Length = 0
+                       or else Shown (Shown'First) = '<'
+                     then
+                        Fail ("the catalog loaded in " & Name
+                              & " but rendered the emergency form");
+                     end if;
+                  end;
+               end if;
+
+               Model_Runner.Localization.Close (Held);
             end;
          end loop;
       end;
