@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Conformance compares the batched path as well as the single-token one:
+  858 sequences. `Evaluate_Batch` is what a prompt goes through, and it was
+  checked only against the engine's own single-token results -- so the
+  strongest statement here, that the arithmetic agrees with an
+  implementation written from the architecture description, was being made
+  about the decode path alone. Every format, architecture and repacking mode
+  is now compared both ways.
+
+  A sequence of one token is the same call either way and is not repeated.
+  The reference backend takes a token at a time by design, so the batched
+  half runs on the backend that batches -- asked of the backend rather than
+  named, and counted into the expected total the same way.
+
 - The checklist fails when the engine decodes a format the fixture cannot
   build. A format arrives with a decoder, a matrix row, a README row and a
   name, and all four of those were checked; whether anything could build a

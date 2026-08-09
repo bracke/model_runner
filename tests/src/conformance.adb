@@ -8,6 +8,8 @@ with Model_Runner.Tokenizer;
 
 with Reference_Transformer;
 with Model_Runner.Backend;
+with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Reference;
 with Tiny_Model;
 
 package body Conformance is
@@ -41,7 +43,8 @@ package body Conformance is
         (Tokens  : Sequence;
          Backend : Model_Runner.Backend.Backend_Kind :=
            Model_Runner.Backend.Backend_CPU;
-         Repack  : L.Repack_Mode := L.No_Repack)
+         Repack  : L.Repack_Mode := L.No_Repack;
+         Batched : Boolean := False)
       is
          Held      : aliased constant B.Byte_Array := Image.all;
          Source    : Model_Runner.Byte_Sources.Memory.Buffer_Source
@@ -101,13 +104,35 @@ package body Conformance is
                return;
             end if;
 
-            for Index in Tokens'Range loop
-               L.Evaluate
-                 (Session, Engine,
-                  Model_Runner.Tokenizer.Token_Id (Tokens (Index)),
-                  Actual, Status => Status);
-               exit when E.Is_Error (Status);
-            end loop;
+            --  One token at a time, or the whole sequence in one pass.
+            --
+            --  The batched path is what a prompt goes through, and it was
+            --  compared only against the engine's own single-token results:
+            --  the strongest statement here -- that the arithmetic agrees
+            --  with an implementation written from the architecture
+            --  description -- was being made about the decode path alone.
+            if Batched then
+               declare
+                  Held : Model_Runner.Tokenizer.Token_Array
+                    (1 .. Tokens'Length);
+               begin
+                  for Index in Tokens'Range loop
+                     Held (Index - Tokens'First + 1) :=
+                       Model_Runner.Tokenizer.Token_Id (Tokens (Index));
+                  end loop;
+
+                  L.Evaluate_Batch
+                    (Session, Engine, Held, Actual, Status => Status);
+               end;
+            else
+               for Index in Tokens'Range loop
+                  L.Evaluate
+                    (Session, Engine,
+                     Model_Runner.Tokenizer.Token_Id (Tokens (Index)),
+                     Actual, Status => Status);
+                  exit when E.Is_Error (Status);
+               end loop;
+            end if;
 
             if E.Is_Ok (Status) then
                Result.Sequences := Result.Sequences + 1;
@@ -188,46 +213,87 @@ package body Conformance is
       --  exactly where the stored layout does, and bf16 rounds every weight
       --  to eight mantissa bits, which is the one lossy thing this program
       --  does and the one that had no number attached to it.
-      for Backend in Model_Runner.Backend.Backend_Kind loop
-         for Qwen in Boolean loop
-            for Format in Tiny_Model.Weight_Format loop
-               Tiny_Model.Build (Image, Format, Qwen => Qwen);
+      --  Which backends take more than a token at a time, asked of the
+      --  backends rather than named here.
+      declare
+         function Batches
+           (Kind : Model_Runner.Backend.Backend_Kind) return Boolean
+         is (case Kind is
+               when Model_Runner.Backend.Backend_CPU =>
+                 Model_Runner.Backend.CPU.Describe
+                   (Model_Runner.Backend.CPU.Max_Workers).Supports_Batched,
+               when Model_Runner.Backend.Backend_Reference =>
+                 Model_Runner.Backend.Reference.Describe.Supports_Batched);
 
-               for Repack in L.Repack_Mode loop
-                  Compare (Sequence'(1 => 4), Backend, Repack);
-                  Compare (Sequence'(4, 5), Backend, Repack);
-                  Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack);
-                  Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
-                           Repack);
+         Batching : Natural := 0;
+      begin
+         for Backend in Model_Runner.Backend.Backend_Kind loop
+            for Qwen in Boolean loop
+               for Format in Tiny_Model.Weight_Format loop
+                  Tiny_Model.Build (Image, Format, Qwen => Qwen);
+
+                  for Repack in L.Repack_Mode loop
+                     Compare (Sequence'(1 => 4), Backend, Repack);
+                     Compare (Sequence'(4, 5), Backend, Repack);
+                     Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack);
+                     Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
+                              Repack);
+
+                     --  And the same sequences through the batched path, which
+                     --  is how a prompt is read. A sequence of one is the same
+                     --  call either way, so the three that are not are the ones
+                     --  worth the second pass.
+                     --
+                     --  Only on a backend that batches. The reference one
+                     --  declines more than a token at a time and says so, which
+                     --  is what it exists to be: asking anyway would compare a
+                     --  refusal against a forward pass.
+                     if Batches (Backend) then
+                        Compare (Sequence'(4, 5), Backend, Repack,
+                                 Batched => True);
+                        Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack,
+                                 Batched => True);
+                        Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
+                                 Repack, Batched => True);
+                     end if;
+                  end loop;
+
+                  B.Free (Image);
                end loop;
-
-               B.Free (Image);
             end loop;
          end loop;
-      end loop;
 
-      --  Every combination the loops above visit, times the four sequences
-      --  each one compares.
-      --
-      --  A literal here was edited nine times in one day -- 32, 96, 144,
-      --  192, 336, 384, 528, 576, 624 -- and a literal can only confirm what
-      --  somebody last typed: a format that quietly failed to load lowered
-      --  the count until the number was edited to match, which is the exact
-      --  failure this is meant to catch. It happened twice.
-      declare
-         Formats : constant Natural :=
-           Tiny_Model.Weight_Format'Pos (Tiny_Model.Weight_Format'Last) + 1;
-         Backends : constant Natural :=
-           Model_Runner.Backend.Backend_Kind'Pos
-             (Model_Runner.Backend.Backend_Kind'Last) + 1;
-         Repacks : constant Natural :=
-           L.Repack_Mode'Pos (L.Repack_Mode'Last) + 1;
+         --  Every combination the loops above visit, times the four sequences
+         --  each one compares.
+         --
+         --  A literal here was edited nine times in one day -- 32, 96, 144,
+         --  192, 336, 384, 528, 576, 624 -- and a literal can only confirm what
+         --  somebody last typed: a format that quietly failed to load lowered
+         --  the count until the number was edited to match, which is the exact
+         --  failure this is meant to catch. It happened twice.
+         for Kind in Model_Runner.Backend.Backend_Kind loop
+            if Batches (Kind) then
+               Batching := Batching + 1;
+            end if;
+         end loop;
 
-         --  Two architectures, and four sequences per combination.
-         Expected : constant Natural :=
-           Formats * 2 * Backends * Repacks * 4;
-      begin
-         Result.Ran := Result.Sequences = Expected;
+         declare
+            Formats : constant Natural :=
+              Tiny_Model.Weight_Format'Pos (Tiny_Model.Weight_Format'Last) + 1;
+            Backends : constant Natural :=
+              Model_Runner.Backend.Backend_Kind'Pos
+                (Model_Runner.Backend.Backend_Kind'Last) + 1;
+            Repacks : constant Natural :=
+              L.Repack_Mode'Pos (L.Repack_Mode'Last) + 1;
+
+            --  Two architectures; four sequences a token at a time on every
+            --  backend, and three of them again in one pass on the backends
+            --  that batch.
+            Expected : constant Natural :=
+              Formats * 2 * Repacks * (Backends * 4 + Batching * 3);
+         begin
+            Result.Ran := Result.Sequences = Expected;
+         end;
       end;
 
    end Run;
