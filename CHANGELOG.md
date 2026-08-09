@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `tests check` runs the conformance comparison and a short fuzzing campaign
+  itself. Both were commands somebody had to remember: the strongest evidence
+  this repository has that the arithmetic is right, and the only thing that
+  puts a mutated file in front of the parser, were outside the gate. A
+  release could have been cut with the suite and the checklist green and the
+  two implementations disagreeing. They cost forty-four milliseconds and
+  ninety.
+
+- The README's conformance row described one architecture and one reference
+  while the figures twelve lines below had grown to sixteen sequences. It
+  says what the run covers, and that the gate runs it.
+
 - `Reference_Transformer` reads `qwen2` too, so `tests conformance` compares
   both architectures against an independent implementation. It knew only the
   interleaved rotary and no attention bias, which meant the architecture

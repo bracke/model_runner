@@ -189,9 +189,46 @@ begin
             then Ada.Command_Line.Argument (2)
             else "..");
          Result : Checks.Report;
+         Agreed : Conformance.Report;
+         Fuzzed : Fuzzing.Report;
+         Failed : Boolean := False;
       begin
          Checks.Run (Root, Result);
-         if not Checks.Is_Clean (Result) then
+         Failed := not Checks.Is_Clean (Result);
+
+         --  The gate runs the two things that were commands somebody had to
+         --  remember. Conformance is the strongest evidence this repository
+         --  has that the arithmetic is right rather than self-consistent,
+         --  and fuzzing is the only thing that puts a mutated file in front
+         --  of the parser. Both were outside the gate, so a release could
+         --  have been cut with the suite and the checklist green and the two
+         --  implementations disagreeing.
+         --
+         --  They cost forty-four milliseconds and ninety, which is no reason
+         --  to leave either out.
+         Conformance.Run (Agreed);
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "  conformance: sequences" & Natural'Image (Agreed.Sequences)
+            & ", outside tolerance" & Natural'Image (Agreed.Failures));
+         if not Conformance.Is_Clean (Agreed) then
+            Failed := True;
+         end if;
+
+         --  A short campaign, not the long one: the gate is asking whether
+         --  the parser still refuses what it should, not searching for a new
+         --  way to break it. 'tests fuzz' with a larger count is the search.
+         Fuzzing.Run (1, 200, Fuzzed);
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "  fuzz: cases" & Natural'Image (Fuzzed.Cases)
+            & ", escaped" & Natural'Image (Fuzzed.Escaped)
+            & ", internal" & Natural'Image (Fuzzed.Internal));
+         if not Fuzzing.Is_Clean (Fuzzed) then
+            Failed := True;
+         end if;
+
+         if Failed then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;
