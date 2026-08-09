@@ -120,6 +120,88 @@ package body Reference_Transformer is
       return Scale * Long_Float (Quant);
    end Decode_Q8_0;
 
+   --  Decode one Q4_K element, independently of the engine.
+   --
+   --  The layout says: two hundred and fifty-six elements to a superblock of
+   --  one hundred and forty-four bytes. A half-precision scale, a
+   --  half-precision minimum, twelve bytes carrying a six-bit factor and a
+   --  six-bit offset for each of eight sub-blocks, then one hundred and
+   --  twenty-eight bytes of four-bit quants, two to a byte, in which
+   --  sub-blocks 2g and 2g+1 share thirty-two bytes -- low nibbles first.
+   --  A value is factor * scale * quant - offset * minimum.
+   --
+   --  Worked out from the layout rather than by calling the engine, like the
+   --  Q8_0 decoder above and for the same reason: a fault made twice is a
+   --  fault that agrees with itself.
+   function Decode_Q4_K
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 256);
+      Within : constant Natural := Index mod 256;
+      Sub    : constant Natural := Within / 32;
+      In_Sub : constant Natural := Within mod 32;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 144;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      --  A half-precision value, from its fields.
+      function Half_At (Offset : Interfaces.Unsigned_64) return Long_Float is
+         Raw      : constant Natural :=
+           Byte_At (Offset) + 256 * Byte_At (Offset + 1);
+         Sign     : constant Long_Float :=
+           (if Raw >= 16#8000# then -1.0 else 1.0);
+         Exponent : constant Integer := (Raw / 1024) mod 32;
+         Mantissa : constant Integer := Raw mod 1024;
+      begin
+         if Exponent = 0 then
+            return Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+         elsif Exponent = 31 then
+            return 0.0;
+         else
+            return Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+              * (2.0 ** (Exponent - 15));
+         end if;
+      end Half_At;
+
+      Scale   : constant Long_Float := Half_At (At_Block);
+      Minimum : constant Long_Float := Half_At (At_Block + 2);
+      Scales  : constant Interfaces.Unsigned_64 := At_Block + 4;
+
+      Factor, Offset_Level : Natural;
+
+      Quants : constant Interfaces.Unsigned_64 := At_Block + 16;
+      Pair   : constant Interfaces.Unsigned_64 :=
+        Quants + Interfaces.Unsigned_64 (Sub / 2) * 32
+        + Interfaces.Unsigned_64 (In_Sub);
+      Packed : constant Natural := Byte_At (Pair);
+      Quant  : constant Natural :=
+        (if Sub mod 2 = 0 then Packed mod 16 else Packed / 16);
+   begin
+      --  The first four sub-blocks keep six bits in a byte of their own; the
+      --  last four take four bits from one byte and two from another.
+      if Sub < 4 then
+         Factor := Byte_At (Scales + Interfaces.Unsigned_64 (Sub)) mod 64;
+         Offset_Level :=
+           Byte_At (Scales + Interfaces.Unsigned_64 (Sub) + 4) mod 64;
+      else
+         Factor :=
+           (Byte_At (Scales + Interfaces.Unsigned_64 (Sub) + 4) mod 16)
+           + 16 * (Byte_At (Scales + Interfaces.Unsigned_64 (Sub) - 4) / 64);
+         Offset_Level :=
+           (Byte_At (Scales + Interfaces.Unsigned_64 (Sub) + 4) / 16)
+           + 16 * (Byte_At (Scales + Interfaces.Unsigned_64 (Sub)) / 64);
+      end if;
+
+      return Scale * Long_Float (Factor) * Long_Float (Quant)
+        - Minimum * Long_Float (Offset_Level);
+   end Decode_Q4_K;
+
    --  Read a metadata integer, or a default.
    function Metadata
      (Source  : Containers.Container;
@@ -166,6 +248,7 @@ package body Reference_Transformer is
            or else Containers.Tensor_Format (Source, Index)
                    not in Model_Runner.GGUF.Type_F32
                         | Model_Runner.GGUF.Type_Q8_0
+                        | Model_Runner.GGUF.Type_Q4_K
          then
             return null;
          end if;
@@ -196,6 +279,16 @@ package body Reference_Transformer is
                           Offset
                           + Interfaces.Unsigned_64 (Row) * 34
                             * Interfaces.Unsigned_64 (Columns / 32),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_Q4_K
+                  then
+                     Result (Row, Column) :=
+                       Decode_Q4_K
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 144
+                            * Interfaces.Unsigned_64 (Columns / 256),
                           Column);
                   else
                      Result (Row, Column) :=

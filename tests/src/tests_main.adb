@@ -461,6 +461,17 @@ begin
                return Default;
          end Number;
 
+         function Mode_Of (Word : String) return Model_Runner.Llama.Repack_Mode
+         is
+         begin
+            for Mode in Model_Runner.Llama.Repack_Mode loop
+               if Model_Runner.Llama.Repack_Name (Mode) = Word then
+                  return Mode;
+               end if;
+            end loop;
+            return Model_Runner.Llama.No_Repack;
+         end Mode_Of;
+
          Path   : constant String := Option ("--model", "");
          Result : External_Model.Report;
       begin
@@ -470,6 +481,7 @@ begin
             Tokens  => Number ("--max-tokens", 16),
             Threads => Number ("--threads", 4),
             Expect  => Option ("--expect", ""),
+            Repack  => Mode_Of (Option ("--repack", "none")),
             Result  => Result);
 
          Ada.Text_IO.Put_Line

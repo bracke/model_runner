@@ -170,6 +170,24 @@ package Fixtures is
    --  @return Encoded block bytes.
    function Encode_Q8_0 (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Encode values as Q4_K: superblocks of 256, eight sub-blocks of
+   --  thirty-two, each with a six-bit scale and a six-bit minimum packed
+   --  twelve bytes to the superblock, and one four-bit quant per element.
+   --
+   --  Written so that the fixture can carry a k-quant at all. The fixture
+   --  built binary32 and Q8_0, so conformance measured every claim about
+   --  quantized weights -- including what repacking to brain floats costs --
+   --  from those two alone, while the formats a real model uses most were
+   --  reachable only through a file nobody can commit.
+   --
+   --  The packing is the inverse of what Quantization decodes, and a test
+   --  holds it to that: encode, decode with the engine's own reader, and the
+   --  values must return within what four bits can carry.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q4_K (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode binary16 values.
    --
    --  @param Values Values to encode.

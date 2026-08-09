@@ -5,7 +5,6 @@ with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
-with Model_Runner.Llama;
 with Model_Runner.Numerics;
 with Model_Runner.Output;
 with Model_Runner.Sampling;
@@ -31,6 +30,8 @@ package body External_Model is
    package N renames Model_Runner.Numerics;
    package T renames Model_Runner.Text;
    package Vocab renames Model_Runner.Tokenizer;
+
+   use type L.Repack_Mode;
 
    Max_Captured : constant := 1_000_000;
 
@@ -80,6 +81,7 @@ package body External_Model is
       Tokens  : Positive;
       Threads : Positive;
       Expect  : String := "";
+      Repack  : L.Repack_Mode := L.No_Repack;
       Result  : out Report)
    is
       Expected    : Expectations.Recording;
@@ -313,7 +315,9 @@ package body External_Model is
          return;
       end if;
 
-      L.Prepare (Engine, Container, Source, Status => Status);
+      L.Prepare
+        (Engine, Container, Source, Repack => Repack,
+         Threads => Threads, Status => Status);
       if E.Is_Error (Status) then
          Give_Up (Rejected,
                   "model rejected: " & E.Diagnostic_Code (Status.Code));
@@ -381,6 +385,71 @@ package body External_Model is
                Give_Up (Failed, "the worker count changed the result");
                return;
             end if;
+         end if;
+
+      --  And the same model without repacking, when repacking was asked
+         --  for. Two engines over the same bytes, one prompt, greedy: whether
+         --  rounding the weights changed what came out is the question a
+         --  fixture cannot answer, and this is a model somebody has.
+         if Repack /= L.No_Repack then
+            Result.Repack_Checked := True;
+
+            declare
+               Plain  : L.Model;
+               Text   : String (1 .. Max_Captured) := [others => ' '];
+               Last   : Natural := 0;
+               Count  : Natural := 0;
+               Fine   : Boolean := False;
+               Local  : E.Error_Info;
+            begin
+               L.Prepare
+                 (Plain, Container, Source, Threads => Threads,
+                  Status => Local);
+
+               if E.Is_Ok (Local) then
+                  declare
+                     Session : L.Session;
+                     Stop    : Model_Runner.Stops.Set;
+                     Sink    : aliased Capture;
+                     Request : Gen.Request;
+                     Outcome : Gen.Result;
+                  begin
+                     L.Open (Session, Plain, Status => Local);
+                     if E.Is_Ok (Local) then
+                        Model_Runner.Stops.Open (Stop);
+                        Request.Max_Tokens := Tokens;
+                        Request.Sampling :=
+                          Model_Runner.Sampling.Greedy_Configuration;
+                        Request.Seed := 42;
+                        Request.Has_Seed := True;
+                        Request.Add_Beginning := True;
+
+                        Gen.Generate
+                          (Plain, Session, Effective_Prompt, Request, Stop,
+                           Sink'Unchecked_Access, null, null, null, null,
+                           Outcome => Outcome);
+
+                        Last := Natural'Min (Sink.Used, Text'Length);
+                        if Last > 0 then
+                           Text (1 .. Last) := Sink.Data (1 .. Last);
+                        end if;
+                        Count := Outcome.Generated_Tokens;
+                        Fine := Outcome.Reason /= Gen.Runtime_Error;
+
+                        Model_Runner.Stops.Close (Stop);
+                        L.Close (Session);
+                        Gen.Release (Outcome);
+                     end if;
+                  end;
+
+                  L.Close (Plain, Local);
+               end if;
+
+               Result.Repack_Match :=
+                 Fine and then Count = Result.Generated
+                 and then Last = Last_1
+                 and then Text (1 .. Last) = First (1 .. Last_1);
+            end;
          end if;
       end;
 
@@ -555,6 +624,10 @@ package body External_Model is
               "external-model: ok, " & Detail_Text (Item)
               & ", prompt" & Natural'Image (Item.Prompt_Tokens)
               & " tokens, generated" & Natural'Image (Item.Generated)
+              & (if not Item.Repack_Checked then ""
+                 elsif Item.Repack_Match
+                 then ", repacked text identical"
+                 else ", repacked text differs")
               & ", deterministic " & Boolean'Image (Item.Deterministic)
               & (if Item.Thread_Checked
                  then ", thread-stable " & Boolean'Image (Item.Thread_Stable)

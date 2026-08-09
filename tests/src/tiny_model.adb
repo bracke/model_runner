@@ -32,16 +32,23 @@ package body Tiny_Model is
       Qwen      : Boolean := False;
       Omit_Biases : Boolean := False)
    is
-      Quantized : constant Boolean := Format = Q8_0;
+      Quantized : constant Boolean := Format in Q8_0 | Q4_K;
+      Deep      : constant Boolean := Format = Q4_K;
 
       --  The quantized fixture is wider because a Q8_0 row must be a whole
       --  number of thirty-two element blocks. Everything else matches.
       Embedding : constant Natural :=
-        (if Quantized then Wide_Embedding else Tiny_Model.Embedding);
+        (if Deep then Deep_Embedding
+         elsif Quantized then Wide_Embedding
+         else Tiny_Model.Embedding);
       Feed_Forward : constant Natural :=
-        (if Quantized then Wide_Feed_Forward else Tiny_Model.Feed_Forward);
+        (if Deep then Deep_Feed_Forward
+         elsif Quantized then Wide_Feed_Forward
+         else Tiny_Model.Feed_Forward);
       Head_Size : constant Natural :=
-        (if Quantized then Wide_Head_Size else Tiny_Model.Head_Size);
+        (if Deep then Deep_Head_Size
+         elsif Quantized then Wide_Head_Size
+         else Tiny_Model.Head_Size);
       Builder : Fixtures.Builder;
       Seed    : Interfaces.Unsigned_64 := 12_345;
 
@@ -68,7 +75,11 @@ package body Tiny_Model is
             --  A quantized model keeps its matrices quantized and its norms
             --  in binary32; the fixture follows that, so the quantized path
             --  is exercised the way a real file exercises it.
-            if Format = Q8_0 and then Total mod 32 = 0 then
+            if Format = Q4_K and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q4_K,
+                  Fixtures.Encode_Q4_K (Values));
+            elsif Format = Q8_0 and then Total mod 32 = 0 then
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_Q8_0,
                   Fixtures.Encode_Q8_0 (Values));

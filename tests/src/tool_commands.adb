@@ -22,7 +22,7 @@ package body Tool_Commands is
      & " --repeats ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds ";
    Opts_External  : aliased constant String :=
-     " --model --prompt --max-tokens --threads --expect ";
+     " --model --prompt --max-tokens --threads --expect --repack ";
    Opts_Tokenize  : aliased constant String := " --model --prompt ";
 
    Takes_Check     : aliased constant String := "[ROOT]";
@@ -33,7 +33,7 @@ package body Tool_Commands is
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N]";
    Takes_External  : aliased constant String :=
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"
-     & " [--expect TEXT]";
+     & " [--expect TEXT] [--repack MODE]";
    Takes_Tokenize  : aliased constant String := "--model PATH --prompt TEXT";
    Takes_Docs      : aliased constant String := "[ROOT]";
    Takes_Fixtures  : aliased constant String := "[DIR]";

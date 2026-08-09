@@ -442,24 +442,36 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 96, logits compared 1024,
-             worst absolute 1.22573368138701E-06,
+conformance: sequences 144, logits compared 1536,
+             worst absolute 2.66391572001368E-06,
              worst relative 8.26692137016013E-04,
-             rounded logits compared 512,
-             rounded worst absolute 3.20279926393028E-02,
+             rounded logits compared 768,
+             rounded worst absolute 6.43864154673288E-02,
              rounded worst relative 9.91448463391238E-01,
              outside tolerance 0
 ```
 
-Both architectures, both weight formats, both backends, and every repacking
-mode. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
+Both architectures, three weight formats -- binary32, Q8_0 and Q4_K -- both
+backends, and every repacking mode. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
 outside it.
 
 The rounded figures are `--repack bf16`, counted apart because mixing them in
 would let the lossy path's error hide the exact path's. They are the number
 that flag never had: rounding every weight to eight mantissa bits moves a
-logit on this fixture by up to **0.032**, and a logit close to zero moves by
-almost all of itself, which is what the relative figure says. `--repack f32`
+logit **on these fixtures** by up to **0.064**, and a logit close to zero moves
+by almost all of itself, which is what the relative figure says.
+
+On this fixture is not a small qualification. Rounding error accumulates with
+the length of a dot product and the depth of the stack, and the widest fixture is
+256 wide and two deep where a small real model is two thousand wide and
+twenty-two deep. Adding the k-quant fixture, which is eight times wider than
+the one before it, doubled the figure -- which is the shape of the thing:
+wider means more terms means more accumulated rounding. The figure bounds what was measured, not what the flag does
+to a model you have. What exists for real models is behaviour rather than
+logits: sixty greedy tokens from TinyLlama Q8_0 and forty from Q4_K come out
+identical either way, which is worth knowing and is not a bound.
+`tests external-model --model PATH --repack bf16` runs a model you have both
+ways and says whether the identifiers still match. `--repack f32`
 is in the first set, where it belongs: it lands exactly where the stored
 layout does. The bound the rounded path is held to is 5e-2 relative with a
 1e-1 absolute floor -- what it measures, rounded up -- rather than the exact

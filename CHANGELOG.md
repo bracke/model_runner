@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The fixture builds a k-quant, and conformance compares it: 144 sequences
+  where there were 96. `Tiny_Model` built binary32 and Q8_0, so every claim
+  about quantized weights -- including what repacking to brain floats costs
+  -- was measured on those two, while the format a real model most often
+  uses was reachable only through a file nobody can commit. The encoder is
+  held to the engine's own reader by a round-trip test, and the reference
+  transformer decodes Q4_K from the layout rather than by calling the
+  engine, like its Q8_0 decoder and for the same reason.
+
+  It doubled the rounding figure: 0.064 where the narrower fixtures said
+  0.032, which is the shape of the thing -- wider matrices mean more terms
+  and more accumulated rounding.
+
+- `tests external-model --repack MODE` runs a model the caller has both
+  ways and says whether the text changed. On TinyLlama Q4_K and Q2_K it did
+  not, at 32, 64 and 128 tokens.
+
+- The README says its bf16 figure is a fixture figure. It read as a bound on
+  the flag; it bounds what was measured, on models three orders of magnitude
+  smaller than the ones the flag is for.
+
 - `tests conformance` runs every repacking mode against the independent
   implementation: 96 sequences where there were 32. Repacking replaces the
   quantized views the kernels decode with binary32 or brain-float ones,

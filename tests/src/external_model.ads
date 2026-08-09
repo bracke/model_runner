@@ -23,6 +23,8 @@
 --  one.
 --
 --  Task safety: a run uses one task.
+with Model_Runner.Llama;
+
 package External_Model is
 
    --  How a run ended.
@@ -46,6 +48,13 @@ package External_Model is
       Compared      : Natural := 0;
       Worst_Gap     : Long_Float := 0.0;
       Reference_Run : Boolean := False;
+      --  Whether the same model was run again without repacking, and
+      --  whether it produced the same text. Only a model of a useful size
+      --  answers what rounding to brain floats does; the conformance figure
+      --  is taken on a fixture eight wide and two deep.
+      Repack_Checked : Boolean := False;
+      Repack_Match   : Boolean := False;
+
       Tokens_Match  : Boolean := False;
       Greedy_Match  : Boolean := False;
       Text_Match    : Boolean := False;
@@ -63,6 +72,12 @@ package External_Model is
    --    reference runtime, or an empty string for no comparison. When present,
    --    its prompt overrides the Prompt argument so that both sides see the
    --    same input.
+   --  @param Repack What to decode the weights into first. The conformance
+   --    figures for repacking are taken on fixtures at most 256 wide and two
+   --    deep; what rounding does to a model of a useful size is a question
+   --    only a model of a useful size answers, and this is where somebody
+   --    with one can ask it. Given a mode, the model is run again without
+   --    repacking and the two texts are compared.
    --  @param Result What the run found.
    procedure Run
      (Path    : String;
@@ -70,6 +85,8 @@ package External_Model is
       Tokens  : Positive;
       Threads : Positive;
       Expect  : String := "";
+      Repack  : Model_Runner.Llama.Repack_Mode :=
+        Model_Runner.Llama.No_Repack;
       Result  : out Report);
 
    --  Human-readable detail from a run.

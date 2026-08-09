@@ -3759,6 +3759,55 @@ package body Tests.GGUF_Cases is
    --  which is why the comparison is exact equality and not a tolerance:
    --  widening loses nothing, and any difference at all is a defect.
 
+   --  The fixture's k-quant encoder is the inverse of the reader.
+   --
+   --  Q4_K carries four bits an element with a six-bit scale and a six-bit
+   --  minimum per thirty-two, all packed twelve bytes to a superblock in a
+   --  layout that splits the last four sub-blocks across two bytes. An
+   --  encoder that gets that wrong produces a fixture that decodes to
+   --  something plausible and wrong, which is worse than one that fails to
+   --  parse -- so it is held to the reader the engine actually uses.
+
+   procedure Fixture_Q4_K_Round_Trips
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Values  : N.Real_Array (0 .. 255);
+      Decoded : N.Real_Array (0 .. 255) := [others => 0.0];
+      Ok      : Boolean;
+   begin
+      --  A spread with sign and scale, so that every sub-block gets its own
+      --  minimum and step rather than all of them sharing one.
+      for Index in Values'Range loop
+         Values (Index) :=
+           N.Real (Integer (Index) mod 37) * 0.125
+           - N.Real (Integer (Index) / 32) * 1.5;
+      end loop;
+
+      declare
+         Encoded : constant B.Byte_Array := Fixtures.Encode_Q4_K (Values);
+         Widest  : N.Real := 0.0;
+      begin
+         Assert (Encoded'Length = 144, "a Q4_K superblock is 144 bytes");
+
+         Q.Decode_Blocks (G.Type_Q4_K, Encoded, 0, 1, Decoded, Ok);
+         Assert (Ok, "the engine could not read the encoded superblock");
+
+         for Index in Values'Range loop
+            Widest :=
+              N.Real'Max (Widest, abs (Values (Index) - Decoded (Index)));
+         end loop;
+
+         --  Four bits over a sub-block's range: a sixteenth of the widest
+         --  span, and the spans here are at most about four and a half.
+         Assert (Widest < 0.25,
+                 "the encoded values came back"
+                 & N.Real'Image (Widest) & " away, which is more than four "
+                 & "bits can explain");
+      end;
+   end Fixture_Q4_K_Round_Trips;
+
    procedure Every_Half_Widens_To_Its_Value
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -4353,6 +4402,9 @@ package body Tests.GGUF_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Fixture_Q4_K_Round_Trips'Access,
+         "the fixture's Q4_K encoder is the inverse of the engine's reader");
       Register_Routine
         (T, Valid_File_Parses'Access,
          "a well-formed container parses and reports its facts");

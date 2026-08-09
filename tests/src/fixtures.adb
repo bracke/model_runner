@@ -448,6 +448,138 @@ package body Fixtures is
    -- Encode_Q8_0 --
    ------------------
 
+   function Encode_Q4_K (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+
+      Blocks : constant N.Element_Count := Values'Length / 256;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 144 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 256;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 144;
+
+            --  Per sub-block: the smallest value it holds, and the step
+            --  between the sixteen levels four bits can name.
+            type Sub_Range is array (0 .. 7) of N.Real;
+            Low, Step : Sub_Range := [others => 0.0];
+
+            Widest, Deepest : N.Real := 0.0;
+         begin
+            for Sub in 0 .. 7 loop
+               declare
+                  Base    : constant N.Element_Count :=
+                    First + N.Element_Count (Sub) * 32;
+                  Smallest : N.Real := Values (Base);
+                  Largest  : N.Real := Values (Base);
+               begin
+                  for Index in 0 .. 31 loop
+                     Smallest := N.Real'Min
+                       (Smallest, Values (Base + N.Element_Count (Index)));
+                     Largest := N.Real'Max
+                       (Largest, Values (Base + N.Element_Count (Index)));
+                  end loop;
+
+                  Low (Sub) := Smallest;
+                  Step (Sub) := (Largest - Smallest) / 15.0;
+                  Widest := N.Real'Max (Widest, Step (Sub));
+                  Deepest := N.Real'Max (Deepest, abs Smallest);
+               end;
+            end loop;
+
+            --  The superblock's own two scales, each dividing a six-bit
+            --  factor: d scales the step, dmin the minimum, and the minimum
+            --  is stored negated the way the decoder adds it back.
+            declare
+               D    : constant N.Real :=
+                 (if Widest = 0.0 then 1.0 else Widest / 63.0);
+               DMin : constant N.Real :=
+                 (if Deepest = 0.0 then 1.0 else Deepest / 63.0);
+            begin
+               Result (At_Byte .. At_Byte + 1) := Encode_F16 ([1 => D]);
+               Result (At_Byte + 2 .. At_Byte + 3) := Encode_F16 ([1 => DMin]);
+
+               for Sub in 0 .. 7 loop
+                  declare
+                     Factor : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Unsigned_8
+                         (N.Real'Min (63.0,
+                                      N.Real'Rounding (Step (Sub) / D)));
+                     Minimum : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Unsigned_8
+                         (N.Real'Min (63.0,
+                                      N.Real'Rounding (-Low (Sub) / DMin)));
+                     Scales : constant B.Byte_Count := At_Byte + 4;
+                  begin
+                     --  The same twelve bytes Sub_Block_Scale reads: the
+                     --  first four sub-blocks keep six bits in place, and
+                     --  the last four are split across two bytes.
+                     if Sub < 4 then
+                        Result (Scales + B.Byte_Count (Sub)) :=
+                          Result (Scales + B.Byte_Count (Sub)) or Factor;
+                        Result (Scales + B.Byte_Count (Sub) + 4) :=
+                          Result (Scales + B.Byte_Count (Sub) + 4) or Minimum;
+                     else
+                        Result (Scales + B.Byte_Count (Sub) + 4) :=
+                          Result (Scales + B.Byte_Count (Sub) + 4)
+                          or (Factor and 16#0F#)
+                          or Interfaces.Shift_Left (Minimum and 16#0F#, 4);
+                        Result (Scales + B.Byte_Count (Sub) - 4) :=
+                          Result (Scales + B.Byte_Count (Sub) - 4)
+                          or Interfaces.Shift_Left
+                               (Interfaces.Shift_Right (Factor, 4), 6);
+                        Result (Scales + B.Byte_Count (Sub)) :=
+                          Result (Scales + B.Byte_Count (Sub))
+                          or Interfaces.Shift_Left
+                               (Interfaces.Shift_Right (Minimum, 4), 6);
+                     end if;
+                  end;
+               end loop;
+
+               --  Four bits an element, two elements a byte, in the pairing
+               --  the decoder reads: sub-blocks 2g and 2g+1 share a run of
+               --  thirty-two bytes, low nibbles first.
+               for Group in 0 .. 3 loop
+                  for L in 0 .. 31 loop
+                     declare
+                        Base : constant B.Byte_Count :=
+                          At_Byte + 16 + B.Byte_Count (Group) * 32
+                          + B.Byte_Count (L);
+
+                        function Level (Sub, Within : Natural)
+                          return Interfaces.Unsigned_8
+                        is
+                           Value : constant N.Real :=
+                             Values (First + N.Element_Count (Sub) * 32
+                                     + N.Element_Count (Within));
+                           Span  : constant N.Real :=
+                             (if Step (Sub) = 0.0 then 1.0 else Step (Sub));
+                        begin
+                           return Interfaces.Unsigned_8
+                             (N.Real'Max
+                                (0.0,
+                                 N.Real'Min
+                                   (15.0,
+                                    N.Real'Rounding
+                                      ((Value - Low (Sub)) / Span))));
+                        end Level;
+                     begin
+                        Result (Base) :=
+                          Level (Group * 2, L)
+                          or Interfaces.Shift_Left
+                               (Level (Group * 2 + 1, L), 4);
+                     end;
+                  end loop;
+               end loop;
+            end;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Q4_K;
+
    function Encode_Q8_0 (Values : N.Real_Array) return B.Byte_Array is
       Blocks : constant N.Element_Count := Values'Length / 32;
       Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 34 - 1) :=

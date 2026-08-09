@@ -63,7 +63,7 @@ package Tiny_Model is
 
    --  Which format the weight matrices use. The norms and the small vectors
    --  stay binary32 in both, as they do in a real quantized model.
-   type Weight_Format is (Float32, Q8_0);
+   type Weight_Format is (Float32, Q8_0, Q4_K);
 
    --  A quantized row is a whole number of thirty-two element blocks, so a
    --  model whose widths are eight and twelve cannot be quantized at all.
@@ -72,6 +72,15 @@ package Tiny_Model is
    Wide_Embedding    : constant := 32;
    Wide_Feed_Forward : constant := 64;
    Wide_Head_Size    : constant := 16;
+
+   --  A k-quant block is 256 elements, so a fixture carrying one has to be
+   --  wider again. It is the format a real model most often uses, and it
+   --  was unreachable here: every claim about quantized weights, including
+   --  what repacking to brain floats costs, was measured on binary32 and
+   --  Q8_0 alone.
+   Deep_Embedding    : constant := 256;
+   Deep_Feed_Forward : constant := 512;
+   Deep_Head_Size    : constant := 128;
 
    --  Build the fixture in memory.
    --
