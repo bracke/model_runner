@@ -95,7 +95,10 @@ package body Model_Runner.Templates is
    function Built_In (Name : String) return String is
       LF : constant Character := Character'Val (10);
    begin
-      if Name = "llama3" then
+      --  Answered through the enumeration, so a format added there and not
+      --  here is a missing case rather than a name that silently carries
+      --  nothing.
+      if Name = Format_Name (Format_Llama3) then
          return
            "{{ bos_token }}"
            & "{% for message in messages %}"
@@ -107,7 +110,7 @@ package body Model_Runner.Templates is
            & "<|start_header_id|>assistant<|end_header_id|>" & LF & LF
            & "{% endif %}";
 
-      elsif Name = "chatml" then
+      elsif Name = Format_Name (Format_ChatML) then
          return
            "{% for message in messages %}"
            & "<|im_start|>{{ message['role'] }}" & LF

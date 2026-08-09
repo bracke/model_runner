@@ -28,6 +28,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Output;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
+with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 
@@ -270,6 +271,82 @@ package body Tests.CLI_Cases is
       Assert (E.Exit_Status (E.Make (E.Backend_Unknown)) = E.Exit_Usage,
               "an unknown backend does not exit as a usage error");
    end Every_Backend_Can_Be_Named;
+
+   --  Every chat format this build carries can be named on the command line.
+   --
+   --  The mirror of the backend test, and it exists because the two options
+   --  did not answer alike: --backend gpu said no backend of that name is in
+   --  this build, while --chat-template nope said the value was invalid,
+   --  which is true of any bad value and tells a reader nothing about what
+   --  there is. A caller could not predict which kind of answer an option
+   --  would give.
+   procedure Every_Chat_Format_Can_Be_Named
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Tmpl renames Model_Runner.Templates;
+
+      Item   : Opt.Command;
+      Status : E.Error_Info;
+
+      procedure Ask (Name : String; Outcome : out E.Error_Info) is
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, "m.gguf");
+         Add (Source, "--prompt");
+         Add (Source, "hi");
+         Add (Source, "--chat-template");
+         Add (Source, Name);
+         Opt.Parse (Source, Item, Outcome);
+      end Ask;
+   begin
+      for Format in Tmpl.Chat_Format loop
+         declare
+            Name : constant String := Tmpl.Format_Name (Format);
+         begin
+            Assert (Name /= "", "a chat format has no name");
+
+            --  Named, accepted, and carrying a template that compiles. A
+            --  name the parser takes and the engine cannot then use would
+            --  be worse than one it refused.
+            Ask (Name, Status);
+            Assert (E.Is_Ok (Status),
+                    "the format named " & Name & " was refused: "
+                    & E.Error_Code'Image (Status.Code));
+            Opt.Release (Item);
+
+            Assert (Tmpl.Built_In (Name) /= "",
+                    "the format named " & Name & " carries no template");
+         end;
+      end loop;
+
+      --  A name no format has is refused, and says so the way --backend
+      --  does rather than the way a malformed number does.
+      for Which in 1 .. 3 loop
+         declare
+            Wrong : constant String :=
+              (case Which is
+                 when 1 => "nope",
+                 when 2 => "LLAMA3",
+                 when others => "");
+         begin
+            Ask (Wrong, Status);
+            Assert (Status.Code = E.Template_Unknown_Format,
+                    "the format named '" & Wrong & "' gave "
+                    & E.Error_Code'Image (Status.Code));
+            Opt.Release (Item);
+         end;
+      end loop;
+
+      --  And it exits as the usage error it is, like the backend one.
+      Assert (E.Exit_Status (E.Make (E.Template_Unknown_Format))
+              = E.Exit_Usage,
+              "an unknown chat format does not exit as a usage error");
+      Assert (E.Exit_Status (E.Make (E.Template_Syntax_Error))
+              = E.Exit_Model_Format,
+              "a malformed template stopped exiting as a model-format error");
+   end Every_Chat_Format_Can_Be_Named;
 
    --  Malformed command lines are rejected with the code that names the
    --  problem.
@@ -3642,6 +3719,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Every_Backend_Can_Be_Named'Access,
          "every backend this build has can be named on the command line");
+      Register_Routine
+        (T, Every_Chat_Format_Can_Be_Named'Access,
+         "every chat format this build carries can be named on the command "
+         & "line");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");

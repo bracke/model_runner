@@ -135,7 +135,7 @@ the choice.
 | Top-k, top-p, minimum-p | Implemented |
 | Repetition penalty with a configurable window | Implemented |
 | Frequency and presence penalties | Implemented |
-| Built-in chat formats | `llama3` and `chatml`, selected with `--chat-template`; nothing is chosen on a model's behalf |
+| Built-in chat formats | `llama3` and `chatml`, selected with `--chat-template` and named from the same enumeration the help and the matching read; a name this build does not carry is refused by name. Nothing is chosen on a model's behalf |
 | Fixed 64-bit seed and entropy-chosen seed reporting | Implemented |
 | Forbidden-token masking | Implemented |
 

@@ -366,6 +366,30 @@ package body Model_Runner.CLI.Execute is
      (Screen : in out Pres.Console;
       Topic  : String)
    is
+      --  The chat formats this build carries, in the order they are
+      --  declared. Written out beside the option before this, where it said
+      --  "llama3 or chatml" and would have gone on saying it.
+      function Format_Names return String is
+         Room : String (1 .. 256);
+         Used : Natural := 0;
+
+         procedure Add (Text : String) is
+         begin
+            if Used + Text'Length <= Room'Length then
+               Room (Used + 1 .. Used + Text'Length) := Text;
+               Used := Used + Text'Length;
+            end if;
+         end Add;
+      begin
+         for Format in Model_Runner.Templates.Chat_Format loop
+            if Used > 0 then
+               Add (", ");
+            end if;
+            Add (Model_Runner.Templates.Format_Name (Format));
+         end loop;
+         return Room (1 .. Used);
+      end Format_Names;
+
       --  The backends this build has, in the order they are declared.
       function Backend_Names return String is
          Room : String (1 .. 256);
@@ -418,7 +442,6 @@ package body Model_Runner.CLI.Execute is
              Loc.Named ("help.run.top_k", ""),
              Loc.Named ("help.run.top_p", ""),
              Loc.Named ("help.run.min_p", ""),
-             Loc.Named ("help.run.chat_template", ""),
              Loc.Named ("help.run.repeat_penalty", ""),
              Loc.Named ("help.run.frequency_penalty", ""),
              Loc.Named ("help.run.presence_penalty", ""),
@@ -438,6 +461,8 @@ package body Model_Runner.CLI.Execute is
          --  Named apart from the block above because it carries a value:
          --  the backends this build has, read from the enumeration so that
          --  the help cannot list one that is not there or miss one that is.
+         Screen.Put_Message
+           ("help.run.chat_template", [Loc.Named ("value", Format_Names)]);
          Screen.Put_Message
            ("help.run.backend", [Loc.Named ("value", Backend_Names)]);
 

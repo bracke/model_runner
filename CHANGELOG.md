@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `--chat-template` and `--backend` answer alike. A name neither carries is
+  now refused the same way -- `MR-TMPL-0013: no chat format named nope in
+  this build` beside `MR-BACKEND-0001: no backend named gpu in this build` --
+  where the first used to report an invalid option value, which is true of
+  any bad value and says nothing about what there is. A caller could not
+  predict which kind of answer an option would give.
+
+  The formats come from an enumeration now, as the backends do, so the help
+  line, the matching and the tests read from one place. The help said
+  "llama3 or chatml" in three locales and would have gone on saying it.
+
 - Two diagnostics were removed rather than left reserved.
   `CLI_Invalid_Backend` was kept against the day `--backend` existed; it does
   now, and reports `Backend_Unknown`, which says which backend and that this
@@ -379,7 +390,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 147 diagnostic
+- Localization through `messages`, with a catalog entry for all 148 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

@@ -118,6 +118,23 @@ package Model_Runner.Templates is
    --  @return Template source, or the empty string when the name is unknown.
    function Built_In (Name : String) return String;
 
+   --  The chat formats this build carries, in the order they are offered.
+   --
+   --  An enumeration rather than a list written into each place that needs
+   --  one: the help text, the name matching and the tests all read from
+   --  here, so none of them can offer a format that is not carried or miss
+   --  one that is. The backends are named the same way for the same reason.
+   type Chat_Format is (Format_Llama3, Format_ChatML);
+
+   --  The name a caller asks for a format by.
+   --
+   --  @param Item Format to name.
+   --  @return Lower-case identifier such as "llama3".
+   function Format_Name (Item : Chat_Format) return String
+   is (case Item is
+         when Format_Llama3 => "llama3",
+         when Format_ChatML => "chatml");
+
    --  Compile and validate a template.
    --
    --  @param Item Template to fill in; released first.

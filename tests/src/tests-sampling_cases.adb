@@ -727,18 +727,19 @@ package body Tests.Sampling_Cases is
    begin
       Assert (Tmpl.Built_In ("nope") = "",
               "an unknown format name returned a template");
-      Assert (Tmpl.Built_In ("llama3") /= "", "llama3 is not carried");
-      Assert (Tmpl.Built_In ("chatml") /= "", "chatml is not carried");
+      for Format in Tmpl.Chat_Format loop
+         Assert (Tmpl.Built_In (Tmpl.Format_Name (Format)) /= "",
+                 Tmpl.Format_Name (Format) & " is not carried");
+      end loop;
 
       Conv.Open (Messages, Status => Status);
       Assert (E.Is_Ok (Status), "could not open a conversation");
       Conv.Append (Messages, Conv.User_Role, "Hi", Status);
       Assert (E.Is_Ok (Status), "could not build a conversation");
 
-      for Which in 1 .. 2 loop
+      for Format in Tmpl.Chat_Format loop
          declare
-            Name : constant String :=
-              (if Which = 1 then "llama3" else "chatml");
+            Name : constant String := Tmpl.Format_Name (Format);
          begin
          Tmpl.Compile (Item, Tmpl.Built_In (Name), Status => Status);
          Assert (E.Is_Ok (Status),

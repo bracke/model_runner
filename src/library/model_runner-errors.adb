@@ -429,7 +429,6 @@ package body Model_Runner.Errors is
 
          when Domain_GGUF
             | Domain_Tokenizer
-            | Domain_Template
             | Domain_Architecture
             | Domain_Tensor =>
             return Exit_Model_Format;
@@ -445,6 +444,15 @@ package body Model_Runner.Errors is
               (if Item.Code = Backend_Unknown
                then Exit_Usage
                else Exit_Internal);
+
+         when Domain_Template =>
+            --  Same division: a template that will not compile is the
+            --  model's, and a chat format nobody carries is a name the
+            --  caller typed.
+            return
+              (if Item.Code = Template_Unknown_Format
+               then Exit_Usage
+               else Exit_Model_Format);
 
          when Domain_Lifecycle =>
             return

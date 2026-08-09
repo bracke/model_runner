@@ -768,20 +768,33 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
 
-                     --  Refused here, by name, rather than later when the
-                     --  empty source it would resolve to is reported as the
-                     --  model having no template at all -- which is a true
-                     --  sentence about the wrong subject.
-                     if Model_Runner.Templates.Built_In
-                          (Model_Runner.Text.To_String (Result.Chat_Template))
-                        = ""
-                     then
-                        Fail (E.CLI_Invalid_Option_Value, Name,
-                              Model_Runner.Text.To_String
-                                (Result.Chat_Template));
-                        Good := False;
-                        return;
-                     end if;
+                     --  Matched against the formats this build carries,
+                     --  and refused by name when it has none -- the same
+                     --  answer --backend gives, for the same question. It
+                     --  said "invalid value for --chat-template" before,
+                     --  which is true of any bad value and tells a reader
+                     --  nothing about what this build has.
+                     declare
+                        Asked : constant String :=
+                          Model_Runner.Text.To_String (Result.Chat_Template);
+                        Found : Boolean := False;
+                     begin
+                        for Format in Model_Runner.Templates.Chat_Format loop
+                           if Model_Runner.Templates.Format_Name (Format)
+                             = Asked
+                           then
+                              Found := True;
+                           end if;
+                        end loop;
+
+                        if not Found then
+                           Status := E.Make (E.Template_Unknown_Format);
+                           E.Add_Text
+                             (Status, "value", Asked, E.Param_Identifier);
+                           Good := False;
+                           return;
+                        end if;
+                     end;
 
                   elsif Name = "--repeat-penalty" then
                      Real_Value (Flag_Repeat_Penalty,

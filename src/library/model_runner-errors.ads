@@ -158,6 +158,7 @@ package Model_Runner.Errors is
       Template_Unbalanced_Block,
       Template_Unsupported_Role,
       Template_Variables_Too_Large,
+      Template_Unknown_Format,
 
       --  Architecture profile.
       Arch_Missing_Identifier,
