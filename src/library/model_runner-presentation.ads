@@ -29,7 +29,10 @@ with Model_Runner.Progress;
 --  decided per destination, so a piped standard output and a terminal standard
 --  error behave correctly at the same time.
 --
---  Task safety: a Console is used by one task.
+--  Task safety: a Console is used by one task. Open also writes the
+--  colour policy of `terminal_styles`, which is global to the process; it
+--  writes the same value every time, so consoles do not contend, but a
+--  caller with a policy of its own does lose it.
 package Model_Runner.Presentation is
 
    --  Capabilities of the destinations, so tests can substitute a terminal
@@ -59,6 +62,18 @@ package Model_Runner.Presentation is
    type Console is tagged limited private;
 
    --  Prepare a console.
+   --
+   --  Sets the colour policy of `terminal_styles` to always, which is
+   --  process-global state and not this console's. It is deliberate: that
+   --  library gates styling on a policy of its own, judged by whether
+   --  standard output is a terminal, and a global judged by one stream
+   --  cannot answer a question asked per stream. This console has the mode,
+   --  the destination and NO_COLOR in hand and decides for itself, so the
+   --  library is told to emit what it is asked for.
+   --
+   --  What that costs a caller: a program embedding this engine and also
+   --  using `terminal_styles` directly will find its own colour policy
+   --  replaced. Set it again after opening a console if you rely on it.
    --
    --  @param Item Console to prepare.
    --  @param Catalog Resolved message catalog.

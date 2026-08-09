@@ -150,7 +150,7 @@ a partition are what `cpu` has and what `reference` deliberately has not.
 | Backend | State |
 | --- | --- |
 | `cpu` | Worker pool, partitioned rows, batched prefill, span decoding. The default |
-| `reference` | One row at a time, decoded whole, multiplied element by element, summed wide, on the calling task. No pool, no partition, no batching. Produces the same logits as `cpu` and takes about forty times as long; it exists so that a suspicious result on a caller's own model can be asked again by different code |
+| `reference` | One row at a time, decoded whole, multiplied element by element, summed wide, on the calling task. No pool, no partition, no batching. Produces the same logits as `cpu` and takes about twelve times as long, measured; it exists so that a suspicious result on a caller's own model can be asked again by different code |
 
 | Capability | Backend | State |
 | --- | --- | --- |

@@ -11,7 +11,7 @@ Keep a Changelog and the project uses semantic versioning.
   worker tasks it would take, and `--show-stats` reports which one did and
   how many it had. Neither is read back off the command line: `--backend
   reference` takes one worker whatever `--threads` asked for. Two backends
-  produce the same logits and differ by about forty times in wall clock, so
+  produce the same logits and differ by about twelve times in wall clock, so
   which one ran is the first thing a timing needs to say, and it was
   knowable only by remembering what was typed.
 
@@ -24,6 +24,25 @@ Keep a Changelog and the project uses semantic versioning.
   report inherited standard error from a choice nobody at the call site had
   to make. The README's stream table did not mention `inspect` at all; it
   does now.
+
+- The reference backend takes about twelve times as long, not forty. The
+  figure was published when the backend was added, taken by hand and never
+  checked; re-measuring it on the machine and model the other figures use
+  gives 12.5x -- 18x on the prompt, where the CPU backend batches and this
+  one does not, and 11x on the generation. `tests benchmark` measures the
+  two against each other now, so the algorithmic part of the ratio can be
+  re-taken without a model: 2.3x for q8_0, 2.4x for q4_k, 3.1x for f32,
+  serial against serial. The rest of the twelve is the worker pool.
+
+- `docs/measured-figures.txt` has a group for that comparison.
+  `model_runner-backend-reference.adb` was named in no group, so the one
+  file that could move the published ratio was unguarded by the document
+  whose whole rule is that a published figure names the sources it depends
+  on.
+
+- `Presentation.Open` says that it writes the colour policy of
+  `terminal_styles`, which is global to the process, and what that costs a
+  caller who uses that library too.
 
 - `--color always` colours a destination that is not a terminal, which is
   the only arrangement in which it differs from `auto`. The decision was

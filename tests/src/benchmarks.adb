@@ -9,6 +9,7 @@ with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Reference;
 with Model_Runner.Kernels;
 with Model_Runner.Platform;
 with Model_Runner.Numerics;
@@ -337,6 +338,100 @@ package body Benchmarks is
       --  real one does. Count is what separates the two cases a run spends
       --  its time in: one vector per pass is generating a token, where each
       --  weight byte is read for a single multiply, and thirty-two is
+      --  How much slower the reference backend is than the CPU one.
+      --
+      --  The README and the support matrix publish that ratio -- "about
+      --  forty times as long" -- and it was taken by hand, once, with
+      --  nothing able to produce it again. A published figure that cannot be
+      --  re-measured is a figure the fingerprint duty cannot be discharged
+      --  for: the check says re-measure and record what you get, and there
+      --  was nothing to run.
+      --
+      --  Both are given the same view and the same vector, on one task, so
+      --  what is compared is the two ways of multiplying and nothing else.
+      --  The CPU side is measured through a null pool, which is its serial
+      --  path: a ratio against a pool would be a ratio against this
+      --  machine's core count as well.
+      procedure Measure_Reference_Ratio
+        (Name   : String;
+         Format : G.Tensor_Type := G.Type_Q8_0)
+      is
+         Rows    : constant N.Element_Count := 512;
+         Columns : constant N.Element_Count := 2048;
+         Width   : constant B.Byte_Count :=
+           B.Byte_Count (Columns) / B.Byte_Count (G.Block_Elements (Format))
+           * B.Byte_Count (G.Block_Bytes (Format));
+
+         Data   : B.Byte_Array_Access;
+         Item   : T.View;
+         Status : E.Error_Info;
+
+         Inputs  : T.Real_Array_Access;
+         Outputs : T.Real_Array_Access;
+
+         Fast, Slow : Long_Float := 0.0;
+
+         --  Passes per second of one product, by whichever backend.
+         function Rate_Of (Reference : Boolean) return Long_Float is
+            Started : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+            Passes  : Long_Long_Integer := 0;
+            Elapsed : Duration := 0.0;
+         begin
+            loop
+               if Reference then
+                  Model_Runner.Backend.Reference.Product
+                    (Item, Inputs, Outputs, Status);
+               else
+                  Model_Runner.Backend.CPU.Dispatch
+                    (null, Item, Inputs, Outputs, Status);
+               end if;
+               exit when E.Is_Error (Status);
+               Passes := Passes + 1;
+               Elapsed := Ada.Real_Time.To_Duration
+                 (Ada.Real_Time.Clock - Started);
+               exit when Elapsed >= Seconds;
+            end loop;
+
+            if Elapsed <= 0.0 or else Passes = 0 then
+               return 0.0;
+            end if;
+            return Long_Float (Passes) / Long_Float (Elapsed);
+         end Rate_Of;
+      begin
+         T.Allocate (Columns, Inputs);
+         T.Allocate (Rows, Outputs);
+         B.Allocate (Width * B.Byte_Count (Rows), Data);
+         if Data = null or else Inputs = null or else Outputs = null then
+            return;
+         end if;
+         Fill (Data.all);
+         Tame_Scales (Data.all, Format,
+                      B.Byte_Count (Rows) * B.Byte_Count (Columns)
+                      / B.Byte_Count (G.Block_Elements (Format)));
+         T.Make (Format, Rows, Columns, Data, 0, Item, Status);
+         if E.Is_Error (Status) then
+            B.Free (Data);
+            return;
+         end if;
+
+         for Index in Inputs.all'Range loop
+            Inputs.all (Index) := N.Real (Index mod 17) * 0.125 - 1.0;
+         end loop;
+
+         Fast := Rate_Of (Reference => False);
+         Slow := Rate_Of (Reference => True);
+
+         if Fast > 0.0 and then Slow > 0.0 then
+            IO.Put_Line
+              ("  " & Name & Long_Float'Image (Fast / Slow)
+               & "x slower on the reference backend");
+         end if;
+
+         B.Free (Data);
+         T.Free (Inputs);
+         T.Free (Outputs);
+      end Measure_Reference_Ratio;
+
       --  evaluating a prompt, where the same byte serves thirty-two.
       procedure Measure_Scaling
         (Name             : String;
@@ -686,6 +781,12 @@ package body Benchmarks is
       Measure_Scaling ("q8_0, thirty-two per pass, as when evaluating a prompt",
                        32);
       Measure_Scaling ("q4_k, thirty-two per pass", 32, G.Type_Q4_K);
+      IO.New_Line;
+
+      IO.Put_Line ("reference backend against the CPU one, serial");
+      Measure_Reference_Ratio ("q8_0");
+      Measure_Reference_Ratio ("q4_k", G.Type_Q4_K);
+      Measure_Reference_Ratio ("f32 ", G.Type_F32);
       IO.New_Line;
 
       IO.Put_Line ("vector kernels");

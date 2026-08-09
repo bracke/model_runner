@@ -132,7 +132,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Localization | Every application-authored string through `messages`; 148 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
-| Backends | Two, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about forty times as long, for asking a suspicious result again by different code |
+| Backends | Two, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long — see below for the measurement — for asking a suspicious result again by different code |
 | Tooling | `tests test`, `tests check`, `tests conformance`, `tests external-model`, `tests docs`, `tests fuzz`, `tests fixtures` — all Ada, all in the tests crate. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
@@ -663,6 +663,29 @@ hand-written wide code beats inline narrow code, even counting the call.
 Getting past it needs either wider instructions than the build allows or an
 approximation loose enough to change what models say, and the second is a
 decision rather than an optimization.
+
+### The reference backend
+
+`--backend reference` computes the same logits by different code, and the
+question a caller asks before running it is what that costs. On the machine
+and the model above, twelve tokens from the same short prompt, median of
+three runs: `cpu` spends 0.32 s evaluating the prompt and 1.05 s generating;
+`reference` spends 5.66 s and 11.34 s. That is **12.5 times** the work in
+total, 18 times on the prompt and 11 times on the generation. The prompt
+suffers more because that is where the batching goes: `cpu` shares one
+reading of the weights between the tokens of a batch and `reference` declines
+to, which is one of the things it exists to be without.
+
+This number was published as forty times for as long as the backend has
+existed, taken by hand and never checked. Re-measuring it is what the
+fingerprint duty above asks for, and there was nothing to run: `tests
+benchmark` now measures the two against each other on synthetic tensors, so
+the algorithmic part of the ratio can be had without a model at all. Serial
+against serial -- no pool on either side -- it reports 2.3x for q8_0, 2.4x
+for q4_k and 3.1x for f32. The rest of the twelve is the worker pool and the
+batching, which is the honest way to read the figure: `reference` is between
+two and three times slower than the same loop written for speed, and the
+remaining factor is the parallelism it has none of.
 
 ### Batched prefill
 

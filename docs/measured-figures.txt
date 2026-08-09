@@ -119,5 +119,9 @@ kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/m
 # covers: the twelve-token figure and the batch-size table under "Speed"
 engine 7D2A01708913FEED src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
+# covers: the reference-backend comparison under "Speed" and the ratio quoted
+# in the backend rows of the README and the support matrix
+reference 63E96BA865138563 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
