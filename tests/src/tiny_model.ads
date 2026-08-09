@@ -33,6 +33,10 @@ package Tiny_Model is
    --  Write the fixture.
    --
    --  @param Path Where to write it.
+   --  @param Qwen Write the file as a qwen2 model: its metadata under the
+   --    qwen2 keys, and a bias beside each attention projection. The two
+   --    architectures differ in that and in which elements the rotation
+   --    pairs, and nothing but a file could tell the two apart.
    --  @param Room Context length the model declares. The default is small
    --    on purpose, so that tests reach the context bound without a large
    --    conversation; a test that needs a turn to complete asks for more.
@@ -77,6 +81,8 @@ package Tiny_Model is
       Format    : Weight_Format := Float32;
       End_Token : Natural := 2;
       Adds_Beginning : Boolean := True;
-      Room      : Positive := Context);
+      Room      : Positive := Context;
+      Qwen      : Boolean := False;
+      Omit_Biases : Boolean := False);
 
 end Tiny_Model;

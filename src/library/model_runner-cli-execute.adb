@@ -416,6 +416,28 @@ package body Model_Runner.CLI.Execute is
       return Room (1 .. Used);
    end Backend_Names;
 
+   --  The architectures this build reads, in the order they are declared.
+   function Architecture_Names return String is
+      Room : String (1 .. 128);
+      Used : Natural := 0;
+
+      procedure Add (Text : String) is
+      begin
+         if Used + Text'Length <= Room'Length then
+            Room (Used + 1 .. Used + Text'Length) := Text;
+            Used := Used + Text'Length;
+         end if;
+      end Add;
+   begin
+      for Kind in L.Architecture loop
+         if Used > 0 then
+            Add (", ");
+         end if;
+         Add (L.Architecture_Name (Kind));
+      end loop;
+      return Room (1 .. Used);
+   end Architecture_Names;
+
    --  The tensor formats this build decodes, in the order they are declared.
    function Decodable_Formats return String is
       Room : String (1 .. 256);
@@ -448,7 +470,7 @@ package body Model_Runner.CLI.Execute is
         ("application.license", [Loc.Named ("license", Model_Runner.License)]);
       Screen.Put_Message
         ("application.architecture",
-         [Loc.Named ("name", L.Architecture_Name)]);
+         [Loc.Named ("name", Architecture_Names)]);
 
       --  What this build can actually take, asked of the build. Someone
       --  running version wants to know whether their file will open, and
@@ -681,7 +703,8 @@ package body Model_Runner.CLI.Execute is
                T.Escape_Controls
                  (Containers.String_Value (Container, "general.name")));
             Pres.Put_Field
-              (Screen, "cli.inspect.label.architecture", L.Architecture_Name);
+              (Screen, "cli.inspect.label.architecture",
+               Containers.String_Value (Container, "general.architecture"));
             Pres.Put_Field
               (Screen, "cli.inspect.label.context_length",
                T.Image (Long_Long_Integer (Settings.Context_Length)));

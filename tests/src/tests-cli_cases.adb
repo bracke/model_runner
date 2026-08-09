@@ -19,6 +19,8 @@ with Model_Runner.Errors;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
 with Model_Runner.Presentation;
+with Model_Runner.Kernels;
+with Fixtures;
 with Model_Runner.Memory;
 with Model_Runner.Progress;
 with Model_Runner.Limits;
@@ -1821,6 +1823,185 @@ package body Tests.CLI_Cases is
          Containers.Close (Under.Parsed);
       end;
    end Unused_Interface_Is_Exercised;
+
+   --  Each architecture is read with its own keys and its own rotation.
+   --
+   --  Qwen2 is Llama with a bias on the attention projections and the other
+   --  rotary pairing. The pairing is the part that goes wrong quietly: with
+   --  the wrong one a model writes grammatical sentences that mean nothing
+   --  it meant, and only a real model shows that. Here the mapping itself
+   --  is pinned, which is the line that would have to change for it to
+   --  happen again.
+   procedure Architectures_Are_Read_By_Name
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Model_Runner.Kernels.Rotary_Pairing;
+      use type L.Architecture;
+
+      --  A container carrying the metadata a profile needs, under the keys
+      --  the named architecture spells them with.
+      procedure Configured
+        (Named    : String;
+         Settings : out L.Configuration;
+         Status   : out E.Error_Info)
+      is
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", Named);
+         Fixtures.Add_U32 (Builder, Named & ".context_length", 16);
+         Fixtures.Add_U32 (Builder, Named & ".embedding_length", 8);
+         Fixtures.Add_U32 (Builder, Named & ".block_count", 1);
+         Fixtures.Add_U32 (Builder, Named & ".feed_forward_length", 16);
+         Fixtures.Add_U32 (Builder, Named & ".attention.head_count", 2);
+         Fixtures.Add_U32 (Builder, Named & ".attention.head_count_kv", 2);
+         Fixtures.Add_F32
+           (Builder, Named & ".attention.layer_norm_rms_epsilon", 1.0e-5);
+         Fixtures.Build (Builder, Image);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            if E.Is_Ok (Status) then
+               L.Read_Config (Parsed, Settings => Settings, Status => Status);
+            end if;
+            Containers.Close (Parsed);
+         end;
+      end Configured;
+
+      Settings : L.Configuration;
+      Status   : E.Error_Info;
+   begin
+      --  Every architecture this build reads is read.
+      for Kind in L.Architecture loop
+         Configured (L.Architecture_Name (Kind), Settings, Status);
+         Assert (E.Is_Ok (Status),
+                 "the architecture " & L.Architecture_Name (Kind)
+                 & " was refused: " & E.Error_Code'Image (Status.Code));
+         Assert (Settings.Kind = Kind,
+                 "a file saying " & L.Architecture_Name (Kind)
+                 & " was read as something else");
+
+         --  Its keys were found under its own name, which is the whole
+         --  reason the prefix is not a constant any more.
+         Assert (Settings.Embedding = 8 and then Settings.Layers = 1,
+                 "the metadata of " & L.Architecture_Name (Kind)
+                 & " was not read under its own keys");
+      end loop;
+
+      --  And the rotation each one asks for.
+      Configured ("llama", Settings, Status);
+      Assert (Settings.Pairing = Model_Runner.Kernels.Interleaved,
+              "llama did not ask for the interleaved rotation");
+
+      Configured ("qwen2", Settings, Status);
+      Assert (Settings.Pairing = Model_Runner.Kernels.Split,
+              "qwen2 did not ask for the split rotation");
+
+      --  A file naming something else is refused by name.
+      Configured ("gemma", Settings, Status);
+      Assert (Status.Code = E.Arch_Unsupported,
+              "an architecture this build does not read was accepted: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  And a whole qwen2 file prepares and runs: its biases are required
+      --  and found, its keys are read, and it generates the same text at
+      --  every batch size, which is what a bias applied in one path and not
+      --  the other would break.
+      declare
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Image, Room => 64, Qwen => True);
+
+         declare
+            Held    : aliased constant B.Byte_Array := Image.all;
+            Under   : Harness (Held'Access);
+            Session : L.Session;
+            Stop    : Model_Runner.Stops.Set;
+            Sink    : aliased Capture_Sink;
+            Request : Gen.Request;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+            First   : String (1 .. Max_Captured) := [others => ' '];
+            Length  : Natural := 0;
+         begin
+            Start (Under);
+            Assert (L.Config (Under.Ready).Kind = L.Qwen2,
+                    "the qwen2 fixture was prepared as something else");
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 3;
+
+            for Batch in 1 .. 3 loop
+               L.Open (Session, Under.Ready, Status => Local);
+               Assert (E.Is_Ok (Local), "the qwen2 session did not open");
+
+               Sink.Used := 0;
+               Request.Batch_Size := (if Batch = 1 then 1 else Batch * 4);
+               Gen.Generate
+                 (Under.Ready, Session, "hello there you", Request, Stop,
+                  Sink'Unchecked_Access, null, null, null, null,
+                  Outcome => Outcome);
+               Assert (E.Is_Ok (Outcome.Error),
+                       "a qwen2 run failed: "
+                       & E.Error_Code'Image (Outcome.Error.Code));
+
+               if Batch = 1 then
+                  Length := Sink.Used;
+                  First (1 .. Length) := Sink.Data (1 .. Length);
+               else
+                  Assert (Sink.Data (1 .. Sink.Used) = First (1 .. Length),
+                          "a qwen2 batch produced different text from the "
+                          & "same prompt one token at a time");
+               end if;
+
+               Gen.Release (Outcome);
+               L.Close (Session);
+            end loop;
+
+            Model_Runner.Stops.Close (Stop);
+            L.Close (Under.Ready, Local);
+            Containers.Close (Under.Parsed);
+         end;
+      end;
+
+      --  A qwen2 file without the biases is refused. They are required
+      --  rather than taken if present: reading one as though its biases
+      --  were zero would produce plausible text that is not what the model
+      --  says, and plausible text is the hardest kind of wrong to notice.
+      declare
+         Image  : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build
+           (Image, Room => 64, Qwen => True, Omit_Biases => True);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Ready  : L.Model;
+            Local  : E.Error_Info;
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Local);
+            Assert (E.Is_Ok (Local), "the biasless fixture did not parse");
+
+            L.Prepare (Ready, Parsed, Source, Status => Local);
+            Assert (Local.Code = E.Arch_Missing_Tensor,
+                    "a qwen2 file with no attention biases was prepared: "
+                    & E.Error_Code'Image (Local.Code));
+
+            L.Close (Ready, Local);
+            Containers.Close (Parsed);
+         end;
+      end;
+   end Architectures_Are_Read_By_Name;
 
    --  How many workers run a generation does not change what it produces.
    --
@@ -5024,6 +5205,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Unused_Interface_Is_Exercised'Access,
          "public operations the program does not call are exercised");
+      Register_Routine
+        (T, Architectures_Are_Read_By_Name'Access,
+         "each architecture is read with its own keys and its own rotation");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");

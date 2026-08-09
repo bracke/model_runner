@@ -6,6 +6,7 @@ with Model_Runner.Bytes;
 with Model_Runner.Cancellation;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers;
+with Model_Runner.Kernels;
 with Model_Runner.Limits;
 with Model_Runner.Memory;
 with Model_Runner.Numerics;
@@ -43,7 +44,20 @@ package Model_Runner.Llama is
    subtype Token_Id is Model_Runner.Tokenizer.Token_Id;
 
    --  Architecture identifier this package implements. Never localized.
-   Architecture_Name : constant String := "llama";
+   --  The architectures this profile reads.
+   --
+   --  Both are the same shape: RMS normalization, rotary encoding, grouped
+   --  query attention and a SwiGLU feed-forward. Qwen2 adds a bias to each
+   --  of the three attention projections and changes nothing else, which is
+   --  why it belongs here rather than in a profile of its own.
+   type Architecture is (Llama, Qwen2);
+
+   --  The identifier a file carries for an architecture.
+   --
+   --  @param Item Architecture to name.
+   --  @return Lower-case identifier, as general.architecture spells it.
+   function Architecture_Name (Item : Architecture) return String
+   is (case Item is when Llama => "llama", when Qwen2 => "qwen2");
 
    --  Validated architecture configuration.
    --
@@ -51,6 +65,9 @@ package Model_Runner.Llama is
    --  checked; the derived fields are checked for exact divisibility so that
    --  no later computation has to round.
    type Configuration is record
+      Kind            : Architecture := Llama;
+      Pairing         : Model_Runner.Kernels.Rotary_Pairing :=
+        Model_Runner.Kernels.Interleaved;
       Context_Length  : Natural := 0;
       Embedding       : Natural := 0;
       Feed_Forward    : Natural := 0;
@@ -412,6 +429,12 @@ private
       Query          : Model_Runner.Tensors.View;
       Key            : Model_Runner.Tensors.View;
       Value          : Model_Runner.Tensors.View;
+
+      --  Added to the projections after they are computed. Null for an
+      --  architecture that has none, which is what Llama has.
+      Query_Bias     : Model_Runner.Tensors.Real_Array_Access;
+      Key_Bias       : Model_Runner.Tensors.Real_Array_Access;
+      Value_Bias     : Model_Runner.Tensors.Real_Array_Access;
       Attention_Out  : Model_Runner.Tensors.View;
       Feed_Norm      : Model_Runner.Tensors.Real_Array_Access;
       Gate           : Model_Runner.Tensors.View;

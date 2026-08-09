@@ -89,11 +89,20 @@ package Model_Runner.Kernels is
    --  @param Target Values to activate, updated in place.
    procedure SiLU (Target : in out Real_Array);
 
+   --  How a head's elements are paired for the rotation.
+   --
+   --  Interleaved rotates element 2i against element 2i + 1 within a head,
+   --  which is what a Llama file's weights are laid out for. Split rotates
+   --  element i against element i + Rotary / 2, which is what a Qwen2
+   --  file's are. Both are the same rotation by the same angle over
+   --  different elements, and a model rotated the wrong way writes
+   --  grammatical sentences that do not mean what it meant -- which is how
+   --  this came to be told apart.
+   type Rotary_Pairing is (Interleaved, Split);
+
    --  Rotary positional encoding, in place.
    --
-   --  Uses the pairing the Llama architecture defines: element 2i is rotated
-   --  against element 2i + 1 within each head, for the first Rotary elements
-   --  of the head. Elements beyond Rotary are left unchanged.
+   --  Elements beyond Rotary are left unchanged.
    --
    --  @param Vector Head-major vector holding Heads heads of Head_Size
    --    elements each, updated in place.
@@ -105,6 +114,7 @@ package Model_Runner.Kernels is
    --  @param Base RoPE frequency base from the model metadata.
    --  @param Frequency_Scale Multiplier applied to the position, 1.0 when no
    --    rotary scaling is configured.
+   --  @param Pairing Which elements of a head are rotated against which.
    procedure Apply_Rotary
      (Vector          : in out Real_Array;
       Heads           : Element_Count;
@@ -112,7 +122,8 @@ package Model_Runner.Kernels is
       Rotary          : Element_Count;
       Position        : Natural;
       Base            : Wide_Real;
-      Frequency_Scale : Wide_Real := 1.0);
+      Frequency_Scale : Wide_Real := 1.0;
+      Pairing         : Rotary_Pairing := Interleaved);
 
    --  Report whether every element is finite.
    --

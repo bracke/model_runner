@@ -219,7 +219,8 @@ package body Model_Runner.Kernels is
       Rotary          : Element_Count;
       Position        : Natural;
       Base            : Wide_Real;
-      Frequency_Scale : Wide_Real := 1.0)
+      Frequency_Scale : Wide_Real := 1.0;
+      Pairing         : Rotary_Pairing := Interleaved)
    is
       Effective : constant Wide_Real :=
         Wide_Real (Position) * Frequency_Scale;
@@ -246,8 +247,14 @@ package body Model_Runner.Kernels is
                     Effective * N.Power (Base, Exponent);
                   Cosine   : constant Wide_Real := N.Cos (Theta);
                   Sine     : constant Wide_Real := N.Sin (Theta);
-                  Even     : constant Element_Count := Origin + 2 * Pair;
-                  Odd      : constant Element_Count := Even + 1;
+                  Even     : constant Element_Count :=
+                    (if Pairing = Interleaved
+                     then Origin + 2 * Pair
+                     else Origin + Pair);
+                  Odd      : constant Element_Count :=
+                    (if Pairing = Interleaved
+                     then Even + 1
+                     else Even + Rotary / 2);
                   First    : constant Wide_Real := Wide_Real (Vector (Even));
                   Second   : constant Wide_Real := Wide_Real (Vector (Odd));
                begin

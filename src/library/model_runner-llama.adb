@@ -54,8 +54,12 @@ package body Model_Runner.Llama is
    is ("blk." & Model_Runner.Text.Image (Long_Long_Integer (Index))
        & "." & Suffix);
 
-   function Model_Key (Suffix : String) return String
-   is (Architecture_Name & "." & Suffix);
+   --  Metadata keys carry the architecture's own name, so the same reader
+   --  finds llama.context_length in one file and qwen2.context_length in
+   --  another without either name being written anywhere but here.
+   function Model_Key
+     (Kind : Architecture; Suffix : String) return String
+   is (Architecture_Name (Kind) & "." & Suffix);
 
    procedure Deallocate_Layers is
      new Ada.Unchecked_Deallocation (Layer_Array, Layer_Array_Access);
@@ -114,50 +118,72 @@ package body Model_Runner.Llama is
       Settings := (others => <>);
 
       declare
-         Name : constant String :=
+         Name  : constant String :=
            Containers.String_Value (Source, "general.architecture");
+         Found : Boolean := False;
       begin
          if Name = "" then
             Status := E.Make (E.Arch_Missing_Identifier);
             return;
          end if;
 
-         if Name /= Architecture_Name then
+         --  Matched against the architectures this profile reads. Nothing is
+         --  inferred: a file says what it is, and one that says something
+         --  else is refused by name rather than read as though it were the
+         --  shape this happens to implement.
+         for Kind in Architecture loop
+            if Architecture_Name (Kind) = Name then
+               Settings.Kind := Kind;
+
+               --  How the weights of this architecture were laid out for
+               --  rotation. Llama interleaves the pairs; Qwen2 splits the
+               --  head in half. Same rotation, different elements, and the
+               --  wrong one reads as a model that has lost the thread.
+               Settings.Pairing :=
+                 (case Kind is
+                    when Llama => K.Interleaved,
+                    when Qwen2 => K.Split);
+               Found := True;
+            end if;
+         end loop;
+
+         if not Found then
             Status := E.Make (E.Arch_Unsupported);
             E.Add_Text (Status, "architecture", Name, E.Param_Identifier);
             E.Add_Text
-              (Status, "supported", Architecture_Name, E.Param_Identifier);
+              (Status, "supported", Architecture_Name (Llama),
+               E.Param_Identifier);
             return;
          end if;
       end;
 
-      Required (Model_Key ("context_length"),
+      Required (Model_Key (Settings.Kind, "context_length"),
                 Long_Long_Integer (Bounds.Max_Context_Length),
                 Settings.Context_Length);
       if E.Is_Error (Status) then
          return;
       end if;
 
-      Required (Model_Key ("embedding_length"),
+      Required (Model_Key (Settings.Kind, "embedding_length"),
                 Long_Long_Integer (Bounds.Max_Embedding), Settings.Embedding);
       if E.Is_Error (Status) then
          return;
       end if;
 
-      Required (Model_Key ("block_count"),
+      Required (Model_Key (Settings.Kind, "block_count"),
                 Long_Long_Integer (Bounds.Max_Layers), Settings.Layers);
       if E.Is_Error (Status) then
          return;
       end if;
 
-      Required (Model_Key ("feed_forward_length"),
+      Required (Model_Key (Settings.Kind, "feed_forward_length"),
                 Long_Long_Integer (Bounds.Max_Embedding) * 64,
                 Settings.Feed_Forward);
       if E.Is_Error (Status) then
          return;
       end if;
 
-      Required (Model_Key ("attention.head_count"),
+      Required (Model_Key (Settings.Kind, "attention.head_count"),
                 Long_Long_Integer (Bounds.Max_Heads), Settings.Heads);
       if E.Is_Error (Status) then
          return;
@@ -166,7 +192,7 @@ package body Model_Runner.Llama is
       --  Key-value head count is optional; a model that omits it is
       --  multi-head rather than grouped-query.
       Containers.Get_Integer
-        (Source, Model_Key ("attention.head_count_kv"), 1,
+        (Source, Model_Key (Settings.Kind, "attention.head_count_kv"), 1,
          Long_Long_Integer (Settings.Heads), Number, Local);
       if Present_And_Wrong (Local) then
          Status := Local;
@@ -176,7 +202,7 @@ package body Model_Runner.Llama is
         (if E.Is_Ok (Local) then Natural (Number) else Settings.Heads);
 
       Containers.Get_Float
-        (Source, Model_Key ("attention.layer_norm_rms_epsilon"),
+        (Source, Model_Key (Settings.Kind, "attention.layer_norm_rms_epsilon"),
          0.0, 1.0, Value, Local);
       if Present_And_Wrong (Local) then
          Status := Local;
@@ -186,7 +212,7 @@ package body Model_Runner.Llama is
         (if E.Is_Ok (Local) then N.Real (Value) else 1.0E-5);
 
       Containers.Get_Float
-        (Source, Model_Key ("rope.freq_base"), 1.0, 1.0E12, Value, Local);
+        (Source, Model_Key (Settings.Kind, "rope.freq_base"), 1.0, 1.0E12, Value, Local);
       if Present_And_Wrong (Local) then
          Status := Local;
          return;
@@ -198,7 +224,7 @@ package body Model_Runner.Llama is
       --  different model.
       declare
          Scaling : constant String :=
-           Containers.String_Value (Source, Model_Key ("rope.scaling.type"));
+           Containers.String_Value (Source, Model_Key (Settings.Kind, "rope.scaling.type"));
       begin
          if Scaling /= "" and then Scaling /= "none" and then Scaling /= "linear"
          then
@@ -208,7 +234,7 @@ package body Model_Runner.Llama is
          end if;
 
          Containers.Get_Float
-           (Source, Model_Key ("rope.scaling.factor"), 0.0, 1.0E6, Value, Local);
+           (Source, Model_Key (Settings.Kind, "rope.scaling.factor"), 0.0, 1.0E6, Value, Local);
          if Present_And_Wrong (Local) then
             Status := Local;
             return;
@@ -220,20 +246,20 @@ package body Model_Runner.Llama is
 
       --  Features this profile does not implement. Presence of the key is
       --  enough to reject: the model is not the one this crate can run.
-      if Containers.Has (Source, Model_Key ("expert_count"))
-        or else Containers.Has (Source, Model_Key ("expert_used_count"))
+      if Containers.Has (Source, Model_Key (Settings.Kind, "expert_count"))
+        or else Containers.Has (Source, Model_Key (Settings.Kind, "expert_used_count"))
       then
          Reject_Feature ("mixture_of_experts");
          return;
       end if;
 
-      if Containers.Has (Source, Model_Key ("attention.sliding_window")) then
+      if Containers.Has (Source, Model_Key (Settings.Kind, "attention.sliding_window")) then
          Reject_Feature ("sliding_window_attention");
          return;
       end if;
 
-      if Containers.Has (Source, Model_Key ("attention.value_length"))
-        and then Containers.Has (Source, Model_Key ("attention.key_length"))
+      if Containers.Has (Source, Model_Key (Settings.Kind, "attention.value_length"))
+        and then Containers.Has (Source, Model_Key (Settings.Kind, "attention.key_length"))
       then
          --  Separate key and value widths are legal GGUF but are not part of
          --  this profile, whose head size is derived from the embedding width.
@@ -242,10 +268,10 @@ package body Model_Runner.Llama is
             First, Second : E.Error_Info;
          begin
             Containers.Get_Integer
-              (Source, Model_Key ("attention.key_length"), 1, 1_000_000,
+              (Source, Model_Key (Settings.Kind, "attention.key_length"), 1, 1_000_000,
                Key_Length, First);
             Containers.Get_Integer
-              (Source, Model_Key ("attention.value_length"), 1, 1_000_000,
+              (Source, Model_Key (Settings.Kind, "attention.value_length"), 1, 1_000_000,
                Value_Length, Second);
             --  Both keys are known to be present here, so an unreadable one
             --  is the file being wrong. Skipping the comparison would let a
@@ -289,7 +315,7 @@ package body Model_Runner.Llama is
       Settings.Group_Size := Settings.Heads / Settings.KV_Heads;
 
       Containers.Get_Integer
-        (Source, Model_Key ("rope.dimension_count"), 1,
+        (Source, Model_Key (Settings.Kind, "rope.dimension_count"), 1,
          Long_Long_Integer (Settings.Head_Size), Number, Local);
       if Present_And_Wrong (Local) then
          Status := Local;
@@ -727,6 +753,29 @@ package body Model_Runner.Llama is
                  (Item, Source, Layer_Key (Index, "attn_v.weight"),
                   KV, Width, Current.Value, Status);
                exit when E.Is_Error (Status);
+
+               --  Qwen2 adds a bias to each projection and Llama has none.
+               --  Required when the architecture says so rather than taken
+               --  if present: a qwen2 file without them is a file this
+               --  cannot evaluate, and reading it as though the biases were
+               --  zero would produce plausible text that is not what the
+               --  model says.
+               if Item.Settings.Kind = Qwen2 then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_q.bias"),
+                     Width, Current.Query_Bias, Status);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_k.bias"),
+                     KV, Current.Key_Bias, Status);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_v.bias"),
+                     KV, Current.Value_Bias, Status);
+                  exit when E.Is_Error (Status);
+               end if;
 
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_output.weight"),
@@ -1313,14 +1362,23 @@ package body Model_Runner.Llama is
                Status);
             exit when E.Is_Error (Status);
 
+            --  The projection bias, before the rotary encoding, because the
+            --  bias is part of the projection and the encoding acts on what
+            --  the projection produced.
+            if Current.Query_Bias /= null then
+               K.Add (Item.Query.all, Current.Query_Bias.all);
+               K.Add (Item.Key_Row.all, Current.Key_Bias.all);
+               K.Add (Item.Value_Row.all, Current.Value_Bias.all);
+            end if;
+
             K.Apply_Rotary
               (Item.Query.all, Heads, Head_Size,
                Element_Count (Settings.Rotary), Item.Committed,
-               Settings.Rope_Base, Settings.Rope_Scale);
+               Settings.Rope_Base, Settings.Rope_Scale, Settings.Pairing);
             K.Apply_Rotary
               (Item.Key_Row.all, KV_Heads, Head_Size,
                Element_Count (Settings.Rotary), Item.Committed,
-               Settings.Rope_Base, Settings.Rope_Scale);
+               Settings.Rope_Base, Settings.Rope_Scale, Settings.Pairing);
 
             --  Write into the reserved slot. The slot is only readable as
             --  context once Committed is advanced, at the end of this call.
@@ -1640,16 +1698,31 @@ package body Model_Runner.Llama is
                   Place : constant Element_Count :=
                     Base + (Reserved + Which) * KV_Width;
                begin
+                  --  The same bias as the single-token path adds, on each
+                  --  token of the batch. A batch that skipped it would
+                  --  answer a prompt differently from the way it answers
+                  --  the same text one token at a time.
+                  if Current.Query_Bias /= null then
+                     K.Add (Query.all (Q_At .. Q_At + Wide - 1),
+                            Current.Query_Bias.all);
+                     K.Add (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                            Current.Key_Bias.all);
+                     K.Add (Values.all (KV_At .. KV_At + KV_Width - 1),
+                            Current.Value_Bias.all);
+                  end if;
+
                   K.Apply_Rotary
                     (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
                      Element_Count (Settings.Rotary),
                      Item.Committed + Natural (Which),
-                     Settings.Rope_Base, Settings.Rope_Scale);
+                     Settings.Rope_Base, Settings.Rope_Scale,
+                     Settings.Pairing);
                   K.Apply_Rotary
                     (Keys.all (KV_At .. KV_At + KV_Width - 1),
                      KV_Heads, Head_Size, Element_Count (Settings.Rotary),
                      Item.Committed + Natural (Which),
-                     Settings.Rope_Base, Settings.Rope_Scale);
+                     Settings.Rope_Base, Settings.Rope_Scale,
+                     Settings.Pairing);
 
                   for Offset in 0 .. KV_Width - 1 loop
                      Item.Keys.all (Place + Offset) :=

@@ -264,6 +264,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `qwen2` files run. They are the same shape as `llama` -- RMS normalization,
+  rotary encoding, grouped-query attention, a SwiGLU feed-forward -- with a
+  bias on each of the three attention projections and the other rotary
+  pairing: element *i* rotated against element *i + rotary/2* rather than
+  against its neighbour. Metadata is read under each architecture's own keys,
+  so neither name is written anywhere but in the enumeration.
+
+  The biases are required rather than taken if present. A qwen2 file read as
+  though its biases were zero produces plausible text that is not what the
+  model says, and plausible text is the hardest kind of wrong to notice.
+
 - A diagnostic ends with what can be done about it, chosen from the recovery
   class every code already carried. A limit that was too small says to raise
   it or ask for less; something this build does not support says where the

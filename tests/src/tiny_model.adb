@@ -27,7 +27,9 @@ package body Tiny_Model is
       Format    : Weight_Format := Float32;
       End_Token : Natural := 2;
       Adds_Beginning : Boolean := True;
-      Room      : Positive := Context)
+      Room      : Positive := Context;
+      Qwen      : Boolean := False;
+      Omit_Biases : Boolean := False)
    is
       Quantized : constant Boolean := Format = Q8_0;
 
@@ -92,6 +94,21 @@ package body Tiny_Model is
             Fixtures.Encode_F32 (Values));
       end Norm;
 
+      --  A one-dimensional tensor of a given width, for the biases.
+      procedure Norm_Of (Name : String; Width : Positive) is
+         Values : N.Real_Array (0 .. N.Element_Count (Width) - 1);
+         Drawn  : constant N.Real_Array := Next (N.Element_Count (Width));
+      begin
+         for Index in Values'Range loop
+            Values (Index) := Drawn (Index) * 0.125;
+         end loop;
+         Fixtures.Add_Tensor
+           (Builder, Name, [G.U64 (Width)], G.Type_F32,
+            Fixtures.Encode_F32 (Values));
+      end Norm_Of;
+
+      Prefix : constant String := (if Qwen then "qwen2" else "llama");
+
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
       begin
@@ -101,22 +118,23 @@ package body Tiny_Model is
    begin
       Fixtures.Reset (Builder);
 
-      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_String
+        (Builder, "general.architecture", (if Qwen then "qwen2" else "llama"));
       Fixtures.Add_String (Builder, "general.name", "tiny");
       Fixtures.Add_U32
-        (Builder, "llama.context_length", Interfaces.Unsigned_32 (Room));
+        (Builder, Prefix & ".context_length", Interfaces.Unsigned_32 (Room));
       Fixtures.Add_U32
-        (Builder, "llama.embedding_length", Interfaces.Unsigned_32 (Embedding));
-      Fixtures.Add_U32 (Builder, "llama.block_count", Layers);
+        (Builder, Prefix & ".embedding_length", Interfaces.Unsigned_32 (Embedding));
+      Fixtures.Add_U32 (Builder, Prefix & ".block_count", Layers);
       Fixtures.Add_U32
-        (Builder, "llama.feed_forward_length", Interfaces.Unsigned_32 (Feed_Forward));
-      Fixtures.Add_U32 (Builder, "llama.attention.head_count", Heads);
-      Fixtures.Add_U32 (Builder, "llama.attention.head_count_kv", KV_Heads);
+        (Builder, Prefix & ".feed_forward_length", Interfaces.Unsigned_32 (Feed_Forward));
+      Fixtures.Add_U32 (Builder, Prefix & ".attention.head_count", Heads);
+      Fixtures.Add_U32 (Builder, Prefix & ".attention.head_count_kv", KV_Heads);
       Fixtures.Add_F32
-        (Builder, "llama.attention.layer_norm_rms_epsilon", 1.0E-5);
+        (Builder, Prefix & ".attention.layer_norm_rms_epsilon", 1.0E-5);
       Fixtures.Add_U32
-        (Builder, "llama.rope.dimension_count", Interfaces.Unsigned_32 (Head_Size));
-      Fixtures.Add_F32 (Builder, "llama.rope.freq_base", 10_000.0);
+        (Builder, Prefix & ".rope.dimension_count", Interfaces.Unsigned_32 (Head_Size));
+      Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base", 10_000.0);
 
       Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
 
@@ -198,6 +216,13 @@ package body Tiny_Model is
                  [G.U64 (Embedding), G.U64 (KV_Heads * Head_Size)]);
          Weight (Layer_Name (Index, "attn_v.weight"),
                  [G.U64 (Embedding), G.U64 (KV_Heads * Head_Size)]);
+         --  Qwen2 carries a bias beside each projection; Llama has none.
+         if Qwen and then not Omit_Biases then
+            Norm_Of (Layer_Name (Index, "attn_q.bias"), Embedding);
+            Norm_Of (Layer_Name (Index, "attn_k.bias"), KV_Heads * Head_Size);
+            Norm_Of (Layer_Name (Index, "attn_v.bias"), KV_Heads * Head_Size);
+         end if;
+
          Weight (Layer_Name (Index, "attn_output.weight"),
                  [G.U64 (Embedding), G.U64 (Embedding)]);
          Norm (Layer_Name (Index, "ffn_norm.weight"));

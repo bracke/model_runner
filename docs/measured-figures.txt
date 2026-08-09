@@ -83,6 +83,12 @@
 # happen once per reset and once per converted tensor at load, outside the
 # window as above.
 #
+# The rotary pairing choice: two conditionals in the rotary inner loop,
+# which is as inside the window as anything gets. Measured: with the choice
+# 8.27 9.00 9.09, with the interleaved indices written straight in 9.34 9.28
+# 9.04, with the choice again 8.94 9.03 8.86. The spread is wider than any
+# difference between the states.
+#
 # Anything touching these files that is not outside the measured window gets
 # a re-measure like that one.
 
@@ -90,7 +96,7 @@
 kernels EAF68F33E8E77C31 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure and the batch-size table under "Speed"
-engine 0270B7BC56CDB2E6 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine D567F68654AEFD3B src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 0A8A39491ED15B68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

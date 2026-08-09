@@ -775,6 +775,86 @@ package body Tests.Sampling_Cases is
       Conv.Close (Messages);
    end Built_In_Formats_Compile;
 
+   --  The two rotary pairings rotate different elements.
+   --
+   --  A head is rotated in pairs. Llama's weights are laid out for the pairs
+   --  next to each other; Qwen2's are laid out for an element and the one
+   --  half a head later. Both are the same rotation by the same angle, and
+   --  applying the wrong one to a model produces grammatical sentences that
+   --  do not mean what the model meant -- which is exactly how it presented
+   --  itself: a 0.5B model answering "the capital of France is the capital
+   --  of the country" instead of "Paris".
+   --
+   --  Nothing but a real model would have shown that, so this pins the two
+   --  apart where a fixture can: rotating by zero changes nothing under
+   --  either, and rotating by anything else moves different elements.
+   procedure Rotary_Pairings_Differ
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type N.Real;
+
+      Head_Size : constant N.Element_Count := 4;
+
+      function Rotated
+        (Pairing  : Model_Runner.Kernels.Rotary_Pairing;
+         Position : Natural) return N.Real_Array
+      is
+         Values : N.Real_Array (0 .. Head_Size - 1) := [1.0, 2.0, 3.0, 4.0];
+      begin
+         Model_Runner.Kernels.Apply_Rotary
+           (Values, 1, Head_Size, Head_Size, Position, 10_000.0, 1.0,
+            Pairing);
+         return Values;
+      end Rotated;
+   begin
+      --  At position zero the angle is zero, so neither pairing moves
+      --  anything and the two agree. Without this the test below could be
+      --  satisfied by a pairing that corrupts its input.
+      declare
+         Still : constant N.Real_Array :=
+           Rotated (Model_Runner.Kernels.Interleaved, 0);
+         Also  : constant N.Real_Array :=
+           Rotated (Model_Runner.Kernels.Split, 0);
+      begin
+         for Index in Still'Range loop
+            Assert (abs (Still (Index) - N.Real (Index + 1)) < 1.0e-6,
+                    "interleaved rotation by zero changed an element");
+            Assert (abs (Also (Index) - N.Real (Index + 1)) < 1.0e-6,
+                    "split rotation by zero changed an element");
+         end loop;
+      end;
+
+      --  At any other position they differ, because they pair different
+      --  elements: interleaved turns (0,1) and (2,3), split turns (0,2)
+      --  and (1,3).
+      declare
+         One : constant N.Real_Array :=
+           Rotated (Model_Runner.Kernels.Interleaved, 1);
+         Two : constant N.Real_Array :=
+           Rotated (Model_Runner.Kernels.Split, 1);
+         Apart : Boolean := False;
+      begin
+         for Index in One'Range loop
+            if abs (One (Index) - Two (Index)) > 1.0e-4 then
+               Apart := True;
+            end if;
+         end loop;
+         Assert (Apart,
+                 "the two rotary pairings produced the same vector, so one "
+                 & "of them is not doing what it says");
+
+         --  And each keeps the length of the pair it turned, which is what
+         --  makes it a rotation rather than a rearrangement.
+         Assert (abs ((One (0) * One (0) + One (1) * One (1))
+                      - (1.0 * 1.0 + 2.0 * 2.0)) < 1.0e-3,
+                 "interleaved rotation did not preserve its pair");
+         Assert (abs ((Two (0) * Two (0) + Two (2) * Two (2))
+                      - (1.0 * 1.0 + 3.0 * 3.0)) < 1.0e-3,
+                 "split rotation did not preserve its pair");
+      end;
+   end Rotary_Pairings_Differ;
+
    --  Constructs outside the supported subset are rejected at compile time,
    --  and the engine has no operation that could reach a file or a process.
    procedure Template_Rejects_Unsupported
@@ -1362,6 +1442,9 @@ package body Tests.Sampling_Cases is
         (T, Penalty_Range_Rejected'Access,
          "a penalty large enough to make every logit infinite is refused, "
          & "and an ordinary negative one is not"); 
+      Register_Routine
+        (T, Rotary_Pairings_Differ'Access,
+         "the two rotary pairings rotate different elements");
       Register_Routine
         (T, Built_In_Formats_Compile'Access,
          "the chat formats this build carries compile and render through "
