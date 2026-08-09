@@ -530,11 +530,10 @@ Prompt text given with `--prompt` may be visible to other local processes. Use
 
 Named in the specification, absent here:
 
-- **A second backend.** `--backend` names the backend to evaluate on and
-  refuses one this build does not have, but there is only `cpu` to name. The
-  option exists because a caller who asks for a backend and is not told there
-  is only one has been told the wrong thing; it does not exist because there
-  is a choice to make.
+- **A backend that is not the processor.** There are two, and both run on
+  the CPU: one for speed and one for being obviously right. Nothing here
+  reaches a GPU or any other device, and nothing will without a foreign
+  library, which the rules above do not allow.
 
 - **Hand-written vector code or intrinsics.** The kernels are ordinary Ada and
   the compiler vectorizes them; nothing is written in assembly, in intrinsics,

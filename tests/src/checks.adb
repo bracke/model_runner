@@ -87,6 +87,36 @@ package body Checks is
          end if;
       end Contents;
 
+      --  One section of a document, from its heading to the next one.
+      --  The heading must end at its line: "## Backend" is a prefix of
+      --  "## Backends and pools", and matching the prefix let that section be
+      --  renamed without anything noticing.
+      function Section (Text, Heading : String) return String is
+         Opening : constant String := Heading & Character'Val (10);
+         From    : Natural := 0;
+      begin
+         if Text'Length < Opening'Length then
+            return "";
+         end if;
+         for Index in Text'First .. Text'Last - Opening'Length + 1 loop
+            if Text (Index .. Index + Opening'Length - 1) = Opening then
+               From := Index + Opening'Length;
+               exit;
+            end if;
+         end loop;
+         if From = 0 then
+            return "";
+         end if;
+         for Index in From .. Text'Last - 2 loop
+            if Text (Index) = Character'Val (10)
+              and then Text (Index + 1 .. Index + 2) = "##"
+            then
+               return Text (From .. Index);
+            end if;
+         end loop;
+         return Text (From .. Text'Last);
+      end Section;
+
       --  Report whether text holds a token.
       function Holds (Text, Token : String) return Boolean
       is (Project_Tools.Text.Contains (Text, Token));
@@ -476,62 +506,13 @@ package body Checks is
 
          Listed : constant String := Row (Readme, "| Quantization |");
 
-         --  The architecture table, from its heading to the next one.
-         function Architecture_Table return String is
-            Opening : constant String :=
-              "## Architecture" & Character'Val (10);
-            From    : Natural := 0;
-         begin
-            if Matrix'Length < Opening'Length then
-               return "";
-            end if;
-            for Index in Matrix'First .. Matrix'Last - Opening'Length + 1 loop
-               if Matrix (Index .. Index + Opening'Length - 1) = Opening then
-                  From := Index + Opening'Length;
-                  exit;
-               end if;
-            end loop;
-            if From = 0 then
-               return "";
-            end if;
-            for Index in From .. Matrix'Last - 2 loop
-               if Matrix (Index) = Character'Val (10)
-                 and then Matrix (Index + 1 .. Index + 2) = "##"
-               then
-                  return Matrix (From .. Index);
-               end if;
-            end loop;
-            return Matrix (From .. Matrix'Last);
-         end Architecture_Table;
+         function Architecture_Table return String
+         is (Section (Matrix, "## Architecture"));
 
          Architectures : constant String := Architecture_Table;
 
-         --  The backend section, from its heading to the next one.
-         function Backend_Table return String is
-            Opening : constant String := "## Backend" & Character'Val (10);
-            From    : Natural := 0;
-         begin
-            if Matrix'Length < Opening'Length then
-               return "";
-            end if;
-            for Index in Matrix'First .. Matrix'Last - Opening'Length + 1 loop
-               if Matrix (Index .. Index + Opening'Length - 1) = Opening then
-                  From := Index + Opening'Length;
-                  exit;
-               end if;
-            end loop;
-            if From = 0 then
-               return "";
-            end if;
-            for Index in From .. Matrix'Last - 2 loop
-               if Matrix (Index) = Character'Val (10)
-                 and then Matrix (Index + 1 .. Index + 2) = "##"
-               then
-                  return Matrix (From .. Index);
-               end if;
-            end loop;
-            return Matrix (From .. Matrix'Last);
-         end Backend_Table;
+         function Backend_Table return String
+         is (Section (Matrix, "## Backend"));
 
          Backends : constant String := Backend_Table;
       begin
@@ -540,6 +521,64 @@ package body Checks is
             Fail ("README.md has no quantization row; the check no longer "
                   & "matches the document it reads");
          end if;
+
+         --  Nothing this build has is listed among the things it has not.
+         --
+         --  Every positive claim in these documents is checked against the
+         --  code. The list of absences was checked by nothing, and it said a
+         --  second backend was absent for two commits after the second
+         --  backend arrived -- in the section whose whole purpose is to say
+         --  what the program does not do, which is the most misleading place
+         --  for it and the least likely to be doubted.
+         --
+         --  What can be checked mechanically is narrow: a name the code has
+         --  must not appear in that section. It cannot tell whether the prose
+         --  around a name is still true, so the names are the part that is
+         --  held.
+         declare
+            Absences : constant String := Section (Readme, "## Not implemented");
+         begin
+            Result.Performed := Result.Performed + 1;
+            if Absences = "" then
+               Fail ("README.md has no list of what is absent; the check no "
+                     & "longer matches the document it reads");
+            end if;
+
+            for Kind in Model_Runner.Backend.Backend_Kind loop
+               Result.Performed := Result.Performed + 1;
+               if Holds_Word (Absences,
+                              Model_Runner.Backend.Backend_Name (Kind))
+               then
+                  Fail ("the " & Model_Runner.Backend.Backend_Name (Kind)
+                        & " backend is listed among the things this build "
+                        & "does not have");
+               end if;
+            end loop;
+
+            for Kind in Model_Runner.Llama.Architecture loop
+               Result.Performed := Result.Performed + 1;
+               if Holds_Word (Absences,
+                              Model_Runner.Llama.Architecture_Name (Kind))
+               then
+                  Fail ("the " & Model_Runner.Llama.Architecture_Name (Kind)
+                        & " architecture is listed among the things this "
+                        & "build does not read");
+               end if;
+            end loop;
+
+            for Format in Model_Runner.GGUF.Tensor_Type loop
+               if Model_Runner.Quantization.Is_Decodable (Format) then
+                  Result.Performed := Result.Performed + 1;
+                  if Holds_Word (Absences,
+                                 Model_Runner.GGUF.Type_Name (Format))
+                  then
+                     Fail ("the " & Model_Runner.GGUF.Type_Name (Format)
+                           & " format is listed among the things this build "
+                           & "cannot decode");
+                  end if;
+               end if;
+            end loop;
+         end;
 
          --  Every backend this build has has a row of its own in the
          --  matrix's backend table, and is named in the README's row.
@@ -1811,39 +1850,12 @@ package body Checks is
       --  it implemented.
       declare
          Matrix : constant String := Contents ("docs/support-matrix.md");
-         Opened : constant String := "## Chat-template constructs";
          Seen   : array (1 .. Template_Registry.Count) of Boolean :=
            [others => False];
          Rows   : Natural := 0;
 
-         --  The chat-template section, up to the heading after it.
-         function Section return String is
-            From : Natural := 0;
-         begin
-            if Matrix'Length < Opened'Length then
-               return "";
-            end if;
-            for Index in Matrix'First .. Matrix'Last - Opened'Length + 1 loop
-               if Matrix (Index .. Index + Opened'Length - 1) = Opened then
-                  From := Index + Opened'Length;
-                  exit;
-               end if;
-            end loop;
-            if From = 0 then
-               return "";
-            end if;
-
-            for Index in From .. Matrix'Last - 2 loop
-               if Matrix (Index) = Character'Val (10)
-                 and then Matrix (Index + 1 .. Index + 2) = "##"
-               then
-                  return Matrix (From .. Index);
-               end if;
-            end loop;
-            return Matrix (From .. Matrix'Last);
-         end Section;
-
-         Body_Text : constant String := Section;
+         Body_Text : constant String :=
+           Section (Matrix, "## Chat-template constructs");
          Cursor    : Natural := Body_Text'First;
       begin
          Result.Performed := Result.Performed + 1;
