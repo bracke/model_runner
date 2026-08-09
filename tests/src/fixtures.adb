@@ -510,7 +510,7 @@ package body Fixtures is
                  N.Real'Max (abs Smallest, abs Largest);
                D      : constant N.Real :=
                  (if Centred
-                  then (if Extent = 0.0 then 1.0 else Extent / 8.0)
+                  then (if Extent = 0.0 then 1.0 else Extent / 7.0)
                   else (if Largest = Smallest then 1.0
                         else (Largest - Smallest) / 15.0));
                Quants : constant B.Byte_Count :=
@@ -556,6 +556,536 @@ package body Fixtures is
 
    function Encode_Q4_1 (Values : N.Real_Array) return B.Byte_Array
    is (Encode_Four_Bit (Values, Centred => False));
+
+   --  One block of thirty-two with a fifth bit. Q5_0 centres the level on
+   --  sixteen and carries one half-precision number; Q5_1 lifts it from a
+   --  minimum and carries two. The fifth bits live in four bytes read as one
+   --  thirty-two bit word: bit j belongs to element j.
+   function Encode_Five_Bit
+     (Values  : N.Real_Array;
+      Centred : Boolean) return B.Byte_Array
+   is
+      use type Interfaces.Unsigned_8;
+      use type Interfaces.Unsigned_32;
+
+      Width  : constant B.Byte_Count := (if Centred then 22 else 24);
+      Blocks : constant N.Element_Count := Values'Length / 32;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * Width - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 32;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * Width;
+
+            Smallest : N.Real := Values (First);
+            Largest  : N.Real := Values (First);
+         begin
+            for Index in 0 .. 31 loop
+               Smallest := N.Real'Min
+                 (Smallest, Values (First + N.Element_Count (Index)));
+               Largest := N.Real'Max
+                 (Largest, Values (First + N.Element_Count (Index)));
+            end loop;
+
+            declare
+               Extent : constant N.Real :=
+                 N.Real'Max (abs Smallest, abs Largest);
+               D      : constant N.Real :=
+                 (if Centred
+                  then (if Extent = 0.0 then 1.0 else Extent / 15.0)
+                  else (if Largest = Smallest then 1.0
+                        else (Largest - Smallest) / 31.0));
+
+               Fifths_At : constant B.Byte_Count :=
+                 At_Byte + (if Centred then 2 else 4);
+               Quants_At : constant B.Byte_Count :=
+                 At_Byte + (if Centred then 6 else 8);
+
+               Fifths : Interfaces.Unsigned_32 := 0;
+
+               function Level (Index : Natural) return Natural is
+                  Value : constant N.Real :=
+                    Values (First + N.Element_Count (Index));
+                  Step  : constant N.Real :=
+                    (if Centred then Value / D else (Value - Smallest) / D);
+               begin
+                  return Natural
+                    (N.Real'Max
+                       (0.0,
+                        N.Real'Min
+                          (31.0,
+                           N.Real'Rounding (Step)
+                           + (if Centred then 16.0 else 0.0))));
+               end Level;
+            begin
+               Result (At_Byte .. At_Byte + 1) := Encode_F16 ([1 => D]);
+               if not Centred then
+                  Result (At_Byte + 2 .. At_Byte + 3) :=
+                    Encode_F16 ([1 => Smallest]);
+               end if;
+
+               for J in 0 .. 15 loop
+                  declare
+                     Low  : constant Natural := Level (J);
+                     High : constant Natural := Level (J + 16);
+                  begin
+                     Result (Quants_At + B.Byte_Count (J)) :=
+                       Interfaces.Unsigned_8 (Low mod 16)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Unsigned_8 (High mod 16), 4);
+
+                     if Low >= 16 then
+                        Fifths := Fifths
+                          or Interfaces.Shift_Left (1, J);
+                     end if;
+                     if High >= 16 then
+                        Fifths := Fifths
+                          or Interfaces.Shift_Left (1, J + 16);
+                     end if;
+                  end;
+               end loop;
+
+               Result (Fifths_At .. Fifths_At + 3) := B.Put_U32 (Fifths);
+            end;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Five_Bit;
+
+   function Encode_Q5_0 (Values : N.Real_Array) return B.Byte_Array
+   is (Encode_Five_Bit (Values, Centred => True));
+
+   function Encode_Q5_1 (Values : N.Real_Array) return B.Byte_Array
+   is (Encode_Five_Bit (Values, Centred => False));
+
+   function Encode_Q3_K (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+
+      Blocks : constant N.Element_Count := Values'Length / 256;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 110 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 256;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 110;
+
+            --  Sixteen sub-blocks of sixteen, walked as halves, groups and
+            --  the upper half of each group, as in the two-bit format.
+            type Sub_Range is array (0 .. 15) of N.Real;
+            Widest  : Sub_Range := [others => 0.0];
+            Extent  : N.Real := 0.0;
+
+            function Start_Of (Sub : Natural) return N.Element_Count is
+               Half  : constant Natural := Sub / 8;
+               Rest  : constant Natural := Sub mod 8;
+               Group : constant Natural := Rest / 2;
+               Upper : constant Natural := Rest mod 2;
+            begin
+               return N.Element_Count
+                 (Half * 128 + Group * 32 + Upper * 16);
+            end Start_Of;
+         begin
+            for Sub in 0 .. 15 loop
+               declare
+                  Base : constant N.Element_Count := First + Start_Of (Sub);
+                  Most : N.Real := 0.0;
+               begin
+                  for L in 0 .. 15 loop
+                     Most := N.Real'Max
+                       (Most, abs Values (Base + N.Element_Count (L)));
+                  end loop;
+                  Widest (Sub) := Most;
+                  Extent := N.Real'Max (Extent, Most);
+               end;
+            end loop;
+
+            declare
+               --  A level runs -4 .. 3 and a scale -32 .. 31, so the factor
+               --  covers the widest sub-block at the widest scale.
+               D : constant N.Real :=
+                 (if Extent = 0.0 then 1.0 else Extent / (3.0 * 31.0));
+
+               High   : constant B.Byte_Count := At_Byte;
+               Quants : constant B.Byte_Count := At_Byte + 32;
+               Scales : constant B.Byte_Count := At_Byte + 96;
+            begin
+               Result (At_Byte + 108 .. At_Byte + 109) :=
+                 Encode_F16 ([1 => D]);
+
+               for Sub in 0 .. 15 loop
+                  declare
+                     Half  : constant Natural := Sub / 8;
+                     Rest  : constant Natural := Sub mod 8;
+                     Group : constant Natural := Rest / 2;
+                     Upper : constant Natural := Rest mod 2;
+
+                     Factor : constant Integer :=
+                       Integer'Max
+                         (1,
+                          Integer'Min
+                            (31,
+                             Integer
+                               (N.Real'Ceiling (Widest (Sub) / (3.0 * D)))));
+                     Step : constant N.Real := D * N.Real (Factor);
+
+                     --  Six bits, stored biased by thirty-two: four low bits
+                     --  in one of the first eight bytes and two high bits in
+                     --  one of the last four, chosen by the group of four
+                     --  the sub-block falls in.
+                     Stored : constant Natural := Factor + 32;
+                     Which  : constant Natural := Sub;
+                     Place  : constant B.Byte_Count :=
+                       B.Byte_Count (Which mod 4);
+                     Nibble : constant B.Byte_Count :=
+                       (if (Which / 4) mod 2 = 0 then Place else Place + 4);
+
+                     Base : constant N.Element_Count := First + Start_Of (Sub);
+                     From : constant B.Byte_Count :=
+                       Quants + B.Byte_Count (Half * 32 + Upper * 16);
+                     Mask_At : constant B.Byte_Count :=
+                       High + B.Byte_Count (Upper * 16);
+                     Bit : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Shift_Left (1, Half * 4 + Group);
+                  begin
+                     if Which / 4 < 2 then
+                        Result (Scales + Nibble) :=
+                          Result (Scales + Nibble)
+                          or Interfaces.Unsigned_8 (Stored mod 16);
+                     else
+                        Result (Scales + Nibble) :=
+                          Result (Scales + Nibble)
+                          or Interfaces.Shift_Left
+                               (Interfaces.Unsigned_8 (Stored mod 16), 4);
+                     end if;
+
+                     Result (Scales + Place + 8) :=
+                       Result (Scales + Place + 8)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Unsigned_8 (Stored / 16),
+                             2 * (Which / 4));
+
+                     for L in 0 .. 15 loop
+                        declare
+                           Level : constant Integer :=
+                             Integer'Max
+                               (-4,
+                                Integer'Min
+                                  (3,
+                                   Integer
+                                     (N.Real'Rounding
+                                        (Values (Base + N.Element_Count (L))
+                                         / Step))));
+
+                           --  The mask bit's absence takes four away, so a
+                           --  level of -4 .. -1 clears it and 0 .. 3 sets it.
+                           Lifted : constant Boolean := Level >= 0;
+                           Low    : constant Natural :=
+                             (if Lifted then Level else Level + 4);
+                        begin
+                           Result (From + B.Byte_Count (L)) :=
+                             Result (From + B.Byte_Count (L))
+                             or Interfaces.Shift_Left
+                                  (Interfaces.Unsigned_8 (Low), 2 * Group);
+
+                           if Lifted then
+                              Result (Mask_At + B.Byte_Count (L)) :=
+                                Result (Mask_At + B.Byte_Count (L)) or Bit;
+                           end if;
+                        end;
+                     end loop;
+                  end;
+               end loop;
+            end;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Q3_K;
+
+   function Encode_Q5_K (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+
+      Blocks : constant N.Element_Count := Values'Length / 256;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 176 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 256;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 176;
+
+            type Sub_Range is array (0 .. 7) of N.Real;
+            Low, Step : Sub_Range := [others => 0.0];
+            Widest, Deepest : N.Real := 0.0;
+         begin
+            for Sub in 0 .. 7 loop
+               declare
+                  Base     : constant N.Element_Count :=
+                    First + N.Element_Count (Sub) * 32;
+                  Smallest : N.Real := Values (Base);
+                  Largest  : N.Real := Values (Base);
+               begin
+                  for Index in 0 .. 31 loop
+                     Smallest := N.Real'Min
+                       (Smallest, Values (Base + N.Element_Count (Index)));
+                     Largest := N.Real'Max
+                       (Largest, Values (Base + N.Element_Count (Index)));
+                  end loop;
+
+                  --  As in the other two: the stored minimum is subtracted
+                  --  and cannot be negative.
+                  Low (Sub) := N.Real'Min (Smallest, 0.0);
+                  Step (Sub) := (Largest - Low (Sub)) / 31.0;
+                  Widest := N.Real'Max (Widest, Step (Sub));
+                  Deepest := N.Real'Max (Deepest, abs Low (Sub));
+               end;
+            end loop;
+
+            declare
+               D    : constant N.Real :=
+                 (if Widest = 0.0 then 1.0 else Widest / 63.0);
+               DMin : constant N.Real :=
+                 (if Deepest = 0.0 then 1.0 else Deepest / 63.0);
+
+               Scales : constant B.Byte_Count := At_Byte + 4;
+               High   : constant B.Byte_Count := At_Byte + 16;
+               Quants : constant B.Byte_Count := At_Byte + 48;
+            begin
+               Result (At_Byte .. At_Byte + 1) := Encode_F16 ([1 => D]);
+               Result (At_Byte + 2 .. At_Byte + 3) := Encode_F16 ([1 => DMin]);
+
+               for Sub in 0 .. 7 loop
+                  declare
+                     Factor : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Unsigned_8
+                         (N.Real'Min (63.0,
+                                      N.Real'Rounding (Step (Sub) / D)));
+                     Minimum : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Unsigned_8
+                         (N.Real'Min (63.0,
+                                      N.Real'Rounding (-Low (Sub) / DMin)));
+                  begin
+                     --  The same twelve bytes Q4_K uses.
+                     if Sub < 4 then
+                        Result (Scales + B.Byte_Count (Sub)) :=
+                          Result (Scales + B.Byte_Count (Sub)) or Factor;
+                        Result (Scales + B.Byte_Count (Sub) + 4) :=
+                          Result (Scales + B.Byte_Count (Sub) + 4) or Minimum;
+                     else
+                        Result (Scales + B.Byte_Count (Sub) + 4) :=
+                          Result (Scales + B.Byte_Count (Sub) + 4)
+                          or (Factor and 16#0F#)
+                          or Interfaces.Shift_Left (Minimum and 16#0F#, 4);
+                        Result (Scales + B.Byte_Count (Sub) - 4) :=
+                          Result (Scales + B.Byte_Count (Sub) - 4)
+                          or Interfaces.Shift_Left
+                               (Interfaces.Shift_Right (Factor, 4), 6);
+                        Result (Scales + B.Byte_Count (Sub)) :=
+                          Result (Scales + B.Byte_Count (Sub))
+                          or Interfaces.Shift_Left
+                               (Interfaces.Shift_Right (Minimum, 4), 6);
+                     end if;
+                  end;
+               end loop;
+
+               --  Sub-blocks in pairs, as Q4_K, with the fifth bits of the
+               --  pair in one byte of the thirty-two: bit 2g for the first
+               --  and bit 2g + 1 for the second.
+               for Group in 0 .. 3 loop
+                  for L in 0 .. 31 loop
+                     declare
+                        function Level (Sub : Natural) return Natural is
+                           Value : constant N.Real :=
+                             Values (First + N.Element_Count (Sub) * 32
+                                     + N.Element_Count (L));
+                           Span  : constant N.Real :=
+                             (if Step (Sub) = 0.0 then 1.0 else Step (Sub));
+                        begin
+                           return Natural
+                             (N.Real'Max
+                                (0.0,
+                                 N.Real'Min
+                                   (31.0,
+                                    N.Real'Rounding
+                                      ((Value - Low (Sub)) / Span))));
+                        end Level;
+
+                        First_Level  : constant Natural := Level (Group * 2);
+                        Second_Level : constant Natural :=
+                          Level (Group * 2 + 1);
+
+                        At_Quant : constant B.Byte_Count :=
+                          Quants + B.Byte_Count (Group) * 32
+                          + B.Byte_Count (L);
+                        At_High  : constant B.Byte_Count :=
+                          High + B.Byte_Count (L);
+                     begin
+                        Result (At_Quant) :=
+                          Interfaces.Unsigned_8 (First_Level mod 16)
+                          or Interfaces.Shift_Left
+                               (Interfaces.Unsigned_8 (Second_Level mod 16),
+                                4);
+
+                        if First_Level >= 16 then
+                           Result (At_High) :=
+                             Result (At_High)
+                             or Interfaces.Shift_Left (1, 2 * Group);
+                        end if;
+                        if Second_Level >= 16 then
+                           Result (At_High) :=
+                             Result (At_High)
+                             or Interfaces.Shift_Left (1, 2 * Group + 1);
+                        end if;
+                     end;
+                  end loop;
+               end loop;
+            end;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Q5_K;
+
+   function Encode_Q6_K (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+
+      Blocks : constant N.Element_Count := Values'Length / 256;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 210 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 256;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 210;
+
+            --  Sixteen groups of sixteen elements, each with a signed
+            --  scale, and a superblock factor that turns the scale into a
+            --  number. The elements of a group are not adjacent: the reader
+            --  walks halves, then a pair of runs, then four offsets.
+            type Group_Range is array (0 .. 15) of N.Real;
+            Widest : Group_Range := [others => 0.0];
+            Extent : N.Real := 0.0;
+
+            --  Where a group's elements begin and which scale byte is its
+            --  own, following the reader exactly.
+            function Start_Of (Half, Sub, Run : Natural) return N.Element_Count
+            is (N.Element_Count (Half * 128 + Sub * 16 + Run * 32));
+
+            function Scale_Of (Half, Sub, Run : Natural) return B.Byte_Count
+            is (B.Byte_Count (Half * 8 + Sub + Run * 2));
+         begin
+            --  The largest magnitude in each group, and the largest of those.
+            for Half in 0 .. 1 loop
+               for Sub in 0 .. 1 loop
+                  for Run in 0 .. 3 loop
+                     declare
+                        Base : constant N.Element_Count :=
+                          First + Start_Of (Half, Sub, Run);
+                        Most : N.Real := 0.0;
+                     begin
+                        for L in 0 .. 15 loop
+                           Most := N.Real'Max
+                             (Most,
+                              abs Values (Base + N.Element_Count (L)));
+                        end loop;
+                        Widest (Half * 8 + Sub + Run * 2) := Most;
+                        Extent := N.Real'Max (Extent, Most);
+                     end;
+                  end loop;
+               end loop;
+            end loop;
+
+            declare
+               --  A level runs -32 .. 31, and a scale is a signed byte, so
+               --  the factor covers the widest group at the widest scale.
+               D : constant N.Real :=
+                 (if Extent = 0.0 then 1.0 else Extent / (31.0 * 127.0));
+            begin
+               Result (At_Byte + 208 .. At_Byte + 209) :=
+                 Encode_F16 ([1 => D]);
+
+               for Half in 0 .. 1 loop
+                  for Sub in 0 .. 1 loop
+                     for Run in 0 .. 3 loop
+                        declare
+                           Which : constant Natural :=
+                             Half * 8 + Sub + Run * 2;
+                           Factor : constant Integer :=
+                             Integer'Max
+                               (1,
+                                Integer'Min
+                                  (127,
+                                   Integer
+                                     (N.Real'Ceiling
+                                        (Widest (Which) / (31.0 * D)))));
+                           Step : constant N.Real := D * N.Real (Factor);
+
+                           Base : constant N.Element_Count :=
+                             First + Start_Of (Half, Sub, Run);
+                           Low_Run : constant B.Byte_Count :=
+                             At_Byte + B.Byte_Count (Half) * 64
+                             + B.Byte_Count (Sub) * 16
+                             + B.Byte_Count (Run mod 2) * 32;
+                           High_Run : constant B.Byte_Count :=
+                             At_Byte + 128 + B.Byte_Count (Half) * 32
+                             + B.Byte_Count (Sub) * 16;
+                           Shift : constant Natural := (Run / 2) * 4;
+                        begin
+                           Result (At_Byte + 192
+                                   + Scale_Of (Half, Sub, Run)) :=
+                             Interfaces.Unsigned_8 (Factor);
+
+                           for L in 0 .. 15 loop
+                              declare
+                                 Level : constant Integer :=
+                                   Integer'Max
+                                     (0,
+                                      Integer'Min
+                                        (63,
+                                         Integer
+                                           (N.Real'Rounding
+                                              (Values
+                                                 (Base + N.Element_Count (L))
+                                               / Step))
+                                         + 32));
+                                 Low  : constant B.Byte_Count :=
+                                   Low_Run + B.Byte_Count (L);
+                                 High : constant B.Byte_Count :=
+                                   High_Run + B.Byte_Count (L);
+                              begin
+                                 --  Runs 0 and 1 keep their low nibble in
+                                 --  the low half of the byte, runs 2 and 3
+                                 --  in the high half; the two high bits go
+                                 --  into the pair the reader shifts to.
+                                 Result (Low) :=
+                                   Result (Low)
+                                   or Interfaces.Shift_Left
+                                        (Interfaces.Unsigned_8 (Level mod 16),
+                                         Shift);
+                                 Result (High) :=
+                                   Result (High)
+                                   or Interfaces.Shift_Left
+                                        (Interfaces.Unsigned_8 (Level / 16),
+                                         2 * Run);
+                              end;
+                           end loop;
+                        end;
+                     end loop;
+                  end loop;
+               end loop;
+            end;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Q6_K;
 
    function Encode_Q2_K (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;

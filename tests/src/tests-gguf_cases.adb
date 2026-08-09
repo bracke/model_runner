@@ -3853,6 +3853,113 @@ package body Tests.GGUF_Cases is
          end loop;
       end;
 
+      --  The five-bit blocks, whose extra bit lives in a word of its own.
+      declare
+         Narrow : constant N.Real_Array (0 .. 31) := Values (0 .. 31);
+         Back   : N.Real_Array (0 .. 31) := [others => 0.0];
+         Widest : N.Real := 0.0;
+      begin
+         for Centred in Boolean loop
+            declare
+               Encoded : constant B.Byte_Array :=
+                 (if Centred then Fixtures.Encode_Q5_0 (Narrow)
+                  else Fixtures.Encode_Q5_1 (Narrow));
+            begin
+               Assert (Encoded'Length = (if Centred then 22 else 24),
+                       "a five-bit block is twenty-two or twenty-four bytes");
+
+               Back := [others => 0.0];
+               Q.Decode_Blocks
+                 ((if Centred then G.Type_Q5_0 else G.Type_Q5_1),
+                  Encoded, 0, 1, Back, Ok);
+               Assert (Ok, "the engine could not read the encoded block");
+
+               Widest := 0.0;
+               for Index in Narrow'Range loop
+                  Widest :=
+                    N.Real'Max (Widest, abs (Narrow (Index) - Back (Index)));
+               end loop;
+
+               Assert (Widest < 0.08,
+                       "a five-bit block came back"
+                       & N.Real'Image (Widest) & " away");
+            end;
+         end loop;
+      end;
+
+      --  The six-bit superblock, whose sixteen groups of sixteen are spread
+      --  across four runs and whose scales are signed bytes.
+      declare
+         Encoded : constant B.Byte_Array := Fixtures.Encode_Q6_K (Values);
+         Widest  : N.Real := 0.0;
+      begin
+         Assert (Encoded'Length = 210, "a Q6_K superblock is 210 bytes");
+
+         Decoded := [others => 0.0];
+         Q.Decode_Blocks (G.Type_Q6_K, Encoded, 0, 1, Decoded, Ok);
+         Assert (Ok, "the engine could not read the encoded superblock");
+
+         for Index in Values'Range loop
+            Widest :=
+              N.Real'Max (Widest, abs (Values (Index) - Decoded (Index)));
+         end loop;
+
+         --  Sixty-four levels over a group's own range.
+         Assert (Widest < 0.05,
+                 "the encoded values came back"
+                 & N.Real'Image (Widest) & " away, which is more than six "
+                 & "bits can explain");
+      end;
+
+      --  The five-bit superblock: Q4_K's scales with a bit kept aside.
+      declare
+         Encoded : constant B.Byte_Array := Fixtures.Encode_Q5_K (Values);
+         Widest  : N.Real := 0.0;
+      begin
+         Assert (Encoded'Length = 176, "a Q5_K superblock is 176 bytes");
+
+         Decoded := [others => 0.0];
+         Q.Decode_Blocks (G.Type_Q5_K, Encoded, 0, 1, Decoded, Ok);
+         Assert (Ok, "the engine could not read the encoded superblock");
+
+         for Index in Values'Range loop
+            Widest :=
+              N.Real'Max (Widest, abs (Values (Index) - Decoded (Index)));
+         end loop;
+
+         --  Thirty-two levels over a sub-block's range.
+         Assert (Widest < 0.04,
+                 "the encoded values came back"
+                 & N.Real'Image (Widest) & " away, which is more than five "
+                 & "bits can explain");
+      end;
+
+      --  The three-bit superblock, whose third bit lowers rather than
+      --  raises: a level of zero to three keeps its mask bit and minus four
+      --  to minus one clears it.
+      declare
+         Encoded : constant B.Byte_Array := Fixtures.Encode_Q3_K (Values);
+         Widest  : N.Real := 0.0;
+      begin
+         Assert (Encoded'Length = 110, "a Q3_K superblock is 110 bytes");
+
+         Decoded := [others => 0.0];
+         Q.Decode_Blocks (G.Type_Q3_K, Encoded, 0, 1, Decoded, Ok);
+         Assert (Ok, "the engine could not read the encoded superblock");
+
+         for Index in Values'Range loop
+            Widest :=
+              N.Real'Max (Widest, abs (Values (Index) - Decoded (Index)));
+         end loop;
+
+         --  Eight levels over a sub-block's range, and a scale quantized to
+         --  six bits under it.
+         Assert (Widest < 0.2,
+                 "the encoded values came back"
+                 & N.Real'Image (Widest) & " away, which is more than three "
+                 & "bits can explain");
+      end;
+
       --  And half precision and brain floats, where the only question is
       --  whether the bytes land where the reader looks.
       declare

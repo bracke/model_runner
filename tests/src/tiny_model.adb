@@ -33,8 +33,10 @@ package body Tiny_Model is
       Omit_Biases : Boolean := False)
    is
       Quantized : constant Boolean :=
-        Format in Q4_0 | Q4_1 | Q8_0 | Q4_K | Q2_K;
-      Deep      : constant Boolean := Format in Q4_K | Q2_K;
+        Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
+                | Q2_K | Q3_K | Q4_K | Q5_K | Q6_K;
+      Deep      : constant Boolean :=
+        Format in Q2_K | Q3_K | Q4_K | Q5_K | Q6_K;
 
       --  The quantized fixture is wider because a Q8_0 row must be a whole
       --  number of thirty-two element blocks. Everything else matches.
@@ -84,6 +86,26 @@ package body Tiny_Model is
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_BF16,
                   Fixtures.Encode_BF16 (Values));
+            elsif Format = Q5_0 and then Total mod 32 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q5_0,
+                  Fixtures.Encode_Q5_0 (Values));
+            elsif Format = Q5_1 and then Total mod 32 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q5_1,
+                  Fixtures.Encode_Q5_1 (Values));
+            elsif Format = Q3_K and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q3_K,
+                  Fixtures.Encode_Q3_K (Values));
+            elsif Format = Q5_K and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q5_K,
+                  Fixtures.Encode_Q5_K (Values));
+            elsif Format = Q6_K and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q6_K,
+                  Fixtures.Encode_Q6_K (Values));
             elsif Format = Q4_0 and then Total mod 32 = 0 then
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_Q4_0,

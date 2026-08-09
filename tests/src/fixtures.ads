@@ -224,6 +224,46 @@ package Fixtures is
    --  @return The encoded bytes.
    function Encode_Q4_1 (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Encode values as Q5_0: as Q4_0 with a fifth bit for each element, held
+   --  apart in four bytes read as one number -- bit j for element j and bit
+   --  j + 16 for element j + 16 -- in twenty-two bytes.
+   --
+   --  @param Values Values to encode; a whole number of 32-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q5_0 (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as Q5_1: as Q5_0 with a minimum of its own instead of a
+   --  fixed bias, in twenty-four bytes.
+   --
+   --  @param Values Values to encode; a whole number of 32-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q5_1 (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as Q6_K: superblocks of 256 in 210 bytes -- 128 of low
+   --  nibbles, 64 of high pairs, sixteen signed scales and one
+   --  half-precision factor -- with the elements of a half spread across
+   --  four runs of sixteen.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q6_K (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as Q5_K: as Q4_K with a fifth bit for every element,
+   --  kept in thirty-two bytes of their own, in 176 bytes.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q5_K (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as Q3_K: three bits an element in two pieces -- two in a
+   --  byte shared by four sub-blocks, the third in a mask of thirty-two
+   --  bytes whose absence lowers the value by four -- with sixteen six-bit
+   --  signed scales, in 110 bytes.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q3_K (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode binary16 values.
    --
    --  @param Values Values to encode.

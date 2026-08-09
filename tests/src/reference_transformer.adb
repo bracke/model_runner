@@ -237,6 +237,307 @@ package body Reference_Transformer is
       end if;
    end Decode_Four_Bit;
 
+   --  Decode one five-bit element, independently of the engine.
+   --
+   --  Thirty-two to a block: a half-precision scale, for Q5_1 a
+   --  half-precision minimum, then four bytes read as one thirty-two bit
+   --  word in which bit j is the fifth bit of element j, then sixteen bytes
+   --  of nibbles. Q5_0 centres the level on sixteen; Q5_1 lifts it.
+   function Decode_Five_Bit
+     (Image   : Model_Runner.Bytes.Byte_Array;
+      Base    : Interfaces.Unsigned_64;
+      Index   : Natural;
+      Centred : Boolean) return Long_Float
+   is
+      Width  : constant Interfaces.Unsigned_64 := (if Centred then 22 else 24);
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 32);
+      Within : constant Natural := Index mod 32;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * Width;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      function Half_At (Offset : Interfaces.Unsigned_64) return Long_Float is
+         Raw      : constant Natural :=
+           Byte_At (Offset) + 256 * Byte_At (Offset + 1);
+         Sign     : constant Long_Float :=
+           (if Raw >= 16#8000# then -1.0 else 1.0);
+         Exponent : constant Integer := (Raw / 1024) mod 32;
+         Mantissa : constant Integer := Raw mod 1024;
+      begin
+         if Exponent = 0 then
+            return Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+         elsif Exponent = 31 then
+            return 0.0;
+         else
+            return Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+              * (2.0 ** (Exponent - 15));
+         end if;
+      end Half_At;
+
+      Scale  : constant Long_Float := Half_At (At_Block);
+      Lowest : constant Long_Float :=
+        (if Centred then 0.0 else Half_At (At_Block + 2));
+
+      Fifths_At : constant Interfaces.Unsigned_64 :=
+        At_Block + (if Centred then 2 else 4);
+      Quants_At : constant Interfaces.Unsigned_64 :=
+        At_Block + (if Centred then 6 else 8);
+
+      Word : constant Natural :=
+        Byte_At (Fifths_At)
+        + 256 * Byte_At (Fifths_At + 1)
+        + 65_536 * Byte_At (Fifths_At + 2);
+      Top  : constant Natural := Byte_At (Fifths_At + 3);
+
+      --  Bit j of the word, taking the fourth byte separately so that this
+      --  needs no thirty-two bit arithmetic.
+      function Fifth (Position : Natural) return Natural
+      is (if Position < 24
+          then (Word / (2 ** Position)) mod 2
+          else (Top / (2 ** (Position - 24))) mod 2);
+
+      Packed : constant Natural :=
+        Byte_At (Quants_At + Interfaces.Unsigned_64 (Within mod 16));
+      Level  : constant Natural :=
+        (if Within < 16 then Packed mod 16 else Packed / 16)
+        + 16 * Fifth (Within);
+   begin
+      if Centred then
+         return Scale * Long_Float (Level - 16);
+      else
+         return Scale * Long_Float (Level) + Lowest;
+      end if;
+   end Decode_Five_Bit;
+
+   --  Decode one Q3_K element, independently of the engine.
+   --
+   --  Three bits in two pieces: the low two packed four to a byte as in the
+   --  two-bit format, the third in a mask of thirty-two bytes whose bit for
+   --  a sub-block is set when the level is zero or above -- its absence is
+   --  what takes four away. Sixteen six-bit signed scales, stored biased by
+   --  thirty-two across twelve bytes.
+   function Decode_Q3_K
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 256);
+      Within : constant Natural := Index mod 256;
+
+      Half   : constant Natural := Within / 128;
+      Rest   : constant Natural := Within mod 128;
+      Group  : constant Natural := Rest / 32;
+      Upper  : constant Natural := (Rest mod 32) / 16;
+      In_Sub : constant Natural := Within mod 16;
+      Sub    : constant Natural := Half * 8 + Group * 2 + Upper;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 110;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Scales : constant Interfaces.Unsigned_64 := At_Block + 96;
+      Place  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Sub mod 4);
+      Nibble : constant Interfaces.Unsigned_64 :=
+        (if (Sub / 4) mod 2 = 0 then Place else Place + 4);
+
+      Low_Bits : constant Natural :=
+        (if Sub / 4 < 2
+         then Byte_At (Scales + Nibble) mod 16
+         else Byte_At (Scales + Nibble) / 16);
+      Top_Bits : constant Natural :=
+        (Byte_At (Scales + Place + 8) / (2 ** (2 * (Sub / 4)))) mod 4;
+      Factor   : constant Integer := Low_Bits + 16 * Top_Bits - 32;
+
+      From : constant Interfaces.Unsigned_64 :=
+        At_Block + 32 + Interfaces.Unsigned_64 (Half * 32 + Upper * 16)
+        + Interfaces.Unsigned_64 (In_Sub);
+      Mask_At : constant Interfaces.Unsigned_64 :=
+        At_Block + Interfaces.Unsigned_64 (Upper * 16)
+        + Interfaces.Unsigned_64 (In_Sub);
+
+      Low    : constant Natural := (Byte_At (From) / (2 ** (2 * Group))) mod 4;
+      Lifted : constant Boolean :=
+        (Byte_At (Mask_At) / (2 ** (Half * 4 + Group))) mod 2 = 1;
+      Level  : constant Integer := (if Lifted then Low else Low - 4);
+
+      Raw      : constant Natural := Byte_At (At_Block + 108)
+        + 256 * Byte_At (At_Block + 109);
+      Sign     : constant Long_Float :=
+        (if Raw >= 16#8000# then -1.0 else 1.0);
+      Exponent : constant Integer := (Raw / 1024) mod 32;
+      Mantissa : constant Integer := Raw mod 1024;
+      D        : Long_Float;
+   begin
+      if Exponent = 0 then
+         D := Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+      elsif Exponent = 31 then
+         D := 0.0;
+      else
+         D := Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+           * (2.0 ** (Exponent - 15));
+      end if;
+
+      return D * Long_Float (Factor) * Long_Float (Level);
+   end Decode_Q3_K;
+
+   --  Decode one Q5_K element, independently of the engine.
+   --
+   --  Q4_K's shape with a bit kept aside: two half-precision factors, twelve
+   --  bytes of six-bit scales and minimums, thirty-two bytes in which bit
+   --  2g of byte L is the fifth bit of element 64g + L and bit 2g + 1 the
+   --  fifth of element 64g + 32 + L, then a hundred and twenty-eight bytes
+   --  of nibbles paired the way Q4_K pairs them.
+   function Decode_Q5_K
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 256);
+      Within : constant Natural := Index mod 256;
+      Sub    : constant Natural := Within / 32;
+      In_Sub : constant Natural := Within mod 32;
+      Group  : constant Natural := Sub / 2;
+      Upper  : constant Natural := Sub mod 2;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 176;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      function Half_At (Offset : Interfaces.Unsigned_64) return Long_Float is
+         Raw      : constant Natural :=
+           Byte_At (Offset) + 256 * Byte_At (Offset + 1);
+         Sign     : constant Long_Float :=
+           (if Raw >= 16#8000# then -1.0 else 1.0);
+         Exponent : constant Integer := (Raw / 1024) mod 32;
+         Mantissa : constant Integer := Raw mod 1024;
+      begin
+         if Exponent = 0 then
+            return Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+         elsif Exponent = 31 then
+            return 0.0;
+         else
+            return Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+              * (2.0 ** (Exponent - 15));
+         end if;
+      end Half_At;
+
+      Scale   : constant Long_Float := Half_At (At_Block);
+      Minimum : constant Long_Float := Half_At (At_Block + 2);
+      Scales  : constant Interfaces.Unsigned_64 := At_Block + 4;
+
+      Factor, Offset_Level : Natural;
+
+      Packed : constant Natural :=
+        Byte_At (At_Block + 48 + Interfaces.Unsigned_64 (Group) * 32
+                 + Interfaces.Unsigned_64 (In_Sub));
+      Fifth  : constant Natural :=
+        (Byte_At (At_Block + 16 + Interfaces.Unsigned_64 (In_Sub))
+         / (2 ** (2 * Group + Upper))) mod 2;
+      Level  : constant Natural :=
+        (if Upper = 0 then Packed mod 16 else Packed / 16) + 16 * Fifth;
+   begin
+      if Sub < 4 then
+         Factor := Byte_At (Scales + Interfaces.Unsigned_64 (Sub)) mod 64;
+         Offset_Level :=
+           Byte_At (Scales + Interfaces.Unsigned_64 (Sub) + 4) mod 64;
+      else
+         Factor :=
+           (Byte_At (Scales + Interfaces.Unsigned_64 (Sub) + 4) mod 16)
+           + 16 * (Byte_At (Scales + Interfaces.Unsigned_64 (Sub) - 4) / 64);
+         Offset_Level :=
+           (Byte_At (Scales + Interfaces.Unsigned_64 (Sub) + 4) / 16)
+           + 16 * (Byte_At (Scales + Interfaces.Unsigned_64 (Sub)) / 64);
+      end if;
+
+      return Scale * Long_Float (Factor) * Long_Float (Level)
+        - Minimum * Long_Float (Offset_Level);
+   end Decode_Q5_K;
+
+   --  Decode one Q6_K element, independently of the engine.
+   --
+   --  Two hundred and fifty-six elements to two hundred and ten bytes: a
+   --  hundred and twenty-eight of low nibbles, sixty-four of high pairs,
+   --  sixteen signed scales and one half-precision factor. A half of the
+   --  elements is walked as two sub-runs of four runs of sixteen, and the
+   --  scale of a run is its own byte.
+   function Decode_Q6_K
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 256);
+      Within : constant Natural := Index mod 256;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 210;
+
+      --  Undo the walk: which half, which sub-run, which of the four runs,
+      --  and which of the sixteen elements.
+      Half   : constant Natural := Within / 128;
+      Rest   : constant Natural := Within mod 128;
+      Run    : constant Natural := Rest / 32;
+      Sub    : constant Natural := (Rest mod 32) / 16;
+      In_Run : constant Natural := Within mod 16;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Factor : constant Integer :=
+        (if Byte_At (At_Block + 192
+                     + Interfaces.Unsigned_64 (Half * 8 + Sub + Run * 2))
+              < 128
+         then Byte_At (At_Block + 192
+                       + Interfaces.Unsigned_64 (Half * 8 + Sub + Run * 2))
+         else Byte_At (At_Block + 192
+                       + Interfaces.Unsigned_64 (Half * 8 + Sub + Run * 2))
+              - 256);
+
+      Low_At  : constant Interfaces.Unsigned_64 :=
+        At_Block + Interfaces.Unsigned_64 (Half) * 64
+        + Interfaces.Unsigned_64 (Sub) * 16
+        + Interfaces.Unsigned_64 (Run mod 2) * 32
+        + Interfaces.Unsigned_64 (In_Run);
+      High_At : constant Interfaces.Unsigned_64 :=
+        At_Block + 128 + Interfaces.Unsigned_64 (Half) * 32
+        + Interfaces.Unsigned_64 (Sub) * 16
+        + Interfaces.Unsigned_64 (In_Run);
+
+      Low  : constant Natural :=
+        (if Run < 2 then Byte_At (Low_At) mod 16 else Byte_At (Low_At) / 16);
+      High : constant Natural := (Byte_At (High_At) / (2 ** (2 * Run))) mod 4;
+
+      Raw      : constant Natural := Byte_At (At_Block + 208)
+        + 256 * Byte_At (At_Block + 209);
+      Sign     : constant Long_Float :=
+        (if Raw >= 16#8000# then -1.0 else 1.0);
+      Exponent : constant Integer := (Raw / 1024) mod 32;
+      Mantissa : constant Integer := Raw mod 1024;
+      D        : Long_Float;
+   begin
+      if Exponent = 0 then
+         D := Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+      elsif Exponent = 31 then
+         D := 0.0;
+      else
+         D := Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+           * (2.0 ** (Exponent - 15));
+      end if;
+
+      return D * Long_Float (Factor) * Long_Float (Low + 16 * High - 32);
+   end Decode_Q6_K;
+
    --  Decode one Q2_K element, independently of the engine.
    --
    --  The layout says: two hundred and fifty-six elements to a superblock of
@@ -440,6 +741,11 @@ package body Reference_Transformer is
                         | Model_Runner.GGUF.Type_Q4_0
                         | Model_Runner.GGUF.Type_Q4_1
                         | Model_Runner.GGUF.Type_F16
+                        | Model_Runner.GGUF.Type_Q5_0
+                        | Model_Runner.GGUF.Type_Q5_1
+                        | Model_Runner.GGUF.Type_Q6_K
+                        | Model_Runner.GGUF.Type_Q5_K
+                        | Model_Runner.GGUF.Type_Q3_K
          then
             return null;
          end if;
@@ -470,6 +776,55 @@ package body Reference_Transformer is
                           Offset
                           + Interfaces.Unsigned_64 (Row) * 34
                             * Interfaces.Unsigned_64 (Columns / 32),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          in Model_Runner.GGUF.Type_Q5_0
+                           | Model_Runner.GGUF.Type_Q5_1
+                  then
+                     declare
+                        Centred : constant Boolean :=
+                          Containers.Tensor_Format (Source, Index)
+                            = Model_Runner.GGUF.Type_Q5_0;
+                        Width   : constant Interfaces.Unsigned_64 :=
+                          (if Centred then 22 else 24);
+                     begin
+                        Result (Row, Column) :=
+                          Decode_Five_Bit
+                            (Image,
+                             Offset
+                             + Interfaces.Unsigned_64 (Row) * Width
+                               * Interfaces.Unsigned_64 (Columns / 32),
+                             Column, Centred);
+                     end;
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_Q3_K
+                  then
+                     Result (Row, Column) :=
+                       Decode_Q3_K
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 110
+                            * Interfaces.Unsigned_64 (Columns / 256),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_Q5_K
+                  then
+                     Result (Row, Column) :=
+                       Decode_Q5_K
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 176
+                            * Interfaces.Unsigned_64 (Columns / 256),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_Q6_K
+                  then
+                     Result (Row, Column) :=
+                       Decode_Q6_K
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 210
+                            * Interfaces.Unsigned_64 (Columns / 256),
                           Column);
                   elsif Containers.Tensor_Format (Source, Index)
                           = Model_Runner.GGUF.Type_F16

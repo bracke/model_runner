@@ -442,36 +442,37 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 384, logits compared 4096,
-             worst absolute 2.66391572001368E-06,
+conformance: sequences 624, logits compared 6656,
+             worst absolute 2.99283966764818E-06,
              worst relative 8.94395650089654E-04,
-             rounded logits compared 2048,
-             rounded worst absolute 8.99418639596608E-02,
+             rounded logits compared 3328,
+             rounded worst absolute 2.53853988407743E-01,
              rounded worst relative 1.34086800307472E+00,
              outside tolerance 0
 ```
 
-Both architectures, eight weight formats -- binary32, F16, BF16, Q4_0, Q4_1,
-Q8_0, Q4_K and Q2_K -- both backends, and every repacking mode. The engine
-decodes thirteen: Q5_0, Q5_1, Q3_K, Q5_K and Q6_K are decoded by code no
-independent implementation here has read, because the fixture cannot write
-them and the reference cannot read them. That is a gap and it is stated
-rather than papered over. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
+Both architectures, both backends, every repacking mode, and every one of the
+thirteen weight formats the engine decodes: binary32, F16, BF16, Q4_0, Q4_1,
+Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K and Q6_K. The fixture writes each of
+them and the reference reads each of them, both worked out from the layouts
+rather than by calling the engine, so a packing mistake cannot be common to
+the two sides. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
 outside it.
 
 The rounded figures are `--repack bf16`, counted apart because mixing them in
 would let the lossy path's error hide the exact path's. They are the number
 that flag never had: rounding every weight to eight mantissa bits moves a
-logit **on these fixtures** by up to **0.090**, and a logit close to zero moves
+logit **on these fixtures** by up to **0.254**, and a logit close to zero moves
 by almost all of itself, which is what the relative figure says.
 
 On this fixture is not a small qualification. Rounding error accumulates with
 the length of a dot product and the depth of the stack, and the widest fixture is
 256 wide and two deep where a small real model is two thousand wide and
-twenty-two deep. Adding the k-quant fixtures, eight times wider than the ones
-before them, took the figure from 0.032 to 0.064 and then to 0.090 -- which
-is the shape of the thing: wider means more terms means more accumulated
-rounding, and coarser weights mean a rounding step that matters more. The figure bounds what was measured, not what the flag does
+twenty-two deep. The figure went 0.032, 0.064, 0.090 and then 0.254 as the fixtures
+grew wider and their weights coarser -- which is the shape of the thing:
+wider means more terms means more accumulated rounding, and the three-bit
+superblock, whose weights are the coarsest here, moves furthest when they are
+rounded again. The figure bounds what was measured, not what the flag does
 to a model you have. What exists for real models is behaviour rather than
 logits: sixty greedy tokens from TinyLlama Q8_0 and forty from Q4_K come out
 identical either way, which is worth knowing and is not a bound.

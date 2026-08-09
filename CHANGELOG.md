@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Conformance covers every format the engine decodes: all thirteen, in 624
+  sequences. The fixture writes each and the reference reads each, both
+  worked out from the layouts rather than by calling the engine, so a
+  packing mistake cannot be common to the two sides. The five that were
+  left -- Q5_0, Q5_1, Q3_K, Q5_K and Q6_K -- are the ones with the most to
+  get wrong: a fifth bit indexed by element out of a thirty-two bit word,
+  four runs of sixteen spread across a half, and a third bit whose absence
+  lowers a value rather than raising it.
+
+  Writing them found a fault in the four the fixture already had: a centred
+  level runs -8 .. 7, not -8 .. 8, so the scale has to cover the shorter
+  side. Every centred encoder here divided by the longer one, which cost
+  about a level of accuracy at the positive end. Q3_K failed its round-trip
+  outright and the rest had been passing quietly.
+
+  Q3_K also moved the bf16 figure from 0.090 to 0.254: its weights are the
+  coarsest here, so rounding them again into eight mantissa bits moves a
+  logit furthest. The lossy bound follows what is measured.
+
 - Conformance covers eight of the thirteen formats the engine decodes, where
   it covered four: binary32, F16, BF16, Q4_0, Q4_1, Q8_0, Q4_K and Q2_K, in
   384 sequences. Both sides had to learn each one -- the fixture cannot write
