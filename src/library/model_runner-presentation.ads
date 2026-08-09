@@ -104,23 +104,45 @@ package Model_Runner.Presentation is
    --  @return Rendered text.
    function Message_Value (Item : Console; Key : String) return String;
 
-   --  Write a heading to standard error.
+   --  Which stream a line belongs on.
+   --
+   --  An answer is what the command was asked for, and belongs on standard
+   --  output where a caller can redirect it. Everything else -- diagnostics,
+   --  warnings, progress, statistics, and the responses interactive mode
+   --  gives its own commands -- belongs on standard error, so that
+   --  redirecting the answer does not collect them.
+   --
+   --  Headings and fields carry both kinds: an inspection report is an
+   --  answer, the statistics after a run are not, and they are written by
+   --  the same two operations. There is no default, because the whole of the
+   --  inspection report went to standard error for as long as there was one
+   --  -- `inspect MODEL > report.txt` wrote an empty file -- and it did that
+   --  by inheriting a destination nobody at the call site had to think about.
+   type Destination is (Answer, Diagnostic);
+
+   --  Write a heading.
    --
    --  @param Item Console to write through.
    --  @param Key Stable message identifier of the heading.
-   procedure Put_Heading (Item : in out Console; Key : String);
+   --  @param Where Which stream the heading belongs on.
+   procedure Put_Heading
+     (Item  : in out Console;
+      Key   : String;
+      Where : Destination);
 
-   --  Write a labelled value to standard error.
+   --  Write a labelled value.
    --
    --  The label is localized; the value is not, because it is data.
    --
    --  @param Item Console to write through.
    --  @param Key Stable message identifier of the label.
    --  @param Value Value text, already escaped when it came from a model file.
+   --  @param Where Which stream the line belongs on.
    procedure Put_Field
      (Item  : in out Console;
       Key   : String;
-      Value : String);
+      Value : String;
+      Where : Destination);
 
    --  Write a labelled value whose label is data rather than a message.
    --
@@ -131,10 +153,12 @@ package Model_Runner.Presentation is
    --  @param Item Console to write through.
    --  @param Label Label text, already escaped.
    --  @param Value Value text, already escaped.
+   --  @param Where Which stream the line belongs on.
    procedure Put_Data_Field
      (Item  : in out Console;
       Label : String;
-      Value : String);
+      Value : String;
+      Where : Destination);
 
    --  Report a structured condition on standard error.
    --

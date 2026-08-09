@@ -74,6 +74,7 @@ error, and `--` ends option processing.
 | --- | --- |
 | generated model text | standard output, byte for byte |
 | help, version | standard output |
+| the `inspect` report, including `--metadata` and `--tensors` | standard output |
 | diagnostics, warnings, progress, statistics | standard error |
 | interactive prompts and command responses | standard error |
 

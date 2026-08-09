@@ -539,16 +539,23 @@ package body Tests.CLI_Cases is
             Add (Source, Words (First .. Words'Last));
          end if;
 
+         --  Both streams, into one file. This reads screens rather than
+         --  telling the streams apart -- an inspection is an answer and
+         --  statistics are not, and the layout is the same question for
+         --  both. Streams_Are_Separate is what holds them to their streams.
          Create (Handle, Out_File, Captured);
+         Set_Output (Handle);
          Set_Error (Handle);
          begin
             Model_Runner.CLI.Driver.Run (Source, Status);
          exception
             when others =>
+               Set_Output (Standard_Output);
                Set_Error (Standard_Error);
                Close (Handle);
                raise;
          end;
+         Set_Output (Standard_Output);
          Set_Error (Standard_Error);
          Close (Handle);
 
@@ -4842,6 +4849,160 @@ package body Tests.CLI_Cases is
    -- Register_Tests --
    --------------------
 
+   ----------------------------
+   -- Streams_Are_Separate --
+   ----------------------------
+
+   --  Each kind of output leaves by the stream the README says it does.
+   --
+   --  Every test that reads what a command wrote redirected both streams
+   --  into one file, so no test could tell them apart, and the table of five
+   --  claims about where output goes was checked by nothing. The whole
+   --  inspection report went to standard error for as long as there was one:
+   --  inspect MODEL > report.txt wrote an empty file, and the transcript
+   --  test compared the report against the README without noticing, because
+   --  it had merged the streams before it looked.
+   --
+   --  The generated text is not asserted here. It leaves through the output
+   --  sink rather than the text streams, so redirecting those does not see
+   --  it -- which is the same reason the transcript test leaves it out. What
+   --  is asserted is the part that redirecting an answer must not collect.
+
+   procedure Streams_Are_Separate
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model : constant String := "obj/streams-model.gguf";
+      Out_Path : constant String := "obj/streams-out.txt";
+      Err_Path : constant String := "obj/streams-err.txt";
+
+      --  Run one command with the two streams kept apart.
+      procedure Ran (Source : in out Fixed_Arguments) is
+         Answer, Errors : File_Type;
+         Status         : Natural;
+      begin
+         Create (Answer, Out_File, Out_Path);
+         Create (Errors, Out_File, Err_Path);
+         Set_Output (Answer);
+         Set_Error (Errors);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               Set_Output (Standard_Output);
+               Set_Error (Standard_Error);
+               Close (Answer);
+               Close (Errors);
+               raise;
+         end;
+         Set_Output (Standard_Output);
+         Set_Error (Standard_Error);
+         Close (Answer);
+         Close (Errors);
+      end Ran;
+
+      function Answered return String
+      is (Project_Tools.Files.Read_Raw_File (Out_Path));
+
+      function Complained return String
+      is (Project_Tools.Files.Read_Raw_File (Err_Path));
+
+      function Holds (Text, Token : String) return Boolean
+      is (Project_Tools.Text.Contains (Text, Token));
+
+      --  Report whether a stream carried nothing.
+      --
+      --  Not the empty string: closing a text file that was made current
+      --  leaves one line terminator behind whether or not anything was
+      --  written to it, which is an artefact of capturing the stream this
+      --  way rather than of the program. The same commands run as a program
+      --  write zero bytes to standard error. Anything else is output.
+      function Silent (Text : String) return Boolean is
+      begin
+         for Index in Text'Range loop
+            if Text (Index) not in ASCII.LF | ASCII.CR then
+               return False;
+            end if;
+         end loop;
+         return True;
+      end Silent;
+   begin
+      Tiny_Model.Write (Model, Room => 256);
+
+      --  version and help are answers.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "version");
+         Ran (Source);
+         Assert (Holds (Answered, "model_runner"),
+                 "version wrote nothing to standard output");
+         Assert (Silent (Complained),
+                 "version wrote to standard error: " & Complained);
+      end;
+
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "help");
+         Ran (Source);
+         Assert (Answered /= "", "help wrote nothing to standard output");
+         Assert (Silent (Complained),
+                 "help wrote to standard error: " & Complained);
+      end;
+
+      --  An inspection is an answer, all of it. This is the one that was
+      --  wrong: a caller redirecting it collected an empty file.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "inspect");
+         Add (Source, Model);
+         Ran (Source);
+         Assert (Holds (Answered, "Container")
+                   and then Holds (Answered, "Execution"),
+                 "the inspection report did not reach standard output");
+         Assert (Silent (Complained),
+                 "inspect wrote to standard error: " & Complained);
+      end;
+
+      --  Statistics are not an answer, so redirecting one does not collect
+      --  them.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         Add (Source, "--show-stats");
+         Ran (Source);
+         Assert (not Holds (Answered, "Statistics"),
+                 "the statistics reached standard output, where the "
+                 & "generated text is: " & Answered);
+         Assert (Holds (Complained, "Statistics"),
+                 "the statistics did not reach standard error");
+      end;
+
+      --  Neither is a diagnostic.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "inspect");
+         Add (Source, "obj/streams-absent.gguf");
+         Ran (Source);
+         Assert (Silent (Answered),
+                 "a diagnostic reached standard output: " & Answered);
+         Assert (not Silent (Complained),
+                 "a failing command wrote no diagnostic");
+      end;
+   end Streams_Are_Separate;
+
    ------------------------------------
    -- Runs_Report_Which_Backend_Ran --
    ------------------------------------
@@ -5632,6 +5793,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Published_Transcripts_Are_Real'Access,
          "the transcripts the README publishes are what the program prints");
+      Register_Routine
+        (T, Streams_Are_Separate'Access,
+         "each kind of output leaves by the stream the README says it does");
       Register_Routine
         (T, Runs_Report_Which_Backend_Ran'Access,
          "a run and an inspection both say which backend answers and with "

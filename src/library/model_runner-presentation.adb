@@ -130,15 +130,33 @@ package body Model_Runner.Presentation is
          null;
    end Error_Line;
 
+   --  Write one line to the stream the caller named. The two writers it
+   --  chooses between are the whole of the streams policy; everything that
+   --  can go either way comes through here.
+   procedure Write_Line
+     (Item : in out Console; Where : Destination; Text : String) is
+   begin
+      case Where is
+         when Answer =>
+            Put_Line (Item, Text);
+         when Diagnostic =>
+            Error_Line (Item, Text);
+      end case;
+   end Write_Line;
+
    ------------------
    -- Put_Heading --
    ------------------
 
-   procedure Put_Heading (Item : in out Console; Key : String) is
+   procedure Put_Heading
+     (Item  : in out Console;
+      Key   : String;
+      Where : Destination)
+   is
       Label : constant String := Message (Item, Key);
    begin
-      Error_Line
-        (Item,
+      Write_Line
+        (Item, Where,
          (if Styles_Diagnostics (Item)
           then Terminal_Styles.Decorate
                  (Label, Terminal_Styles.Role_Header,
@@ -153,7 +171,8 @@ package body Model_Runner.Presentation is
    procedure Put_Field
      (Item  : in out Console;
       Key   : String;
-      Value : String)
+      Value : String;
+      Where : Destination)
    is
       Label : constant String := Message (Item, Key);
 
@@ -164,8 +183,8 @@ package body Model_Runner.Presentation is
       Shown : constant Natural := (if Width = 0 then Label'Length else Width);
       Padding : constant Natural := (if Shown >= 24 then 1 else 24 - Shown);
    begin
-      Error_Line
-        (Item,
+      Write_Line
+        (Item, Where,
          "  "
          & (if Styles_Diagnostics (Item)
             then Terminal_Styles.Decorate
@@ -183,7 +202,8 @@ package body Model_Runner.Presentation is
    procedure Put_Data_Field
      (Item  : in out Console;
       Label : String;
-      Value : String)
+      Value : String;
+      Where : Destination)
    is
       --  Padded like Put_Field, in code points rather than bytes, so a key
       --  with a non-ASCII character does not break the column.
@@ -191,8 +211,8 @@ package body Model_Runner.Presentation is
       Shown : constant Natural := (if Width = 0 then Label'Length else Width);
       Padding : constant Natural := (if Shown >= 40 then 1 else 40 - Shown);
    begin
-      Error_Line
-        (Item,
+      Write_Line
+        (Item, Where,
          "  "
          & (if Styles_Diagnostics (Item)
             then Terminal_Styles.Decorate
@@ -381,31 +401,31 @@ package body Model_Runner.Presentation is
             (Item, "statistics.per_second",
              [Loc.Named ("value", T.Image (Value, 2))]));
    begin
-      Put_Heading (Item, "statistics.heading");
+      Put_Heading (Item, "statistics.heading", Diagnostic);
       Put_Field
         (Item, "statistics.prompt_tokens",
-         T.Image (Long_Long_Integer (Outcome.Prompt_Tokens)));
+         T.Image (Long_Long_Integer (Outcome.Prompt_Tokens)), Diagnostic);
       Put_Field
         (Item, "statistics.generated_tokens",
-         T.Image (Long_Long_Integer (Outcome.Generated_Tokens)));
+         T.Image (Long_Long_Integer (Outcome.Generated_Tokens)), Diagnostic);
       Put_Field
         (Item, "statistics.context_position",
-         T.Image (Long_Long_Integer (Outcome.Final_Position)));
+         T.Image (Long_Long_Integer (Outcome.Final_Position)), Diagnostic);
       Put_Field
-        (Item, "statistics.seed", T.Image (Outcome.Seed));
-      Put_Field (Item, "statistics.prefill_duration", Seconds (Outcome.Prefill_Ns));
-      Put_Field (Item, "statistics.decode_duration", Seconds (Outcome.Decode_Ns));
-      Put_Field (Item, "statistics.prefill_rate", Rate (Outcome.Prefill_Rate));
-      Put_Field (Item, "statistics.decode_rate", Rate (Outcome.Decode_Rate));
+        (Item, "statistics.seed", T.Image (Outcome.Seed), Diagnostic);
+      Put_Field (Item, "statistics.prefill_duration", Seconds (Outcome.Prefill_Ns), Diagnostic);
+      Put_Field (Item, "statistics.decode_duration", Seconds (Outcome.Decode_Ns), Diagnostic);
+      Put_Field (Item, "statistics.prefill_rate", Rate (Outcome.Prefill_Rate), Diagnostic);
+      Put_Field (Item, "statistics.decode_rate", Rate (Outcome.Decode_Rate), Diagnostic);
       Put_Field
         (Item, "statistics.backend",
-         Model_Runner.Backend.Backend_Name (Outcome.Backend));
+         Model_Runner.Backend.Backend_Name (Outcome.Backend), Diagnostic);
       Put_Field
         (Item, "statistics.workers",
-         T.Image (Long_Long_Integer (Outcome.Workers)));
+         T.Image (Long_Long_Integer (Outcome.Workers)), Diagnostic);
       Put_Field
         (Item, "statistics.completion_reason",
-         Message (Item, "completion." & Gen.Reason_Name (Outcome.Reason)));
+         Message (Item, "completion." & Gen.Reason_Name (Outcome.Reason)), Diagnostic);
    end Put_Statistics;
 
    -----------

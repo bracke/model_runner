@@ -5,7 +5,70 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `inspect` reports which backend would evaluate the model and how many
+  worker tasks it would take, and `--show-stats` reports which one did and
+  how many it had. Neither is read back off the command line: `--backend
+  reference` takes one worker whatever `--threads` asked for. Two backends
+  produce the same logits and differ by about forty times in wall clock, so
+  which one ran is the first thing a timing needs to say, and it was
+  knowable only by remembering what was typed.
+
 ### Fixed
+
+- The `inspect` report goes to standard output. All of it went to standard
+  error, so `inspect MODEL > report.txt` wrote an empty file, and
+  `--metadata` and `--tensors` could not be redirected either. Headings and
+  fields now name the stream they belong on, with no default, because the
+  report inherited standard error from a choice nobody at the call site had
+  to make. The README's stream table did not mention `inspect` at all; it
+  does now.
+
+- Every test that read what a command wrote redirected both streams into one
+  file, so no test could tell them apart and the five stream claims were
+  checked by nothing. One test now runs each command with the streams kept
+  apart and holds each claim.
+
+- Every catalog key has a reader, and every message key the code names has a
+  catalog entry. Ten keys had no reader: three of them read as capability
+  rather than as cruft -- "backend" and "worker tasks" were labels for
+  figures nothing printed, and "the model has no chat template; the prompt is
+  being sent unchanged" described a fallback the program refuses to make.
+  Six were removed and four wired to what they claimed. In the other
+  direction a mistyped key shipped as `<cli.inspect.label.wrkers>`, in every
+  locale, with the whole gate green.
+
+- The pseudo-locale test walks the whole catalog. It walked `Error_Code`, so
+  it covered 148 of 343 keys and skipped help, inspect, statistics,
+  interactive and progress -- where a string that never went through the
+  catalog would hide.
+
+- The source walk recurses. It searched one level, so every scan kept a list
+  of directories by hand: three scans were given `src/platform`, which holds
+  no sources of its own, and visited nothing while reporting nothing; the
+  older scans named three of the five host directories, leaving `linux` and
+  `macos` -- the two holding the topology bodies -- outside the layering,
+  lowercase and environment rules. The walk must now reach 120 files or it
+  fails, so a scan that stops arriving says so.
+
+- Line length is measured in `src/platform` and `tools/src`, and the GNATdoc
+  rule covers the tooling crates, where it found `tiny_model.ads` carrying
+  three headers for one subprogram and one subprogram's parameters
+  documented against another.
+
+- The README's list of what is not implemented said a second backend was
+  absent for two commits after the reference backend arrived. Every positive
+  claim was checked against the code and the list of absences was checked by
+  nothing, which is the worst place for a stale claim: the section whose
+  purpose is to say what the program does not do reads as modesty.
+
+- `Library_Surface` lists the public operations the program itself never
+  calls, with the reason for each. The check that every public operation has
+  a reader counted a test as a reader, so thirty-three operations passed it
+  exactly as one used on every run does, and it took a script to find out
+  which. This is a library as well as a command and a wider interface is
+  allowed; how much wider is now a thing somebody chose.
 
 - The backend section of the support matrix and the README's backend row
   described one backend. Worker pools, partitioned rows, bounded queues and

@@ -673,25 +673,25 @@ package body Model_Runner.CLI.Execute is
          return;
       end if;
 
-      Pres.Put_Heading (Screen, "cli.inspect.heading.container");
+      Pres.Put_Heading (Screen, "cli.inspect.heading.container", Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.path",
-         T.Escape_Controls (T.To_String (Item.Model_Path)));
+         T.Escape_Controls (T.To_String (Item.Model_Path)), Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.file_size",
-         T.Image (Long_Long_Integer (Containers.File_Size (Container))));
+         T.Image (Long_Long_Integer (Containers.File_Size (Container))), Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.gguf_version",
-         T.Image (Long_Long_Integer (Containers.Version (Container))));
+         T.Image (Long_Long_Integer (Containers.Version (Container))), Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.alignment",
-         T.Image (Long_Long_Integer (Containers.Alignment (Container))));
+         T.Image (Long_Long_Integer (Containers.Alignment (Container))), Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.metadata_count",
-         T.Image (Long_Long_Integer (Containers.Metadata_Count (Container))));
+         T.Image (Long_Long_Integer (Containers.Metadata_Count (Container))), Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.tensor_count",
-         T.Image (Long_Long_Integer (Containers.Tensor_Count (Container))));
+         T.Image (Long_Long_Integer (Containers.Tensor_Count (Container))), Pres.Answer);
 
       --  Parameter count and the set of formats actually used.
       declare
@@ -725,15 +725,15 @@ package body Model_Runner.CLI.Execute is
 
          Pres.Put_Field
            (Screen, "cli.inspect.label.parameters",
-            T.Image (Long_Long_Integer (Parameters)));
+            T.Image (Long_Long_Integer (Parameters)), Pres.Answer);
          Pres.Put_Field
-           (Screen, "cli.inspect.label.formats", Listing (1 .. Filled));
+           (Screen, "cli.inspect.label.formats", Listing (1 .. Filled), Pres.Answer);
          Pres.Put_Field
            (Screen, "cli.inspect.label.mapped",
             Screen.Message_Value
               (if Files.Is_Mapped (Source)
                then "cli.inspect.value.yes"
-               else "cli.inspect.value.no"));
+               else "cli.inspect.value.no"), Pres.Answer);
       end;
 
       --  Architecture, read from metadata without loading any weights.
@@ -746,41 +746,41 @@ package body Model_Runner.CLI.Execute is
          if E.Is_Error (Detail) then
             Pres.Report (Screen, Detail);
          else
-            Pres.Put_Heading (Screen, "cli.inspect.heading.architecture");
+            Pres.Put_Heading (Screen, "cli.inspect.heading.architecture", Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.name",
                T.Escape_Controls
-                 (Containers.String_Value (Container, "general.name")));
+                 (Containers.String_Value (Container, "general.name")), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.architecture",
-               Containers.String_Value (Container, "general.architecture"));
+               Containers.String_Value (Container, "general.architecture"), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.context_length",
-               T.Image (Long_Long_Integer (Settings.Context_Length)));
+               T.Image (Long_Long_Integer (Settings.Context_Length)), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.embedding",
-               T.Image (Long_Long_Integer (Settings.Embedding)));
+               T.Image (Long_Long_Integer (Settings.Embedding)), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.feed_forward",
-               T.Image (Long_Long_Integer (Settings.Feed_Forward)));
+               T.Image (Long_Long_Integer (Settings.Feed_Forward)), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.layers",
-               T.Image (Long_Long_Integer (Settings.Layers)));
+               T.Image (Long_Long_Integer (Settings.Layers)), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.heads",
-               T.Image (Long_Long_Integer (Settings.Heads)));
+               T.Image (Long_Long_Integer (Settings.Heads)), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.kv_heads",
-               T.Image (Long_Long_Integer (Settings.KV_Heads)));
+               T.Image (Long_Long_Integer (Settings.KV_Heads)), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.head_size",
-               T.Image (Long_Long_Integer (Settings.Head_Size)));
+               T.Image (Long_Long_Integer (Settings.Head_Size)), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.rope_dimension",
-               T.Image (Long_Long_Integer (Settings.Rotary)));
+               T.Image (Long_Long_Integer (Settings.Rotary)), Pres.Answer);
             Pres.Put_Field
               (Screen, "cli.inspect.label.rope_base",
-               T.Image (Long_Float (Settings.Rope_Base), 1));
+               T.Image (Long_Float (Settings.Rope_Base), 1), Pres.Answer);
 
             --  Tokenizer.
             declare
@@ -788,28 +788,28 @@ package body Model_Runner.CLI.Execute is
                Kind  : E.Error_Info;
             begin
                Vocab.Load (Words, Container, Model_Bounds (Item), Kind);
-               Pres.Put_Heading (Screen, "cli.inspect.heading.tokenizer");
+               Pres.Put_Heading (Screen, "cli.inspect.heading.tokenizer", Pres.Answer);
                if E.Is_Error (Kind) then
                   Pres.Report (Screen, Kind);
                else
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.tokenizer_model",
-                     T.Escape_Controls (Vocab.Model_Name (Words)));
+                     T.Escape_Controls (Vocab.Model_Name (Words)), Pres.Answer);
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.vocabulary",
-                     T.Image (Long_Long_Integer (Vocab.Size (Words))));
+                     T.Image (Long_Long_Integer (Vocab.Size (Words))), Pres.Answer);
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.byte_fallback",
                      Screen.Message_Value
                        (if Vocab.Has_Byte_Fallback (Words)
                         then "cli.inspect.value.yes"
-                        else "cli.inspect.value.no"));
+                        else "cli.inspect.value.no"), Pres.Answer);
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.bos_token",
-                     T.Image (Long_Long_Integer (Vocab.Beginning_Token (Words))));
+                     T.Image (Long_Long_Integer (Vocab.Beginning_Token (Words))), Pres.Answer);
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.eos_token",
-                     T.Image (Long_Long_Integer (Vocab.End_Token (Words))));
+                     T.Image (Long_Long_Integer (Vocab.End_Token (Words))), Pres.Answer);
                   Settings.Vocabulary := Vocab.Size (Words);
                end if;
                Vocab.Close (Words);
@@ -827,7 +827,7 @@ package body Model_Runner.CLI.Execute is
                if Text_Value = "" then
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.template",
-                     Screen.Message_Value ("cli.inspect.value.absent"));
+                     Screen.Message_Value ("cli.inspect.value.absent"), Pres.Answer);
                else
                   Model_Runner.Templates.Compile
                     (Compiled, Text_Value, Model_Bounds (Item), Outcome);
@@ -836,7 +836,7 @@ package body Model_Runner.CLI.Execute is
                      Screen.Message_Value
                        (if E.Is_Ok (Outcome)
                         then "cli.inspect.value.present_supported"
-                        else "cli.inspect.value.present_unsupported"));
+                        else "cli.inspect.value.present_unsupported"), Pres.Answer);
                   if E.Is_Error (Outcome) and then Item.Level = Opt.Verbose then
                      Pres.Report (Screen, Outcome);
                   end if;
@@ -850,16 +850,16 @@ package body Model_Runner.CLI.Execute is
                Detail2 : E.Error_Info;
             begin
                L.Plan_For (Settings, Item.Context_Size, Plan, Detail2);
-               Pres.Put_Heading (Screen, "cli.inspect.heading.memory");
+               Pres.Put_Heading (Screen, "cli.inspect.heading.memory", Pres.Answer);
                Pres.Put_Field
                  (Screen, "cli.inspect.label.model_bytes",
                   T.Image
                     (Long_Long_Integer
-                       (Containers.Tensor_Data_Bytes (Container))));
+                       (Containers.Tensor_Data_Bytes (Container))), Pres.Answer);
                if E.Is_Ok (Detail2) then
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.session_bytes",
-                     T.Image (Long_Long_Integer (Plan.Total_Resident)));
+                     T.Image (Long_Long_Integer (Plan.Total_Resident)), Pres.Answer);
                end if;
             end;
          end if;
@@ -870,17 +870,17 @@ package body Model_Runner.CLI.Execute is
       --  answer stopped being obvious when a second backend arrived: --backend
       --  reference takes one worker whatever --threads says, and a caller who
       --  cannot see that has no way to tell a slow run from a wrong one.
-      Pres.Put_Heading (Screen, "cli.inspect.heading.execution");
+      Pres.Put_Heading (Screen, "cli.inspect.heading.execution", Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.backend",
-         Model_Runner.Backend.Backend_Name (Item.Backend));
+         Model_Runner.Backend.Backend_Name (Item.Backend), Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.workers",
-         T.Image (Long_Long_Integer (Selected_Workers (Item))));
+         T.Image (Long_Long_Integer (Selected_Workers (Item))), Pres.Answer);
 
       --  Optional detail listings. Neither dumps a vocabulary by default.
       if Item.Show_Metadata then
-         Pres.Put_Heading (Screen, "cli.inspect.heading.metadata");
+         Pres.Put_Heading (Screen, "cli.inspect.heading.metadata", Pres.Answer);
          for Index in 1 .. Containers.Metadata_Count (Container) loop
             declare
                Key : constant String :=
@@ -889,13 +889,13 @@ package body Model_Runner.CLI.Execute is
                Pres.Put_Data_Field
                  (Screen,
                   T.Escape_Controls (Key),
-                  Containers.Value_Image (Container, Index));
+                  Containers.Value_Image (Container, Index), Pres.Answer);
             end;
          end loop;
       end if;
 
       if Item.Show_Tensors then
-         Pres.Put_Heading (Screen, "cli.inspect.heading.tensors");
+         Pres.Put_Heading (Screen, "cli.inspect.heading.tensors", Pres.Answer);
          for Index in 1 .. Containers.Tensor_Count (Container) loop
             declare
                Shape : String (1 .. 64) := [others => ' '];
@@ -923,7 +923,7 @@ package body Model_Runner.CLI.Execute is
                     (Containers.Tensor_Name (Container, Index))
                   & "  " & Shape (1 .. Last)
                   & "  "
-                  & G.Type_Name (Containers.Tensor_Format (Container, Index)));
+                  & G.Type_Name (Containers.Tensor_Format (Container, Index)), Pres.Answer);
             end;
          end loop;
       end if;

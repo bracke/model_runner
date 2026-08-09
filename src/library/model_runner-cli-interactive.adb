@@ -246,29 +246,29 @@ package body Model_Runner.CLI.Interactive is
       begin
          Pres.Put_Field
            (Screen, "cli.interactive.setting.temperature",
-            T.Image (Long_Float (Item.Sampling.Temperature), 3));
+            T.Image (Long_Float (Item.Sampling.Temperature), 3), Pres.Diagnostic);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.top_k",
-            T.Image (Long_Long_Integer (Item.Sampling.Top_K)));
+            T.Image (Long_Long_Integer (Item.Sampling.Top_K)), Pres.Diagnostic);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.top_p",
-            T.Image (Long_Float (Item.Sampling.Top_P), 3));
+            T.Image (Long_Float (Item.Sampling.Top_P), 3), Pres.Diagnostic);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.min_p",
-            T.Image (Long_Float (Item.Sampling.Min_P), 3));
+            T.Image (Long_Float (Item.Sampling.Min_P), 3), Pres.Diagnostic);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.repeat_penalty",
-            T.Image (Long_Float (Item.Sampling.Repeat_Penalty), 3));
+            T.Image (Long_Float (Item.Sampling.Repeat_Penalty), 3), Pres.Diagnostic);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.repeat_window",
-            T.Image (Long_Long_Integer (Item.Sampling.Repeat_Window)));
+            T.Image (Long_Long_Integer (Item.Sampling.Repeat_Window)), Pres.Diagnostic);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.max_tokens",
-            T.Image (Long_Long_Integer (Item.Max_Tokens)));
+            T.Image (Long_Long_Integer (Item.Max_Tokens)), Pres.Diagnostic);
          if Item.Has_Seed then
             Pres.Put_Field
               (Screen, "cli.interactive.setting.seed",
-               T.Image (Item.Seed));
+               T.Image (Item.Seed), Pres.Diagnostic);
          end if;
       end Show_Settings;
 
