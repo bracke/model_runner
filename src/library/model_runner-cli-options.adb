@@ -6,6 +6,132 @@ with Model_Runner.Templates;
 
 package body Model_Runner.CLI.Options is
 
+   --  Every option, the commands that take it, and the help line that
+   --  documents it.
+   --
+   --  Three answers to one question used to be given separately: what the
+   --  parser accepts, what a command may be given, and what the help screens
+   --  list. The parser accepted everything for every command -- `inspect
+   --  m.gguf --temperature 0.5 --interactive` ran the inspection and said
+   --  nothing -- and the help lists were written out beside it, so `inspect`
+   --  documented five options while thirty-seven were reachable, and --quiet
+   --  and --verbose worked there while appearing only under run.
+   type Entry_Text is access constant String;
+
+   type Registry_Row is record
+      Name  : Entry_Text;
+      Where : Command_Set;
+      Help  : Entry_Text;
+   end record;
+
+   --  A literal on the heap, so the table can be written flat. Allocated at
+   --  elaboration and never released, which is what a table of constants is.
+   function Text (Value : String) return Entry_Text
+   is (new String'(Value));
+
+   Registry : constant array (1 .. 37) of Registry_Row :=
+     [
+      (Text ("--prompt"), [Command_Run => True, others => False], Text ("prompt")),
+      (Text ("--prompt-file"), [Command_Run => True, others => False], Text ("prompt_file")),
+      (Text ("--interactive"), [Command_Run => True, others => False], Text ("interactive")),
+      (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
+      (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
+      (Text ("--system-file"), [Command_Run => True, others => False], Text ("system_file")),
+      (Text ("--max-tokens"), [Command_Run => True, others => False], Text ("max_tokens")),
+      (Text ("--context-size"), [Command_Run => True, others => False], Text ("context_size")),
+      (Text ("--threads"),
+       [Command_Run | Command_Inspect => True, others => False],
+       Text ("threads")),
+      (Text ("--backend"),
+       [Command_Run | Command_Inspect => True, others => False],
+       Text ("backend")),
+      (Text ("--batch-size"), [Command_Run => True, others => False], Text ("batch_size")),
+      (Text ("--temperature"), [Command_Run => True, others => False], Text ("temperature")),
+      (Text ("--top-k"), [Command_Run => True, others => False], Text ("top_k")),
+      (Text ("--top-p"), [Command_Run => True, others => False], Text ("top_p")),
+      (Text ("--min-p"), [Command_Run => True, others => False], Text ("min_p")),
+      (Text ("--chat-template"), [Command_Run => True, others => False], Text ("chat_template")),
+      (Text ("--repeat-penalty"), [Command_Run => True, others => False], Text ("repeat_penalty")),
+      (Text ("--frequency-penalty"), [Command_Run => True, others => False], Text ("frequency_penalty")),
+      (Text ("--presence-penalty"), [Command_Run => True, others => False], Text ("presence_penalty")),
+      (Text ("--repeat-window"), [Command_Run => True, others => False], Text ("repeat_window")),
+      (Text ("--seed"), [Command_Run => True, others => False], Text ("seed")),
+      (Text ("--stop"), [Command_Run => True, others => False], Text ("stop")),
+      (Text ("--stop-token"), [Command_Run => True, others => False], Text ("stop_token")),
+      (Text ("--memory-limit"), [Command_Run => True, others => False], Text ("memory_limit")),
+      (Text ("--mmap"), [Command_Run => True, others => False], Text ("mmap")),
+      (Text ("--no-mmap"), [Command_Run => True, others => False], Text ("no_mmap")),
+      (Text ("--show-stats"), [Command_Run => True, others => False], Text ("show_stats")),
+      (Text ("--no-stats"), [Command_Run => True, others => False], Text ("no_stats")),
+      (Text ("--metadata"), [Command_Inspect => True, others => False], Text ("metadata")),
+      (Text ("--tensors"), [Command_Inspect => True, others => False], Text ("tensors")),
+      (Text ("--validate"), [Command_Inspect => True, others => False], Text ("validate")),
+      (Text ("--quiet"), [others => True], Text ("quiet")),
+      (Text ("--verbose"), [others => True], Text ("verbose")),
+      (Text ("--locale"), [others => True], Text ("locale")),
+      (Text ("--color"), [others => True], Text ("color")),
+      (Text ("--help"), [others => True], Text ("")),
+      (Text ("--version"), [others => True], Text (""))];
+
+   ------------------
+   -- Option_Count --
+   ------------------
+
+   function Option_Count return Natural is (Registry'Length);
+
+   -----------------
+   -- Option_Name --
+   -----------------
+
+   function Option_Name (Index : Positive) return String
+   is (Registry (Index).Name.all);
+
+   ---------------------
+   -- Option_Commands --
+   ---------------------
+
+   function Option_Commands (Index : Positive) return Command_Set
+   is (Registry (Index).Where);
+
+   -----------------
+   -- Option_Help --
+   -----------------
+
+   function Option_Help (Index : Positive) return String
+   is (Registry (Index).Help.all);
+
+   ------------------
+   -- Command_Word --
+   ------------------
+
+   --  The word a caller types for a command. Never localized: it is
+   --  protocol, and a diagnostic naming a translated command word tells the
+   --  reader to type something the parser will refuse.
+   function Command_Word (Kind : Command_Kind) return String
+   is (case Kind is
+         when Command_None    => "",
+         when Command_Run     => "run",
+         when Command_Inspect => "inspect",
+         when Command_Help    => "help",
+         when Command_Version => "version");
+
+   -------------
+   -- Accepts --
+   -------------
+
+   function Accepts (Kind : Command_Kind; Name : String) return Boolean is
+   begin
+      for Row of Registry loop
+         if Row.Name.all = Name then
+            return Row.Where (Kind);
+         end if;
+      end loop;
+
+      --  A name no row holds is not an option this program has, which the
+      --  parser reports for itself.
+      return False;
+   end Accepts;
+
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Numerics.Real;
 
@@ -410,6 +536,14 @@ package body Model_Runner.CLI.Options is
       Options_Ended : Boolean := False;
       Operands      : Natural := 0;
 
+      --  Every option seen, in order, so that each can be judged against the
+      --  command once there is one. An option may be typed before the
+      --  command word, so this cannot be decided where it is read.
+      Max_Seen_Options : constant := 64;
+      Typed      : array (1 .. Max_Seen_Options) of Entry_Text :=
+        [others => null];
+      Typed_Used : Natural := 0;
+
       --  Track which options were seen so that a repeat is a usage error
       --  rather than a silent last-wins.
       type Option_Flag is
@@ -606,6 +740,11 @@ package body Model_Runner.CLI.Options is
 
                   Good : Boolean;
                begin
+                  if Typed_Used < Max_Seen_Options then
+                     Typed_Used := Typed_Used + 1;
+                     Typed (Typed_Used) := Text (Name);
+                  end if;
+
                   if Name = "--help" then
                      No_Value (Name, Value_Present,
                                Argument (Value_First .. Argument'Last), Good);
@@ -1124,6 +1263,23 @@ package body Model_Runner.CLI.Options is
          Status := E.Make (E.CLI_Missing_Command);
          return;
       end if;
+
+      --  An option this command does not take is a usage error, not a
+      --  setting to ignore. Every option used to reach every command:
+      --  `inspect m.gguf --temperature 0.5 --interactive` ran the inspection
+      --  and said nothing, so on a command documenting five options and
+      --  accepting thirty-seven a typo and a setting looked alike.
+      for Index in 1 .. Typed_Used loop
+         if not Accepts (Result.Kind, Typed (Index).all) then
+            Status := E.Make (E.CLI_Option_Not_For_Command);
+            E.Add_Text
+              (Status, "option", Typed (Index).all, E.Param_Identifier);
+            E.Add_Text
+              (Status, "value", Command_Word (Result.Kind),
+               E.Param_Identifier);
+            return;
+         end if;
+      end loop;
 
       if Result.Kind in Command_Run | Command_Inspect
         and then T.Is_Empty (Result.Model_Path)

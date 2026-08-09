@@ -38,6 +38,9 @@ package body Checks is
 
    package Dirs renames Ada.Directories;
    package E renames Model_Runner.Errors;
+   package Opt renames Model_Runner.CLI.Options;
+
+   use type Opt.Command_Kind;
    package Files renames Project_Tools.Files;
    package T renames Model_Runner.Text;
 
@@ -621,6 +624,20 @@ package body Checks is
                    (Model_Runner.Progress.Generation_Stage'Image (Stage)));
          end loop;
 
+         --  A fourth family: a help line per option per command that takes
+         --  it, built where the help screen is written rather than named
+         --  there. The registry says which those are.
+         for Index in 1 .. Opt.Option_Count loop
+            if Opt.Option_Help (Index) /= "" then
+               if Opt.Option_Commands (Index) (Opt.Command_Run) then
+                  Reached ("help.run." & Opt.Option_Help (Index));
+               end if;
+               if Opt.Option_Commands (Index) (Opt.Command_Inspect) then
+                  Reached ("help.inspect." & Opt.Option_Help (Index));
+               end if;
+            end if;
+         end loop;
+
          Scan_Keys ("src");
 
          for Index in 1 .. Count loop
@@ -630,6 +647,120 @@ package body Checks is
                      & Keys (Index).Text (1 .. Keys (Index).Last));
             end if;
          end loop;
+      end;
+
+      --  The program answers for its own options.
+      --
+      --  Three answers to one question used to be given separately: what
+      --  the parser accepts, what a command may be given, and what the help
+      --  screens list. Every option reached every command -- `inspect
+      --  m.gguf --temperature 0.5 --interactive` ran the inspection and said
+      --  nothing -- and the help lists were written out beside the parser,
+      --  so inspect documented five options and took thirty-seven, with
+      --  --quiet and --verbose working there while appearing only under run.
+      declare
+         Parser  : constant String :=
+           Contents ("src/library/model_runner-cli-options.adb");
+         Catalog : constant String :=
+           Contents ("resources/messages/catalog.txt");
+         Found   : Natural := 0;
+
+         --  The catalog carries an English entry for this key.
+         function Documented (Key : String) return Boolean
+         is (Holds (Catalog, Character'Val (10) & "en." & Key & " ="));
+      begin
+         Result.Performed := Result.Performed + 1;
+         if Parser'Length = 0 then
+            Fail ("the option parser is missing; the option check no longer "
+                  & "reads the code it describes");
+         end if;
+
+         for Index in 1 .. Opt.Option_Count loop
+            declare
+               Name : constant String := Opt.Option_Name (Index);
+               Help : constant String := Opt.Option_Help (Index);
+            begin
+               --  The parser reads what the registry lists.
+               Result.Performed := Result.Performed + 1;
+               if not Holds (Parser, "Name = """ & Name & """") then
+                  Fail ("the option registry lists " & Name
+                        & ", which the parser does not read");
+               end if;
+
+               --  And every command that takes it documents it, in a line
+               --  of its own, so that a screen cannot say less than the
+               --  command accepts.
+               if Help /= "" then
+                  for Kind in Opt.Command_Kind loop
+                     if Opt.Option_Commands (Index) (Kind)
+                       and then Kind in Opt.Command_Run | Opt.Command_Inspect
+                     then
+                        declare
+                           Topic : constant String :=
+                             (if Kind = Opt.Command_Run
+                              then "run" else "inspect");
+                        begin
+                           Result.Performed := Result.Performed + 1;
+                           if not Documented
+                                    ("help." & Topic & "." & Help)
+                           then
+                              Fail (Topic & " takes " & Name
+                                    & ", which no help line documents");
+                           end if;
+                        end;
+                     end if;
+                  end loop;
+               end if;
+            end;
+         end loop;
+
+         --  And back the other way, from the parser to the registry.
+         declare
+            Needle : constant String := "Name = ""--";
+            Index  : Natural := Parser'First;
+         begin
+            while Index <= Parser'Last - Needle'Length loop
+               if Parser (Index .. Index + Needle'Length - 1) = Needle then
+                  declare
+                     From : constant Natural := Index + Needle'Length - 2;
+                     Stop : Natural := From;
+                     Seen : Boolean := False;
+                  begin
+                     while Stop <= Parser'Last
+                       and then Parser (Stop) /= '"'
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+
+                     declare
+                        Name : constant String := Parser (From .. Stop - 1);
+                     begin
+                        Found := Found + 1;
+                        for Which in 1 .. Opt.Option_Count loop
+                           if Opt.Option_Name (Which) = Name then
+                              Seen := True;
+                           end if;
+                        end loop;
+
+                        Result.Performed := Result.Performed + 1;
+                        if not Seen then
+                           Fail ("the parser reads " & Name
+                                 & ", which the option registry does not "
+                                 & "list");
+                        end if;
+                     end;
+                  end;
+               end if;
+               Index := Index + 1;
+            end loop;
+         end;
+
+         Result.Performed := Result.Performed + 1;
+         if Found /= Opt.Option_Count then
+            Fail ("the parser reads" & Natural'Image (Found)
+                  & " options and the registry lists"
+                  & Natural'Image (Opt.Option_Count));
+         end if;
       end;
 
       --  The tests tool answers for its own commands.

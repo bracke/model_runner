@@ -38,6 +38,23 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- `inspect` refuses an option it does not take. Every option reached every
+  command: `inspect m.gguf --temperature 0.5 --interactive --raw` ran the
+  inspection and said nothing, on a command whose help documented five
+  options while thirty-seven were reachable. `MR-CLI-0020` now names the
+  option and the command.
+
+- The options, the commands that take them and the help lines that document
+  them are one registry. The help screens are generated from it, so a screen
+  cannot say less than the command accepts, and the checklist holds the
+  parser against it in both directions.
+
+- `inspect` documents `--quiet` and `--verbose`, which it has always
+  honoured, and takes `--threads` and `--backend`, which decide the two
+  figures it reports. `--locale` and `--color` reach every command,
+  including `help` and `version`, where they had never been documented and
+  were briefly refused while this was being written.
+
 - Every command of the tests tool refuses an option it does not take, and
   the check happens once rather than in each command. Five of eleven checked
   and six did not: `tests check --nonsense` ran the whole gate without a
@@ -876,7 +893,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 148 diagnostic
+- Localization through `messages`, with a catalog entry for all 149 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

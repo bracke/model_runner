@@ -62,6 +62,48 @@ package Model_Runner.CLI.Options is
       Command_Help,
       Command_Version);
 
+   --  Which commands an option belongs to.
+   type Command_Set is array (Command_Kind) of Boolean;
+
+   --  How many options the program accepts.
+   --
+   --  @return The number of entries in the option registry.
+   function Option_Count return Natural;
+
+   --  One option's name, with its leading dashes.
+   --
+   --  @param Index Position, from one.
+   --  @return The option name as it is typed.
+   function Option_Name (Index : Positive) return String;
+
+   --  The commands that take an option.
+   --
+   --  @param Index Position, from one.
+   --  @return The set of commands it belongs to.
+   function Option_Commands (Index : Positive) return Command_Set;
+
+   --  The catalog key suffix that documents an option.
+   --
+   --  The full key is "help." & command & "." & this, so one option
+   --  documented under two commands has a line for each, in each locale.
+   --
+   --  @param Index Position, from one.
+   --  @return The suffix, or an empty string for an option no help lists.
+   function Option_Help (Index : Positive) return String;
+
+   --  Report whether a command takes an option.
+   --
+   --  Every option used to be accepted by every command: `inspect m.gguf
+   --  --temperature 0.5 --interactive` ran the inspection and said nothing,
+   --  and thirty-two options were reachable on a command whose help
+   --  documents five. A reader who cannot tell a refusal from an
+   --  acceptance cannot tell a typo from a setting.
+   --
+   --  @param Kind Command being parsed.
+   --  @param Name Option name, with its dashes.
+   --  @return True when that command takes it.
+   function Accepts (Kind : Command_Kind; Name : String) return Boolean;
+
    --  Where the prompt comes from.
    type Prompt_Source is
      (Prompt_Unset,

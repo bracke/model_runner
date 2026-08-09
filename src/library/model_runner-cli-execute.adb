@@ -498,6 +498,42 @@ package body Model_Runner.CLI.Execute is
       --  is what the line's {value} stands for. That is how a line listing
       --  what this build carries stays in the block with the rest instead of
       --  being printed beside it and losing its indentation.
+      --  Every option a command takes, in the order the registry holds
+      --  them, each with the line that documents it.
+      --
+      --  The lists used to be written out here beside a parser that
+      --  accepted a different set: `inspect` documented five options and
+      --  took thirty-seven, and --quiet and --verbose worked there while
+      --  appearing only under run. Generated from the registry, a help
+      --  screen cannot say less than the command accepts.
+      procedure Options_Of (Kind : Opt.Command_Kind; Topic_Name : String) is
+      begin
+         for Index in 1 .. Opt.Option_Count loop
+            if Opt.Option_Commands (Index) (Kind)
+              and then Opt.Option_Help (Index) /= ""
+            then
+               declare
+                  Key : constant String :=
+                    "help." & Topic_Name & "." & Opt.Option_Help (Index);
+
+                  --  Three lines name what this build carries rather than
+                  --  a list somebody typed. The value goes in as an
+                  --  argument so the sentence around it stays localized.
+                  Value : constant String :=
+                    (if Opt.Option_Name (Index) = "--color"
+                     then Opt.Color_Names
+                     elsif Opt.Option_Name (Index) = "--backend"
+                     then Backend_Names
+                     elsif Opt.Option_Name (Index) = "--chat-template"
+                     then Format_Names
+                     else "");
+               begin
+                  Screen.Put_Option (Key, [Loc.Named ("value", Value)]);
+               end;
+            end if;
+         end loop;
+      end Options_Of;
+
       procedure Block (Keys : Loc.Argument_List) is
       begin
          for Entry_Value of Keys loop
@@ -513,39 +549,8 @@ package body Model_Runner.CLI.Execute is
          Screen.Put_Message ("help.run.summary");
          Screen.Put_Line ("");
          Screen.Put_Message ("help.run.options");
-         Block
-           ([Loc.Named ("help.run.prompt", ""),
-             Loc.Named ("help.run.prompt_file", ""),
-             Loc.Named ("help.run.interactive", ""),
-             Loc.Named ("help.run.raw", ""),
-             Loc.Named ("help.run.system", ""),
-             Loc.Named ("help.run.system_file", ""),
-             Loc.Named ("help.run.max_tokens", ""),
-             Loc.Named ("help.run.context_size", ""),
-             Loc.Named ("help.run.threads", ""),
-             Loc.Named ("help.run.backend", Backend_Names),
-             Loc.Named ("help.run.batch_size", ""),
-             Loc.Named ("help.run.temperature", ""),
-             Loc.Named ("help.run.top_k", ""),
-             Loc.Named ("help.run.top_p", ""),
-             Loc.Named ("help.run.min_p", ""),
-             Loc.Named ("help.run.chat_template", Format_Names),
-             Loc.Named ("help.run.repeat_penalty", ""),
-             Loc.Named ("help.run.frequency_penalty", ""),
-             Loc.Named ("help.run.presence_penalty", ""),
-             Loc.Named ("help.run.repeat_window", ""),
-             Loc.Named ("help.run.seed", ""),
-             Loc.Named ("help.run.stop", ""),
-             Loc.Named ("help.run.stop_token", ""),
-             Loc.Named ("help.run.memory_limit", ""),
-             Loc.Named ("help.run.mmap", ""),
-             Loc.Named ("help.run.no_mmap", ""),
-             Loc.Named ("help.run.quiet", ""),
-             Loc.Named ("help.run.verbose", ""),
-             Loc.Named ("help.run.show_stats", ""),
-             Loc.Named ("help.run.no_stats", ""),
-             Loc.Named ("help.run.locale", ""),
-             Loc.Named ("help.run.color", Opt.Color_Names)]);
+         Options_Of (Opt.Command_Run, "run");
+
          Screen.Put_Line ("");
          Screen.Put_Message ("help.run.streams");
          Screen.Put_Message ("help.run.privacy");
@@ -556,12 +561,7 @@ package body Model_Runner.CLI.Execute is
          Screen.Put_Message ("help.inspect.summary");
          Screen.Put_Line ("");
          Screen.Put_Message ("help.inspect.options");
-         Block
-           ([Loc.Named ("help.inspect.metadata", ""),
-             Loc.Named ("help.inspect.tensors", ""),
-             Loc.Named ("help.inspect.validate", ""),
-             Loc.Named ("help.inspect.locale", ""),
-             Loc.Named ("help.inspect.color", Opt.Color_Names)]);
+         Options_Of (Opt.Command_Inspect, "inspect");
 
       elsif Topic = "version" then
          Screen.Put_Message ("help.version.usage");
