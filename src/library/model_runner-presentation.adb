@@ -56,6 +56,24 @@ package body Model_Runner.Presentation is
    function Styles_Diagnostics (Item : Console) return Boolean
    is (Styled (Item, Item.Capabilities.Error_Is_Terminal));
 
+   --  Whether the stream a line is going to is a terminal.
+   --
+   --  Every styling decision used to ask this of standard error, whatever
+   --  stream the line was going to. That was invisible while only the error
+   --  stream carried anything worth colouring; the moment the inspection
+   --  report moved to standard output, `inspect MODEL > report.txt` began
+   --  writing escape sequences into the file whenever a terminal was still
+   --  attached to standard error, which is the ordinary case. A destination
+   --  now names its own state, and the answer follows the line.
+   function Attached (Item : Console; Where : Destination) return Boolean
+   is (case Where is
+         when Answer     => Item.Capabilities.Output_Is_Terminal,
+         when Diagnostic => Item.Capabilities.Error_Is_Terminal);
+
+   --  Whether a line going to this stream may carry escape sequences.
+   function Styles (Item : Console; Where : Destination) return Boolean
+   is (Styled (Item, Attached (Item, Where)));
+
    --  Look up a localized message, tolerating an absent catalog.
    function Message
      (Item      : Console;
@@ -157,10 +175,10 @@ package body Model_Runner.Presentation is
    begin
       Write_Line
         (Item, Where,
-         (if Styles_Diagnostics (Item)
+         (if Styles (Item, Where)
           then Terminal_Styles.Decorate
                  (Label, Terminal_Styles.Role_Header,
-                  Item.Capabilities.Error_Is_Terminal)
+                  Attached (Item, Where))
           else Label));
    end Put_Heading;
 
@@ -186,10 +204,10 @@ package body Model_Runner.Presentation is
       Write_Line
         (Item, Where,
          "  "
-         & (if Styles_Diagnostics (Item)
+         & (if Styles (Item, Where)
             then Terminal_Styles.Decorate
                    (Label, Terminal_Styles.Role_Muted,
-                    Item.Capabilities.Error_Is_Terminal)
+                    Attached (Item, Where))
             else Label)
          & String'(1 .. Padding => ' ')
          & Value);
@@ -214,10 +232,10 @@ package body Model_Runner.Presentation is
       Write_Line
         (Item, Where,
          "  "
-         & (if Styles_Diagnostics (Item)
+         & (if Styles (Item, Where)
             then Terminal_Styles.Decorate
                    (Label, Terminal_Styles.Role_Muted,
-                    Item.Capabilities.Error_Is_Terminal)
+                    Attached (Item, Where))
             else Label)
          & String'(1 .. Padding => ' ')
          & Value);

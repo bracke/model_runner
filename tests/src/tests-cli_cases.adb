@@ -4849,6 +4849,119 @@ package body Tests.CLI_Cases is
    -- Register_Tests --
    --------------------
 
+   -------------------------------
+   -- Styling_Follows_Its_Stream --
+   -------------------------------
+
+   --  A line is coloured according to the stream it is going to.
+   --
+   --  Every styling decision asked whether standard error was a terminal,
+   --  whatever stream the line was for. That was invisible while only the
+   --  error stream carried anything worth colouring. The moment the
+   --  inspection report moved to standard output it became
+   --  `inspect MODEL > report.txt` writing thirty-five escape sequences into
+   --  the file, because a terminal was still attached to standard error --
+   --  which is what redirecting one stream and not the other means.
+   --
+   --  No test could have seen it: every console in this suite is opened
+   --  Color_Never with both terminal flags False, so the styling policy was
+   --  exercised only in the arrangement where nothing is styled. This one
+   --  states the two arrangements that matter and reads the bytes.
+
+   procedure Styling_Follows_Its_Stream
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Out_Path : constant String := "obj/styling-out.txt";
+      Err_Path : constant String := "obj/styling-err.txt";
+
+      --  Write one heading and one field to each stream, with the terminals
+      --  arranged as the caller says.
+      procedure Wrote (Answer_Is_Terminal, Error_Is_Terminal : Boolean) is
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : Model_Runner.Presentation.Console;
+         Answer, Errors : File_Type;
+      begin
+         Model_Runner.Localization.Open
+           (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access, Opt.Color_Auto,
+            (Output_Is_Terminal => Answer_Is_Terminal,
+             Error_Is_Terminal  => Error_Is_Terminal,
+             Input_Is_Terminal  => False,
+             Colour_Suppressed  => False),
+            Opt.Normal);
+
+         Create (Answer, Out_File, Out_Path);
+         Create (Errors, Out_File, Err_Path);
+         Set_Output (Answer);
+         Set_Error (Errors);
+         begin
+            Model_Runner.Presentation.Put_Heading
+              (Screen, "cli.inspect.heading.execution",
+               Model_Runner.Presentation.Answer);
+            Model_Runner.Presentation.Put_Field
+              (Screen, "cli.inspect.label.backend", "cpu",
+               Model_Runner.Presentation.Answer);
+            Model_Runner.Presentation.Put_Heading
+              (Screen, "statistics.heading",
+               Model_Runner.Presentation.Diagnostic);
+            Model_Runner.Presentation.Put_Field
+              (Screen, "statistics.backend", "cpu",
+               Model_Runner.Presentation.Diagnostic);
+         exception
+            when others =>
+               Set_Output (Standard_Output);
+               Set_Error (Standard_Error);
+               Close (Answer);
+               Close (Errors);
+               Model_Runner.Localization.Close (Catalog);
+               raise;
+         end;
+         Set_Output (Standard_Output);
+         Set_Error (Standard_Error);
+         Close (Answer);
+         Close (Errors);
+         Model_Runner.Localization.Close (Catalog);
+      end Wrote;
+
+      --  Report whether text carries an escape sequence.
+      function Coloured (Text : String) return Boolean is
+      begin
+         for Index in Text'Range loop
+            if Text (Index) = ASCII.ESC then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Coloured;
+
+      function Answered return String
+      is (Project_Tools.Files.Read_Raw_File (Out_Path));
+
+      function Complained return String
+      is (Project_Tools.Files.Read_Raw_File (Err_Path));
+   begin
+      --  A report on a terminal, with the diagnostics redirected. This is
+      --  the arrangement that was wrong the other way round.
+      Wrote (Answer_Is_Terminal => True, Error_Is_Terminal => False);
+      Assert (Coloured (Answered),
+              "a report going to a terminal was not styled");
+      Assert (not Coloured (Complained),
+              "a diagnostic going to a file carried escape sequences");
+
+      --  And the arrangement a redirected report makes: the terminal is
+      --  still on standard error, and nothing may follow it to the file.
+      Wrote (Answer_Is_Terminal => False, Error_Is_Terminal => True);
+      Assert (not Coloured (Answered),
+              "a report going to a file carried escape sequences");
+      Assert (Coloured (Complained),
+              "a diagnostic going to a terminal was not styled");
+   end Styling_Follows_Its_Stream;
+
    ----------------------------
    -- Streams_Are_Separate --
    ----------------------------
@@ -5793,6 +5906,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Published_Transcripts_Are_Real'Access,
          "the transcripts the README publishes are what the program prints");
+      Register_Routine
+        (T, Styling_Follows_Its_Stream'Access,
+         "a line is coloured according to the stream it is going to");
       Register_Routine
         (T, Streams_Are_Separate'Access,
          "each kind of output leaves by the stream the README says it does");

@@ -25,6 +25,17 @@ Keep a Changelog and the project uses semantic versioning.
   to make. The README's stream table did not mention `inspect` at all; it
   does now.
 
+- Styling asks the stream a line is going to. Every styling decision asked
+  whether standard error was a terminal, whatever stream the line was for,
+  so moving the inspection report to standard output made
+  `inspect MODEL > report.txt` write thirty-five escape sequences into the
+  file: a terminal was still attached to standard error, which is what
+  redirecting one stream and not the other means. `Output_Is_Terminal` was
+  captured by the driver and read by nothing but `Supports_Interaction`, so
+  the README's claim of per-destination styling had never been true; it
+  could not bite while nothing but unstyled generated text used the other
+  destination.
+
 - Every test that read what a command wrote redirected both streams into one
   file, so no test could tell them apart and the five stream claims were
   checked by nothing. One test now runs each command with the streams kept
