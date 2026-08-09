@@ -539,7 +539,8 @@ package body Model_Runner.Llama is
       Observer : Model_Runner.Progress.Observer_Reference := null;
       Backend  : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Repack   : Boolean := False;
+      Repack   : Repack_Mode := No_Repack;
+      Threads  : Positive := 1;
       Status   : out E.Error_Info)
    is
       Ignored : E.Error_Info;
@@ -820,27 +821,51 @@ package body Model_Runner.Llama is
       --  follows is the same arithmetic on the same numbers. What it costs
       --  is four bytes a weight against about one, which is why it is asked
       --  for rather than done.
-      if Repack then
+      if Repack /= No_Repack then
          P.Publish (Observer, P.Load_Progress (P.Repacking_Weights));
 
          declare
+            --  Bytes a weight, and the format the copy is written in.
+            Width : constant B.Byte_Count :=
+              (if Repack = To_BF16 then 2 else 4);
+            Format : constant Model_Runner.GGUF.Tensor_Type :=
+              (if Repack = To_BF16
+               then Model_Runner.GGUF.Type_BF16
+               else Model_Runner.GGUF.Type_F32);
+
+            use type Interfaces.Unsigned_32;
+
             Needed : B.Byte_Count := 0;
-            Filled : B.Byte_Count := 0;
 
             --  Every matrix this model holds. A norm is already a decoded
             --  vector and a bias is too, so neither is here.
             type View_Access is access all T.View;
             type View_List is array (Positive range <>) of View_Access;
 
+            Skipped : Natural := 0;
+
             function Matrices return View_List is
                Room  : View_List (1 .. 2 + 7 * Item.Settings.Layers);
                Count : Natural := 0;
 
+               Target : constant Model_Runner.GGUF.Tensor_Type :=
+                 (if Repack = To_BF16
+                  then Model_Runner.GGUF.Type_BF16
+                  else Model_Runner.GGUF.Type_F32);
+
                procedure Add (Where : View_Access) is
                begin
+                  --  A matrix already in the target format is nothing to
+                  --  decode: copying it would double the memory to buy
+                  --  nothing, which is what the first version of this did
+                  --  to every binary32 tensor in a file.
                   if T.Is_Present (Where.all) then
-                     Count := Count + 1;
-                     Room (Count) := Where;
+                     if Model_Runner.GGUF."=" (Where.all.Format, Target) then
+                        Skipped := Skipped + 1;
+                     else
+                        Count := Count + 1;
+                        Room (Count) := Where;
+                     end if;
                   end if;
                end Add;
             begin
@@ -865,7 +890,7 @@ package body Model_Runner.Llama is
             for Where of Held loop
                Needed := Needed
                  + B.Byte_Count (Where.all.Rows)
-                   * B.Byte_Count (Where.all.Columns) * 4;
+                   * B.Byte_Count (Where.all.Columns) * Width;
             end loop;
 
             --  Asked for before it is taken, like the weights themselves.
@@ -892,19 +917,60 @@ package body Model_Runner.Llama is
             Mem.Record_Conversion
               (Item.Accounting, Interfaces.Unsigned_64 (Needed));
 
-            for Where of Held loop
-               declare
+            --  Where each matrix's copy begins, computed before anything
+            --  is written so that the decoding can be handed out.
+            declare
+               Bases : array (Held'Range) of B.Byte_Count :=
+                 [others => 0];
+               Trouble : E.Error_Info := E.Success;
+
+               --  Which matrix to take next. A queue rather than a slice
+               --  per task: the matrices differ by a factor of ten in size,
+               --  and a fair-looking split by count is not a fair split of
+               --  the work.
+               protected Shared is
+                  procedure Take (Index : out Natural);
+                  procedure Note (Reason : E.Error_Info);
+                  function Reason return E.Error_Info;
+               private
+                  Next : Natural := Held'First;
+                  Bad  : E.Error_Info := E.Success;
+               end Shared;
+
+               protected body Shared is
+                  procedure Take (Index : out Natural) is
+                  begin
+                     if Next > Held'Last or else E.Is_Error (Bad) then
+                        Index := 0;
+                     else
+                        Index := Next;
+                        Next := Next + 1;
+                     end if;
+                  end Take;
+
+                  procedure Note (Reason : E.Error_Info) is
+                  begin
+                     if E.Is_Ok (Bad) then
+                        Bad := Reason;
+                     end if;
+                  end Note;
+
+                  function Reason return E.Error_Info is (Bad);
+               end Shared;
+
+               --  One matrix, decoded into its own region.
+               procedure Decode_One (Which : Positive) is
+                  Where   : constant View_Access := Held (Which);
                   Rows    : constant Element_Count := Where.all.Rows;
                   Columns : constant Element_Count := Where.all.Columns;
-                  Base    : constant B.Byte_Count := Filled;
-                  Row     : T.Real_Array (0 .. Columns - 1) :=
-                    [others => 0.0];
-                  Fresh   : T.View;
+                  Base    : constant B.Byte_Count := Bases (Which);
+                  Row     : T.Real_Array (0 .. Columns - 1) := [others => 0.0];
+                  Local   : E.Error_Info;
                begin
                   for Index in 0 .. Rows - 1 loop
-                     T.Dequantize_Row (Where.all, Index, Row, Status);
-                     if E.Is_Error (Status) then
-                        Fail (Status);
+                     T.Dequantize_Row (Where.all, Index, Row, Local);
+                     if E.Is_Error (Local) then
+                        Shared.Note (Local);
                         return;
                      end if;
 
@@ -913,58 +979,120 @@ package body Model_Runner.Llama is
                            At_Byte : constant B.Byte_Count :=
                              Base
                              + (B.Byte_Count (Index) * B.Byte_Count (Columns)
-                                + B.Byte_Count (Column)) * 4;
+                                + B.Byte_Count (Column)) * Width;
                         begin
-                           Item.Repacked.all
-                             (Item.Repacked.all'First + At_Byte
-                              .. Item.Repacked.all'First + At_Byte + 3) :=
-                             B.Put_F32 (Row (Column));
+                           if Repack = To_BF16 then
+                              declare
+                                 Whole : constant Interfaces.Unsigned_32 :=
+                                   N.Bits (Row (Column));
+                                 Round : constant Interfaces.Unsigned_32 :=
+                                   16#7FFF#
+                                   + (Interfaces.Shift_Right (Whole, 16)
+                                      and 1);
+                              begin
+                                 Item.Repacked.all
+                                   (Item.Repacked.all'First + At_Byte
+                                    .. Item.Repacked.all'First + At_Byte + 1)
+                                   := B.Put_U16
+                                        (Interfaces.Unsigned_16
+                                           (Interfaces.Shift_Right
+                                              (Whole + Round, 16)
+                                            and 16#FFFF#));
+                              end;
+                           else
+                              Item.Repacked.all
+                                (Item.Repacked.all'First + At_Byte
+                                 .. Item.Repacked.all'First + At_Byte + 3) :=
+                                B.Put_F32 (Row (Column));
+                           end if;
                         end;
                      end loop;
 
-                     --  A large model takes a while to decode, and a caller
-                     --  that asked to cancel should not wait for all of it.
                      if C.Is_Cancelled (Cancel) then
-                        Fail (E.Make (E.Generation_Cancelled));
+                        Shared.Note (E.Make (E.Generation_Cancelled));
                         return;
                      end if;
                   end loop;
+               end Decode_One;
 
-                  T.Make
-                    (Format  => Model_Runner.GGUF.Type_F32,
-                     Rows    => Rows,
-                     Columns => Columns,
-                     Data    => Item.Repacked,
-                     Offset  => Base,
-                     Result  => Fresh,
-                     Status  => Status);
-                  if E.Is_Error (Status) then
-                     Fail (Status);
-                     return;
-                  end if;
+               task type Decoder;
 
-                  Where.all := Fresh;
-                  Filled := Filled
-                    + B.Byte_Count (Rows) * B.Byte_Count (Columns) * 4;
-               end;
-            end loop;
-
-            --  The file's own bytes are nobody's now. Every matrix refers
-            --  into the copy, and the vectors -- norms and biases -- were
-            --  decoded into their own storage before this ran, so what is
-            --  left is the arena and no reader for it. Held to the end of
-            --  the model's life it made repacking cost the copy and the
-            --  file at once: a peak of 5.2 GB where the copy is 4.4 and
-            --  the file 0.43.
-            declare
-               Was : constant Interfaces.Unsigned_64 :=
-                 (if Item.Arena = null then 0
-                  else Interfaces.Unsigned_64 (Item.Arena.all'Length));
+               task body Decoder is
+                  Which : Natural;
+               begin
+                  loop
+                     Shared.Take (Which);
+                     exit when Which = 0;
+                     Decode_One (Which);
+                  end loop;
+               exception
+                  when others =>
+                     Shared.Note (E.Make (E.Internal_Invariant_Violated));
+               end Decoder;
             begin
-               B.Free (Item.Arena);
-               Item.Arena_Base := 0;
-               Mem.Record_Release (Item.Accounting, Mem.Model_Weights, Was);
+               declare
+                  Running : B.Byte_Count := 0;
+               begin
+                  for Index in Held'Range loop
+                     Bases (Index) := Running;
+                     Running := Running
+                       + B.Byte_Count (Held (Index).all.Rows)
+                         * B.Byte_Count (Held (Index).all.Columns) * Width;
+                  end loop;
+               end;
+
+               declare
+                  Team : array (1 .. Positive'Min (Threads, Held'Length))
+                    of Decoder;
+                  pragma Unreferenced (Team);
+               begin
+                  null;
+               end;
+
+               Trouble := Shared.Reason;
+               if E.Is_Error (Trouble) then
+                  Fail (Trouble);
+                  return;
+               end if;
+
+               for Index in Held'Range loop
+                  declare
+                     Fresh : T.View;
+                  begin
+                     T.Make
+                       (Format  => Format,
+                        Rows    => Held (Index).all.Rows,
+                        Columns => Held (Index).all.Columns,
+                        Data    => Item.Repacked,
+                        Offset  => Bases (Index),
+                        Result  => Fresh,
+                        Status  => Status);
+                     if E.Is_Error (Status) then
+                        Fail (Status);
+                        return;
+                     end if;
+                     Held (Index).all := Fresh;
+                  end;
+               end loop;
             end;
+
+            --  Only when nothing is left pointing at it. A matrix already
+            --  in the target format is not copied, and its view still
+            --  refers into the file's bytes -- freeing them under it read
+            --  outside its storage on the first product, which is what an
+            --  all-binary32 file did the moment the skip was added.
+            if Skipped = 0 then
+               declare
+                  Was : constant Interfaces.Unsigned_64 :=
+                    (if Item.Arena = null then 0
+                     else Interfaces.Unsigned_64 (Item.Arena.all'Length));
+               begin
+                  B.Free (Item.Arena);
+                  Item.Arena_Base := 0;
+                  Mem.Record_Release
+                    (Item.Accounting, Mem.Model_Weights, Was);
+               end;
+            end if;
          end;
       end if;
 

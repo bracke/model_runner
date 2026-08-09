@@ -735,47 +735,40 @@ batching, which is the honest way to read the figure: `reference` is between
 two and three times slower than the same loop written for speed, and the
 remaining factor is the parallelism it has none of.
 
-### Repacking, and why it is off
+### Repacking
 
-`--repack` decodes every weight matrix once into binary32 and evaluates from
-that copy, instead of decoding a span of it on every pass. It cannot change
-what the model says: the values written are the ones the decoder produces, in
-the order the kernels read them, so the arithmetic that follows is the same
-arithmetic, and a test holds the logits to the bit. A memory limit counts the
-copy like anything else, because four bytes a weight against about one is the
-whole of the trade.
+`--repack MODE` decodes every weight matrix once at load and evaluates from
+that copy, instead of decoding a span of it on every pass. `f32` writes four
+bytes a weight and cannot change what the model says: the values written are
+the ones the decoder produces, in the order the kernels read them, and a test
+holds the logits to the bit. `bf16` writes two, rounding each value to the
+nearest brain float, which keeps eight mantissa bits where binary32 keeps
+twenty-three — so it can change what the model says, and is the faster of the
+two. A matrix already in the target format is left alone, and when nothing is
+left pointing into the file's own bytes they are released.
 
-The kernels say it should win. A binary32 row product measures 0.26 ns an
-element against 0.37 for Q8_0 and 0.69 for Q2_K, because nothing has to be
-unpacked before it can be multiplied. Twelve tokens from the seven-token
-prompt, generation only, on this machine:
+Twelve tokens from the seven-token prompt, generation only, medians of three:
 
-| weights | as stored | repacked | repacked size |
+| weights | as stored | `f32` | `bf16` |
 |---|---|---|---|
-| Q8_0 | 1.11 s | 1.34 s | 1.1 GB → 4.4 GB |
-| Q4_K | 1.11 s | 1.44 s | 0.67 GB → 4.4 GB |
-| Q2_K | 1.52 s | 1.34 s | 0.43 GB → 4.4 GB |
+| Q8_0 | 1.06 s | 1.38 s | **0.98 s** |
+| Q4_K | 1.14 s | 1.44 s | **0.97 s** |
+| Q2_K | 1.65 s | 1.38 s | **1.02 s** |
 
-The copy is decoded from the file's own bytes, so both exist while it is
-written and the file's are released when it is done: the peak is the sum and
-what the model holds afterwards is the copy. `inspect` reports that peak,
-which is the number that decides whether it will run -- 4.8 GB for the Q2_K
-file above, whose own weights are 0.43.
+So `f32` is worth it only for Q2_K, and `bf16` is worth it everywhere: seven
+per cent on Q8_0, fifteen on Q4_K, thirty-eight on Q2_K, at half the memory
+`f32` needs. The kernels explain both halves of that. A binary32 row product
+is the fastest per element — 0.26 ns against 0.31 for BF16, 0.37 for Q8_0 and
+0.69 for Q2_K — but those are measured on a 64 MB matrix, and a repacked
+model is 4.4 GB in binary32 against 2.2 in BF16. At that size the product
+waits for memory, and the format that moves fewer bytes wins even though it
+costs more per element to decode.
 
-So it loses on two of three, wins twelve per cent on the third, and costs ten
-seconds of decoding at load every time. `tests speed --model PATH --repack
-yes` takes that comparison again, and `inspect` says what the copy would need
-for a given file, beside what the file itself takes. The kernel figures are measured on a
-64 MB matrix and the model is 4.4 GB repacked: at that size the product is
-waiting for memory rather than for the decoder, and quadrupling the bytes to
-save the unpacking is a bad trade. Only Q2_K, whose decode is dearest and
-whose file is smallest, comes out ahead — and it pays ten times its size for
-twelve per cent.
-
-That is why it is a flag and not a default, and why the paragraph this
-replaced said the weights are consumed in the layout the file stores them in.
-The measurement is the answer to a question the code could not settle by
-itself.
+The decoding itself is handed to as many tasks as the run has workers, since
+the matrices are independent and each writes its own region: thirteen seconds
+became three for a one-gigabyte model. `inspect` reports the peak the copy
+needs, which is the file and the copy at once, because both exist while the
+second is written.
 
 ### Batched prefill
 

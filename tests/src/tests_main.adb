@@ -26,6 +26,7 @@ with Model_Runner.Tokenizer;
 with Model_Runner.Limits;
 with Model_Runner.Text;
 with Model_Runner.Errors;
+with Model_Runner.Llama;
 with Model_Runner.Platform;
 with Project_Tools.Files;
 with Project_Tools.Text;
@@ -512,6 +513,18 @@ begin
                return Default;
          end Number;
 
+         --  Named the way --repack names them.
+         function Mode_Of (Word : String) return Model_Runner.Llama.Repack_Mode
+         is
+         begin
+            for Mode in Model_Runner.Llama.Repack_Mode loop
+               if Model_Runner.Llama.Repack_Name (Mode) = Word then
+                  return Mode;
+               end if;
+            end loop;
+            return Model_Runner.Llama.No_Repack;
+         end Mode_Of;
+
          Result  : Speed_Run.Report;
       begin
          Speed_Run.Run
@@ -527,7 +540,7 @@ begin
             --  Named with a value like every other option this command
             --  takes, so that a reader who saw --repack in the README does
             --  not have to guess whether it is a flag here.
-            Repack      => Option ("--repack", "no") /= "no",
+            Repack      => Mode_Of (Option ("--repack", "none")),
             Repeats     => Number ("--repeats", 3),
             Result      => Result);
 

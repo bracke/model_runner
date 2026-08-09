@@ -1,6 +1,7 @@
 with Interfaces;
 
 with Model_Runner.Backend;
+with Model_Runner.Llama;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Errors;
 with Model_Runner.Sampling;
@@ -106,6 +107,11 @@ package Model_Runner.CLI.Options is
    --  @param Word Word as typed.
    --  @return The command, or Command_None when no command has that word.
    function Command_Of (Word : String) return Command_Kind;
+
+   --  The repacking modes a caller may name, in one line.
+   --
+   --  @return Comma-separated identifiers, in declaration order.
+   function Repack_Names return String;
 
    --  Report whether a command takes an option.
    --
@@ -217,10 +223,9 @@ package Model_Runner.CLI.Options is
       Stats_Set  : Boolean := False;
       Color      : Color_Mode := Color_Auto;
 
-      --  Decode the weight matrices once into binary32 rather than decoding
-      --  a span of them on every pass. Four bytes a weight against about
-      --  one, for a faster product and the same answer.
-      Repack     : Boolean := False;
+      --  What to decode the weight matrices into at load, if anything.
+      Repack     : Model_Runner.Llama.Repack_Mode :=
+        Model_Runner.Llama.No_Repack;
       Locale     : Model_Runner.Text.Bounded;
 
       --  Inspect modes.

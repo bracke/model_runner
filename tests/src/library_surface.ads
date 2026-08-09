@@ -17,7 +17,8 @@
 --  They fall into six kinds.
 --
 --  The codec's other half. The library reads GGUF containers; Get_F16,
---  Put_F32, Put_U16, Put_U64, Wipe, Tensor_Code and Value_Code write them.
+--  Put_U64, Wipe, Tensor_Code and Value_Code write them -- Put_F32, Put_U16
+--  and Record_Release had callers of their own once repacking arrived.
 --  Nothing in the program writes one -- the source model file is opened
 --  read-only and is never modified -- so the fixture writer is the only
 --  caller there can be, and the fixtures it writes are what most of the

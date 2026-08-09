@@ -114,6 +114,30 @@ package body Model_Runner.CLI.Options is
          when Command_Help    => "help",
          when Command_Version => "version");
 
+   -------------------
+   -- Repack_Names --
+   -------------------
+
+   function Repack_Names return String is
+      Room : String (1 .. 64) := [others => ' '];
+      Used : Natural := 0;
+
+      procedure Add (Value : String) is
+      begin
+         if Used > 0 then
+            Room (Used + 1 .. Used + 2) := ", ";
+            Used := Used + 2;
+         end if;
+         Room (Used + 1 .. Used + Value'Length) := Value;
+         Used := Used + Value'Length;
+      end Add;
+   begin
+      for Mode in Model_Runner.Llama.Repack_Mode loop
+         Add (Model_Runner.Llama.Repack_Name (Mode));
+      end loop;
+      return Room (1 .. Used);
+   end Repack_Names;
+
    ----------------
    -- Command_Of --
    ----------------
@@ -572,6 +596,7 @@ package body Model_Runner.CLI.Options is
          Flag_Chat_Template,
          Flag_Seed, Flag_Memory, Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
+         Flag_Repack,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
@@ -823,12 +848,33 @@ package body Model_Runner.CLI.Options is
                      Result.Prompt_Kind := Prompt_Interactive;
 
                   elsif Name = "--repack" then
-                     No_Value (Name, Value_Present,
-                               Argument (Value_First .. Argument'Last), Good);
-                     if not Good then
-                        return;
-                     end if;
-                     Result.Repack := True;
+                     declare
+                        Asked : T.Bounded;
+                        Found : Boolean := False;
+                     begin
+                        Bounded_Value (Flag_Repack, Asked, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        for Mode in Model_Runner.Llama.Repack_Mode loop
+                           if Model_Runner.Llama.Repack_Name (Mode)
+                             = T.To_String (Asked)
+                           then
+                              Result.Repack := Mode;
+                              Found := True;
+                           end if;
+                        end loop;
+
+                        --  Named against the modes this build has, and
+                        --  refused by name otherwise, which is the answer
+                        --  --backend and --chat-template already give.
+                        if not Found then
+                           Fail (E.CLI_Invalid_Option_Value, Name,
+                                 T.To_String (Asked));
+                           return;
+                        end if;
+                     end;
 
                   elsif Name = "--raw" then
                      No_Value (Name, Value_Present,

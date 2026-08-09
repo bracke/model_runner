@@ -130,6 +130,16 @@
 # inside the ten per cent this machine varies by, so the published figures
 # still describe this code and were left alone.
 #
+# Moved again for the repacking rework -- a second target format, a skip for
+# matrices already in it, and the decoding handed to tasks -- and this one was
+# re-measured rather than reasoned about, because it is too large a change to
+# read one's way through. With repacking off: twelve tokens 0.32 s evaluating
+# and 1.02 s generating against 0.26 and 1.02 published, 9.3 s of processor
+# time at seven workers and 17.1 at fourteen against 9.3 and 17.2; the
+# reference backend 0.30/1.15 against 5.68/11.39, which is 11.8x against the
+# 12.5x published, and 2.35x, 2.38x and 2.96x at the kernel against 2.3x,
+# 2.4x and 3.1x. All inside the ten per cent this machine varies by.
+#
 # Moved twice more for repacking: a progress line, and the release of the
 # file's bytes once the copy holds them. Both additions are inside
 # `if Repack then`, and neither group is measured with repacking on -- the
@@ -156,11 +166,11 @@ kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/m
 # and both commands are printed beside their figures in the README. The
 # processor figures come from the operating system's timing tool, as the
 # README says.
-engine 5178A9F87ACA143E src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine 4D3F95726ADE1144 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
-reference 20143C408D3CE25A src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+reference 8BAF8A6AF56C8A96 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

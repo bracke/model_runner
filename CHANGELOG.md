@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `--repack` takes a mode: `f32`, `bf16` or `none`. Binary32 is exact and
+  holds the logits to the bit; a brain float rounds to eight mantissa bits,
+  writes two bytes a weight instead of four, and is faster everywhere --
+  seven per cent on Q8_0, fifteen on Q4_K, thirty-eight on Q2_K, against the
+  stored layout. Binary32 repacking is worth it only on Q2_K. A repacked
+  model is 4.4 GB in binary32 and 2.2 in BF16, and at that size the product
+  waits for memory rather than for the decoder, which is why the format that
+  moves fewer bytes wins although it costs more per element.
+
+- A matrix already in the target format is not copied. Every binary32 tensor
+  in a file was being copied to itself: a 5024-byte fixture reported a
+  9888-byte peak, and an all-binary32 file paid double for nothing. The
+  file's bytes are released only when nothing is left pointing at them --
+  freeing them under a skipped matrix read outside its storage on the first
+  product.
+
+- The decoding is handed to as many tasks as the run has workers. It was one
+  core for thirteen seconds on a one-gigabyte model while seven watched;
+  three seconds now. The matrices are independent and each writes its own
+  region, so the queue hands them out one at a time rather than splitting by
+  count, which would have split ten-to-one work evenly.
+
 - Repacking releases the file's own bytes once the copy holds them. Every
   matrix refers into the copy and the vectors were decoded before it ran, so
   what was left was an arena with no reader, held for the life of the model:

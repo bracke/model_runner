@@ -35,6 +35,8 @@
 --  used.
 --
 --  Task safety: run from one task.
+with Model_Runner.Llama;
+
 package Speed_Run is
 
    --  What one set of repetitions measured. Times are seconds.
@@ -63,8 +65,8 @@ package Speed_Run is
    --  @param Tokens How many tokens to generate.
    --  @param Threads Worker tasks; one means the serial path.
    --  @param Batch Tokens per prefill batch, as --batch-size selects.
-   --  @param Repack Decode the weights once into binary32 first, as
-   --    --repack does. The published comparison between the stored layout
+   --  @param Repack What to decode the weights into first, as --repack
+   --    selects. The published comparison between the stored layout
    --    and the repacked one was taken by hand before this existed, which
    --    is the same gap the reference-backend ratio had.
    --  @param Repeats How many times to run, for the median.
@@ -75,7 +77,7 @@ package Speed_Run is
       Tokens      : Positive;
       Threads     : Positive;
       Batch       : Positive;
-      Repack      : Boolean;
+      Repack      : Model_Runner.Llama.Repack_Mode;
       Repeats     : Positive;
       Result      : out Report);
 

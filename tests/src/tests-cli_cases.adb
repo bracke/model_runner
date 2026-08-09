@@ -907,7 +907,7 @@ package body Tests.CLI_Cases is
       declare
          Screen : constant String :=
            Traced ("run " & Model
-                   & " --prompt hi --max-tokens 1 --repack --verbose");
+                   & " --prompt hi --max-tokens 1 --repack f32 --verbose");
       begin
          for Stage in Model_Runner.Progress.Load_Stage loop
             declare
@@ -1314,7 +1314,7 @@ package body Tests.CLI_Cases is
      (Item    : in out Harness;
       Backend : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Repack  : Boolean := False)
+      Repack  : L.Repack_Mode := L.No_Repack)
    is
       Status : E.Error_Info;
    begin
@@ -2055,7 +2055,7 @@ package body Tests.CLI_Cases is
       declare
          Held : aliased constant B.Byte_Array := Image.all;
 
-         function Logits_With (Repack : Boolean) return Logit_Row is
+         function Logits_With (Repack : L.Repack_Mode) return Logit_Row is
             Under   : Harness (Held'Access);
             Session : L.Session;
             Room    : Logit_Row := [others => 0.0];
@@ -2073,8 +2073,8 @@ package body Tests.CLI_Cases is
             return Room;
          end Logits_With;
 
-         Plain    : constant Logit_Row := Logits_With (False);
-         Repacked : constant Logit_Row := Logits_With (True);
+         Plain    : constant Logit_Row := Logits_With (L.No_Repack);
+         Repacked : constant Logit_Row := Logits_With (L.To_F32);
       begin
          for Index in Plain'Range loop
             Assert (Plain (Index) = Repacked (Index),
@@ -2090,7 +2090,7 @@ package body Tests.CLI_Cases is
       declare
          Held : aliased constant B.Byte_Array := Image.all;
 
-         function Reference_Logits (Repack : Boolean) return Logit_Row is
+         function Reference_Logits (Repack : L.Repack_Mode) return Logit_Row is
             Under   : Harness (Held'Access);
             Session : L.Session;
             Room    : Logit_Row := [others => 0.0];
@@ -2110,8 +2110,8 @@ package body Tests.CLI_Cases is
             return Room;
          end Reference_Logits;
 
-         Plain    : constant Logit_Row := Reference_Logits (False);
-         Repacked : constant Logit_Row := Reference_Logits (True);
+         Plain    : constant Logit_Row := Reference_Logits (L.No_Repack);
+         Repacked : constant Logit_Row := Reference_Logits (L.To_F32);
       begin
          for Index in Plain'Range loop
             Assert (Plain (Index) = Repacked (Index),
@@ -2171,7 +2171,7 @@ package body Tests.CLI_Cases is
 
          declare
             Plain    : constant String := Text_Of ("");
-            Repacked : constant String := Text_Of ("--repack");
+            Repacked : constant String := Text_Of ("--repack f32");
             Unmapped : constant String := Text_Of ("--no-mmap");
          begin
             Assert (Plain = Repacked,
@@ -2198,7 +2198,7 @@ package body Tests.CLI_Cases is
          Under : Harness (Held'Access);
          Books : Model_Runner.Memory.Account;
       begin
-         Start (Under, Repack => True);
+         Start (Under, Repack => L.To_F32);
          Books := L.Accounting (Under.Ready);
 
          Assert (Books.By_Category (Model_Runner.Memory.Converted_Weights) > 0,

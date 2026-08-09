@@ -305,6 +305,55 @@ package body Model_Runner.CLI.Execute is
       return Result;
    end Session_Bounds;
 
+   --  What the chosen backend says it can do. Asked of the backend rather
+   --  than taken from the CPU pool's constants, so that a second backend's
+   --  numbers are the numbers used -- for the worker count and for whether a
+   --  batch is worth asking for.
+   --
+   --  @param Item Parsed command.
+   --  @return The capability record of the backend the command names.
+   function Selected_Capabilities
+     (Item : Opt.Command) return Model_Runner.Backend.Capabilities
+   is (case Item.Backend is
+         when Model_Runner.Backend.Backend_CPU =>
+           Workers_CPU.Describe (Workers_CPU.Max_Workers),
+         when Model_Runner.Backend.Backend_Reference =>
+           Model_Runner.Backend.Reference.Describe);
+
+   --  Worker count: an explicit --threads wins, otherwise the core count
+   --  bounded by what the backend accepts. One worker means serial
+   --  execution, and produces the same output as any other count.
+   --
+   --  Cores rather than processors, because on a machine with two
+   --  processors per core the second of each pair shares the first's
+   --  execution units. Measured on an eight-core Ryzen 7 7840U that
+   --  reports sixteen: twelve tokens take 2.20 s of wall with eight
+   --  workers and 2.22 s with fourteen, and 14.9 s of processor time
+   --  against 26.7 s. The extra workers buy nothing and cost nearly twice
+   --  the energy, which matters most on the battery this is likeliest to
+   --  run on. --threads still takes any number the backend accepts.
+   --
+   --  Shared with inspect, which reports it. A run and an inspection that
+   --  disagreed about the worker count would make the reported one useless.
+   --
+   --  @param Item Parsed command.
+   --  @return Worker tasks the run would use.
+   function Selected_Workers (Item : Opt.Command) return Positive is
+      Able : constant Model_Runner.Backend.Capabilities :=
+        Selected_Capabilities (Item);
+   begin
+      if not Able.Supports_Parallel then
+         return 1;
+      elsif Item.Threads > 0 then
+         return Positive'Min (Item.Threads, Able.Max_Workers);
+      else
+         --  The policy lives with the pool, which is what knows that a job
+         --  is cut into one more share than it has workers.
+         return Positive
+           (Workers_CPU.Default_Workers (Model_Runner.Platform.Core_Count));
+      end if;
+   end Selected_Workers;
+
    --  Load and validate a container, and prepare a model when asked.
    procedure Load
      (Item      : Opt.Command;
@@ -348,7 +397,7 @@ package body Model_Runner.CLI.Execute is
       if Full then
          L.Prepare
            (Prepared, Container, Source, Bounds, Cancel, Observer,
-            Item.Backend, Item.Repack, Status);
+            Item.Backend, Item.Repack, Selected_Workers (Item), Status);
 
          --  A chat format named on the command line replaces the model's
          --  own. Models whose template this build will not compile are
@@ -522,7 +571,9 @@ package body Model_Runner.CLI.Execute is
                   --  a list somebody typed. The value goes in as an
                   --  argument so the sentence around it stays localized.
                   Value : constant String :=
-                    (if Opt.Option_Name (Index) = "--color"
+                    (if Opt.Option_Name (Index) = "--repack"
+                     then Opt.Repack_Names
+                     elsif Opt.Option_Name (Index) = "--color"
                      then Opt.Color_Names
                      elsif Opt.Option_Name (Index) = "--backend"
                      then Backend_Names
@@ -602,55 +653,6 @@ package body Model_Runner.CLI.Execute is
    ---------------------------------------------------------------------------
    --  inspect
    ---------------------------------------------------------------------------
-
-   --  What the chosen backend says it can do. Asked of the backend rather
-   --  than taken from the CPU pool's constants, so that a second backend's
-   --  numbers are the numbers used -- for the worker count and for whether a
-   --  batch is worth asking for.
-   --
-   --  @param Item Parsed command.
-   --  @return The capability record of the backend the command names.
-   function Selected_Capabilities
-     (Item : Opt.Command) return Model_Runner.Backend.Capabilities
-   is (case Item.Backend is
-         when Model_Runner.Backend.Backend_CPU =>
-           Workers_CPU.Describe (Workers_CPU.Max_Workers),
-         when Model_Runner.Backend.Backend_Reference =>
-           Model_Runner.Backend.Reference.Describe);
-
-   --  Worker count: an explicit --threads wins, otherwise the core count
-   --  bounded by what the backend accepts. One worker means serial
-   --  execution, and produces the same output as any other count.
-   --
-   --  Cores rather than processors, because on a machine with two
-   --  processors per core the second of each pair shares the first's
-   --  execution units. Measured on an eight-core Ryzen 7 7840U that
-   --  reports sixteen: twelve tokens take 2.20 s of wall with eight
-   --  workers and 2.22 s with fourteen, and 14.9 s of processor time
-   --  against 26.7 s. The extra workers buy nothing and cost nearly twice
-   --  the energy, which matters most on the battery this is likeliest to
-   --  run on. --threads still takes any number the backend accepts.
-   --
-   --  Shared with inspect, which reports it. A run and an inspection that
-   --  disagreed about the worker count would make the reported one useless.
-   --
-   --  @param Item Parsed command.
-   --  @return Worker tasks the run would use.
-   function Selected_Workers (Item : Opt.Command) return Positive is
-      Able : constant Model_Runner.Backend.Capabilities :=
-        Selected_Capabilities (Item);
-   begin
-      if not Able.Supports_Parallel then
-         return 1;
-      elsif Item.Threads > 0 then
-         return Positive'Min (Item.Threads, Able.Max_Workers);
-      else
-         --  The policy lives with the pool, which is what knows that a job
-         --  is cut into one more share than it has workers.
-         return Positive
-           (Workers_CPU.Default_Workers (Model_Runner.Platform.Core_Count));
-      end if;
-   end Selected_Workers;
 
    procedure Do_Inspect
      (Item    : Opt.Command;
@@ -879,10 +881,18 @@ package body Model_Runner.CLI.Execute is
                declare
                   Repacked : Interfaces.Unsigned_64 := 0;
                begin
+                  --  A matrix already in the target format is not copied,
+                  --  so a file that is binary32 throughout needs nothing --
+                  --  which is what this said 9888 bytes for on a 5024-byte
+                  --  fixture before the skip existed.
                   for Index in 1 .. Containers.Tensor_Count (Container) loop
-                     if Containers.Tensor_Rank (Container, Index) >= 2 then
+                     if Containers.Tensor_Rank (Container, Index) >= 2
+                       and then not G."=" (Containers.Tensor_Format
+                                             (Container, Index),
+                                           G.Type_BF16)
+                     then
                         Repacked := Repacked
-                          + Containers.Tensor_Elements (Container, Index) * 4;
+                          + Containers.Tensor_Elements (Container, Index) * 2;
                      end if;
                   end loop;
 

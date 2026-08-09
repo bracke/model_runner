@@ -8,7 +8,6 @@ with Model_Runner.Clocks;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
-with Model_Runner.Llama;
 with Model_Runner.Output;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
@@ -101,7 +100,7 @@ package body Speed_Run is
       Tokens      : Positive;
       Threads     : Positive;
       Batch       : Positive;
-      Repack      : Boolean;
+      Repack      : L.Repack_Mode;
       Repeats     : Positive;
       Result      : out Report)
    is
@@ -163,7 +162,8 @@ package body Speed_Run is
          end if;
 
          L.Prepare
-           (Engine, Container, Source, Repack => Repack, Status => Status);
+           (Engine, Container, Source, Repack => Repack,
+            Threads => Threads, Status => Status);
          if E.Is_Error (Status) then
             Containers.Close (Container);
             Files.Close (Source);

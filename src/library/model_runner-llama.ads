@@ -109,6 +109,33 @@ package Model_Runner.Llama is
       Bounds : Model_Runner.Limits.Model_Limits;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  What to decode the weight matrices into before evaluating them.
+   --
+   --  No_Repack reads them as the file stores them, decoding a span on every
+   --  pass. The other two decode every matrix once at load and evaluate from
+   --  that copy, which costs four bytes a weight or two against about one.
+   --
+   --  To_F32 cannot change what the model says: the values written are the
+   --  ones the decoder produces, in the order the kernels read them, and a
+   --  test holds the logits to the bit.
+   --
+   --  To_BF16 can, and does. A brain float keeps eight mantissa bits where
+   --  binary32 keeps twenty-three, so a value the decoder produced may not
+   --  be representable and is rounded to the nearest one that is. It halves
+   --  the copy. Whether that trade is worth taking is a measurement, and
+   --  the README carries it.
+   type Repack_Mode is (No_Repack, To_F32, To_BF16);
+
+   --  The word a caller types for a repacking mode.
+   --
+   --  @param Item Mode to name.
+   --  @return Lower-case identifier such as "bf16".
+   function Repack_Name (Item : Repack_Mode) return String
+   is (case Item is
+         when No_Repack => "none",
+         when To_F32    => "f32",
+         when To_BF16   => "bf16");
+
    --  Load, validate and prepare a model from an open byte source.
    --
    --  The source must stay open for the life of the model.
@@ -123,9 +150,12 @@ package Model_Runner.Llama is
    --    checked against what that backend can read, so a model carrying a
    --    format it cannot take is refused here with
    --    Backend_Unsupported_Format naming the tensor and the format.
-   --  @param Repack Decode every weight matrix once into binary32 and
-   --    evaluate from that copy. Four bytes a weight against about one, and
-   --    a memory limit counts it; it cannot change what the model says.
+   --  @param Repack What to decode the weight matrices into, or No_Repack
+   --    to read them as the file stores them.
+   --  @param Threads How many tasks may decode at once when repacking. The
+   --    matrices are independent and each writes its own region, so this is
+   --    the one part of a load that divides; at one it is what it was, which
+   --    took thirteen seconds for a gigabyte while seven cores watched.
    --  @param Status Success, or the first diagnostic that stopped preparation.
 
    procedure Prepare
@@ -138,7 +168,8 @@ package Model_Runner.Llama is
       Observer : Model_Runner.Progress.Observer_Reference := null;
       Backend  : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Repack   : Boolean := False;
+      Repack   : Repack_Mode := No_Repack;
+      Threads  : Positive := 1;
       Status   : out Model_Runner.Errors.Error_Info);
 
    --  What the backend this model was prepared for can do.
