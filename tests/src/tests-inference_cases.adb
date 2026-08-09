@@ -1115,10 +1115,14 @@ package body Tests.Inference_Cases is
 
       use type External_Model.Outcome;
 
-      Model : constant String := "fixtures/tiny-model.gguf";
+      Model : constant String := Tiny_Model.Suite_Fixture;
       Found : External_Model.Report;
       Fits  : External_Model.Report;
    begin
+      --  Written rather than assumed: the fixture is not committed, so a
+      --  clean checkout has none until something makes one.
+      Tiny_Model.Write_Suite_Fixture;
+
       --  More tokens than the context can hold, which the engine refuses
       --  before it generates anything.
       External_Model.Run

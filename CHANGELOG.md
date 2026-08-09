@@ -38,6 +38,14 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- The suite writes the fixture it reads. `tests/fixtures/*.gguf` is ignored
+  by git -- a model file is not committed unless its licence plainly allows
+  it -- and four tests read `fixtures/tiny-model.gguf` as though it were
+  there. It was there on the machine where `tests fixtures` had been run,
+  and on no clean checkout, so the suite passed here and failed in
+  continuous integration on every push. Any test that reads the fixture
+  writes it first; the bytes are fixed, so it is the same file every time.
+
 - The interactive commands are one list. `Command_Kind` named seven, a chain
   matched seven words beside it, and `/help` printed seven catalog keys
   written out in order, with nothing relating the three -- so an eighth

@@ -1,3 +1,4 @@
+with Ada.Directories;
 with Ada.Streams.Stream_IO;
 
 with Interfaces;
@@ -242,6 +243,23 @@ package body Tiny_Model is
    -----------
    -- Write --
    -----------
+
+   ---------------------------
+   -- Write_Suite_Fixture --
+   ---------------------------
+
+   procedure Write_Suite_Fixture is
+   begin
+      --  The directory is in the repository -- it carries the prompts and
+      --  the expectation files -- but a checkout that somehow lacks it
+      --  should get a fixture rather than an exception from deep inside a
+      --  test that is about something else.
+      if not Ada.Directories.Exists ("fixtures") then
+         Ada.Directories.Create_Path ("fixtures");
+      end if;
+
+      Write (Suite_Fixture);
+   end Write_Suite_Fixture;
 
    procedure Write
      (Path : String;

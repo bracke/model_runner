@@ -5572,11 +5572,16 @@ package body Tests.CLI_Cases is
          return;
       end if;
 
+      --  The fixture this reads is not committed, so it is written here
+      --  rather than assumed: the same bytes every time, and no dependence
+      --  on what an earlier run of `tests fixtures` left behind.
+      Tiny_Model.Write_Suite_Fixture;
+
       declare
          Source : Fixed_Arguments;
       begin
          Add (Source, "inspect");
-         Add (Source, "fixtures/tiny-model.gguf");
+         Add (Source, Tiny_Model.Suite_Fixture);
          Must_Match ("$ model_runner inspect", Output_Of (Source),
                      "inspect");
       end;
@@ -5680,14 +5685,14 @@ package body Tests.CLI_Cases is
                        External_Model.Summary (Absent), "a missing model");
 
          External_Model.Run
-           (Path => "fixtures/tiny-model.gguf", Prompt => "ab", Tokens => 8,
+           (Path => Tiny_Model.Suite_Fixture, Prompt => "ab", Tokens => 8,
             Threads => 4, Result => Fits);
          Must_Read_As
            ("--threads 4 --max-tokens 8",
             External_Model.Summary (Fits), "a run that fits the context");
 
          External_Model.Run
-           (Path => "fixtures/tiny-model.gguf", Prompt => "ab", Tokens => 16,
+           (Path => Tiny_Model.Suite_Fixture, Prompt => "ab", Tokens => 16,
             Threads => 4, Result => Over);
          Must_Read_As
            ("$ tests external-model --model fixtures/tiny-model.gguf"

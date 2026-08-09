@@ -27,6 +27,25 @@ package Tiny_Model is
    Head_Size    : constant := 4;
    Context      : constant := 16;
 
+   --  Write the fixture where the suite reads it, at fixtures/tiny-model.gguf
+   --  relative to the tests crate.
+   --
+   --  `tests/fixtures/*.gguf` is ignored by git: a model file is not
+   --  committed unless its licence plainly allows it, and that rule is meant
+   --  to keep the decision from being made by accident. The consequence went
+   --  unnoticed -- four tests read a file the repository does not carry, so
+   --  they passed on a machine where `tests fixtures` had been run and failed
+   --  on every clean checkout, which is what continuous integration is. The
+   --  suite had been reporting green against a file that only existed here.
+   --
+   --  Any test that reads the fixture writes it first. The bytes are fixed,
+   --  so writing it again writes the same file, and a run that writes it
+   --  needs nothing left behind by an earlier one.
+   procedure Write_Suite_Fixture;
+
+   --  Where that fixture is, for a test to name.
+   Suite_Fixture : constant String := "fixtures/tiny-model.gguf";
+
    --  Write the fixture to disk.
    --
    --  @param Path Destination path; overwritten if it exists.
