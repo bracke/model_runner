@@ -38,6 +38,21 @@ Keep a Changelog and the project uses semantic versioning.
   and 1.02 s generating, 9.3 s of processor time. The worker-count and
   share-count figures beside it are re-measured in the same configuration.
 
+- The catalog check reads the root it was given. It opened the catalog
+  beside the executable while every other check here reads the file under
+  the root `tests check [ROOT]` names, so pointed at another tree it
+  answered about this one: a copy with a deliberately broken catalog
+  reported four missing files and nothing about the catalog. A check that
+  reports on a file nobody asked it about is worse than no check, because
+  it reports green.
+
+- The parser records which options it saw as a set over the option
+  registry. It kept a list of sixty-four names, allocated one string per
+  option and freed none, and silently stopped validating past the bound --
+  a cap of exactly the kind the rules here refuse elsewhere. A set has room
+  for every option that exists, by construction, allocates nothing and has
+  no bound to exceed.
+
 - The repository checks load the catalog rather than only reading it. Every
   other check reads it as text -- keys, readers, counts, help lines -- and
   none of that notices a catalog the message runtime refuses, which it does

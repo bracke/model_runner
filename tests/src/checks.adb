@@ -26,7 +26,6 @@ with Model_Runner.GGUF;
 with Model_Runner.Generation;
 with Model_Runner.Llama;
 with Model_Runner.Localization;
-with Model_Runner.Platform;
 with Model_Runner.Progress;
 with Model_Runner.Quantization;
 with Model_Runner.Templates;
@@ -1246,8 +1245,16 @@ package body Checks is
                  Names (Index).Text (1 .. Names (Index).Last);
                Held : Model_Runner.Localization.Catalog;
             begin
+               --  The catalog under the root this run was given, not the
+               --  one beside the executable. Every other check here reads
+               --  the file through Contents, which is root-relative, and
+               --  this opened Platform.Catalog_Path, which is relative to
+               --  the program. Pointed at another tree it answered about
+               --  this one -- a check that reports on a file nobody asked
+               --  it about is worse than no check, because it reports
+               --  green.
                Model_Runner.Localization.Open
-                 (Held, Model_Runner.Platform.Catalog_Path, Name);
+                 (Held, Path ("resources/messages/catalog.txt"), Name);
 
                Result.Performed := Result.Performed + 1;
                if not Model_Runner.Localization.Is_Ready (Held) then

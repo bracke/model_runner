@@ -536,13 +536,18 @@ package body Model_Runner.CLI.Options is
       Options_Ended : Boolean := False;
       Operands      : Natural := 0;
 
-      --  Every option seen, in order, so that each can be judged against the
-      --  command once there is one. An option may be typed before the
+      --  Which options were seen, so that each can be judged against the
+      --  command once there is one: an option may be typed before the
       --  command word, so this cannot be decided where it is read.
-      Max_Seen_Options : constant := 64;
-      Typed      : array (1 .. Max_Seen_Options) of Entry_Text :=
-        [others => null];
-      Typed_Used : Natural := 0;
+      --
+      --  A set over the registry rather than a list of names. A list needed
+      --  a bound, and a bound needs an answer for what happens past it --
+      --  the first version of this recorded sixty-four and silently stopped
+      --  validating after that, which is the kind of cap this repository
+      --  refuses elsewhere. It also allocated a string per option and freed
+      --  none. A set has room for every option that exists, by
+      --  construction, and holds nothing that needs releasing.
+      Typed : array (Registry'Range) of Boolean := [others => False];
 
       --  Track which options were seen so that a repeat is a usage error
       --  rather than a silent last-wins.
@@ -740,10 +745,13 @@ package body Model_Runner.CLI.Options is
 
                   Good : Boolean;
                begin
-                  if Typed_Used < Max_Seen_Options then
-                     Typed_Used := Typed_Used + 1;
-                     Typed (Typed_Used) := Text (Name);
-                  end if;
+                  --  A name no row holds is not an option this program
+                  --  has, and the chain below reports that for itself.
+                  for Row in Registry'Range loop
+                     if Registry (Row).Name.all = Name then
+                        Typed (Row) := True;
+                     end if;
+                  end loop;
 
                   if Name = "--help" then
                      No_Value (Name, Value_Present,
@@ -1269,11 +1277,17 @@ package body Model_Runner.CLI.Options is
       --  `inspect m.gguf --temperature 0.5 --interactive` ran the inspection
       --  and said nothing, so on a command documenting five options and
       --  accepting thirty-seven a typo and a setting looked alike.
-      for Index in 1 .. Typed_Used loop
-         if not Accepts (Result.Kind, Typed (Index).all) then
+      for Index in Registry'Range loop
+         --  Asked through Accepts rather than read off the row, so that
+         --  the question a caller can ask and the question the parser asks
+         --  are the same question.
+         if Typed (Index)
+           and then not Accepts (Result.Kind, Registry (Index).Name.all)
+         then
             Status := E.Make (E.CLI_Option_Not_For_Command);
             E.Add_Text
-              (Status, "option", Typed (Index).all, E.Param_Identifier);
+              (Status, "option", Registry (Index).Name.all,
+               E.Param_Identifier);
             E.Add_Text
               (Status, "value", Command_Word (Result.Kind),
                E.Param_Identifier);
