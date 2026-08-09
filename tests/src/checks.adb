@@ -552,6 +552,156 @@ package body Checks is
                 "a two-worker pool says it does not run in parallel");
       end;
 
+      --  Every capability field is read by something.
+      --
+      --  Capabilities carries a rule in its comment: every field here is
+      --  asked by something. That was a rule nobody enforced, which is what
+      --  it was describing -- ten of eleven fields had no reader, and the one
+      --  that mattered said the wrong thing for as long as it did.
+      --
+      --  The field names are read out of the record and looked for in the
+      --  program, discounting the backend's own assignments to them. A field
+      --  added without a reader fails here.
+      declare
+         Spec  : constant String :=
+           Contents ("src/library/model_runner-backend.ads");
+         Named : Natural := 0;
+
+         --  Everything that could read the record, with the lines that fill
+         --  it in taken out. An assignment is not a reader, and Describe is
+         --  nothing but assignments; a field read only there is a field
+         --  written for its own sake.
+         --
+         --  The backend's own spec counts, because Supports reads Formats
+         --  there and callers go through it. An accessor is a reader.
+         function Without_Assignments (Text : String) return String is
+            Room   : String (1 .. Text'Length);
+            Used   : Natural := 0;
+            Cursor : Natural := Text'First;
+         begin
+            while Cursor <= Text'Last loop
+               declare
+                  Stop : Natural := Cursor;
+               begin
+                  while Stop <= Text'Last
+                    and then Text (Stop) /= Character'Val (10)
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  declare
+                     Line : constant String := Text (Cursor .. Stop - 1);
+                  begin
+                     if not Holds (Line, "Result.") then
+                        Room (Used + 1 .. Used + Line'Length) := Line;
+                        Used := Used + Line'Length + 1;
+                        if Used <= Room'Length then
+                           Room (Used) := Character'Val (10);
+                        end if;
+                     end if;
+                  end;
+
+                  Cursor := Stop + 1;
+               end;
+            end loop;
+            return Room (1 .. Natural'Min (Used, Room'Length));
+         end Without_Assignments;
+
+         Program : constant String :=
+           Without_Assignments
+             (Contents ("src/library/model_runner-backend.ads")
+              & Contents ("src/library/model_runner-backend-cpu.adb")
+              & Contents ("src/library/model_runner-llama.adb")
+              & Contents ("src/library/model_runner-cli-execute.adb"));
+
+         --  The record's fields, between "type Capabilities is record" and
+         --  the "end record" that closes it.
+         function Fields return String is
+            Opening : constant String := "type Capabilities is record";
+            From    : Natural := 0;
+         begin
+            if Spec'Length < Opening'Length then
+               return "";
+            end if;
+            for Index in Spec'First .. Spec'Last - Opening'Length + 1 loop
+               if Spec (Index .. Index + Opening'Length - 1) = Opening then
+                  From := Index + Opening'Length;
+                  exit;
+               end if;
+            end loop;
+            if From = 0 then
+               return "";
+            end if;
+            for Index in From .. Spec'Last - 9 loop
+               if Spec (Index .. Index + 9) = "end record" then
+                  return Spec (From .. Index - 1);
+               end if;
+            end loop;
+            return "";
+         end Fields;
+
+         Body_Text : constant String := Fields;
+         Cursor    : Natural := Body_Text'First;
+      begin
+         Result.Performed := Result.Performed + 1;
+         if Body_Text = "" then
+            Fail ("Capabilities has no fields to check; the check no longer "
+                  & "matches the source it reads");
+         end if;
+
+         while Cursor <= Body_Text'Last loop
+            declare
+               Stop : Natural := Cursor;
+            begin
+               while Stop <= Body_Text'Last
+                 and then Body_Text (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line  : constant String :=
+                    T.Trim (Body_Text (Cursor .. Stop - 1));
+                  Colon : Natural := 0;
+               begin
+                  for Index in Line'Range loop
+                     if Line (Index) = ':' then
+                        Colon := Index;
+                        exit;
+                     end if;
+                  end loop;
+
+                  --  A field declaration, not a comment or a blank line.
+                  if Colon > Line'First
+                    and then Line'Length > 2
+                    and then Line (Line'First .. Line'First + 1) /= "--"
+                  then
+                     declare
+                        Name : constant String :=
+                          T.Trim (Line (Line'First .. Colon - 1));
+                     begin
+                        Named := Named + 1;
+                        Result.Performed := Result.Performed + 1;
+                        if not Holds (Program, "." & Name) then
+                           Fail ("the capability field " & Name
+                                 & " is filled in and read by nothing; give "
+                                 & "it a reader or take it out");
+                        end if;
+                     end;
+                  end if;
+               end;
+
+               Cursor := Stop + 1;
+            end;
+         end loop;
+
+         Result.Performed := Result.Performed + 1;
+         if Named = 0 then
+            Fail ("no capability fields were found; the check no longer "
+                  & "matches the source it reads");
+         end if;
+      end;
+
       --  Every chat-template row says what running it actually does.
       --
       --  This was the last hand-maintained registry: a table of claims about

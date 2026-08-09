@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `--locale` says when it could not give you the locale you asked for. An
+  unavailable one fell back to English and said so only under `--verbose`, so
+  `--locale de` produced English output and no reason. A locale named on the
+  command line is now reported at any verbosity; one taken from the
+  environment still only in verbose mode, because that fallback is ordinary
+  and not a request that went unhonoured.
+
+  The warning also said "locale zz is unavailable; using zz". `Locale`
+  reports what was asked for, and the message wanted what answered, which is
+  now `Answering_Locale`.
+
+- `--color` lists the modes from the enumeration rather than from prose
+  written into the catalog in three locales, and the parser matches against
+  the same names. Renaming a mode moves the message with it.
+
+- The rule in `Capabilities` -- every field here is asked by something -- is
+  a check rather than a comment. The field names are read out of the record
+  and looked for in the program with the backend's own assignments
+  discounted, so a field added without a reader fails.
+
 - `--chat-template` and `--backend` answer alike. A name neither carries is
   now refused the same way -- `MR-TMPL-0013: no chat format named nope in
   this build` beside `MR-BACKEND-0001: no backend named gpu in this build` --

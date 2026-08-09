@@ -137,11 +137,22 @@ package body Model_Runner.CLI.Driver is
          --  The emergency path: say so once, in the invariant form, and carry
          --  on with message identifiers instead of text.
          Pres.Warn (Screen, "warning.locale_fallback");
-      elsif Loc.Used_Fallback (Catalog) and then Item.Level = Opt.Verbose then
+      elsif Loc.Used_Fallback (Catalog)
+        and then (Model_Runner.Text.To_String (Item.Locale) /= ""
+                  or else Item.Level = Opt.Verbose)
+      then
+         --  Said whenever the caller named the locale, at any verbosity. A
+         --  locale taken from the environment falling back is ordinary and
+         --  only worth a word in verbose mode; a locale asked for on the
+         --  command line and not honoured is the caller being told their
+         --  request was not carried out, and --locale zz said nothing at all.
          Pres.Warn
            (Screen, "warning.locale_fallback",
-            [Loc.Named ("value", Model_Runner.Text.To_String (Item.Locale)),
-             Loc.Named ("detail", Loc.Locale (Catalog))]);
+            [Loc.Named ("value",
+                        (if Model_Runner.Text.To_String (Item.Locale) = ""
+                         then Loc.Locale (Catalog)
+                         else Model_Runner.Text.To_String (Item.Locale))),
+             Loc.Named ("detail", Loc.Answering_Locale (Catalog))]);
       end if;
 
       --  When no prompt source was given, interactive mode is used only when

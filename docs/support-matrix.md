@@ -162,6 +162,8 @@ the choice.
 | `da` | Partial; every key it does not carry falls back to `en` |
 | `qps` | Pseudo-locale generated from `en`, complete |
 
+A locale this build does not carry falls back to `en`. When it was named on the command line that is reported, at any verbosity: a request that was not honoured is not progress chatter. A locale taken from the environment reports only under `--verbose`.
+
 ## Not implemented
 
 Nothing remains from the specification's tooling list: the release checklist is

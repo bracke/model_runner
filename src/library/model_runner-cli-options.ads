@@ -73,6 +73,25 @@ package Model_Runner.CLI.Options is
    --  Terminal styling policy.
    type Color_Mode is (Color_Auto, Color_Always, Color_Never);
 
+   --  The name a caller asks for a colour mode by.
+   --
+   --  Read by the parser and by the message that lists what was expected, so
+   --  that neither can offer a mode that is not there. The list used to be
+   --  written into the catalog in every locale.
+   --
+   --  @param Item Mode to name.
+   --  @return Lower-case identifier such as "auto".
+   function Color_Name (Item : Color_Mode) return String
+   is (case Item is
+         when Color_Auto   => "auto",
+         when Color_Always => "always",
+         when Color_Never  => "never");
+
+   --  The colour modes this build accepts, comma-separated.
+   --
+   --  @return "auto, always, never" and whatever else is added.
+   function Color_Names return String;
+
    --  How much diagnostic output to produce.
    type Verbosity is (Quiet, Normal, Verbose);
 

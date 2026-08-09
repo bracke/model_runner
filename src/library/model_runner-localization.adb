@@ -100,6 +100,15 @@ package body Model_Runner.Localization is
          Item.Fallback :=
            Probe.Status /= Messages.Runtime.Found
            or else Messages.Runtime.Resolved_Locale (Probe) /= Wanted;
+
+         --  What answered, as against what was asked for. Kept apart because
+         --  a warning that names the missing locale as the one in use tells
+         --  the reader nothing they did not type themselves.
+         Item.Answering :=
+           (if Probe.Status /= Messages.Runtime.Found
+            then To_Unbounded_String (Invariant_Locale)
+            else To_Unbounded_String
+                   (Messages.Runtime.Resolved_Locale (Probe)));
       end;
 
       Item.Ready := True;
@@ -121,6 +130,7 @@ package body Model_Runner.Localization is
       Item.Ready := False;
       Item.Fallback := False;
       Item.Resolved := Null_Unbounded_String;
+      Item.Answering := Null_Unbounded_String;
       Item.Wanted := Null_Unbounded_String;
    exception
       when others =>
@@ -145,6 +155,15 @@ package body Model_Runner.Localization is
    --------------------
 
    function Used_Fallback (Item : Catalog) return Boolean is (Item.Fallback);
+
+   -----------------------
+   -- Answering_Locale --
+   -----------------------
+
+   function Answering_Locale (Item : Catalog) return String
+   is (if Item.Answering = Null_Unbounded_String
+       then Invariant_Locale
+       else To_String (Item.Answering));
 
    ---------
    -- Has --

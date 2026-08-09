@@ -93,6 +93,17 @@ package Model_Runner.Localization is
    --  @return True when the resolved locale differs from the requested one.
    function Used_Fallback (Item : Catalog) return Boolean;
 
+   --  Locale that actually answered when the requested one was probed.
+   --
+   --  Locale reports what was asked for. This reports what replied, which is
+   --  the same thing until a locale this build does not carry is asked for --
+   --  and the warning about that used to name the missing locale twice,
+   --  saying it was unavailable and then that it was being used.
+   --
+   --  @param Item Catalog to inspect.
+   --  @return Locale identifier of the entries that answer, never localized.
+   function Answering_Locale (Item : Catalog) return String;
+
    --  Render a message.
    --
    --  @param Item Catalog to read.
@@ -142,6 +153,7 @@ private
       Runtime  : Messages.Runtime.Runtime;
       Ready    : Boolean := False;
       Resolved : Ada.Strings.Unbounded.Unbounded_String;
+      Answering : Ada.Strings.Unbounded.Unbounded_String;
       Wanted   : Ada.Strings.Unbounded.Unbounded_String;
       Fallback : Boolean := False;
    end record;

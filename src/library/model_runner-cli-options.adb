@@ -41,6 +41,31 @@ package body Model_Runner.CLI.Options is
    -- Release --
    -------------
 
+   -----------------
+   -- Color_Names --
+   -----------------
+
+   function Color_Names return String is
+      Room : String (1 .. 128);
+      Used : Natural := 0;
+
+      procedure Add (Text : String) is
+      begin
+         if Used + Text'Length <= Room'Length then
+            Room (Used + 1 .. Used + Text'Length) := Text;
+            Used := Used + Text'Length;
+         end if;
+      end Add;
+   begin
+      for Mode in Color_Mode loop
+         if Used > 0 then
+            Add (", ");
+         end if;
+         Add (Color_Name (Mode));
+      end loop;
+      return Room (1 .. Used);
+   end Color_Names;
+
    procedure Release (Item : in out Command) is
    begin
       if Item.Prompt_Text /= null then
@@ -324,17 +349,14 @@ package body Model_Runner.CLI.Options is
 
       function Decode (Text : String; Ok : out Boolean) return Color_Mode is
       begin
-         Ok := True;
-         if Text = "auto" then
-            return Color_Auto;
-         elsif Text = "always" then
-            return Color_Always;
-         elsif Text = "never" then
-            return Color_Never;
-         else
-            Ok := False;
-            return Color_Auto;
-         end if;
+         for Mode in Color_Mode loop
+            if Color_Name (Mode) = Text then
+               Ok := True;
+               return Mode;
+            end if;
+         end loop;
+         Ok := False;
+         return Color_Auto;
       end Decode;
 
    begin
@@ -1004,17 +1026,28 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
-                     if Held.all = "auto" then
-                        Result.Color := Color_Auto;
-                     elsif Held.all = "always" then
-                        Result.Color := Color_Always;
-                     elsif Held.all = "never" then
-                        Result.Color := Color_Never;
-                     else
-                        Fail (E.CLI_Invalid_Color_Mode, Name, Held.all);
-                        Free_Text (Held);
-                        return;
-                     end if;
+                     --  Matched against the modes this build has. The list
+                     --  the message offers comes from the same place, so a
+                     --  mode added is offered and one removed is not.
+                     declare
+                        Found : Boolean := False;
+                     begin
+                        for Mode in Color_Mode loop
+                           if Color_Name (Mode) = Held.all then
+                              Result.Color := Mode;
+                              Found := True;
+                           end if;
+                        end loop;
+
+                        if not Found then
+                           Fail (E.CLI_Invalid_Color_Mode, Name, Held.all);
+                           E.Add_Text
+                             (Status, "expected", Color_Names,
+                              E.Param_Identifier);
+                           Free_Text (Held);
+                           return;
+                        end if;
+                     end;
                      Free_Text (Held);
 
                   elsif Name = "--metadata" then
