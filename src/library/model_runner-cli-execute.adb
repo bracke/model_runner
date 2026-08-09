@@ -7,6 +7,7 @@ with Interfaces;
 
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Reference;
 with Model_Runner.Bytes;
 with Model_Runner.Clocks;
 with Model_Runner.Conversation;
@@ -924,6 +925,17 @@ package body Model_Runner.CLI.Execute is
       --  Everything from model loading onwards, parameterized by the worker
       --  pool so that the pool can be declared in a frame whose exit waits
       --  for its workers.
+      --  What the chosen backend says it can do. Asked here rather than
+      --  taking the CPU pool's constants, so that a second backend's numbers
+      --  are the numbers used -- for the worker count and for whether a
+      --  batch is worth asking for.
+      Chosen : constant Model_Runner.Backend.Capabilities :=
+        (case Item.Backend is
+           when Model_Runner.Backend.Backend_CPU =>
+             Workers_CPU.Describe (Workers_CPU.Max_Workers),
+           when Model_Runner.Backend.Backend_Reference =>
+             Model_Runner.Backend.Reference.Describe);
+
       procedure Run_With (Team : Workers_CPU.Pool_Reference) is
       begin
          Status := E.Exit_Success;
@@ -1132,7 +1144,24 @@ package body Model_Runner.CLI.Execute is
                Request.Sampling := Item.Sampling;
                Request.Seed := Item.Seed;
                Request.Has_Seed := Item.Has_Seed;
-               Request.Batch_Size := Item.Batch_Size;
+               --  A backend that does not batch is asked for one token at
+               --  a time rather than refused. The capability decides the
+               --  request instead of failing it, which is what a capability
+               --  is for; --batch-size is a performance control and this is
+               --  the performance the chosen backend has.
+               Request.Batch_Size :=
+                 (if Chosen.Supports_Batched then Item.Batch_Size else 1);
+
+               if not Chosen.Supports_Batched
+                 and then Item.Batch_Size /= 1
+                 and then Item.Level = Opt.Verbose
+               then
+                  Pres.Warn
+                    (Screen, "warning.backend_no_batching",
+                     [Loc.Named
+                        ("value",
+                         Model_Runner.Backend.Backend_Name (Chosen.Kind))]);
+               end if;
                Request.Retain_Text := False;
                Request.Add_Beginning := Item.Raw;
 
@@ -1182,20 +1211,12 @@ package body Model_Runner.CLI.Execute is
       --  against 26.7 s. The extra workers buy nothing and cost nearly twice
       --  the energy, which matters most on the battery this is likeliest to
       --  run on. --threads still takes any number the backend accepts.
-      --  What the chosen backend says it can do with workers. Asked here
-      --  rather than taking the CPU pool's constants, so that the numbers
-      --  a second backend reports are the numbers used.
-      Able : constant Model_Runner.Backend.Capabilities :=
-        (case Item.Backend is
-           when Model_Runner.Backend.Backend_CPU =>
-             Workers_CPU.Describe (Workers_CPU.Max_Workers));
-
       function Chosen_Workers return Natural is
       begin
-         if not Able.Supports_Parallel then
+         if not Chosen.Supports_Parallel then
             return 1;
          elsif Item.Threads > 0 then
-            return Natural'Min (Item.Threads, Able.Max_Workers);
+            return Natural'Min (Item.Threads, Chosen.Max_Workers);
          else
             --  The policy lives with the pool, which is what knows that a
             --  job is cut into one more share than it has workers.
@@ -1215,6 +1236,10 @@ package body Model_Runner.CLI.Execute is
       --  here answers for it -- which is the only way a second backend can
       --  arrive without the flag that selects it quietly doing nothing.
       case Item.Backend is
+      when Model_Runner.Backend.Backend_Reference =>
+         --  No pool: this backend runs on the calling task and says so.
+         Run_With (null);
+
       when Model_Runner.Backend.Backend_CPU =>
          if Team_Size <= 1 then
             Run_With (null);

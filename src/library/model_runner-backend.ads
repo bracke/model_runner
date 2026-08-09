@@ -13,14 +13,16 @@ package Model_Runner.Backend is
 
    --  Stable backend identifiers. Never localized; they appear in diagnostics
    --  and in the support matrix as identifiers.
-   type Backend_Kind is (Backend_CPU);
+   type Backend_Kind is (Backend_CPU, Backend_Reference);
 
    --  Name of a backend.
    --
    --  @param Item Backend to name.
    --  @return Lower-case identifier such as "cpu".
    function Backend_Name (Item : Backend_Kind) return String
-   is (case Item is when Backend_CPU => "cpu");
+   is (case Item is
+         when Backend_CPU       => "cpu",
+         when Backend_Reference => "reference");
 
    type Format_Support is array (Model_Runner.GGUF.Tensor_Type) of Boolean;
 

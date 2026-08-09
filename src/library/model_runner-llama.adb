@@ -4,6 +4,7 @@ with Ada.Unchecked_Deallocation;
 with Interfaces;
 
 with Model_Runner.Arithmetic;
+with Model_Runner.Backend.Reference;
 with Model_Runner.Text;
 
 package body Model_Runner.Llama is
@@ -568,6 +569,8 @@ package body Model_Runner.Llama is
       case Backend is
          when Model_Runner.Backend.Backend_CPU =>
             Item.Able := Workers_CPU.Describe;
+         when Model_Runner.Backend.Backend_Reference =>
+            Item.Able := Model_Runner.Backend.Reference.Describe;
       end case;
 
       --  Evaluation is matrix by vector and nothing else. A backend that
@@ -834,6 +837,45 @@ package body Model_Runner.Llama is
 
    function Accounting (Item : Session) return Mem.Account
    is (Item.Accounting);
+
+   --  The product, through whichever backend this session was opened for.
+   --
+   --  Every matrix product in the engine goes through these two, so the
+   --  choice is made once rather than at sixteen call sites. The CPU backend
+   --  takes the pool; the reference backend has none and does not want one.
+   procedure Product
+     (Item   : Session;
+      Weight : T.View;
+      Vector : T.Real_Array_Access;
+      Target : T.Real_Array_Access;
+      Status : out E.Error_Info) is
+   begin
+      case Item.Owner.Able.Kind is
+         when Model_Runner.Backend.Backend_CPU =>
+            Workers_CPU.Dispatch (Item.Team, Weight, Vector, Target, Status);
+         when Model_Runner.Backend.Backend_Reference =>
+            Model_Runner.Backend.Reference.Product
+              (Weight, Vector, Target, Status);
+      end case;
+   end Product;
+
+   procedure Product_Batch
+     (Item    : Session;
+      Weight  : T.View;
+      Vectors : T.Real_Array_Access;
+      Count   : Element_Count;
+      Target  : T.Real_Array_Access;
+      Status  : out E.Error_Info) is
+   begin
+      case Item.Owner.Able.Kind is
+         when Model_Runner.Backend.Backend_CPU =>
+            Workers_CPU.Dispatch_Batch
+              (Item.Team, Weight, Vectors, Count, Target, Status);
+         when Model_Runner.Backend.Backend_Reference =>
+            Model_Runner.Backend.Reference.Product_Batch
+              (Weight, Vectors, Count, Target, Status);
+      end case;
+   end Product_Batch;
 
    -----------
    -- Enter --
@@ -1349,14 +1391,14 @@ package body Model_Runner.Llama is
               (Item.Activation.all, Current.Attention_Norm.all,
                Settings.Epsilon, Item.Normalized.all);
 
-            Workers_CPU.Dispatch
-              (Item.Team, Current.Query, Item.Normalized, Item.Query, Status);
+            Product
+              (Item, Current.Query, Item.Normalized, Item.Query, Status);
             exit when E.Is_Error (Status);
-            Workers_CPU.Dispatch
-              (Item.Team, Current.Key, Item.Normalized, Item.Key_Row, Status);
+            Product
+              (Item, Current.Key, Item.Normalized, Item.Key_Row, Status);
             exit when E.Is_Error (Status);
-            Workers_CPU.Dispatch
-              (Item.Team, Current.Value, Item.Normalized, Item.Value_Row,
+            Product
+              (Item, Current.Value, Item.Normalized, Item.Value_Row,
                Status);
             exit when E.Is_Error (Status);
 
@@ -1439,8 +1481,8 @@ package body Model_Runner.Llama is
                end;
             end loop;
 
-            Workers_CPU.Dispatch
-              (Item.Team, Current.Attention_Out, Item.Attention,
+            Product
+              (Item, Current.Attention_Out, Item.Attention,
                Item.Normalized, Status);
             exit when E.Is_Error (Status);
             K.Add (Item.Activation.all, Item.Normalized.all);
@@ -1450,18 +1492,18 @@ package body Model_Runner.Llama is
               (Item.Activation.all, Current.Feed_Norm.all,
                Settings.Epsilon, Item.Normalized.all);
 
-            Workers_CPU.Dispatch
-              (Item.Team, Current.Gate, Item.Normalized, Item.Gate, Status);
+            Product
+              (Item, Current.Gate, Item.Normalized, Item.Gate, Status);
             exit when E.Is_Error (Status);
-            Workers_CPU.Dispatch
-              (Item.Team, Current.Up, Item.Normalized, Item.Up, Status);
+            Product
+              (Item, Current.Up, Item.Normalized, Item.Up, Status);
             exit when E.Is_Error (Status);
 
             K.SiLU (Item.Gate.all);
             K.Multiply (Item.Gate.all, Item.Up.all);
 
-            Workers_CPU.Dispatch
-              (Item.Team, Current.Down, Item.Gate, Item.Normalized, Status);
+            Product
+              (Item, Current.Down, Item.Gate, Item.Normalized, Status);
             exit when E.Is_Error (Status);
             K.Add (Item.Activation.all, Item.Normalized.all);
          end;
@@ -1479,8 +1521,8 @@ package body Model_Runner.Llama is
       --  The output projection is the widest product of the token, so it is
       --  the one that most benefits from the pool. It writes into a
       --  session-owned row that is then copied into the caller's vector.
-      Workers_CPU.Dispatch
-        (Item.Team, Source.Output, Item.Normalized, Item.Logit_Row, Status);
+      Product
+        (Item, Source.Output, Item.Normalized, Item.Logit_Row, Status);
       if E.Is_Error (Status) then
          Item.Current := Failed;
          return;
@@ -1676,14 +1718,14 @@ package body Model_Runner.Llama is
             end loop;
 
             --  One pass over each weight for the whole batch.
-            Workers_CPU.Dispatch_Batch
-              (Item.Team, Current.Query, Norm, Count, Query, Status);
+            Product_Batch
+              (Item, Current.Query, Norm, Count, Query, Status);
             exit when E.Is_Error (Status);
-            Workers_CPU.Dispatch_Batch
-              (Item.Team, Current.Key, Norm, Count, Keys, Status);
+            Product_Batch
+              (Item, Current.Key, Norm, Count, Keys, Status);
             exit when E.Is_Error (Status);
-            Workers_CPU.Dispatch_Batch
-              (Item.Team, Current.Value, Norm, Count, Values, Status);
+            Product_Batch
+              (Item, Current.Value, Norm, Count, Values, Status);
             exit when E.Is_Error (Status);
 
             --  Rotate at each token's own position, then publish every key
@@ -1794,8 +1836,8 @@ package body Model_Runner.Llama is
                end;
             end loop;
 
-            Workers_CPU.Dispatch_Batch
-              (Item.Team, Current.Attention_Out, Attend, Count, Norm, Status);
+            Product_Batch
+              (Item, Current.Attention_Out, Attend, Count, Norm, Status);
             exit when E.Is_Error (Status);
 
             for Which in 0 .. Count - 1 loop
@@ -1812,11 +1854,11 @@ package body Model_Runner.Llama is
                end;
             end loop;
 
-            Workers_CPU.Dispatch_Batch
-              (Item.Team, Current.Gate, Norm, Count, Gate, Status);
+            Product_Batch
+              (Item, Current.Gate, Norm, Count, Gate, Status);
             exit when E.Is_Error (Status);
-            Workers_CPU.Dispatch_Batch
-              (Item.Team, Current.Up, Norm, Count, Up, Status);
+            Product_Batch
+              (Item, Current.Up, Norm, Count, Up, Status);
             exit when E.Is_Error (Status);
 
             for Which in 0 .. Count - 1 loop
@@ -1830,8 +1872,8 @@ package body Model_Runner.Llama is
                end;
             end loop;
 
-            Workers_CPU.Dispatch_Batch
-              (Item.Team, Current.Down, Gate, Count, Norm, Status);
+            Product_Batch
+              (Item, Current.Down, Gate, Count, Norm, Status);
             exit when E.Is_Error (Status);
 
             for Which in 0 .. Count - 1 loop
@@ -1862,8 +1904,8 @@ package body Model_Runner.Llama is
             Settings.Epsilon, Item.Normalized.all);
       end;
 
-      Workers_CPU.Dispatch
-        (Item.Team, Source.Output, Item.Normalized, Item.Logit_Row, Status);
+      Product
+        (Item, Source.Output, Item.Normalized, Item.Logit_Row, Status);
       if E.Is_Error (Status) then
          Release;
          Item.Current := Failed;

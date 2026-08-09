@@ -193,6 +193,7 @@ en.completion.runtime_error = a failure occurred
 
 en.warning.template_missing = the model has no chat template; the prompt is being sent unchanged
 en.warning.locale_fallback = locale {value} is unavailable; using {detail}
+en.warning.backend_no_batching = the {value} backend evaluates one token at a time; --batch-size is ignored
 en.warning.mapping_unavailable = memory mapping is unavailable; reading the file instead
 en.warning.stats_unavailable = statistics are unavailable
 
@@ -518,6 +519,7 @@ da.completion.output_closed = modtageren af uddata lukkede
 da.completion.runtime_error = der opstod en fejl
 da.warning.template_missing = modellen har ingen samtaleskabelon; prompten sendes uændret
 da.warning.locale_fallback = sproget {value} er ikke tilgængeligt; bruger {detail}
+da.warning.backend_no_batching = {value}-backend'en evaluerer ét token ad gangen; --batch-size ignoreres
 da.warning.mapping_unavailable = hukommelsesafbildning er ikke tilgængelig; læser filen i stedet
 da.warning.stats_unavailable = statistik er ikke tilgængelig
 da.diagnostic.label.error = fejl
@@ -771,6 +773,7 @@ qps.completion.output_closed = ⟦ŧhé óúŧpúŧ ðéßŧíñáŧíóñ çĺ�
 qps.completion.runtime_error = ⟦á fáíĺúŕé óççúŕŕéð⟧
 qps.warning.template_missing = ⟦ŧhé móðéĺ háß ñó çháŧ ŧémpĺáŧé; ŧhé pŕómpŧ íß béíñg ßéñŧ úñçháñgéð⟧
 qps.warning.locale_fallback = ⟦ĺóçáĺé {value} íß úñáváíĺábĺé; úßíñg {detail}⟧
+qps.warning.backend_no_batching = ⟦ŧhé {value} báçkéñð éváĺúáŧéß óñé ŧókéñ áŧ á ŧімé; --batch-size íß ígñóŕéð⟧
 qps.warning.mapping_unavailable = ⟦mémóŕý máppíñg íß úñáváíĺábĺé; ŕéáðíñg ŧhé fíĺé íñßŧéáð⟧
 qps.warning.stats_unavailable = ⟦ßŧáŧíßŧíçß áŕé úñáváíĺábĺé⟧
 qps.diagnostic.label.error = ⟦éŕŕóŕ⟧

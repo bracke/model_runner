@@ -1296,12 +1296,18 @@ package body Tests.CLI_Cases is
       Ready  : L.Model;
    end record;
 
-   procedure Start (Item : in out Harness) is
+   procedure Start
+     (Item    : in out Harness;
+      Backend : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU)
+   is
       Status : E.Error_Info;
    begin
       Containers.Reader.Parse (Item.Parsed, Item.Source, Status => Status);
       Assert (E.Is_Ok (Status), "tiny model did not parse");
-      L.Prepare (Item.Ready, Item.Parsed, Item.Source, Status => Status);
+      L.Prepare
+        (Item.Ready, Item.Parsed, Item.Source, Backend => Backend,
+         Status => Status);
       Assert (E.Is_Ok (Status), "tiny model did not prepare");
    end Start;
 
@@ -1995,6 +2001,89 @@ package body Tests.CLI_Cases is
          end;
       end;
    end Architectures_Are_Read_By_Name;
+
+   --  The two backends produce the same logits.
+   --
+   --  That is the whole point of the second one. The CPU backend partitions
+   --  rows across workers, shares one reading of the weights between the
+   --  vectors of a batch, and decodes a span into a buffer so the loops
+   --  vectorize; each of those was done for speed and each is a way the
+   --  answer could be wrong for a reason that is hard to see. The reference
+   --  backend has none of them: a row, decoded whole, multiplied one element
+   --  at a time, summed wide, on the calling task.
+   --
+   --  So a caller with a file that produces suspicious text can ask again
+   --  with --backend reference and find out whether the fast path was the
+   --  reason. This says the two answers are the same on a fixture; the
+   --  conformance run says the fast path agrees with a third implementation
+   --  written from the architecture description.
+   procedure Backends_Agree
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Back renames Model_Runner.Backend;
+      subtype Logit_Row is
+        Model_Runner.Numerics.Real_Array
+          (0 .. Model_Runner.Numerics.Element_Count
+                  (Tiny_Model.Vocabulary - 1));
+
+      Image   : B.Byte_Array_Access;
+      Dropped : E.Error_Info;
+   begin
+      Tiny_Model.Build (Image, Room => 64);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+
+         --  Logits for the same token, from each backend.
+         function Logits_From (Kind : Back.Backend_Kind) return Logit_Row is
+            Session : L.Session;
+            Room    : Logit_Row := [others => 0.0];
+            Status  : E.Error_Info;
+         begin
+            L.Open (Session, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the session did not open for "
+                    & Back.Backend_Name (Kind));
+
+            L.Evaluate (Session, Under.Ready, 4, Room, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "evaluation failed on " & Back.Backend_Name (Kind)
+                    & ": " & E.Error_Code'Image (Status.Code));
+
+            L.Close (Session);
+            return Room;
+         end Logits_From;
+      begin
+         Start (Under, Back.Backend_CPU);
+
+         declare
+            Fast : constant Logit_Row := Logits_From (Back.Backend_CPU);
+            Slow : Logit_Row;
+            Apart : Model_Runner.Numerics.Real := 0.0;
+         begin
+            L.Close (Under.Ready, Dropped);
+            Start (Under, Back.Backend_Reference);
+            Slow := Logits_From (Back.Backend_Reference);
+
+            for Index in Fast'Range loop
+               Apart := Model_Runner.Numerics.Real'Max
+                 (Apart, abs (Fast (Index) - Slow (Index)));
+            end loop;
+
+            --  Exactly, not nearly. Both sum in the wide format over the same
+            --  values in the same order; a difference would mean one of them
+            --  is not doing what it says.
+            Assert (Apart = 0.0,
+                    "the two backends disagree by"
+                    & Model_Runner.Numerics.Real'Image (Apart));
+         end;
+
+         L.Close (Under.Ready, Dropped);
+         Containers.Close (Under.Parsed);
+      end;
+   end Backends_Agree;
 
    --  How many workers run a generation does not change what it produces.
    --
@@ -5173,6 +5262,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Every_Backend_Can_Be_Named'Access,
          "every backend this build has can be named on the command line");
+      Register_Routine
+        (T, Backends_Agree'Access,
+         "the two backends produce the same logits");
       Register_Routine
         (T, Every_Chat_Format_Can_Be_Named'Access,
          "every chat format this build carries can be named on the command "

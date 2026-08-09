@@ -346,6 +346,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A second backend. `--backend reference` evaluates the model one row at a
+  time: the row decoded whole, multiplied element by element, summed in the
+  wide format, on the calling task. No worker pool, no partition, no batch
+  sharing, no span buffer -- each of which the `cpu` backend does for speed
+  and each of which is a way an answer could be wrong for a reason that is
+  hard to see.
+
+  It produces the same logits as `cpu`, exactly, and takes about forty times
+  as long. It exists so that a suspicious result on a caller's own model can
+  be asked again by different code; `tests conformance` does something
+  stronger but only on a fixture.
+
+  It also makes the capability machinery answer for itself: it declares that
+  it cannot batch and has one worker, and the command line clamps
+  `--batch-size` to one rather than refusing the run.
+
 - `qwen2` files run. They are the same shape as `llama` -- RMS normalization,
   rotary encoding, grouped-query attention, a SwiGLU feed-forward -- with a
   bias on each of the three attention projections and the other rotary
