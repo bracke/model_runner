@@ -55,7 +55,15 @@ package body Conformance is
            Model_Runner.Backend.Backend_CPU;
          Repack  : L.Repack_Mode := L.No_Repack;
          Batched : Boolean := False;
-         Shared  : Boolean := False)
+         Shared  : Boolean := False;
+
+         --  How many tokens to hand over at once, or zero for all of them.
+         --  A prompt longer than --batch-size is evaluated in several
+         --  calls, and the seam between them -- where the cache position
+         --  carries from one call to the next -- is where an off-by-one
+         --  would live. Every comparison here used to hand over the whole
+         --  sequence at once and never cross that seam.
+         Chunk   : Natural := 0)
       is
          Held      : aliased constant B.Byte_Array := Image.all;
          Source    : Model_Runner.Byte_Sources.Memory.Buffer_Source
@@ -134,14 +142,30 @@ package body Conformance is
                declare
                   Held : Model_Runner.Tokenizer.Token_Array
                     (1 .. Tokens'Length);
+                  Step : constant Positive :=
+                    (if Chunk = 0 then Tokens'Length else Chunk);
+                  From : Positive := 1;
                begin
                   for Index in Tokens'Range loop
                      Held (Index - Tokens'First + 1) :=
                        Model_Runner.Tokenizer.Token_Id (Tokens (Index));
                   end loop;
 
-                  L.Evaluate_Batch
-                    (Session, Engine, Held, Actual, Status => Status);
+                  --  One call, or several with the engine carrying the
+                  --  position between them, which is what a prompt longer
+                  --  than the batch size does.
+                  while From <= Held'Last loop
+                     declare
+                        Upto : constant Positive :=
+                          Positive'Min (From + Step - 1, Held'Last);
+                     begin
+                        L.Evaluate_Batch
+                          (Session, Engine, Held (From .. Upto), Actual,
+                           Status => Status);
+                        exit when E.Is_Error (Status);
+                        From := Upto + 1;
+                     end;
+                  end loop;
                end;
             else
                for Index in Tokens'Range loop
@@ -301,6 +325,14 @@ package body Conformance is
                                     Backend, Repack,
                                     Batched => True, Shared => True);
                         end if;
+
+                        --  And the same eight tokens three at a time, which
+                        --  is two seams: 3, 3, 2.
+                        if Batches (Backend) then
+                           Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8),
+                                    Backend, Repack, Batched => True,
+                                    Shared => True, Chunk => 3);
+                        end if;
                      end if;
                   end loop;
 
@@ -342,7 +374,7 @@ package body Conformance is
             Expected : constant Natural :=
               Formats * 2 * Repacks
               * (Backends * 4 + Batching * 3 + Sharing * 2
-                 + (if Batching > 0 and then Sharing > 0 then 1 else 0));
+                 + (if Batching > 0 and then Sharing > 0 then 2 else 0));
          begin
             Result.Ran := Result.Sequences = Expected;
          end;

@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Conformance hands a prompt over in several calls as well as one: 1170
+  sequences. A prompt longer than `--batch-size` is evaluated in chunks, and
+  the seam between them -- where the cache position carries from one call to
+  the next -- is where an off-by-one lives; every comparison used to hand the
+  whole sequence over at once and never cross it. Eight tokens three at a
+  time is two seams.
+
+  Verified by breaking it: subtracting one from the reserved position in
+  `Evaluate_Batch` puts 912 logits outside tolerance, and before this
+  dimension existed the same fault would have passed the sweep untouched.
+
 - Conformance compares the partitioned path as well as the serial one: 1092
   sequences. Every one of them ran with no worker pool, so the path a real
   run takes -- rows divided across workers -- had been compared only against

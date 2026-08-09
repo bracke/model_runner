@@ -442,19 +442,19 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 1092, logits compared 11648,
+conformance: sequences 1170, logits compared 12480,
              worst absolute 3.46898714553845E-06,
              worst relative 8.94395650089654E-04,
-             rounded logits compared 5824,
+             rounded logits compared 6240,
              rounded worst absolute 1.36861269753309E-01,
              rounded worst relative 1.15330975240755E+00,
              outside tolerance 0
 ```
 
-Both architectures, both backends, both evaluation paths -- a token at a time
-and a whole prompt in one pass -- serial and across a worker pool, every
-repacking mode, and every one of the thirteen weight formats the engine
-decodes: binary32, F16, BF16, Q4_0, Q4_1,
+Both architectures, both backends, every evaluation path -- a token at a
+time, a whole prompt in one pass, and a prompt handed over in several --
+serial and across a worker pool, every repacking mode, and every one of the
+thirteen weight formats the engine decodes: binary32, F16, BF16, Q4_0, Q4_1,
 Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K and Q6_K. The fixture writes each of
 them and the reference reads each of them, both worked out from the layouts
 rather than by calling the engine, so a packing mistake cannot be common to
@@ -486,6 +486,16 @@ is in the first set, where it belongs: it lands exactly where the stored
 layout does. The bound the rounded path is held to is 5e-2 relative with a
 1e-1 absolute floor -- what it measures, rounded up -- rather than the exact
 one, which would only restate that rounding rounds.
+
+A prompt longer than `--batch-size` is evaluated in several calls, and the
+seam between them -- where the cache position carries from one call to the
+next -- is where an off-by-one would live. Eight tokens three at a time is
+two of those seams, and every comparison used to hand the whole sequence over
+at once. What decides where the seams fall is the loop in `Generation`, and
+that loop is checked against the engine itself: a test asserts that a batch
+produces the same bits as the same tokens one at a time. So the seam is
+compared independently and the arithmetic that chooses it is not, which is
+the honest division here.
 
 The partitioned path is compared for the same reason the batched one is: a
 run uses it and only the engine had ever read what it produced. Row
