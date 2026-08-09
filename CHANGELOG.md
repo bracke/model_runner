@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The progress trace reports selecting a backend, which it could not before
+  because nothing published the event. `Converting_Tensor` and
+  `Preparing_Kernels` were removed: they named steps this program does not
+  take, and an observer switching on them would have waited forever.
+
+- `Close_Progress` and the flag it tested are gone. The flag was declared,
+  initialized to False, tested before every line the program prints, and set
+  by nothing -- so the mechanism for finishing a half-written progress line
+  had no half-written line to finish.
+
+- The progress trace, a diagnostic and the interactive settings are read by
+  tests. Every load stage this build reports has a message of its own and a
+  verbose run reaches all of them; a quiet diagnostic is one line, and the
+  context frames and file offset a verbose one adds are the lines it
+  promises to leave out; and `/settings` shows the figures it claims.
+
 - The `inspect` and statistics screens are read by a test. Both are built
   from many separate calls whose layout lives in the caller, which is the
   property that let three help lines drift out of their column; nothing had

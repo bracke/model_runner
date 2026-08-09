@@ -265,7 +265,6 @@ private
       Capabilities  : Terminal_Capabilities;
       Level         : Model_Runner.CLI.Options.Verbosity :=
         Model_Runner.CLI.Options.Normal;
-      Progress_Open : Boolean := False;
    end record;
 
    type Standard_Output_Sink is limited new Model_Runner.Output.Sink with record

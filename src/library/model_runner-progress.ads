@@ -28,8 +28,6 @@ package Model_Runner.Progress is
       Selecting_Backend,
       Planning_Memory,
       Preparing_Tensors,
-      Converting_Tensor,
-      Preparing_Kernels,
       Finalizing_Model,
       Model_Ready);
 

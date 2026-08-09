@@ -156,8 +156,6 @@ en.progress.loading.selecting_architecture = selecting architecture
 en.progress.loading.selecting_backend = selecting backend
 en.progress.loading.planning_memory = planning memory
 en.progress.loading.preparing_tensors = reading tensors
-en.progress.loading.converting_tensor = converting tensors
-en.progress.loading.preparing_kernels = preparing kernels
 en.progress.loading.finalizing_model = finalizing model
 en.progress.loading.model_ready = model ready
 
@@ -736,8 +734,6 @@ qps.progress.loading.selecting_architecture = ⟦ßéĺéçŧíñg áŕçhíŧé
 qps.progress.loading.selecting_backend = ⟦ßéĺéçŧíñg báçkéñð⟧
 qps.progress.loading.planning_memory = ⟦pĺáññíñg mémóŕý⟧
 qps.progress.loading.preparing_tensors = ⟦ŕéáðíñg ŧéñßóŕß⟧
-qps.progress.loading.converting_tensor = ⟦çóñvéŕŧíñg ŧéñßóŕß⟧
-qps.progress.loading.preparing_kernels = ⟦pŕépáŕíñg kéŕñéĺß⟧
 qps.progress.loading.finalizing_model = ⟦fíñáĺízíñg móðéĺ⟧
 qps.progress.loading.model_ready = ⟦móðéĺ ŕéáðý⟧
 qps.progress.generation.prompt_rendered = ⟦pŕómpŧ ŕéñðéŕéð⟧

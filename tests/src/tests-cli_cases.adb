@@ -787,6 +787,171 @@ package body Tests.CLI_Cases is
       end;
    end Reported_Screens_Are_Laid_Out;
 
+   --  The progress trace and the diagnostic reach the screen in the shape
+   --  they claim.
+   --
+   --  The last three renderings nothing read. The progress trace is a line
+   --  per stage and the stages are an enumeration, so a stage added without
+   --  a message would print its own identifier and no test would mind. A
+   --  diagnostic's context frames and file offset are verbose-only, which is
+   --  a promise about what a quiet run does not say. And /settings prints
+   --  ten fields in a column that nothing had looked at.
+   procedure Trace_And_Diagnostic_Render
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model    : constant String := "obj/trace-model.gguf";
+      Captured : constant String := "obj/trace.txt";
+
+      --  Run a command and return what reached standard error.
+      function Traced (Words : String; Expect : Natural := 0) return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Handle : File_Type;
+         First  : Positive := Words'First;
+      begin
+         for Index in Words'Range loop
+            if Words (Index) = ' ' then
+               if Index > First then
+                  Add (Source, Words (First .. Index - 1));
+               end if;
+               First := Index + 1;
+            end if;
+         end loop;
+         if First <= Words'Last then
+            Add (Source, Words (First .. Words'Last));
+         end if;
+
+         Create (Handle, Out_File, Captured);
+         Set_Error (Handle);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Assert (Status = Expect,
+                 """" & Words & """ gave status" & Natural'Image (Status)
+                 & " and not" & Natural'Image (Expect));
+         return Project_Tools.Files.Read_Raw_File (Captured);
+      end Traced;
+
+      Catalog : aliased Model_Runner.Localization.Catalog;
+   begin
+      Tiny_Model.Write (Model, Room => 256);
+      Model_Runner.Localization.Open
+        (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+
+      --  Every load stage this build can report has a line of its own, and a
+      --  verbose run reaches all of them.
+      declare
+         Screen : constant String :=
+           Traced ("run " & Model & " --prompt hi --max-tokens 1 --verbose");
+      begin
+         for Stage in Model_Runner.Progress.Load_Stage loop
+            declare
+               Key : constant String :=
+                 "progress.loading."
+                 & Model_Runner.Text.To_Lower
+                     (Model_Runner.Progress.Load_Stage'Image (Stage));
+               Said : constant String :=
+                 Model_Runner.Localization.Text (Catalog, Key);
+            begin
+               Assert (Said /= "" and then Said /= "<" & Key & ">",
+                       "the load stage "
+                       & Model_Runner.Progress.Load_Stage'Image (Stage)
+                       & " has no message of its own");
+               Assert (Project_Tools.Text.Contains (Screen, Said),
+                       "a verbose run did not report " & Said);
+            end;
+         end loop;
+      end;
+
+      --  A cut-short copy of the fixture, for a diagnostic that has a file
+      --  offset to report.
+      declare
+         use Ada.Streams;
+         From, Into : Stream_IO.File_Type;
+         Block      : Stream_Element_Array (1 .. 200);
+         Last       : Stream_Element_Offset;
+      begin
+         Stream_IO.Open (From, Stream_IO.In_File, Model);
+         Stream_IO.Create (Into, Stream_IO.Out_File, "obj/trace-cut.gguf");
+         Stream_IO.Read (From, Block, Last);
+         Stream_IO.Write (Into, Block (1 .. Last));
+         Stream_IO.Close (Into);
+         Stream_IO.Close (From);
+      end;
+
+      --  A diagnostic says the severity, the code and the description, and
+      --  nothing else unless asked. The frame and offset lines are the
+      --  things a quiet run promises not to print.
+      declare
+         --  How many non-empty lines a screen holds. The promise is that a
+         --  quiet run says the diagnostic and stops; counting is the way to
+         --  check it without guessing at the wording of what it left out.
+         --
+         --  Looking for a prefix of the frame message does not work: it
+         --  begins with the program's own name, so "mode" was found inside
+         --  "model_runner" and a quiet run looked like it had printed one.
+         function Lines (Text : String) return Natural is
+            Count  : Natural := 0;
+            Cursor : Natural := Text'First;
+         begin
+            while Cursor <= Text'Last loop
+               declare
+                  Stop : Natural := Cursor;
+               begin
+                  while Stop <= Text'Last and then Text (Stop) /= ASCII.LF
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+                  if Model_Runner.Text.Trim (Text (Cursor .. Stop - 1)) /= ""
+                  then
+                     Count := Count + 1;
+                  end if;
+                  Cursor := Stop + 1;
+               end;
+            end loop;
+            return Count;
+         end Lines;
+
+         --  A file that ends inside a field, so that the diagnostic has a
+         --  location to withhold. A missing file has none, and against that
+         --  one a quiet run and a verbose run print the same thing --
+         --  which is why the first version of this test passed while
+         --  frames were printed unconditionally.
+         Cut : constant String := "obj/trace-cut.gguf";
+
+         Quiet : constant String :=
+           Traced ("inspect " & Cut, Expect => 3);
+         Loud  : constant String :=
+           Traced ("inspect " & Cut & " --verbose", Expect => 3);
+      begin
+         Assert (Project_Tools.Text.Contains (Quiet, "MR-GGUF-0001"),
+                 "a diagnostic did not print its code: " & Quiet);
+         Assert (Project_Tools.Text.Contains (Quiet, "model_runner: "),
+                 "a diagnostic did not name the program");
+
+         --  One line, and one only. Frames and the file offset are the
+         --  lines a quiet run promises not to add, and a verbose run of the
+         --  same failure does add them.
+         Assert (Lines (Quiet) = 1,
+                 "a quiet diagnostic printed"
+                 & Natural'Image (Lines (Quiet)) & " lines: " & Quiet);
+         Assert (Lines (Loud) > Lines (Quiet),
+                 "a verbose diagnostic said no more than a quiet one");
+      end;
+
+   end Trace_And_Diagnostic_Render;
+
    --  Malformed command lines are rejected with the code that names the
    --  problem.
    procedure Usage_Errors_Reported (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -2330,6 +2495,36 @@ package body Tests.CLI_Cases is
       Assert (not Took_A_Turn ("/settings" & ASCII.LF & "/stats" & ASCII.LF
                                & "/exit" & ASCII.LF),
               "a command was taken for a prompt");
+
+      --  And /settings prints the figures it claims to. Ten fields in the
+      --  column the rest of the program uses, and nothing had read them.
+      declare
+         Said   : constant String :=
+           Conversed ("/settings" & ASCII.LF & "/exit" & ASCII.LF);
+         Shown  : Natural := 0;
+      begin
+         for Which in 1 .. 5 loop
+            declare
+               Key : constant String :=
+                 (case Which is
+                    when 1 => "cli.interactive.setting.temperature",
+                    when 2 => "cli.interactive.setting.top_k",
+                    when 3 => "cli.interactive.setting.top_p",
+                    when 4 => "cli.interactive.setting.repeat_penalty",
+                    when others => "cli.interactive.setting.max_tokens");
+               Label : constant String :=
+                 Model_Runner.Localization.Text (Catalog, Key);
+            begin
+               if Project_Tools.Text.Contains (Said, Label) then
+                  Shown := Shown + 1;
+               end if;
+            end;
+         end loop;
+
+         Assert (Shown = 5,
+                 "the settings screen showed" & Natural'Image (Shown)
+                 & " of 5 figures");
+      end;
 
       --  End of file submits what is pending rather than dropping it. No
       --  /stats can be asked afterwards, so this reads the statistics the
@@ -4168,6 +4363,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Reported_Screens_Are_Laid_Out'Access,
          "the inspect and statistics screens are laid out in a column");
+      Register_Routine
+        (T, Trace_And_Diagnostic_Render'Access,
+         "the progress trace and a diagnostic render");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");

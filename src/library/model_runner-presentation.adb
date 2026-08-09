@@ -34,7 +34,6 @@ package body Model_Runner.Presentation is
       Item.Mode := Mode;
       Item.Capabilities := Capabilities;
       Item.Level := Level;
-      Item.Progress_Open := False;
    end Open;
 
    --  Report whether a destination may carry escape sequences.
@@ -77,13 +76,7 @@ package body Model_Runner.Presentation is
 
    --  Finish any partially drawn progress line before something else is
    --  written to the same stream.
-   procedure Close_Progress (Item : in out Console) is
-   begin
-      if Item.Progress_Open then
-         Ada.Text_IO.New_Line (Ada.Text_IO.Current_Error);
-         Item.Progress_Open := False;
-      end if;
-   end Close_Progress;
+
 
    --------------
    -- Put_Line --
@@ -101,7 +94,6 @@ package body Model_Runner.Presentation is
    --  that way.
    procedure Put_Line (Item : in out Console; Text : String) is
    begin
-      Close_Progress (Item);
       Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Output, Text);
    exception
       when Ada.IO_Exceptions.Device_Error | Ada.IO_Exceptions.Use_Error =>
@@ -121,9 +113,16 @@ package body Model_Runner.Presentation is
    end Put_Message;
 
    --  Write one line to standard error, tolerating a closed destination.
+   --
+   --  The console is passed and not read. It was read, to close a progress
+   --  line left half-written, and that line never existed: the flag saying
+   --  one was open was declared, initialized to False, tested, and set by
+   --  nothing. The parameter stays because every writer here takes one and a
+   --  writer that does not is a writer somebody will call from the wrong
+   --  place.
    procedure Error_Line (Item : in out Console; Text : String) is
+      pragma Unreferenced (Item);
    begin
-      Close_Progress (Item);
       Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Text);
    exception
       when Ada.IO_Exceptions.Device_Error | Ada.IO_Exceptions.Use_Error =>
@@ -228,7 +227,6 @@ package body Model_Runner.Presentation is
 
    procedure Put_Prompt (Item : in out Console; Key : String) is
    begin
-      Close_Progress (Item);
       Ada.Text_IO.Put (Ada.Text_IO.Current_Error, Message (Item, Key) & ' ');
       Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
    exception
@@ -482,7 +480,6 @@ package body Model_Runner.Presentation is
               [Loc.Named ("completed", T.Image (Long_Long_Integer (Item.Completed))),
                Loc.Named ("total", T.Image (Long_Long_Integer (Item.Total)))]);
       begin
-         Close_Progress (Owner);
          Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Line);
       end;
    exception

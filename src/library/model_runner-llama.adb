@@ -538,6 +538,7 @@ package body Model_Runner.Llama is
       --  with the model. The case has no others: a backend added to the
       --  enumeration stops this compiling until it says what it can read,
       --  which is the point of asking rather than assuming.
+      P.Publish (Observer, P.Load_Progress (P.Selecting_Backend));
       case Backend is
          when Model_Runner.Backend.Backend_CPU =>
             Item.Able := Workers_CPU.Describe;
