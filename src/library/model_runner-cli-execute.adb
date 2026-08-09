@@ -886,9 +886,18 @@ package body Model_Runner.CLI.Execute is
                      end if;
                   end loop;
 
+                  --  What must fit, not what is held afterwards. The copy
+                  --  is decoded from the file's own bytes, so both exist at
+                  --  once while it is being written; the file's are released
+                  --  when it is done. A caller deciding whether --repack
+                  --  will run needs the moment when both are there.
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.repacked_bytes",
-                     T.Image (Long_Long_Integer (Repacked)), Pres.Answer);
+                     T.Image
+                       (Long_Long_Integer
+                          (Repacked
+                           + Containers.Tensor_Data_Bytes (Container))),
+                     Pres.Answer);
                end;
             end;
          end if;

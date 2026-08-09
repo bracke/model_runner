@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 32) of Text_Access :=
+   Held : constant array (1 .. 31) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Put_U16"),
       new String'("Put_U64"),
@@ -33,7 +33,6 @@ package body Library_Surface is
       --  Planning a session.
       new String'("Finalize_Plan"),
       new String'("Record_Mapping"),
-      new String'("Record_Release"),
 
       --  Helpers.
       new String'("Ends_With"),

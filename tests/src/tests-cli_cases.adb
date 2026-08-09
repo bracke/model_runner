@@ -2083,6 +2083,131 @@ package body Tests.CLI_Cases is
          end loop;
       end;
 
+      --  And on the other backend, which reads the repacked matrices by the
+      --  same view and must agree with itself for the same reason. The
+      --  first version of this test asked only the backend that repacking
+      --  was written against.
+      declare
+         Held : aliased constant B.Byte_Array := Image.all;
+
+         function Reference_Logits (Repack : Boolean) return Logit_Row is
+            Under   : Harness (Held'Access);
+            Session : L.Session;
+            Room    : Logit_Row := [others => 0.0];
+            Status  : E.Error_Info;
+         begin
+            Start (Under,
+                   Backend => Model_Runner.Backend.Backend_Reference,
+                   Repack  => Repack);
+
+            L.Open (Session, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            L.Evaluate (Session, Under.Ready, 4, Room, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation failed");
+
+            L.Close (Session);
+            return Room;
+         end Reference_Logits;
+
+         Plain    : constant Logit_Row := Reference_Logits (False);
+         Repacked : constant Logit_Row := Reference_Logits (True);
+      begin
+         for Index in Plain'Range loop
+            Assert (Plain (Index) = Repacked (Index),
+                    "repacking moved logit"
+                    & Model_Runner.Numerics.Element_Count'Image (Index)
+                    & " on the reference backend");
+         end loop;
+      end;
+
+      --  And through the whole command, with the mapping turned off. The
+      --  copy is decoded from the file's bytes however those bytes arrived,
+      --  and --no-mmap is the arrangement where they are read rather than
+      --  mapped -- which is also the one where holding them after the copy
+      --  was made cost real memory rather than reclaimable pages.
+      declare
+         use Ada.Text_IO;
+
+         Model : constant String := "obj/repack-model.gguf";
+
+         function Text_Of (Extra : String) return String is
+            Source : Fixed_Arguments;
+            Status : Natural;
+            Handle : File_Type;
+         begin
+            Add (Source, "run");
+            Add (Source, Model);
+            Add (Source, "--raw");
+            Add (Source, "--prompt");
+            Add (Source, "ab");
+            Add (Source, "--max-tokens");
+            Add (Source, "6");
+            Add (Source, "--seed");
+            Add (Source, "1");
+            Add (Source, "--temperature");
+            Add (Source, "0");
+            if Extra /= "" then
+               Add (Source, Extra);
+            end if;
+
+            Create (Handle, Out_File, "obj/repack-out.txt");
+            Set_Output (Handle);
+            begin
+               Model_Runner.CLI.Driver.Run (Source, Status);
+            exception
+               when others =>
+                  Set_Output (Standard_Output);
+                  Close (Handle);
+                  raise;
+            end;
+            Set_Output (Standard_Output);
+            Close (Handle);
+
+            return Project_Tools.Files.Read_Raw_File ("obj/repack-out.txt");
+         end Text_Of;
+      begin
+         Tiny_Model.Write (Model, Room => 64);
+
+         declare
+            Plain    : constant String := Text_Of ("");
+            Repacked : constant String := Text_Of ("--repack");
+            Unmapped : constant String := Text_Of ("--no-mmap");
+         begin
+            Assert (Plain = Repacked,
+                    "repacking changed the text: " & Plain & " against "
+                    & Repacked);
+            Assert (Plain = Unmapped,
+                    "reading rather than mapping changed the text");
+         end;
+      end;
+
+      --  And the account says the file's bytes were given back once the
+      --  copy held them.
+      --
+      --  What this can hold is the bookkeeping, not the deallocation: an
+      --  account that recorded a release the code never performed would
+      --  pass. Removing the free and leaving the record does pass, and was
+      --  tried. The deallocation itself was checked from outside, by peak
+      --  resident memory, and it does not move the peak -- both copies
+      --  exist while the second is being written, which is what inspect
+      --  reports as the peak with --repack. What it lowers is what the
+      --  model holds afterwards, by the size of the file.
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Books : Model_Runner.Memory.Account;
+      begin
+         Start (Under, Repack => True);
+         Books := L.Accounting (Under.Ready);
+
+         Assert (Books.By_Category (Model_Runner.Memory.Converted_Weights) > 0,
+                 "repacking recorded no converted weights");
+         Assert (Books.Released > 0,
+                 "repacking released nothing; the file's own bytes are still "
+                 & "held beside the copy");
+      end;
+
       B.Free (Image);
       pragma Unreferenced (Dropped);
    end Repacking_Changes_No_Logit;

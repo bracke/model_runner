@@ -39,7 +39,7 @@
 --  Building a diagnostic. Add_Boolean, Find_Parameter and Set_Cause are for
 --  a caller raising its own Error_Info rather than passing one along.
 --
---  Planning a session. Finalize_Plan, Record_Mapping and Record_Release let
+--  Planning a session. Finalize_Plan and Record_Mapping let
 --  a caller account for memory it arranges itself.
 --
 --  Helpers. Ends_With, Equal_Ignore_Case, Has_Controls, In_Range,

@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Repacking releases the file's own bytes once the copy holds them. Every
+  matrix refers into the copy and the vectors were decoded before it ran, so
+  what was left was an arena with no reader, held for the life of the model:
+  repacking cost the copy and the file at once. It does not move the peak --
+  both exist while the copy is written -- it lowers what is held afterwards
+  by the size of the file.
+
+- `inspect` reports the peak with `--repack` rather than the size of the
+  copy, because the peak is what decides whether it will run: 4.8 GB for a
+  Q2_K file whose own weights are 0.43 GB.
+
+- Repacking is exercised on the reference backend and through the whole
+  command with the mapping turned off. The first test asked only the backend
+  it was written against.
+
 - The load trace says when it is repacking. Ten seconds of decoding sat
   between "reading tensors" and "finalizing model" with nothing in between,
   which was the longest silence in a load and the least explained.

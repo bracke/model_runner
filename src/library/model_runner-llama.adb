@@ -948,6 +948,23 @@ package body Model_Runner.Llama is
                     + B.Byte_Count (Rows) * B.Byte_Count (Columns) * 4;
                end;
             end loop;
+
+            --  The file's own bytes are nobody's now. Every matrix refers
+            --  into the copy, and the vectors -- norms and biases -- were
+            --  decoded into their own storage before this ran, so what is
+            --  left is the arena and no reader for it. Held to the end of
+            --  the model's life it made repacking cost the copy and the
+            --  file at once: a peak of 5.2 GB where the copy is 4.4 and
+            --  the file 0.43.
+            declare
+               Was : constant Interfaces.Unsigned_64 :=
+                 (if Item.Arena = null then 0
+                  else Interfaces.Unsigned_64 (Item.Arena.all'Length));
+            begin
+               B.Free (Item.Arena);
+               Item.Arena_Base := 0;
+               Mem.Record_Release (Item.Accounting, Mem.Model_Weights, Was);
+            end;
          end;
       end if;
 

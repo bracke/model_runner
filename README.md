@@ -756,6 +756,12 @@ prompt, generation only, on this machine:
 | Q4_K | 1.11 s | 1.44 s | 0.67 GB → 4.4 GB |
 | Q2_K | 1.52 s | 1.34 s | 0.43 GB → 4.4 GB |
 
+The copy is decoded from the file's own bytes, so both exist while it is
+written and the file's are released when it is done: the peak is the sum and
+what the model holds afterwards is the copy. `inspect` reports that peak,
+which is the number that decides whether it will run -- 4.8 GB for the Q2_K
+file above, whose own weights are 0.43.
+
 So it loses on two of three, wins twelve per cent on the third, and costs ten
 seconds of decoding at load every time. `tests speed --model PATH --repack
 yes` takes that comparison again, and `inspect` says what the copy would need
