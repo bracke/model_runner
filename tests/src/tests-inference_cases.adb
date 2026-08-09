@@ -20,6 +20,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Tokenizer;
 
 with Conformance;
+with Reference_Tokenizer;
 with Tiny_Model;
 
 package body Tests.Inference_Cases is
@@ -1108,6 +1109,112 @@ package body Tests.Inference_Cases is
    --  answer. The fixture is the small one this repository owns, so the test
    --  is mandatory rather than skipped.
 
+   --  The tokenizer agrees with one written from the description.
+   --
+   --  The forward pass has had an independent reader since the beginning and
+   --  the tokenizer had none: what checked it was a set of expectations
+   --  recorded from llama.cpp, which need a model nobody can commit, so on a
+   --  clean checkout the strongest thing said about it was that its own unit
+   --  tests agreed with themselves. Reference_Tokenizer reads the same
+   --  vocabulary out of the container and encodes by the rule the format
+   --  describes, scanning where the engine hashes.
+
+   procedure Tokenizer_Matches_An_Independent_One
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Image  : B.Byte_Array_Access;
+      Parsed : Containers.Container;
+      Status : E.Error_Info;
+      Loaded : Boolean;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Words  : Vocab.Vocabulary;
+         Second : Reference_Tokenizer.Vocabulary;
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         Vocab.Load (Words, Parsed, Status => Status);
+         Assert (E.Is_Ok (Status), "the engine did not read the vocabulary");
+
+         Reference_Tokenizer.Load (Second, Parsed, Loaded);
+         Assert (Loaded, "the reference did not read the vocabulary");
+         Assert (Reference_Tokenizer.Size (Second) = Vocab.Size (Words),
+                 "the two read different vocabularies");
+
+         --  Text that reaches each rule: a piece of its own, a merge, a
+         --  merge that competes with a longer one, a space, and a character
+         --  the vocabulary does not carry, which becomes bytes.
+         --
+         --  The last two are the ones that say the merges happen in the
+         --  right order rather than merely happening. In "cabc" the pairs
+         --  "ab" and "bc" overlap and "bc" scores higher, so a reader that
+         --  took the leftmost pair would produce "c ab c" where the rule
+         --  produces "c a bc". Without them a leftmost-pair reader agrees
+         --  with the engine on every case above, which was checked by
+         --  writing one.
+         declare
+            type Case_Text is access constant String;
+            Cases : constant array (1 .. 10) of Case_Text :=
+              [new String'(""),
+               new String'("a"),
+               new String'("ab"),
+               new String'("abc"),
+               new String'("a b"),
+               new String'("bca"),
+               new String'("dab"),
+               new String'("a" & Character'Val (16#0A#) & "b"),
+               new String'("cabc"),
+               new String'("cabcab")];
+         begin
+            for Which of Cases loop
+               declare
+                  Mine   : Vocab.Token_Array (1 .. 64);
+                  Mine_N : Natural;
+                  Theirs : Reference_Tokenizer.Token_Vector (1 .. 64);
+                  Theirs_N : Natural;
+               begin
+                  Vocab.Encode
+                    (Words, Which.all, True, False, Mine, Mine_N, Status);
+                  Assert (E.Is_Ok (Status),
+                          "the engine refused """ & Which.all & """");
+
+                  Reference_Tokenizer.Encode
+                    (Second, Which.all, True, Theirs, Theirs_N);
+
+                  Assert (Mine_N = Theirs_N,
+                          "the two disagree on how many tokens """
+                          & Which.all & """ makes:"
+                          & Natural'Image (Mine_N) & " against"
+                          & Natural'Image (Theirs_N));
+
+                  for Index in 1 .. Natural'Min (Mine_N, Theirs_N) loop
+                     Assert (Integer (Mine (Index)) = Theirs (Index),
+                             "the two disagree on token"
+                             & Natural'Image (Index) & " of """
+                             & Which.all & """:"
+                             & Vocab.Token_Id'Image (Mine (Index))
+                             & " against" & Integer'Image (Theirs (Index)));
+                  end loop;
+               end;
+            end loop;
+         end;
+
+         Reference_Tokenizer.Close (Second);
+         Vocab.Close (Words);
+         Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end Tokenizer_Matches_An_Independent_One;
+
    procedure Refused_Generation_Names_Its_Reason
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1172,6 +1279,9 @@ package body Tests.Inference_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Tokenizer_Matches_An_Independent_One'Access,
+         "the tokenizer agrees with one written from the description");
       Register_Routine
         (T, Model_Prepares'Access,
          "the tiny model prepares and reports its configuration");

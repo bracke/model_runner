@@ -233,9 +233,22 @@ closely the two agree is in the README, and `tests conformance` prints the
 worst divergence it measured on every run; both are one place rather than a
 figure copied here to go stale.
 
-That establishes the *arithmetic* is right. What a reference runtime adds is
-agreement on the *conventions*: tokenization of real text, the beginning-token
-policy, the rotary configuration of a real model, and the chat template.
+That establishes the *arithmetic* is right.
+
+The tokenizer has a second reader of its own: `Reference_Tokenizer`, written
+from the description in this document rather than from the engine's code. It
+reads the vocabulary out of the container, replaces spaces with the word
+marker, splits into UTF-8 characters and merges the best-scoring adjacent pair
+until none is left, looking every piece up by scanning. The suite runs both
+over a set of strings on the committed fixture and compares identifier for
+identifier. Two of those strings exist because a reader that merged the
+*leftmost* pair instead of the best-scoring one agreed with the engine on all
+the others.
+
+What a reference runtime adds beyond that is agreement on the *conventions* at
+a scale a fixture cannot reach: tokenization of real text against a vocabulary
+of tens of thousands of pieces, the beginning-token policy, the rotary
+configuration of a real model, and the chat template.
 
 ## Producing a recording
 
