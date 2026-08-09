@@ -29,7 +29,6 @@ package body Model_Runner.Backend.CPU is
          Model_Runner.GGUF.Type_Q5_K => True,
          Model_Runner.GGUF.Type_Q6_K => True,
          others                      => False];
-      Result.Wide_Accumulation := True;
       Result.Alignment := 4;
       Result.Supports_Matrix_Vector := True;
       --  Dispatch_Batch is how prefill evaluates several tokens against one
@@ -40,11 +39,7 @@ package body Model_Runner.Backend.CPU is
       --  the wrong thing.
       Result.Supports_Batched := True;
 
-      Result.Supports_Noncontiguous := False;
-      Result.Supports_Mapping := True;
-      Result.Supports_Quantized := True;
       Result.Supports_Parallel := Workers > 1;
-      Result.Deterministic := True;
       Result.Max_Workers := Max_Workers;
       return Result;
    end Describe;

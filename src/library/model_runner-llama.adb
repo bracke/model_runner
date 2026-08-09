@@ -391,6 +391,21 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  And where it sits. A backend states the alignment it needs from
+      --  tensor storage; a file is free to place a tensor anywhere its own
+      --  alignment allows, and the two are not the same number.
+      if Containers.Tensor_Offset (Source, Index)
+         mod Interfaces.Unsigned_64 (Item.Able.Alignment) /= 0
+      then
+         Status := E.Make (E.Backend_Capability_Missing);
+         E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+         E.Add_Text (Status, "capability", "alignment", E.Param_Identifier);
+         E.Add_Integer
+           (Status, "alignment", Long_Long_Integer (Item.Able.Alignment),
+            E.Param_Bytes);
+         return;
+      end if;
+
       declare
          Rank      : constant Positive := Containers.Tensor_Rank (Source, Index);
          Contiguous : constant Element_Count :=
@@ -527,6 +542,20 @@ package body Model_Runner.Llama is
          when Model_Runner.Backend.Backend_CPU =>
             Item.Able := Workers_CPU.Describe;
       end case;
+
+      --  Evaluation is matrix by vector and nothing else. A backend that
+      --  cannot do that cannot run a model, and says so here rather than
+      --  part way through the first token.
+      if not Item.Able.Supports_Matrix_Vector then
+         Fail (E.Make (E.Backend_Capability_Missing));
+         E.Add_Text
+           (Status, "capability", "matrix_vector", E.Param_Identifier);
+         E.Add_Text
+           (Status, "backend",
+            Model_Runner.Backend.Backend_Name (Item.Able.Kind),
+            E.Param_Identifier);
+         return;
+      end if;
 
       P.Publish (Observer, P.Load_Progress (P.Selecting_Architecture));
       Read_Configuration (Source, Bounds, Item.Settings, Status);
@@ -1399,6 +1428,19 @@ package body Model_Runner.Llama is
 
       if not Source.Ready then
          Status := E.Make (E.Lifecycle_Model_Not_Ready);
+         return;
+      end if;
+
+      --  More than one token at a time is a thing the backend either does or
+      --  does not. One at a time is the same call with Count of one, so only
+      --  a real batch has to ask.
+      if Count > 1 and then not Source.Able.Supports_Batched then
+         Status := E.Make (E.Backend_Capability_Missing);
+         E.Add_Text (Status, "capability", "batched", E.Param_Identifier);
+         E.Add_Text
+           (Status, "backend",
+            Model_Runner.Backend.Backend_Name (Source.Able.Kind),
+            E.Param_Identifier);
          return;
       end if;
 

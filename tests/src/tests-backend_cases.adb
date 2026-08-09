@@ -324,8 +324,10 @@ package body Tests.Backend_Cases is
    begin
       Assert (Model_Runner.Backend.Backend_Name (Single.Kind) = "cpu",
               "wrong backend name");
-      Assert (Single.Deterministic and then Many.Deterministic,
-              "the backend must always be deterministic");
+      --  Determinism was a field here and is not any more: it could only
+      --  ever be True, and a flag with one value documents nothing. What it
+      --  claimed is tested where it can fail, by generating the same text at
+      --  one worker and at four.
       Assert (not Single.Supports_Parallel,
               "one worker was reported as parallel");
       Assert (Many.Supports_Parallel, "many workers were reported as serial");

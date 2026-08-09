@@ -1065,10 +1065,20 @@ package body Model_Runner.CLI.Execute is
       --  against 26.7 s. The extra workers buy nothing and cost nearly twice
       --  the energy, which matters most on the battery this is likeliest to
       --  run on. --threads still takes any number the backend accepts.
+      --  What the chosen backend says it can do with workers. Asked here
+      --  rather than taking the CPU pool's constants, so that the numbers
+      --  a second backend reports are the numbers used.
+      Able : constant Model_Runner.Backend.Capabilities :=
+        (case Item.Backend is
+           when Model_Runner.Backend.Backend_CPU =>
+             Workers_CPU.Describe (Workers_CPU.Max_Workers));
+
       function Chosen_Workers return Natural is
       begin
-         if Item.Threads > 0 then
-            return Natural'Min (Item.Threads, Workers_CPU.Max_Workers);
+         if not Able.Supports_Parallel then
+            return 1;
+         elsif Item.Threads > 0 then
+            return Natural'Min (Item.Threads, Able.Max_Workers);
          else
             --  The policy lives with the pool, which is what knows that a
             --  job is cut into one more share than it has workers.

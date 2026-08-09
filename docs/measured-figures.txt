@@ -50,14 +50,23 @@
 # An A-B build against the previous commit was attempted and abandoned: a git
 # worktree cannot resolve this crate's relative path pins.
 #
+# The capability checks in Llama: the format and alignment checks run during
+# Prepare, outside the window as above. The Supports_Batched check runs inside
+# it, once per Evaluate_Batch call, so that one was measured rather than
+# argued. A-B-A on the same tree, the 131-token prompt with one token
+# generated, three runs each: with the check 7.23 7.57 7.60, without it 7.47
+# 7.56 7.89, with it again 7.35 7.26 7.76. The whole spread is wider than any
+# difference between the states, which is the answer. The published table is
+# not contradicted by these: they include load and one generated token.
+#
 # Anything touching these files that is not outside the measured window gets
-# a re-measure.
+# a re-measure like that one.
 
 # covers: the row-product table under "Kernels"
 kernels EAF68F33E8E77C31 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure and the batch-size table under "Speed"
-engine 420505615BE3A970 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine B04FB63E111D3D9B src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
-scaling 267B915715541414 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
+scaling 0A8A39491ED15B68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

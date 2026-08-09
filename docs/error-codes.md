@@ -164,7 +164,7 @@ ordinal is never reused, not because they might appear.
 | `MR-BACKEND-0001` | `error.backend.unknown` | recovery_none | 2 | raised |
 | `MR-BACKEND-0002` | `error.backend.unsupported_format` | recovery_unsupported | 4 | raised |
 | `MR-BACKEND-0003` | `error.backend.unsupported_operation` | recovery_unsupported | 4 | reserved |
-| `MR-BACKEND-0004` | `error.backend.capability_missing` | recovery_unsupported | 4 | reserved |
+| `MR-BACKEND-0004` | `error.backend.capability_missing` | recovery_unsupported | 4 | raised |
 | `MR-BACKEND-0005` | `error.backend.worker_failed` | recovery_none | 8 | raised |
 | `MR-BACKEND-0006` | `error.backend.queue_full` | recovery_resource_limited | 8 | reserved |
 | `MR-BACKEND-0007` | `error.backend.closed` | recovery_none | 8 | raised |

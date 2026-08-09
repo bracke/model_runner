@@ -30,7 +30,6 @@ package body Reserved_Codes is
             | E.Tensor_Invalid_Stride
             | E.Tensor_Read_Only
             | E.Backend_Unsupported_Operation
-            | E.Backend_Capability_Missing
             | E.Backend_Queue_Full
             | E.Backend_Invalid_Worker_Count
             | E.Memory_Invalid_Limit

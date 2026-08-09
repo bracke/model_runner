@@ -151,7 +151,7 @@ the choice.
 | Clean shutdown, rejection while closing | Implemented |
 | Batched prefill | Implemented, `--batch-size`, capped at 128 tokens |
 | Noncontiguous views | Not implemented |
-| Capability checking | Every tensor is checked against the backend's own account of what it can read, while the model loads. No shipped configuration refuses anything: the one backend claims exactly the formats the decoder decodes. It is the seam a narrower backend plugs into, and narrowing the claim does refuse the model, naming the backend, the format and the tensor |
+| Capability checking | Every field of the backend's `Capabilities` is asked by something: the formats and the alignment per tensor while a model loads, matrix-vector once when it is prepared, batching when a batch is evaluated, and the worker count when the pool is sized. No shipped configuration refuses anything -- the one backend claims what the engine needs -- but disclaiming any of them does refuse, naming the capability. Five fields that could only ever hold one value were removed rather than wired |
 | Backend selection | `--backend NAME`, matched against the backends this build has and refused by name otherwise. There is one, `cpu`, and running dispatches on the choice so that adding another cannot leave the flag inert |
 
 ## Locales

@@ -537,6 +537,11 @@ package body Checks is
          Check (Able.Supports_Batched,
                 "the CPU backend says it does not batch, and Llama batches "
                 & "through it");
+         Check (Able.Supports_Matrix_Vector,
+                "the CPU backend says it cannot multiply a matrix by a "
+                & "vector, which is the whole of what it is asked to do");
+         Check (Able.Alignment >= 4,
+                "the CPU backend asks for an alignment no tensor can have");
          Check (Able.Kind = Model_Runner.Backend.Backend_CPU,
                 "the CPU backend describes itself as another one");
          Check (Able.Max_Workers = Model_Runner.Backend.CPU.Max_Workers,

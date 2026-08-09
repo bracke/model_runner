@@ -25,34 +25,47 @@ package Model_Runner.Backend is
    type Format_Support is array (Model_Runner.GGUF.Tensor_Type) of Boolean;
 
    --  What a backend implements.
+   --
+   --  Every field here is asked by something. That is a rule and not an
+   --  observation: this record began as eleven fields describing a backend to
+   --  nobody, and a description nobody consults is one that can be wrong for
+   --  a year -- Supports_Batched said False while every prefill batched
+   --  through Dispatch_Batch, and nothing noticed because nothing asked.
+   --
+   --  Five fields were removed rather than wired, because nothing could act
+   --  on them: whether accumulation is wide, whether mapped storage is
+   --  usable, whether quantized formats are (which Formats already answers
+   --  per format), whether noncontiguous views are, and whether results are
+   --  independent of the worker count. Each could only ever have held one
+   --  value in this build, and a flag with one value documents nothing. A
+   --  backend that makes one of them a real question brings its field back
+   --  along with the code that reads it.
    type Capabilities is record
       Kind : Backend_Kind := Backend_CPU;
 
-      --  Tensor formats the backend can read directly.
+      --  Tensor formats the backend can read directly. Asked per tensor while
+      --  a model loads.
       Formats : Format_Support := [others => False];
 
-      --  Whether accumulation happens in the wide format. Every kernel in this
-      --  crate accumulates length-dependent reductions in Wide_Real, so a
-      --  result never depends on how the work was partitioned.
-      Wide_Accumulation : Boolean := True;
-
-      --  Alignment the backend needs from tensor storage, in bytes.
+      --  Alignment the backend needs from tensor storage, in bytes. Asked of
+      --  every tensor offset while a model loads.
       Alignment : Positive := 4;
 
+      --  Whether the backend can multiply a matrix by a vector at all, which
+      --  is the whole of what evaluation asks of it. Asked once, when a model
+      --  is prepared.
       Supports_Matrix_Vector : Boolean := True;
-      Supports_Batched       : Boolean := False;
-      Supports_Noncontiguous : Boolean := False;
-      Supports_Mapping       : Boolean := True;
-      Supports_Quantized     : Boolean := True;
 
-      --  Whether more than one worker can be used.
+      --  Whether several vectors can share one reading of the weights. Asked
+      --  when a batch is evaluated.
+      Supports_Batched : Boolean := False;
+
+      --  Whether more than one worker can be used. Asked when the worker
+      --  count is chosen.
       Supports_Parallel : Boolean := False;
 
-      --  Whether results are independent of the worker count. This crate only
-      --  offers deterministic partitioning, so it is always True.
-      Deterministic : Boolean := True;
-
-      --  Largest worker count the backend accepts.
+      --  Largest worker count the backend accepts. Asked when the worker
+      --  count is chosen.
       Max_Workers : Positive := 1;
    end record;
 

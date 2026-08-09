@@ -84,6 +84,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Every field of the backend's `Capabilities` is now asked by something. The
+  formats and the alignment are checked per tensor while a model loads,
+  matrix-vector once when it is prepared, batching when a batch is evaluated,
+  and the worker count when the pool is sized -- through the backend rather
+  than through the CPU pool's own constants, so a second backend's numbers
+  are the numbers used. Disclaiming any of them refuses with
+  `MR-BACKEND-0002` or `MR-BACKEND-0004`, naming what was missing.
+
+- Five capability fields were removed rather than wired: `Wide_Accumulation`,
+  `Supports_Mapping`, `Supports_Quantized`, `Supports_Noncontiguous` and
+  `Deterministic`. Nothing could act on any of them, each could only ever
+  hold one value in this build, and a flag with one value documents nothing.
+  What `Deterministic` claimed is tested where it can fail: the same text
+  from one worker and from four.
+
 - Model preparation asks the backend, per tensor, whether it can read the
   format, and refuses the model with `MR-BACKEND-0002` naming the backend,
   the format and the tensor when it cannot. `--backend` reaches this too, so

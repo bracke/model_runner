@@ -45,6 +45,7 @@ package body Tests.Catalog_Cases is
          Loc.Named ("available", "?"),
          Loc.Named ("backend", "?"),
          Loc.Named ("block", "?"),
+         Loc.Named ("capability", "?"),
          Loc.Named ("capacity", "?"),
          Loc.Named ("category", "?"),
          Loc.Named ("code", "?"),
