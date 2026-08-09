@@ -89,10 +89,20 @@ package body Model_Runner.Presentation is
    -- Put_Line --
    --------------
 
+   --  Current_Output rather than Standard_Output. The program never
+   --  redirects it, so this is the same file it always was; a test can, and
+   --  until it could, nothing read the help screen. Three option lines lost
+   --  their indentation and their place in the list and survived three
+   --  commits and a full checklist run, because every check read the catalog
+   --  the lines come from and none read the screen they land on.
+   --
+   --  Generated text does not come through here. It goes to standard output
+   --  as raw bytes through a sink of its own, which is deliberate and stays
+   --  that way.
    procedure Put_Line (Item : in out Console; Text : String) is
    begin
       Close_Progress (Item);
-      Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Output, Text);
+      Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Output, Text);
    exception
       when Ada.IO_Exceptions.Device_Error | Ada.IO_Exceptions.Use_Error =>
          null;
@@ -230,9 +240,12 @@ package body Model_Runner.Presentation is
    -- Put_Option --
    ------------------
 
-   procedure Put_Option (Item : in out Console; Key : String) is
+   procedure Put_Option
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Loc.Argument_List := Loc.Empty_Arguments) is
    begin
-      Put_Line (Item, "  " & Message (Item, Key));
+      Put_Line (Item, "  " & Message (Item, Key, Arguments));
    end Put_Option;
 
    ------------

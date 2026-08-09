@@ -414,10 +414,17 @@ package body Model_Runner.CLI.Execute is
 
       --  Emit a block of help lines, each an independent catalog entry so
       --  that a translation can reflow a line without breaking the layout.
+      --
+      --  An entry's name is the catalog key and its value, when it has one,
+      --  is what the line's {value} stands for. That is how a line listing
+      --  what this build carries stays in the block with the rest instead of
+      --  being printed beside it and losing its indentation.
       procedure Block (Keys : Loc.Argument_List) is
       begin
          for Entry_Value of Keys loop
-            Screen.Put_Option (T.To_String (Entry_Value.Name));
+            Screen.Put_Option
+              (T.To_String (Entry_Value.Name),
+               [Loc.Named ("value", T.To_String (Entry_Value.Value))]);
          end loop;
       end Block;
    begin
@@ -437,11 +444,13 @@ package body Model_Runner.CLI.Execute is
              Loc.Named ("help.run.max_tokens", ""),
              Loc.Named ("help.run.context_size", ""),
              Loc.Named ("help.run.threads", ""),
+             Loc.Named ("help.run.backend", Backend_Names),
              Loc.Named ("help.run.batch_size", ""),
              Loc.Named ("help.run.temperature", ""),
              Loc.Named ("help.run.top_k", ""),
              Loc.Named ("help.run.top_p", ""),
              Loc.Named ("help.run.min_p", ""),
+             Loc.Named ("help.run.chat_template", Format_Names),
              Loc.Named ("help.run.repeat_penalty", ""),
              Loc.Named ("help.run.frequency_penalty", ""),
              Loc.Named ("help.run.presence_penalty", ""),
@@ -456,17 +465,8 @@ package body Model_Runner.CLI.Execute is
              Loc.Named ("help.run.verbose", ""),
              Loc.Named ("help.run.show_stats", ""),
              Loc.Named ("help.run.no_stats", ""),
-             Loc.Named ("help.run.locale", "")]);
-         --  Named apart from the block above because it carries a value:
-         --  the backends this build has, read from the enumeration so that
-         --  the help cannot list one that is not there or miss one that is.
-         Screen.Put_Message
-           ("help.run.color", [Loc.Named ("value", Opt.Color_Names)]);
-         Screen.Put_Message
-           ("help.run.chat_template", [Loc.Named ("value", Format_Names)]);
-         Screen.Put_Message
-           ("help.run.backend", [Loc.Named ("value", Backend_Names)]);
-
+             Loc.Named ("help.run.locale", ""),
+             Loc.Named ("help.run.color", Opt.Color_Names)]);
          Screen.Put_Line ("");
          Screen.Put_Message ("help.run.streams");
          Screen.Put_Message ("help.run.privacy");
@@ -481,9 +481,8 @@ package body Model_Runner.CLI.Execute is
            ([Loc.Named ("help.inspect.metadata", ""),
              Loc.Named ("help.inspect.tensors", ""),
              Loc.Named ("help.inspect.validate", ""),
-             Loc.Named ("help.inspect.locale", "")]);
-         Screen.Put_Message
-           ("help.inspect.color", [Loc.Named ("value", Opt.Color_Names)]);
+             Loc.Named ("help.inspect.locale", ""),
+             Loc.Named ("help.inspect.color", Opt.Color_Names)]);
 
       elsif Topic = "version" then
          Screen.Put_Message ("help.version.usage");

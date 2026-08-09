@@ -186,9 +186,20 @@ package Model_Runner.Presentation is
    --  Indentation is layout, so it lives here rather than inside a translated
    --  string where it could be lost or reflowed.
    --
+   --  A help line that carries a value -- the backends this build has, the
+   --  chat formats it knows, the colour modes it takes -- goes through here
+   --  too. It did not, once: three such lines were printed with Put_Message
+   --  instead, one at a time, and each lost its indentation and its place in
+   --  the list because that is what the two calls differ in.
+   --
    --  @param Item Console to write through.
    --  @param Key Stable message identifier.
-   procedure Put_Option (Item : in out Console; Key : String);
+   --  @param Arguments Named arguments the line may reference.
+   procedure Put_Option
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Model_Runner.Localization.Argument_List :=
+        Model_Runner.Localization.Empty_Arguments);
 
    --  Report generation statistics on standard error.
    --

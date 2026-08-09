@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The `--backend`, `--chat-template` and `--color` help lines print indented
+  and in their places again. Each was moved out of the block that lays the
+  help out, one at a time, to give it a value the program computes, and each
+  landed flush left at the bottom of the list. `Put_Option` takes arguments
+  now, so a line that carries a value and a line that does not are printed
+  the same way.
+
+- The help screen is read by a test: every option line indented by exactly
+  two spaces, every option `run` accepts present on it, and no line showing
+  the placeholder it was meant to substitute. Application text goes to
+  `Current_Output` so that a test can take it; the program never redirects
+  it, and generated text still goes to standard output as raw bytes through
+  a sink of its own.
+
 - The `--color` help lists its modes from the enumeration, in `run` and in
   `inspect`. Only the error message was changed when the modes were made to
   come from one place; the help beside it went on writing "auto, always or

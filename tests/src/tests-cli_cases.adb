@@ -348,6 +348,159 @@ package body Tests.CLI_Cases is
               "a malformed template stopped exiting as a model-format error");
    end Every_Chat_Format_Can_Be_Named;
 
+   --  The help screen is laid out, and lists every option it accepts.
+   --
+   --  Nothing read it. Every check read the catalog the lines come from, so
+   --  when three of them were moved out of the block that indents them --
+   --  one at a time, each to give it a value the program computes -- they
+   --  printed flush left at the bottom of the list and stayed that way for
+   --  three commits and a full checklist run.
+   --
+   --  Reading the screen is the only way to see that. It goes to
+   --  Current_Output, so a test can take it.
+   procedure Help_Screen_Is_Laid_Out
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Captured : constant String := "obj/help-screen.txt";
+
+      --  Run one help topic and return what it printed.
+      function Screen (Topic : String) return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Handle : File_Type;
+      begin
+         Add (Source, "help");
+         Add (Source, Topic);
+
+         Create (Handle, Out_File, Captured);
+         Set_Output (Handle);
+         begin
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         exception
+            when others =>
+               Set_Output (Standard_Output);
+               Close (Handle);
+               raise;
+         end;
+         Set_Output (Standard_Output);
+         Close (Handle);
+
+         Assert (Status = 0,
+                 "help " & Topic & " failed with status"
+                 & Natural'Image (Status));
+         return Project_Tools.Files.Read_Raw_File (Captured);
+      end Screen;
+
+      --  Assert every option line in Text is indented by exactly two spaces,
+      --  and report how many there were.
+      function Options_Are_Indented (Text : String) return Natural is
+         Count  : Natural := 0;
+         Cursor : Natural := Text'First;
+      begin
+         while Cursor <= Text'Last loop
+            declare
+               Stop : Natural := Cursor;
+            begin
+               while Stop <= Text'Last
+                 and then Text (Stop) /= ASCII.LF
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line : constant String := Text (Cursor .. Stop - 1);
+               begin
+                  --  A line that introduces an option, wherever it starts.
+                  if Line'Length > 2
+                    and then Model_Runner.Text.Trim (Line)'Length > 2
+                    and then Model_Runner.Text.Starts_With
+                               (Model_Runner.Text.Trim (Line), "--")
+                  then
+                     Count := Count + 1;
+                     Assert (Line (Line'First .. Line'First + 1) = "  "
+                             and then Line (Line'First + 2) /= ' ',
+                             "an option line is not indented by two spaces: '"
+                             & Line & "'");
+                  end if;
+               end;
+
+               Cursor := Stop + 1;
+            end;
+         end loop;
+         return Count;
+      end Options_Are_Indented;
+
+      Run_Screen     : constant String := Screen ("run");
+      Inspect_Screen : constant String := Screen ("inspect");
+   begin
+      Assert (Options_Are_Indented (Run_Screen) > 20,
+              "the run help lists almost no options");
+      Assert (Options_Are_Indented (Inspect_Screen) > 3,
+              "the inspect help lists almost no options");
+
+      --  Every option run parses appears on its screen. An option a caller
+      --  can give and cannot find is one they will not know to give.
+      declare
+         Absent : Natural := 0;
+
+         procedure Require (Name : String) is
+         begin
+            if not Project_Tools.Text.Contains (Run_Screen, "  " & Name) then
+               Absent := Absent + 1;
+               Assert (False, Name & " is accepted by run and not in its help");
+            end if;
+         end Require;
+      begin
+         Require ("--prompt");
+         Require ("--prompt-file");
+         Require ("--system");
+         Require ("--system-file");
+         Require ("--interactive");
+         Require ("--raw");
+         Require ("--max-tokens");
+         Require ("--context-size");
+         Require ("--threads");
+         Require ("--backend");
+         Require ("--batch-size");
+         Require ("--temperature");
+         Require ("--top-k");
+         Require ("--top-p");
+         Require ("--min-p");
+         Require ("--chat-template");
+         Require ("--repeat-penalty");
+         Require ("--frequency-penalty");
+         Require ("--presence-penalty");
+         Require ("--repeat-window");
+         Require ("--seed");
+         Require ("--stop");
+         Require ("--stop-token");
+         Require ("--memory-limit");
+         Require ("--mmap");
+         Require ("--no-mmap");
+         Require ("--quiet");
+         Require ("--verbose");
+         Require ("--show-stats");
+         Require ("--no-stats");
+         Require ("--locale");
+         Require ("--color");
+         Assert (Absent = 0, "options are missing from the help");
+      end;
+
+      --  And the lines that carry a computed value carry it, rather than the
+      --  placeholder that stands for it.
+      Assert (Project_Tools.Text.Contains (Run_Screen, "cpu"),
+              "the backend line does not name the backend");
+      Assert (Project_Tools.Text.Contains (Run_Screen, "llama3"),
+              "the chat-format line does not name a format");
+      Assert (not Project_Tools.Text.Contains (Run_Screen, "{value}"),
+              "a help line printed its placeholder instead of a value");
+      Assert (not Project_Tools.Text.Contains (Inspect_Screen, "{value}"),
+              "an inspect help line printed its placeholder");
+   end Help_Screen_Is_Laid_Out;
+
    --  Malformed command lines are rejected with the code that names the
    --  problem.
    procedure Usage_Errors_Reported (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -3723,6 +3876,9 @@ package body Tests.CLI_Cases is
         (T, Every_Chat_Format_Can_Be_Named'Access,
          "every chat format this build carries can be named on the command "
          & "line");
+      Register_Routine
+        (T, Help_Screen_Is_Laid_Out'Access,
+         "the help screen is laid out and lists every option it accepts");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");
