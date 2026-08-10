@@ -10,6 +10,7 @@ with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
 
 with Ada.Strings.Unbounded;
+with Captured_Output;
 with Project_Tools.Files;
 with Project_Tools.Processes;
 with Project_Tools.Text;
@@ -213,6 +214,46 @@ package body Tests.CLI_Cases is
    --  written beside it, and so does this: a backend added to the enumeration
    --  and not to the parser fails here without anyone remembering to come and
    --  add a case.
+   --  Run the command with its generated text caught.
+   --
+   --  Generated text goes through the raw stream of
+   --  Ada.Text_IO.Standard_Output, which Ada.Text_IO.Set_Output does not
+   --  redirect, so a test that ran a generating command in this process
+   --  wrote the model's output into the middle of the suite's own report.
+   --  Seven fragments of it sat there on every run. Nothing a test asserts
+   --  on moves: the presentation layer writes through Current_Output and
+   --  Current_Error, which Set_Output and Set_Error still redirect.
+   --
+   --  Every call site goes through this, including the ones that write
+   --  nothing, so that a command which starts generating does not have to
+   --  remember.
+   procedure Ran (Source : Opt.Arguments'Class; Status : out Natural) is
+      Caught : constant Boolean := True;
+      pragma Unreferenced (Caught);
+   begin
+      Captured_Output.Open ("obj/command-output.txt");
+
+      begin
+         Model_Runner.CLI.Driver.Run (Source, Status);
+      exception
+         when others =>
+            declare
+               Ignored : constant String := Captured_Output.Close;
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+            raise;
+      end;
+
+      declare
+         Ignored : constant String := Captured_Output.Close;
+         pragma Unreferenced (Ignored);
+      begin
+         null;
+      end;
+   end Ran;
+
    procedure Every_Backend_Can_Be_Named
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -381,7 +422,7 @@ package body Tests.CLI_Cases is
          Create (Handle, Out_File, Captured);
          Set_Output (Handle);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                Set_Output (Standard_Output);
@@ -549,7 +590,7 @@ package body Tests.CLI_Cases is
          Set_Output (Handle);
          Set_Error (Handle);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                Set_Output (Standard_Output);
@@ -595,7 +636,7 @@ package body Tests.CLI_Cases is
          Create (Handle, Out_File, Captured);
          Set_Output (Handle);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                Set_Output (Standard_Output);
@@ -835,7 +876,7 @@ package body Tests.CLI_Cases is
          Create (Handle, Out_File, Captured);
          Set_Error (Handle);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                Set_Error (Standard_Error);
@@ -1453,7 +1494,7 @@ package body Tests.CLI_Cases is
          Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, "obj/memory.txt");
          Ada.Text_IO.Set_Error (Handle);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
@@ -2411,16 +2452,33 @@ package body Tests.CLI_Cases is
             Create (Err, Out_File, Log);
             Set_Input (From);
             Set_Error (Err);
+
+            --  The answers go to the real standard output, which only a
+            --  descriptor move catches. Without it a scripted session writes
+            --  its replies into the suite's own report.
+            Captured_Output.Open ("obj/commands-out.txt");
             begin
                Model_Runner.CLI.Interactive.Run
                  (Options, Screen, Rig.Ready, Session, Status);
             exception
                when others =>
+                  declare
+                     Ignored : constant String := Captured_Output.Close;
+                     pragma Unreferenced (Ignored);
+                  begin
+                     null;
+                  end;
                   Set_Input (Standard_Input);
                   Set_Error (Standard_Error);
                   Close (From);
                   Close (Err);
                   raise;
+            end;
+            declare
+               Ignored : constant String := Captured_Output.Close;
+               pragma Unreferenced (Ignored);
+            begin
+               null;
             end;
             Set_Input (Standard_Input);
             Set_Error (Standard_Error);
@@ -2563,6 +2621,33 @@ package body Tests.CLI_Cases is
          --  Belt and braces, and the test can only see the belt.
       end;
 
+      --  A line longer than the buffer the loop reads into.
+      --
+      --  Standard input is untrusted and this is the one place the loop
+      --  bounds it: a line past 8192 bytes is skipped to its end and the
+      --  turn it was part of is refused, rather than arriving in pieces that
+      --  would either be joined into one turn or split into several with
+      --  line feeds inside what somebody typed as one line. The reasoning is
+      --  written out beside the code and nothing had ever driven it, because
+      --  until this test there was no way to script a session.
+      declare
+         Long : constant String := [1 .. 9_000 => 'a'];
+
+         Said : constant String :=
+           Session_Saying (Image, Long & Newline & "/exit" & Newline);
+         Short : constant String :=
+           Session_Saying (Image, "aaa" & Newline & "/exit" & Newline);
+      begin
+         Assert (Said /= Short,
+                 "a line of nine thousand characters read the same as a "
+                 & "line of three, so the bound the loop puts on standard "
+                 & "input reported nothing");
+
+         Assert (Said'Length > Short'Length,
+                 "a line past the buffer wrote no more than one inside it, "
+                 & "so it was taken rather than refused");
+      end;
+
       --  A system message, set and then taken away. Neither is refused, and
       --  what they change is the text rendered for the next turn, which this
       --  cannot see from here -- so what it says is that both are commands
@@ -2626,7 +2711,7 @@ package body Tests.CLI_Cases is
          Create (Handle, Out_File, "obj/clamp.txt");
          Set_Error (Handle);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                Set_Error (Standard_Error);
@@ -2691,16 +2776,29 @@ package body Tests.CLI_Cases is
             Create (Err, Out_File, "obj/clamp-err.txt");
             Set_Input (From);
             Set_Error (Err);
+            Captured_Output.Open ("obj/clamp-answers.txt");
             begin
                Model_Runner.CLI.Interactive.Run
                  (Options, Screen, Rig.Ready, Session, Status);
             exception
                when others =>
+                  declare
+                     Ignored : constant String := Captured_Output.Close;
+                     pragma Unreferenced (Ignored);
+                  begin
+                     null;
+                  end;
                   Set_Input (Standard_Input);
                   Set_Error (Standard_Error);
                   Close (From);
                   Close (Err);
                   raise;
+            end;
+            declare
+               Ignored : constant String := Captured_Output.Close;
+               pragma Unreferenced (Ignored);
+            begin
+               null;
             end;
             Set_Input (Standard_Input);
             Set_Error (Standard_Error);
@@ -3448,10 +3546,8 @@ package body Tests.CLI_Cases is
          Add (Source, "1");
 
          Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Errors);
-         Ada.Text_IO.Set_Output (Handle);
          Ada.Text_IO.Set_Error (Handle);
-         Model_Runner.CLI.Driver.Run (Source, Status);
-         Ada.Text_IO.Set_Output (Ada.Text_IO.Standard_Output);
+         Ran (Source, Status);
          Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
          Ada.Text_IO.Close (Handle);
 
@@ -3472,7 +3568,7 @@ package body Tests.CLI_Cases is
          Ada.Text_IO.Open (Handle, Ada.Text_IO.Out_File, Errors);
          Ada.Text_IO.Set_Output (Handle);
          Ada.Text_IO.Set_Error (Handle);
-         Model_Runner.CLI.Driver.Run (Source, Status);
+         Ran (Source, Status);
          Ada.Text_IO.Set_Output (Ada.Text_IO.Standard_Output);
          Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
          Ada.Text_IO.Close (Handle);
@@ -4528,7 +4624,7 @@ package body Tests.CLI_Cases is
          Create (Handle, Out_File, Errors);
          Set_Error (Handle);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                null;
@@ -4974,7 +5070,7 @@ package body Tests.CLI_Cases is
 
          Create (Handle, Out_File, Errors);
          Set_Error (Handle);
-         Model_Runner.CLI.Driver.Run (Source, Status);
+         Ran (Source, Status);
          Set_Error (Standard_Error);
          Close (Handle);
 
@@ -5073,7 +5169,7 @@ package body Tests.CLI_Cases is
          Set_Error (Handle);
 
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                null;
@@ -5242,7 +5338,7 @@ package body Tests.CLI_Cases is
             Set_Error (Err_File);
 
             begin
-               Model_Runner.CLI.Driver.Run (Source, Status);
+               Ran (Source, Status);
             exception
                when others =>
                   Status := 8;
@@ -5530,7 +5626,7 @@ package body Tests.CLI_Cases is
          Set_Output (Answer);
          Set_Error (Errors);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                Set_Output (Standard_Output);
@@ -5683,7 +5779,7 @@ package body Tests.CLI_Cases is
          Set_Output (Handle);
          Set_Error (Handle);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                Set_Output (Standard_Output);
@@ -5841,7 +5937,7 @@ package body Tests.CLI_Cases is
          Set_Error (Handle);
 
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                null;
@@ -6259,7 +6355,7 @@ package body Tests.CLI_Cases is
          Set_Output (Handle);
          Set_Error (Handle);
          begin
-            Model_Runner.CLI.Driver.Run (Source, Status);
+            Ran (Source, Status);
          exception
             when others =>
                null;

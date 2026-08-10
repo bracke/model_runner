@@ -4179,6 +4179,40 @@ package body Checks is
       --  one of these checks weighs every file in the tree, so a generated
       --  config or a fixture the suite wrote changes it by a few either way.
       --  Well under the count so that ordinary work is not an event, and far
+      --  No test calls the driver without catching what it writes.
+      --
+      --  Generated text goes through the raw stream of
+      --  Ada.Text_IO.Standard_Output, which Set_Output does not redirect, so
+      --  a test that runs a generating command in the suite's own process
+      --  writes the model's output into the middle of the suite's report.
+      --  Seven fragments of it sat there on every run, and the same
+      --  mechanism is what let a comparison of generated text compare one
+      --  newline with itself for as long as it existed.
+      --
+      --  Ran in Tests.CLI_Cases is the one way in, and it captures. This
+      --  says so, because the next call written straight to the driver would
+      --  put the fragments back and nothing would notice.
+      declare
+         Text  : constant String :=
+           Contents ("tests/src/tests-cli_cases.adb");
+         Calls : Natural := 0;
+      begin
+         for Index in Text'First .. Text'Last - 27 loop
+            if Text (Index .. Index + 27) = "Model_Runner.CLI.Driver.Run " then
+               Calls := Calls + 1;
+            end if;
+         end loop;
+
+         Result.Performed := Result.Performed + 1;
+         if Calls /= 1 then
+            Fail ("the command-line tests call the driver directly"
+                  & Natural'Image (Calls) & " times; exactly one of those is "
+                  & "Ran, which catches what the command writes, and the "
+                  & "rest write the model's output into the suite's own "
+                  & "report");
+         end if;
+      end;
+
       --  Every host body parses, not only the ones this build compiles.
       --
       --  src/platform holds five directories and a build uses two of them:

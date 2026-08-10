@@ -630,7 +630,16 @@ begin
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
 
-         if not Result.Ran and then not Result.Missing then
+         --  A run that measured nothing is a failure, and the missing model
+         --  is the commonest way to measure nothing. This used to exempt it:
+         --  'tests speed' with no --model, and with a path to a file that is
+         --  not there, printed "nothing measured" and left with a success.
+         --  Every other campaign here refuses to pass on having done nothing
+         --  -- the fuzz gate fails when no mutated file reached the engine,
+         --  the repository checks fail below a floor, the text campaign
+         --  fails when nothing encoded -- and this was the one whose "I did
+         --  nothing" was indistinguishable from its "I did".
+         if not Result.Ran then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;
