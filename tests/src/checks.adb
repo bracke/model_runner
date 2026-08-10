@@ -15,6 +15,7 @@ with Project_Tools.Tree_Checks;
 with Docs_Generation;
 with Library_Surface;
 with Reserved_Codes;
+with Unreached_Codes;
 with Template_Registry;
 with Tiny_Model;
 with Tool_Commands;
@@ -3553,6 +3554,111 @@ package body Checks is
          end loop;
       end;
 
+      --  And every code a test reaches, or a reason it does not.
+      --
+      --  The check above asks whether a code appears in the source, and a
+      --  raise nobody reaches appears there exactly as a raise everybody
+      --  reaches does. Seventeen codes were in that state and nothing said
+      --  so -- refusals written and never made to happen, which is a promise
+      --  the program has not been asked to keep. Unreached_Codes carries the
+      --  ones that remain with why, and this holds it in both directions.
+      declare
+         --  The enumeration image, which is how a test names a code in
+         --  source: the same spelling the sibling check uses.
+         function Ada_Name (Code : E.Error_Code) return String
+         is (E.Error_Code'Image (Code));
+
+         Named : array (E.Error_Code) of Boolean := [others => False];
+
+         --  A file with its comments taken out and folded to lower case.
+         --
+         --  Folded because the enumeration image is upper case and a test
+         --  writes the declared spelling; comparing the two as they stand
+         --  found nothing and reported every code unreached. Comments out
+         --  because a code discussed in prose is not a code a test reaches,
+         --  and one mentioned in a registry's own header read as reached.
+         --  A double hyphen inside a string literal would cut the line
+         --  short here, which costs a name and never invents one.
+         function Code_Bearing (Relative : String) return String is
+            Text  : constant String := Contents (Relative);
+            Room  : String (1 .. Text'Length);
+            Used  : Natural := 0;
+            Index : Natural := Text'First;
+         begin
+            while Index <= Text'Last loop
+               if Index < Text'Last
+                 and then Text (Index) = '-'
+                 and then Text (Index + 1) = '-'
+               then
+                  while Index <= Text'Last
+                    and then Text (Index) /= Character'Val (10)
+                  loop
+                     Index := Index + 1;
+                  end loop;
+               else
+                  Used := Used + 1;
+                  Room (Used) := Text (Index);
+                  Index := Index + 1;
+               end if;
+            end loop;
+
+            return T.To_Lower (Room (1 .. Used));
+         end Code_Bearing;
+
+         procedure Visit_Naming (Relative : String) is
+            Text : constant String := Code_Bearing (Relative);
+         begin
+            --  The two registries name every code by construction, and
+            --  docs_generation walks the whole type. Counting them would
+            --  make every code look reached.
+            if Relative = "tests/src/reserved_codes.adb"
+              or else Relative = "tests/src/unreached_codes.adb"
+              or else Relative = "tests/src/docs_generation.adb"
+              or else Relative = "tests/src/checks.adb"
+            then
+               return;
+            end if;
+
+            for Code in E.Error_Code loop
+               declare
+                  Word : constant String := T.To_Lower (Ada_Name (Code));
+               begin
+                  for Index in Text'First .. Text'Last - Word'Length + 1 loop
+                     if Text (Index .. Index + Word'Length - 1) = Word then
+                        Named (Code) := True;
+                        exit;
+                     end if;
+                  end loop;
+               end;
+            end loop;
+         end Visit_Naming;
+
+         procedure Scan_Naming is new For_Each_Source (Visit_Naming);
+      begin
+         Scan_Naming ("tests/src");
+
+         for Code in E.Error_Code loop
+            if Code /= E.No_Error
+              and then not Reserved_Codes.Is_Reserved (Code)
+            then
+               Result.Performed := Result.Performed + 1;
+
+               if Named (Code) and then Unreached_Codes.Is_Unreached (Code)
+               then
+                  Fail (Ada_Name (Code)
+                        & " is reached by a test now; take it off the "
+                        & "unreached list");
+               elsif not Named (Code)
+                 and then not Unreached_Codes.Is_Unreached (Code)
+               then
+                  Fail (Ada_Name (Code)
+                        & " is raised and no test names it; either reach it "
+                        & "or put it on the unreached list with a reason");
+               end if;
+            end if;
+         end loop;
+      end;
+
       --  A count written into prose drifts the moment a code is added, and it
       --  did: the documents claimed 147 codes for some time after there were
       --  148. The number is cheap to derive, so it is checked rather than
@@ -4179,38 +4285,58 @@ package body Checks is
       --  one of these checks weighs every file in the tree, so a generated
       --  config or a fixture the suite wrote changes it by a few either way.
       --  Well under the count so that ordinary work is not an event, and far
-      --  No test calls the driver without catching what it writes.
+      --  A test that can run the command can catch what it writes.
       --
       --  Generated text goes through the raw stream of
       --  Ada.Text_IO.Standard_Output, which Set_Output does not redirect, so
       --  a test that runs a generating command in the suite's own process
       --  writes the model's output into the middle of the suite's report.
       --  Seven fragments of it sat there on every run, and the same
-      --  mechanism is what let a comparison of generated text compare one
-      --  newline with itself for as long as it existed.
+      --  mechanism let a comparison of generated text compare one newline
+      --  with itself for as long as it existed.
       --
-      --  Ran in Tests.CLI_Cases is the one way in, and it captures. This
-      --  says so, because the next call written straight to the driver would
-      --  put the fragments back and nothing would notice.
+      --  What this holds is that a file which can start the command has
+      --  Captured_Output to hand. It does not hold that every call is
+      --  wrapped -- a check that tried to match call sites matched every
+      --  Run in the crate, including the fuzzing and conformance campaigns,
+      --  and a check that matched one spelling of one name missed a third
+      --  interactive session that was renaming the package it called
+      --  through. This is the invariant that can be stated exactly.
       declare
-         Text  : constant String :=
-           Contents ("tests/src/tests-cli_cases.adb");
-         Calls : Natural := 0;
-      begin
-         for Index in Text'First .. Text'Last - 27 loop
-            if Text (Index .. Index + 27) = "Model_Runner.CLI.Driver.Run " then
-               Calls := Calls + 1;
-            end if;
-         end loop;
+         procedure Visit_Runner (Relative : String) is
+            Text : constant String := Contents (Relative);
 
-         Result.Performed := Result.Performed + 1;
-         if Calls /= 1 then
-            Fail ("the command-line tests call the driver directly"
-                  & Natural'Image (Calls) & " times; exactly one of those is "
-                  & "Ran, which catches what the command writes, and the "
-                  & "rest write the model's output into the suite's own "
-                  & "report");
-         end if;
+            function Holds (Word : String) return Boolean is
+            begin
+               for Index in Text'First .. Text'Last - Word'Length + 1 loop
+                  if Text (Index .. Index + Word'Length - 1) = Word then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            end Holds;
+         begin
+            --  Not this file: it names those units in the strings it
+            --  compares against, which is not a with clause.
+            if Relative = "tests/src/checks.adb" then
+               return;
+            end if;
+
+            Result.Performed := Result.Performed + 1;
+
+            if (Holds ("with Model_Runner.CLI.Driver;")
+                or else Holds ("with Model_Runner.CLI.Interactive;"))
+              and then not Holds ("with Captured_Output;")
+            then
+               Fail (Relative & " can run the command and does not with "
+                     & "Captured_Output, so whatever it generates lands in "
+                     & "the suite's own report");
+            end if;
+         end Visit_Runner;
+
+         procedure Scan_Runners is new For_Each_Source (Visit_Runner);
+      begin
+         Scan_Runners ("tests/src");
       end;
 
       --  Every host body parses, not only the ones this build compiles.

@@ -2597,6 +2597,46 @@ package body Tests.GGUF_Cases is
          B.Free (Image);
       end;
 
+      --  A byte-pair vocabulary with no merge table.
+      --
+      --  Without one it can tokenize nothing but single characters, so it is
+      --  refused rather than accepted into silently wrong output. The
+      --  refusal was written when the road was and no test had ever made it
+      --  happen -- the fixture always carried merges, because a fixture
+      --  written to exercise merging would.
+      declare
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Item    : Containers.Container;
+         Words   : Vocab.Vocabulary;
+         Parse   : E.Error_Info;
+         Status  : E.Error_Info;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "gpt2");
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, 3);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "a");
+         Fixtures.String_Element (Builder, "b");
+         Fixtures.End_Array (Builder);
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);
+         Fixtures.Build (Builder, Image);
+
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse), "the merge-less fixture did not parse");
+
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (Status.Code = E.Tokenizer_Invalid_Merges,
+                 "a byte-pair vocabulary with no merge table was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+
       --  A vocabulary naming a rule this does not implement is refused by
       --  name rather than cut by the wrong one.
       declare

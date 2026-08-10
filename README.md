@@ -604,7 +604,16 @@ absence of scripting-language build files, that production code never reaches
 AUnit or `project_tools`, that nothing below the presentation layer reaches the
 message catalog, terminal styling, the command-line layer or a standard stream,
 the 120-character line budget, a catalog entry for every diagnostic code, and
-that the generated error-code reference is current. The checks are
+that the generated error-code reference is current.
+
+Diagnostics are held in three states, not two. `Reserved_Codes` names the
+codes nothing raises; `Unreached_Codes` names the codes the program raises
+that no test reaches, each with why. Seventeen codes were in that third state
+with nothing saying so — a refusal written and never made to happen is a
+promise the program has not been asked to keep, and the check that every code
+is *produced somewhere* counts a raise nobody reaches exactly as it counts a
+raise everybody reaches. Ten of the seventeen are now reached; the rest are on
+the list with a reason. Both lists are held in both directions. The checks are
 negative-tested: injecting a violation makes them fail.
 
 They also compile every host body, not only the two a build uses.

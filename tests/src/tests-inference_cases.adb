@@ -1784,6 +1784,92 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Reused_Prefix_Changes_Nothing;
 
+   --  Two refusals the engine makes that no test had made it make.
+   --
+   --  A code is a promise that a wrong input is turned away and named, and
+   --  the raise being written is not evidence that the branch is taken. The
+   --  check that every code is produced somewhere counts a raise nobody
+   --  reaches exactly as it counts a raise everybody reaches, so these sat
+   --  between "declared" and "reached" with nothing saying so.
+   procedure Unreached_Engine_Refusals_Are_Reached
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Gen renames Model_Runner.Generation;
+
+      Image : B.Byte_Array_Access;
+   begin
+      --  A context larger than the model declares. The session refuses it
+      --  rather than opening one the weights cannot fill.
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Live  : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         L.Open
+           (Live, Under.Ready, Context => 1_000_000, Status => Status);
+         Assert (Status.Code = E.Arch_Context_Too_Large,
+                 "a context past what the model declares was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  And zero, which is the other end of the same test and would be
+         --  a session that can hold nothing.
+         L.Open (Live, Under.Ready, Context => 0, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "asking for the model's own context was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+
+      --  A prompt that makes no tokens at all. On the byte-pair road empty
+      --  text is empty -- there is no dummy word marker to stand in for it
+      --  -- so a vocabulary that adds no beginning token leaves generation
+      --  with nothing to evaluate, and it says so rather than generating
+      --  from an empty context.
+      Tiny_Model.Build (Image, Adds_Beginning => False, Byte_Pair => True);
+
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Under   : Harness (Held'Access);
+         Live    : L.Session;
+         Status  : E.Error_Info;
+         Request : Gen.Request;
+         Stop    : Model_Runner.Stops.Set;
+         Outcome : Gen.Result;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         Model_Runner.Stops.Open (Stop);
+         Request.Max_Tokens := 1;
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+         Request.Seed := 1;
+         Request.Has_Seed := True;
+         Request.Add_Beginning := True;
+
+         Gen.Generate
+           (Under.Ready, Live, "", Request, Stop, null, null, null, null,
+            null, Outcome => Outcome);
+
+         Assert (Outcome.Error.Code = E.Generation_Empty_Prompt,
+                 "a prompt that makes no tokens was accepted: "
+                 & E.Error_Code'Image (Outcome.Error.Code));
+
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end Unreached_Engine_Refusals_Are_Reached;
+
    procedure Refused_Generation_Names_Its_Reason
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1861,6 +1947,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, One_Beginning_Token_However_It_Arrives'Access,
          "a prompt carries exactly one beginning token, however it arrives");
+      Register_Routine
+        (T, Unreached_Engine_Refusals_Are_Reached'Access,
+         "refusals the engine had never been made to make are made");
       Register_Routine
         (T, Reused_Prefix_Changes_Nothing'Access,
          "reusing a committed prefix changes nothing about the answer");

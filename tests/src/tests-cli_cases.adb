@@ -10,6 +10,7 @@ with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
 
 with Ada.Strings.Unbounded;
+with Ada.Text_IO.Text_Streams;
 with Captured_Output;
 with Project_Tools.Files;
 with Project_Tools.Processes;
@@ -2382,6 +2383,225 @@ package body Tests.CLI_Cases is
       end;
    end Backends_Agree;
 
+   --  Refusals the command makes that no test had ever made it make.
+   --
+   --  A code is a promise that a particular wrong input is turned away and
+   --  named. The raise being written is not evidence that the branch is
+   --  taken, and the check that every code is produced somewhere counts a
+   --  raise nobody reaches exactly as it counts a raise everybody reaches.
+   --  These four were in that state.
+   procedure Unreached_Refusals_Are_Reached
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model : constant String := "obj/unreached-model.gguf";
+
+      --  Run the command and return the diagnostic it wrote.
+      function Refusal (Words : Fixed_Arguments) return String is
+         Log    : constant String := "obj/unreached-err.txt";
+         Handle : File_Type;
+         Status : Natural;
+      begin
+         Create (Handle, Out_File, Log);
+         Set_Error (Handle);
+         begin
+            Ran (Words, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Assert (Status /= 0,
+                 "a run that should have been refused left with a success");
+
+         return Project_Tools.Files.Read_Raw_File (Log);
+      end Refusal;
+
+      --  Whether a diagnostic names a code, by the MR-XXX-NNNN identifier
+      --  the code carries. Asked of the code rather than written out, so a
+      --  renumbering does not quietly stop being looked for.
+      function Names (Text : String; Code : E.Error_Code) return Boolean
+      is (Project_Tools.Text.Contains (Text, E.Diagnostic_Code (Code)));
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      --  An option that belongs to another command. The parser knows which
+      --  options each command takes and says so by name rather than calling
+      --  it unknown.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "inspect");
+         Add (Source, Model);
+         Add (Source, "--temperature");
+         Add (Source, "0.5");
+
+         declare
+            Said : constant String := Refusal (Source);
+         begin
+            Assert (Names (Said, E.CLI_Option_Not_For_Command),
+                    "an option for another command was not refused by name: "
+                    & Said);
+         end;
+      end;
+
+      --  Interactive mode without a terminal on both streams. The suite has
+      --  neither, which is what makes this reachable here at all.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--interactive");
+
+         declare
+            Said : constant String := Refusal (Source);
+         begin
+            Assert (Names (Said, E.CLI_Interactive_Unavailable),
+                    "interactive mode without a terminal was not refused by "
+                    & "name: " & Said);
+         end;
+      end;
+
+      --  A run with no prompt anywhere: none on the command line, none in a
+      --  file, and nothing on standard input.
+      declare
+         Source : Fixed_Arguments;
+         Empty  : constant String := "obj/unreached-empty.txt";
+         From   : File_Type;
+         Blank  : File_Type;
+      begin
+         Create (Blank, Out_File, Empty);
+         Close (Blank);
+
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+
+         Open (From, In_File, Empty);
+         Set_Input (From);
+
+         declare
+            Said : constant String := Refusal (Source);
+         begin
+            Set_Input (Standard_Input);
+            Close (From);
+            Assert (Names (Said, E.CLI_No_Prompt_Available),
+                    "a run with no prompt at all was not refused by name: "
+                    & Said);
+         end;
+      end;
+   end Unreached_Refusals_Are_Reached;
+
+   --  The thing that catches what the command writes.
+   --
+   --  Forty lines of descriptor juggling whose failure mode is swallowing
+   --  the suite's own report, which it did: nesting a capture inside a
+   --  capture left standard output pointing at a file and the whole report
+   --  vanished, 182 lines to none. What found that was counting opens
+   --  against closes by hand. Nothing checked any of it.
+   --
+   --  Four things are asked. Text written while it is open comes back.
+   --  Standard output is put back afterwards, which is the property whose
+   --  failure is invisible until a report goes missing. Nesting is refused
+   --  rather than half-done. And Took_Effect answers for the last Open
+   --  rather than for whether one was ever tried.
+   procedure Capture_Catches_And_Restores
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  Written through the raw stream, which is the one the generated
+      --  text uses and the one Set_Output does not redirect. Writing through
+      --  Put_Line would prove nothing about the case this exists for.
+      procedure Say (Text : String) is
+      begin
+         String'Write
+           (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output),
+            Text);
+         Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
+      end Say;
+
+      Inside : constant String := "caught-by-the-capture";
+   begin
+      Captured_Output.Open ("obj/capture-probe.txt");
+      Say (Inside);
+
+      declare
+         Back : constant String := Captured_Output.Close;
+      begin
+         Assert (Captured_Output.Took_Effect,
+                 "the capture did not take effect, so what follows says "
+                 & "nothing about it");
+         Assert (Back = Inside,
+                 "the capture returned '" & Back & "' where '" & Inside
+                 & "' was written");
+      end;
+
+      --  And standard output is back. Said by capturing again: if the first
+      --  Close had left the descriptor on the file, this second capture
+      --  would still work and the report would still be lost, so what is
+      --  checked is that the second capture catches only what is written
+      --  inside it and not what was written before.
+      Captured_Output.Open ("obj/capture-probe-two.txt");
+
+      declare
+         Back : constant String := Captured_Output.Close;
+      begin
+         Assert (Back = "",
+                 "a capture that wrote nothing returned '" & Back
+                 & "', so the one before it had not been closed");
+      end;
+
+      --  Nesting is refused. A second Open inside the first would overwrite
+      --  the one saved descriptor, and then neither Close could put things
+      --  back -- which is exactly how the report went missing.
+      Captured_Output.Open ("obj/capture-probe-three.txt");
+
+      declare
+         Refused : Boolean := False;
+      begin
+         begin
+            Captured_Output.Open ("obj/capture-probe-four.txt");
+         exception
+            when others =>
+               Refused := True;
+         end;
+
+         declare
+            Back : constant String := Captured_Output.Close;
+            pragma Unreferenced (Back);
+         begin
+            null;
+         end;
+
+         Assert (Refused,
+                 "a capture opened inside another was accepted, so the "
+                 & "saved descriptor is overwritten and standard output "
+                 & "never comes back");
+      end;
+
+      --  A path that cannot be opened is reported rather than silently
+      --  leaving standard output where it was and pretending.
+      Captured_Output.Open ("obj/no-such-directory-here/probe.txt");
+
+      declare
+         Back : constant String := Captured_Output.Close;
+      begin
+         Assert (not Captured_Output.Took_Effect,
+                 "a capture on a path that cannot be opened said it took "
+                 & "effect");
+         Assert (Back = "",
+                 "a capture that never opened returned '" & Back & "'");
+      end;
+   end Capture_Catches_And_Restores;
+
    --  Every interactive command, run rather than parsed.
    --
    --  Which word means which command was checked in both directions, and the
@@ -2619,6 +2839,28 @@ package body Tests.CLI_Cases is
          --  observable, because the next turn's tokens are then not a prefix
          --  of what the session committed and generation resets it anyway.
          --  Belt and braces, and the test can only see the belt.
+      end;
+
+      --  A line that is not UTF-8. Standard input is untrusted and the loop
+      --  refuses text it cannot read as characters rather than passing bytes
+      --  on to a tokenizer that would refuse them further down with less to
+      --  say about where they came from.
+      declare
+         Bad : constant String :=
+           "ab" & Character'Val (16#C4#) & Character'Val (16#C4#);
+
+         Said : constant String :=
+           Session_Saying (Image, Bad & Newline & "/exit" & Newline);
+         Good : constant String :=
+           Session_Saying (Image, "abab" & Newline & "/exit" & Newline);
+      begin
+         Assert (Project_Tools.Text.Contains
+                   (Said, E.Diagnostic_Code (E.IO_Invalid_UTF8)),
+                 "a line that is not UTF-8 was not refused by name: " & Said);
+
+         Assert (Said'Length > Good'Length,
+                 "a line that is not UTF-8 read the same as one that is, so "
+                 & "the loop passed it on rather than refusing it");
       end;
 
       --  A line longer than the buffer the loop reads into.
@@ -4070,15 +4312,29 @@ package body Tests.CLI_Cases is
             Set_Input (From);
             Set_Error (Err);
 
+            Captured_Output.Open ("obj/loop-answers.txt");
             begin
                I.Run (Options, Screen, Rig.Ready, Session, Status);
             exception
                when others =>
+                  declare
+                     Ignored : constant String := Captured_Output.Close;
+                     pragma Unreferenced (Ignored);
+                  begin
+                     null;
+                  end;
                   Set_Input (Standard_Input);
                   Set_Error (Standard_Error);
                   Close (From);
                   Close (Err);
                   raise;
+            end;
+
+            declare
+               Ignored : constant String := Captured_Output.Close;
+               pragma Unreferenced (Ignored);
+            begin
+               null;
             end;
 
             Set_Input (Standard_Input);
@@ -6492,6 +6748,12 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Architectures_Are_Read_By_Name'Access,
          "each architecture is read with its own keys and its own rotation");
+      Register_Routine
+        (T, Unreached_Refusals_Are_Reached'Access,
+         "refusals the command had never been made to make are made");
+      Register_Routine
+        (T, Capture_Catches_And_Restores'Access,
+         "the capture that catches command output puts it back afterwards");
       Register_Routine
         (T, Interactive_Commands_Do_Something'Access,
          "every interactive command does something, and reset clears the "
