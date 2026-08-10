@@ -6573,6 +6573,16 @@ package body Tests.CLI_Cases is
       begin
          Add (Source, "inspect");
          Add (Source, Tiny_Model.Suite_Fixture);
+
+         --  The worker count is one per physical core less one, so a
+         --  transcript that lets it default publishes this machine's core
+         --  count and cannot be replayed on another. It read "worker tasks
+         --  7" and failed on every continuous-integration runner there is.
+         --  Asked for explicitly, the line is the program's answer rather
+         --  than the machine's.
+         Add (Source, "--threads");
+         Add (Source, "4");
+
          Must_Match ("$ model_runner inspect", Output_Of (Source),
                      "inspect");
       end;

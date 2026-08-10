@@ -17,7 +17,7 @@ The engine and the command-line program work end to end. A list of what is
 capability it does not have.
 
 ```
-$ model_runner inspect tiny-model.gguf
+$ model_runner inspect tiny-model.gguf --threads 4
 Container
   path                    tiny-model.gguf
   file size               7648
@@ -46,7 +46,7 @@ Memory
   session at this context 5880
 Execution
   backend                 cpu
-  worker tasks            7
+  worker tasks            4
 
 $ model_runner run tiny-model.gguf --raw --prompt "ab" --seed 42 --temperature 0 --max-tokens 6
  bcaaaa

@@ -340,6 +340,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- The suite passes on every host the project supports, not only on the one
+  it was written on. Three separate faults, all found by continuous
+  integration and none by the release checklist, which had been passing
+  locally throughout:
+
+  The check that compiles every host body ran a bare `gcc`. On a runner
+  that has one without `gnat1` behind it, all ten bodies were reported as
+  failing to compile, including the two the build had just made. It goes
+  through `alr exec` now, and a run in which *every* body fails says that the
+  compiler is the more likely explanation than the tree.
+
+  `Captured_Output` did nothing on Windows. It reached the host through
+  `Hostkit.Descriptors.Assign`, which is `dup2` on POSIX and `SetStdHandle`
+  on Windows -- and `SetStdHandle` changes the handle `GetStdHandle` answers
+  with, not the C runtime's descriptor 1, which is what `Ada.Text_IO` writes
+  through. The redirection silently failed, the capture came back empty, and
+  five tests failed there while passing here. It has a body per host now,
+  in the directories the project file picks, binding the runtime's own
+  `dup2` and `_dup2`; the Windows one opens in binary mode, because text
+  mode would turn every line ending into two and the comparison would be
+  against something the program never wrote.
+
+  And the transcript the README publishes for `inspect` showed `worker
+  tasks 7`, which is one per physical core less one on the machine it was
+  taken from. The command asks for four now, so the line is the program's
+  answer rather than the machine's.
+
 - `run --help` prints the help for `run`. It printed the top-level screen,
   byte for byte identical to bare `help`, discarding the command it was typed
   against; `help run` gave the useful answer and the flag did not. The option

@@ -4558,6 +4558,15 @@ package body Checks is
       --  that and fails this -- and a body nothing compiles is exactly where
       --  a profile drifts from the spec it implements.
       declare
+         --  Through Alire, because the Ada compiler is the one the build
+         --  used and it is not on the path: a bare gcc on a
+         --  continuous-integration runner has no gnat1 behind it, and every
+         --  one of the ten bodies was reported as failing to compile,
+         --  including the two that had just been built. Checked on the
+         --  machine that had one and nowhere else, which is the mistake this
+         --  whole section exists to stop somebody making.
+         Alr      : constant String :=
+           Project_Tools.Processes.Locate_Command ("alr");
          Compiler : constant String :=
            Project_Tools.Processes.Locate_Command ("gcc");
 
@@ -4596,6 +4605,10 @@ package body Checks is
             (new String'("tests/src/platform"), new String'("tests/src"))];
 
          Parsed : Natural := 0;
+         Broken : Natural := 0;
+
+         --  Every one of them failing is a statement about the compiler.
+         function Failed_All return Boolean is (Broken = Parsed);
       begin
          Result.Performed := Result.Performed + 1;
 
@@ -4626,6 +4639,18 @@ package body Checks is
                               Args : Project_Tools.Processes.Argument_Vectors
                                        .Vector;
                            begin
+                              if Alr /= "" then
+                                 Args.Append
+                                   (Ada.Strings.Unbounded.To_Unbounded_String
+                                      ("exec"));
+                                 Args.Append
+                                   (Ada.Strings.Unbounded.To_Unbounded_String
+                                      ("--"));
+                                 Args.Append
+                                   (Ada.Strings.Unbounded.To_Unbounded_String
+                                      ("gcc"));
+                              end if;
+
                               Args.Append
                                 (Ada.Strings.Unbounded.To_Unbounded_String
                                    ("-c"));
@@ -4658,10 +4683,12 @@ package body Checks is
                                    (Label   => "parse " & Each.Root.all & "/"
                                                & Host.all & "/" & Name,
                                     Dir     => Scratch,
-                                    Program => Compiler,
+                                    Program =>
+                                      (if Alr /= "" then Alr else Compiler),
                                     Args    => Args,
                                     Quiet   => True) /= 0
                               then
+                                 Broken := Broken + 1;
                                  Fail (Each.Root.all & "/" & Host.all & "/"
                                        & Name
                                        & " does not compile; it would fail on "
@@ -4675,6 +4702,20 @@ package body Checks is
                   end;
                end loop;
             end loop;
+
+            --  A compiler that cannot compile anything reports every body
+            --  as broken, which is what happened: a bare gcc with no gnat1
+            --  behind it failed on all ten, including the two the build had
+            --  just made. So one file that must compile is compiled first,
+            --  and if that fails the answer is that the question could not
+            --  be asked rather than that the tree is broken.
+            Result.Performed := Result.Performed + 1;
+
+            if Parsed > 0 and then Failed_All then
+               Fail ("every host body failed to compile, which is what a "
+                     & "compiler that cannot run looks like; the tree is "
+                     & "more likely sound than the tool");
+            end if;
 
             --  And that each host gets exactly one body for each spec.
             --
