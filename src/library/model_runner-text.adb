@@ -192,6 +192,33 @@ package body Model_Runner.Text is
       return Item (First .. Last);
    end Trim;
 
+   --------------------
+   -- Leading_Number --
+   --------------------
+
+   function Leading_Number (Item : String) return Integer is
+      --  Bounded so that a line of digits cannot overflow on its way to
+      --  being refused. Anything past what a Natural holds is not a
+      --  processor number and the answer is that there is none.
+      Ceiling : constant Natural := Natural'Last / 10;
+      Value   : Natural := 0;
+      Seen    : Boolean := False;
+   begin
+      for Position in Item'Range loop
+         exit when Item (Position) not in '0' .. '9';
+
+         if Value > Ceiling then
+            return -1;
+         end if;
+
+         Value := Value * 10 + (Character'Pos (Item (Position))
+                                - Character'Pos ('0'));
+         Seen := True;
+      end loop;
+
+      return (if Seen then Value else -1);
+   end Leading_Number;
+
    -----------------
    -- Starts_With --
    -----------------

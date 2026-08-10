@@ -607,6 +607,14 @@ the 120-character line budget, a catalog entry for every diagnostic code, and
 that the generated error-code reference is current. The checks are
 negative-tested: injecting a violation makes them fail.
 
+They also parse every host body, not only the two a build compiles.
+`src/platform` holds five directories and a Linux build uses `linux` and
+`posix`; the other three are production code no compiler here would otherwise
+see, and reading them as text is not parsing. The sibling `hostkit` crate
+shipped a Windows body holding `('\\')` where Ada spells a backslash, found by
+building on Windows and nowhere else. `gcc -gnats` stops after the syntax, so
+the question can be asked from a machine of the wrong kind.
+
 ## Layering
 
 CLI and presentation sit above command execution, which sits above generation,

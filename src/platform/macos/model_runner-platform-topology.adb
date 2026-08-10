@@ -13,6 +13,12 @@ with System;
 --  processor count all return zero, and zero means the caller keeps the
 --  behaviour it had before this file existed. The worst outcome is the
 --  previous default.
+--
+--  What holds it up on a machine of the wrong kind is two things and no
+--  more: the repository checks parse this file with every other host body,
+--  so it cannot go stale silently, and Core_Count_Keeps_Its_Contract in the
+--  tests crate says what the answer has to satisfy wherever the suite runs.
+--  Neither runs the sysctl. Only a macOS machine can do that.
 package body Model_Runner.Platform.Topology is
 
    use type Interfaces.C.int;

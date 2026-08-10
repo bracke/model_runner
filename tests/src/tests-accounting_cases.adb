@@ -16,6 +16,7 @@ with Hostkit.Fs;
 with Model_Runner.Memory;
 with Model_Runner.Text;
 with Model_Runner.Bytes;
+with Model_Runner.Platform;
 with Model_Runner.Platform.Mapping;
 
 with Ada.Directories;
@@ -168,6 +169,98 @@ package body Tests.Accounting_Cases is
    end Plan_Sums_Its_Parts;
 
    --  A clock that goes backwards yields no elapsed time.
+   --  What decides how many worker tasks a run gets.
+   --
+   --  Core_Count is the default worker count on every run, and it comes from
+   --  a host body: a walk over /sys on Linux, a sysctl on macOS, and zero --
+   --  meaning "cannot say" -- on the rest. None of the four had a test. The
+   --  Windows body went as far as telling the next person that "the test in
+   --  the tests crate already says what the answer must satisfy", and there
+   --  was no such test; this is it.
+   --
+   --  What can be said on whatever host the suite runs on is the contract,
+   --  and the contract is what a wrong body would break: a count in range,
+   --  the same answer twice, and a fallback that is the processor count
+   --  rather than a guess. The walk itself cannot be tested here, because it
+   --  reads files only one host has -- which is why the rule it applies to
+   --  each line was moved somewhere a test can hand it a string.
+   procedure Core_Count_Keeps_Its_Contract
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package P renames Model_Runner.Platform;
+
+      Processors : constant Positive := P.Processor_Count;
+      Cores      : constant Positive := P.Core_Count;
+   begin
+      Assert (Cores <= Processors,
+              "the core count" & Positive'Image (Cores)
+              & " is above the processor count" & Positive'Image (Processors)
+              & ", so a host body set a worker count the machine cannot run");
+
+      Assert (Cores = P.Core_Count,
+              "the core count answered differently on a second call, so the "
+              & "worker default is not a property of the machine");
+
+      Assert (P.Processor_Count = Processors,
+              "the processor count answered differently on a second call");
+
+      --  That a host answering zero cannot reach the caller is not asserted
+      --  here: Core_Count returns Positive, so the compiler carries it and
+      --  an assertion would only say that Positive holds no zero.
+   end Core_Count_Keeps_Its_Contract;
+
+   --  The rule the Linux core count applies to each line it reads.
+   --
+   --  Each processor has a file naming every processor that shares its core,
+   --  and the ones whose file names themselves first are counted, so each
+   --  core is counted once. Everything about that turns on reading the first
+   --  number of a line, and getting it wrong changes the worker count on
+   --  every run of the program without changing anything else -- which is
+   --  the kind of mistake that shows up as a speed figure nobody can explain.
+   procedure Leading_Number_Reads_What_It_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package T2 renames Model_Runner.Text;
+
+      --  The shapes /sys actually writes: a single processor, a pair as a
+      --  range, and a pair as a list.
+      procedure Same (Line : String; Expected : Integer; Why : String) is
+         Got : constant Integer := T2.Leading_Number (Line);
+      begin
+         Assert (Got = Expected,
+                 Why & ": """ & Line & """ read as" & Integer'Image (Got)
+                 & " where" & Integer'Image (Expected) & " was due");
+      end Same;
+   begin
+      Same ("0", 0, "a processor on its own");
+      Same ("7", 7, "a processor on its own");
+      Same ("0-1", 0, "a pair written as a range");
+      Same ("4-5", 4, "a pair written as a range");
+      Same ("2,10", 2, "a pair written as a list");
+      Same ("12,13", 12, "two-digit processors");
+      Same ("0 ", 0, "a trailing space");
+
+      --  Not a number, and the caller has to be able to tell that from zero:
+      --  zero is a processor and "no number here" is a file this does not
+      --  understand, which stops the walk rather than counting a core.
+      Same ("", -1, "an empty line");
+      Same ("-1", -1, "a line that starts with a sign");
+      Same (" 0", -1, "a line that starts with a space");
+      Same ("cpu0", -1, "a line that starts with a word");
+
+      --  A run of digits longer than a Natural holds. Refused rather than
+      --  wrapped: the walk stops, the host says it cannot tell, and the
+      --  caller keeps the processor count.
+      Same ("99999999999999999999", -1, "a number too large to hold");
+
+      --  Leading zeroes are still a number, however many there are: nothing
+      --  overflows on the way to zero. Written down because the first
+      --  version of this test expected the refusal and the rule was right.
+      Same ("0000000000000000000000", 0, "a long run of zeroes");
+   end Leading_Number_Reads_What_It_Says;
+
    procedure Backwards_Clock_Yields_No_Duration
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -781,6 +874,13 @@ package body Tests.Accounting_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Core_Count_Keeps_Its_Contract'Access,
+         "the core count that sets the worker default keeps its contract");
+      Register_Routine
+        (T, Leading_Number_Reads_What_It_Says'Access,
+         "the rule the Linux core count applies to a line reads what it "
+         & "says");
       Register_Routine
         (T, Over_Budget_Is_Refused'Access,
          "an allocation past the budget is refused before it is attempted");

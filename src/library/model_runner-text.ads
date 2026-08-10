@@ -130,6 +130,23 @@ package Model_Runner.Text is
    --  @return Trimmed slice of Item.
    function Trim (Item : String) return String;
 
+   --  The number spelled at the front of a string, or -1.
+   --
+   --  Reading stops at the first character that is not a digit, so "0-3" is
+   --  zero and "12,13" is twelve. An empty string, one that does not begin
+   --  with a digit, and one whose number is larger than a Natural can hold
+   --  all give -1: the caller asked for a number and there is not one it can
+   --  use, which is a different answer from zero.
+   --
+   --  This is here rather than beside its caller because its caller reads a
+   --  file that only one host has, and a rule nobody can hand a string to is
+   --  a rule nobody can check. What reads it is the Linux core count, which
+   --  decides how many worker tasks every run gets.
+   --
+   --  @param Item Text to read.
+   --  @return The leading number, or -1 when there is none.
+   function Leading_Number (Item : String) return Integer;
+
    --  Report whether Item starts with Prefix.
    --
    --  @param Item Text to test.

@@ -39,24 +39,24 @@ package body Model_Runner.Platform.Topology is
                --  Bounded. A line longer than this is not a sibling list
                --  this understands, and an answer not understood is no
                --  answer.
-               Line : String (1 .. 512);
-               Last : Natural;
-               Stop : Natural;
+               Line  : String (1 .. 512);
+               Last  : Natural;
+               Named : Integer;
             begin
                Ada.Text_IO.Get_Line (File, Line, Last);
                Ada.Text_IO.Close (File);
 
-               Stop := Line'First - 1;
-               for Position in Line'First .. Last loop
-                  exit when Line (Position) not in '0' .. '9';
-                  Stop := Position;
-               end loop;
+               --  The first processor the line names. The rule itself
+               --  lives in Model_Runner.Text, where a test can hand it a
+               --  string; here there is only a file no test can write.
+               Named := Model_Runner.Text.Leading_Number
+                          (Line (Line'First .. Last));
 
-               if Stop < Line'First then
+               if Named < 0 then
                   return 0;
                end if;
 
-               if Integer'Value (Line (Line'First .. Stop)) = Index then
+               if Named = Index then
                   Found := Found + 1;
                end if;
             end;

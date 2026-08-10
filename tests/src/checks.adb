@@ -7,6 +7,7 @@ with Hostkit.Fs;
 
 with Ada.Strings.Unbounded;
 with Project_Tools.Ada_Source;
+with Project_Tools.Processes;
 with Project_Tools.Files;
 with Project_Tools.Text;
 with Project_Tools.Tree_Checks;
@@ -4178,6 +4179,124 @@ package body Checks is
       --  one of these checks weighs every file in the tree, so a generated
       --  config or a fixture the suite wrote changes it by a few either way.
       --  Well under the count so that ordinary work is not an event, and far
+      --  Every host body parses, not only the ones this build compiles.
+      --
+      --  src/platform holds five directories and a build uses two of them:
+      --  linux and posix here, windows or macos elsewhere. The other three
+      --  are production code that no compiler on this machine has ever seen,
+      --  and the checks above read them as text -- layering, line length,
+      --  which constants are dead -- which no amount of reading turns into
+      --  parsing.
+      --
+      --  This is not hypothetical. The sibling hostkit crate shipped a
+      --  Windows body holding ('\\') where Ada spells a backslash ('\'),
+      --  and it was found by building on Windows and nowhere else. The
+      --  check written there is this one; bringing it here was overdue,
+      --  because this tree has three unbuilt directories to that one's two.
+      --
+      --  Syntax only: -gnats stops after parsing, so nothing here needs the
+      --  host's own headers or bindings, which is what makes it possible to
+      --  ask the question at all from a machine of the wrong kind.
+      declare
+         Compiler : constant String :=
+           Project_Tools.Processes.Locate_Command ("gcc");
+
+         --  Absolute, because the child is run with its working directory
+         --  set to the tree root: a path relative to where this command was
+         --  started would be resolved again from there and find nothing,
+         --  which is how the first version of this check reported that all
+         --  ten bodies failed to parse, including the two this build had
+         --  just compiled.
+         Full : constant String := Ada.Directories.Full_Name (Root);
+
+         type Name_Access is access constant String;
+         Hosts : constant array (1 .. 5) of Name_Access :=
+           [new String'("linux"),
+            new String'("macos"),
+            new String'("posix"),
+            new String'("unsupported"),
+            new String'("windows")];
+
+         Parsed : Natural := 0;
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if Compiler = "" then
+            Fail ("no gcc on the path, so no host body could be parsed and "
+                  & "the three directories this build does not compile went "
+                  & "unchecked");
+         else
+            for Host of Hosts loop
+               declare
+                  Where  : constant String :=
+                    Full & "/src/platform/" & Host.all;
+                  Search : Ada.Directories.Search_Type;
+                  Item   : Ada.Directories.Directory_Entry_Type;
+               begin
+                  if Ada.Directories.Exists (Where) then
+                     Ada.Directories.Start_Search (Search, Where, "*.ad[sb]");
+
+                     while Ada.Directories.More_Entries (Search) loop
+                        Ada.Directories.Get_Next_Entry (Search, Item);
+
+                        declare
+                           Name : constant String :=
+                             Ada.Directories.Simple_Name (Item);
+                           Args : Project_Tools.Processes.Argument_Vectors
+                                    .Vector;
+                        begin
+                           Args.Append
+                             (Ada.Strings.Unbounded.To_Unbounded_String
+                                ("-c"));
+                           Args.Append
+                             (Ada.Strings.Unbounded.To_Unbounded_String
+                                ("-gnats"));
+                           Args.Append
+                             (Ada.Strings.Unbounded.To_Unbounded_String
+                                ("-gnat2022"));
+                           Args.Append
+                             (Ada.Strings.Unbounded.To_Unbounded_String
+                                ("-x"));
+                           Args.Append
+                             (Ada.Strings.Unbounded.To_Unbounded_String
+                                ("ada"));
+                           Args.Append
+                             (Ada.Strings.Unbounded.To_Unbounded_String
+                                (Where & "/" & Name));
+
+                           Result.Performed := Result.Performed + 1;
+                           Parsed := Parsed + 1;
+
+                           if Project_Tools.Processes.Run_Status
+                                (Label   => "parse " & Host.all & "/" & Name,
+                                 Dir     => Full,
+                                 Program => Compiler,
+                                 Args    => Args,
+                                 Quiet   => True) /= 0
+                           then
+                              Fail ("src/platform/" & Host.all & "/" & Name
+                                    & " does not parse; it would fail on "
+                                    & "that host and nowhere else");
+                           end if;
+                        end;
+                     end loop;
+
+                     Ada.Directories.End_Search (Search);
+                  end if;
+               end;
+            end loop;
+
+            --  A run that parsed nothing found nothing, and would say so by
+            --  saying nothing at all.
+            Result.Performed := Result.Performed + 1;
+            if Parsed < 8 then
+               Fail ("only" & Natural'Image (Parsed) & " host bodies were "
+                     & "parsed; this tree has ten, so the walk is no longer "
+                     & "finding them");
+            end if;
+         end if;
+      end;
+
       --  enough above zero that a run which stops checking cannot pass.
       declare
          Fewest_Checks : constant := 3_000;

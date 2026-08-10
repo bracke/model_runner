@@ -11,8 +11,15 @@
 --  per core, the default worker count is twice what the work can use, and the
 --  second worker on each core spends processor time to return nothing.
 --  Measured on Linux that is 26.7 s of processor time against 14.9 for the
---  same wall. Whoever has such a machine and half an hour can fix it here,
---  and the test in the tests crate already says what the answer must satisfy.
+--  same wall.
+--
+--  Whoever has such a machine and half an hour can fix it here. What the
+--  answer has to satisfy is in the tests crate, in
+--  Core_Count_Keeps_Its_Contract: a count in one .. the processor count, the
+--  same on a second call, and zero from here rather than a number this file
+--  half believes. That sentence used to say the test already existed, and it
+--  did not -- so anybody who came to do this work would have gone looking
+--  for a contract nobody had written.
 package body Model_Runner.Platform.Topology is
 
    ---------------------
