@@ -306,6 +306,98 @@ package body Tests.Sampling_Cases is
       S.Close (Sampler);
    end Top_K_Restricts;
 
+   --  Top-p keeps the smallest set of candidates whose probability reaches
+   --  the threshold, and keeps the one that crosses it.
+   --
+   --  This was the option nothing checked. Top-k and minimum-p each had a
+   --  test of what they do; top-p was set below one in exactly two places,
+   --  once at zero to prove it is refused and once at a random value in a
+   --  test that asserts only that some usable token comes back. A build in
+   --  which top-p did nothing at all passed the suite.
+   --
+   --  The logits are the natural logarithms of one half, one quarter and two
+   --  eighths, so the probabilities are known rather than measured, and the
+   --  three thresholds below fall either side of each boundary: 0.4 is
+   --  reached by the first candidate alone, 0.6 needs the second, and 0.9 is
+   --  not reached until the fourth.
+   --
+   --  What this does not settle is a threshold that falls exactly on a
+   --  cumulative sum, where reaching it and passing it part company. Writing
+   --  that would mean asking two floating-point sums to be equal, and the
+   --  answer would turn on the last bit of a logarithm rather than on the
+   --  rule; the three cases here each survive a change of the comparison at
+   --  that one point, and that is the honest extent of them.
+   procedure Top_P_Restricts (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Logits : constant Logit_Vector :=
+        [0 => 0.0, 1 => -0.693_147_2, 2 => -1.386_294_4, 3 => -1.386_294_4,
+         4 => -50.0, 5 => -50.0, 6 => -50.0, 7 => -50.0];
+
+      --  Draw many times under one threshold and report what was admitted.
+      procedure Admitted
+        (Threshold : N.Real;
+         Highest   : out Vocab.Token_Id;
+         Saw_Second : out Boolean)
+      is
+         Config : constant S.Configuration :=
+           (Temperature => 1.0, Top_K => 0, Top_P => Threshold, Min_P => 0.0,
+            Repeat_Penalty => 1.0, Repeat_Window => 0,
+            others => <>);
+         Sampler : S.Sampler;
+         Status  : E.Error_Info;
+         Token   : Vocab.Token_Id;
+      begin
+         Highest := 0;
+         Saw_Second := False;
+
+         S.Open (Sampler, Config, Vocabulary, 7, Status);
+         Assert (E.Is_Ok (Status), "sampler did not open");
+
+         for Step in 1 .. 256 loop
+            S.Sample (Sampler, Logits, Token, Status);
+            Assert (E.Is_Ok (Status), "sample failed");
+            if Token > Highest then
+               Highest := Token;
+            end if;
+            if Token = 1 then
+               Saw_Second := True;
+            end if;
+         end loop;
+
+         S.Close (Sampler);
+      end Admitted;
+
+      Highest : Vocab.Token_Id;
+      Second  : Boolean;
+   begin
+      --  Half is already four tenths, so nothing joins the most probable
+      --  candidate. A reader that dropped the crossing candidate instead of
+      --  keeping it would have nothing left to sample from here.
+      Admitted (0.4, Highest, Second);
+      Assert (Highest = 0,
+              "top-p at four tenths admitted more than the most probable"
+              & " candidate: token" & Vocab.Token_Id'Image (Highest));
+
+      --  Six tenths needs the second, and stops there: three quarters is
+      --  past the threshold, so the third never enters.
+      Admitted (0.6, Highest, Second);
+      Assert (Highest = 1,
+              "top-p at six tenths admitted a candidate past the one that"
+              & " reached it: token" & Vocab.Token_Id'Image (Highest));
+      Assert (Second,
+              "top-p at six tenths never admitted the candidate that reaches"
+              & " it in two hundred and fifty-six draws");
+
+      --  Nine tenths is not reached until the last of the four, so all four
+      --  are in. Without this a build that kept only ever two would pass the
+      --  two checks above.
+      Admitted (0.9, Highest, Second);
+      Assert (Highest = 3,
+              "top-p at nine tenths kept fewer candidates than reaching it"
+              & " requires: highest admitted was token"
+              & Vocab.Token_Id'Image (Highest));
+   end Top_P_Restricts;
+
    --  Minimum-p drops candidates far below the most probable one.
    procedure Min_P_Restricts (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -1405,6 +1497,9 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Top_K_Restricts'Access,
          "top-k restricts selection to the highest-scoring candidates");
+      Register_Routine
+        (T, Top_P_Restricts'Access,
+         "top-p keeps the smallest set that reaches the threshold");
       Register_Routine
         (T, Min_P_Restricts'Access,
          "minimum-p drops candidates far below the most probable one");

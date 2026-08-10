@@ -1013,6 +1013,33 @@ package body Model_Runner.Tokenizer is
          declare
             Produced : Natural := 0;
             From     : Positive := Text'First;
+            Refused  : Boolean := False;
+
+            --  Add one token, or say why not.
+            --
+            --  This road used to write straight into Target under a test for
+            --  room and do nothing when there was none, so a caller whose
+            --  buffer was too small got a short answer and a success -- the
+            --  other road reports MR-TOK-0013 for exactly that, and an
+            --  independent reader written from the description is what
+            --  showed the two apart.
+            procedure Put (Token : Token_Id) is
+            begin
+               if Refused then
+                  return;
+               end if;
+
+               if Produced >= Target'Length then
+                  Status := E.Make (E.Tokenizer_Buffer_Too_Small);
+                  E.Add_Integer
+                    (Status, "size", Long_Long_Integer (Target'Length));
+                  Refused := True;
+                  return;
+               end if;
+
+               Produced := Produced + 1;
+               Target (Target'First + Produced - 1) := Token;
+            end Put;
 
             procedure Emit (Piece : String) is
                --  Every byte as its printable stand-in, which is the form
@@ -1083,17 +1110,33 @@ package body Model_Runner.Tokenizer is
                      Token : constant Token_Id :=
                        Find (Item, Mapped (Starts (Index) .. Ends (Index)));
                   begin
-                     if Token /= No_Token and then Produced < Target'Length then
-                        Produced := Produced + 1;
-                        Target (Target'First + Produced - 1) := Token;
+                     --  A symbol the vocabulary does not carry. A byte-level
+                     --  vocabulary carries a piece for every one of the 256
+                     --  stand-in characters, so this cannot happen to a file
+                     --  that was written properly -- and a file that was not
+                     --  is the case this program exists to survive. It used
+                     --  to be dropped, which deleted a piece of the caller's
+                     --  own prompt without saying so.
+                     if Token /= No_Token then
+                        Put (Token);
+                     elsif Item.Unknown /= No_Token then
+                        Put (Item.Unknown);
+                     elsif not Refused then
+                        Status := E.Make (E.Tokenizer_Missing_Byte_Fallback);
+                        E.Add_Text
+                          (Status, "value",
+                           Mapped (Starts (Index) .. Ends (Index)),
+                           E.Param_Identifier);
+                        Refused := True;
                      end if;
                   end;
+
+                  exit when Refused;
                end loop;
             end Emit;
          begin
             if Add_Beginning and then Item.Beginning /= No_Token then
-               Produced := Produced + 1;
-               Target (Target'First) := Item.Beginning;
+               Put (Item.Beginning);
             end if;
 
             --  A marker such as <|im_start|> is one token, not the dozen
@@ -1132,11 +1175,7 @@ package body Model_Runner.Tokenizer is
                   end if;
 
                   if Ending > 0 then
-                     if Produced < Target'Length then
-                        Produced := Produced + 1;
-                        Target (Target'First + Produced - 1) :=
-                          Token_Id (Marker);
-                     end if;
+                     Put (Token_Id (Marker));
                      From := Ending + 1;
                   else
                      declare
@@ -1149,16 +1188,15 @@ package body Model_Runner.Tokenizer is
                      end;
                   end if;
                end;
+
+               exit when Refused;
             end loop;
 
-            if Add_End and then Item.Ending /= No_Token
-              and then Produced < Target'Length
-            then
-               Produced := Produced + 1;
-               Target (Target'First + Produced - 1) := Item.Ending;
+            if Add_End and then Item.Ending /= No_Token then
+               Put (Item.Ending);
             end if;
 
-            Last := Produced;
+            Last := (if Refused then 0 else Produced);
             return;
          end;
       end if;

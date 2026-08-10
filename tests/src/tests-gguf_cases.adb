@@ -18,6 +18,7 @@ with Model_Runner.UTF8;
 with Model_Runner.Tokenizer;
 with Model_Runner.Llama;
 
+with BPE_Vocabulary;
 with Fixtures;
 with Fuzzing;
 
@@ -2344,6 +2345,217 @@ package body Tests.GGUF_Cases is
 
    end Structural_Refusals_Report_Themselves;
 
+   --  The byte-pair tokenizer, and the five rules that cut text for it.
+   --
+   --  The suite had no byte-pair vocabulary at all: every tokenizer test
+   --  built a `llama` one, so the merge table, the byte-to-character mapping
+   --  and all five cutting rules ran nowhere, while the support matrix marked
+   --  those rows implemented under a definition that requires coverage.
+   --
+   --  The rules differ in what may lead a run of letters and in how digits
+   --  are grouped, and the differences do not show in the decoded text -- the
+   --  tokens read back as the same string either way and mean something else
+   --  to the model. So the check is on the identifiers, and the vocabulary is
+   --  built so that the five rules give five different answers on two short
+   --  strings. Anything less would pass on a reader that carried one rule and
+   --  answered to five names.
+   procedure Byte_Pair_Cutting_Follows_The_Named_Rule
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+      use type Vocab.Token_Id;
+      use type Vocab.Model_Kind;
+
+      Tab : constant String := [1 => Character'Val (16#09#)];
+
+      --  Encode one string under one rule and report the identifiers.
+      function Encoded (Pre : String; Text : String) return String is
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+         Tokens : Vocab.Token_Array (1 .. 32);
+         Last   : Natural;
+         Result : String (1 .. 128);
+         Used   : Natural := 0;
+
+         procedure Add (Value : String) is
+         begin
+            Result (Used + 1 .. Used + Value'Length) := Value;
+            Used := Used + Value'Length;
+         end Add;
+      begin
+         BPE_Vocabulary.Build (Pre, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse), "the byte-pair fixture did not parse");
+
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the byte-pair vocabulary did not load under " & Pre & ": "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Vocab.Kind (Words) = Vocab.Kind_BPE,
+                 "the vocabulary did not load as byte-pair under " & Pre);
+
+         Vocab.Encode (Words, Text, False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "encoding failed under " & Pre & ": "
+                 & E.Error_Code'Image (Status.Code));
+
+         for Index in 1 .. Last loop
+            Add ((if Index = 1 then "" else " "));
+            Add (Model_Runner.Text.Trim (Vocab.Token_Id'Image
+                                         (Tokens (Index))));
+         end loop;
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+         return Result (1 .. Used);
+      end Encoded;
+
+      --  Compare one rule's answer against what the rule says it must be.
+      procedure Same (Pre, Text, Expected, What : String) is
+         Got : constant String := Encoded (Pre, Text);
+      begin
+         Assert (Got = Expected,
+                 "under " & Pre & ", " & What & " gave (" & Got
+                 & ") where the rule says (" & Expected & ")");
+      end Same;
+
+      --  "ab 1234": the space may lead digits under the first two rules and
+      --  under no other, and the digits run to the end, in threes, or one at
+      --  a time. Three answers, and no two rules that share one here share
+      --  the other below.
+      Numbered : constant String := "ab 1234";
+
+      --  "x<TAB>ab": a tab may lead the word after it under llama3 and qwen2
+      --  and stands alone under the rest.
+      Tabbed : constant String := "x" & Tab & "ab";
+   begin
+      --  An absent key is the original rule, as is naming it either way.
+      Same ("", Numbered, "11 22", "a run of digits");
+      Same ("gpt-2", Numbered, "11 22", "a run of digits");
+      Same ("starcoder", Numbered, "11 22", "a run of digits");
+      Same ("falcon", Numbered, "11 21 8", "a run of digits");
+      Same ("llama3", Numbered, "11 9 15 8", "a run of digits");
+      Same ("llama-bpe", Numbered, "11 9 15 8", "a run of digits");
+      Same ("qwen2", Numbered, "11 9 5 6 7 8", "a run of digits");
+      Same ("smollm", Numbered, "11 9 5 6 7 8", "a run of digits");
+
+      Same ("gpt-2", Tabbed, "4 10 11", "a tab before a word");
+      Same ("falcon", Tabbed, "4 10 11", "a tab before a word");
+      Same ("smollm", Tabbed, "4 10 11", "a tab before a word");
+      Same ("llama3", Tabbed, "4 18", "a tab before a word");
+      Same ("qwen2", Tabbed, "4 18", "a tab before a word");
+
+      --  The merge table is read by rank and not by position in the file.
+      --  " ab" can be cut into a space and "ab" or into the single piece the
+      --  table names, and which one happens is decided by the rank of "a b"
+      --  against the rank of the two that build the whole -- the fixture puts
+      --  "a b" last for exactly this.
+      Same ("gpt-2", "x ab", "4 13", "a merge decided by rank");
+      Same ("gpt-2", "abc", "1 23", "a merge decided by rank");
+      Same ("falcon", "x ab", "4 13", "a merge decided by rank");
+      Same ("smollm", "x ab", "4 13", "a merge decided by rank");
+      Same ("llama3", "x ab", "4 13", "a merge decided by rank");
+      Same ("qwen2", "x ab", "4 13", "a merge decided by rank");
+
+      --  A buffer too small for the answer is reported rather than filled
+      --  as far as it goes.
+      --
+      --  This road wrote into the buffer under a test for room and did
+      --  nothing when there was none, so a cramped caller got a short answer
+      --  and a success. The SentencePiece road reports MR-TOK-0013 for the
+      --  same thing and has done since it was written; the two were told
+      --  apart by an independent reader, not by a test, because no test came
+      --  down here at all.
+      declare
+         Image   : B.Byte_Array_Access;
+         Item    : Containers.Container;
+         Words   : Vocab.Vocabulary;
+         Parse   : E.Error_Info;
+         Status  : E.Error_Info;
+         Cramped : Vocab.Token_Array (1 .. 2);
+         Last    : Natural;
+      begin
+         BPE_Vocabulary.Build ("gpt-2", Image);
+         Parse_Image (Image.all, Item, Parse);
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status), "the byte-pair vocabulary did not load");
+
+         Vocab.Encode
+           (Words, "ab 1234 ab 1234", False, False, Cramped, Last, Status);
+         Assert (Status.Code = E.Tokenizer_Buffer_Too_Small,
+                 "a byte-pair buffer too small for the tokens was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+
+      --  Text the vocabulary cannot represent at all.
+      --
+      --  A byte-level vocabulary carries a piece for every one of the 256
+      --  stand-in characters, so a piece with no identifier cannot happen to
+      --  a file that was written properly -- and a file that was not is what
+      --  this program exists to survive. It used to be dropped, which
+      --  deleted part of the caller's own prompt without saying so. The
+      --  fixture carries no piece for an apostrophe, so a contraction is
+      --  exactly that case.
+      declare
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+         Tokens : Vocab.Token_Array (1 .. 32);
+         Last   : Natural;
+      begin
+         BPE_Vocabulary.Build ("gpt-2", Image);
+         Parse_Image (Image.all, Item, Parse);
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status), "the byte-pair vocabulary did not load");
+
+         Vocab.Encode (Words, "ab's", False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "text with no piece of its own was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Last = 3,
+                 "text the vocabulary cannot spell was dropped rather than"
+                 & " marked unknown:" & Natural'Image (Last)
+                 & " tokens where three were due");
+         Assert (Tokens (2) = 0 and then Tokens (3) = 0,
+                 "the unknown token did not stand in for what has no piece");
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+
+      --  A vocabulary naming a rule this does not implement is refused by
+      --  name rather than cut by the wrong one.
+      declare
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+      begin
+         BPE_Vocabulary.Build ("deepseek-llm", Image);
+         Parse_Image (Image.all, Item, Parse);
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (Status.Code = E.Tokenizer_Unsupported_Model,
+                 "a cutting rule this does not implement was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+   end Byte_Pair_Cutting_Follows_The_Named_Rule;
+
    --  Every refusal the tokenizer can give, reported by name.
    --
    --  The vocabulary is the largest attacker-controlled structure in a model
@@ -4596,6 +4808,9 @@ package body Tests.GGUF_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Byte_Pair_Cutting_Follows_The_Named_Rule'Access,
+         "the byte-pair tokenizer cuts by the rule the vocabulary names");
       Register_Routine
         (T, Fixture_Q4_K_Round_Trips'Access,
          "every fixture encoder is the inverse of the engine's reader");

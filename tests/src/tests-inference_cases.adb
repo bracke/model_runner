@@ -20,6 +20,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Tokenizer;
 
 with Conformance;
+with BPE_Vocabulary;
 with Reference_Tokenizer;
 with Tiny_Model;
 
@@ -1215,6 +1216,121 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Tokenizer_Matches_An_Independent_One;
 
+   --  The same comparison for a byte-pair vocabulary, under every rule.
+   --
+   --  The reader written from the description covers both halves of the
+   --  tokenizer or it covers neither: the byte-pair half decides a merge by
+   --  rank rather than by score and cuts the text before merging at all, so
+   --  agreement on one says nothing about the other. This runs the same
+   --  strings under all five cutting rules, which is thirty comparisons of
+   --  identifiers against a reader that shares no code with the engine.
+   procedure Byte_Pair_Matches_An_Independent_One
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Reference_Tokenizer.Model_Kind;
+
+      Tab : constant String := [1 => Character'Val (16#09#)];
+
+      type Case_Text is access constant String;
+      Rules : constant array (1 .. 5) of Case_Text :=
+        [new String'("gpt-2"),
+         new String'("falcon"),
+         new String'("smollm"),
+         new String'("llama3"),
+         new String'("qwen2")];
+
+      --  Text that reaches every part of the rule: a bare word, a word whose
+      --  merges are decided by rank rather than by position, a word led by a
+      --  space, a tab before a word, runs of digits of each length the three
+      --  groupings tell apart, and a contraction.
+      Cases : constant array (1 .. 7) of Case_Text :=
+        [new String'("ab"),
+         new String'("abc"),
+         new String'("x ab"),
+         new String'("x" & Tab & "ab"),
+         new String'("ab 1234"),
+         new String'("x 12 abc"),
+         new String'("ab's 4321")];
+   begin
+      for Rule of Rules loop
+         declare
+            Image  : B.Byte_Array_Access;
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Loaded : Boolean;
+         begin
+            BPE_Vocabulary.Build (Rule.all, Image);
+
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Words  : Vocab.Vocabulary;
+               Second : Reference_Tokenizer.Vocabulary;
+            begin
+               Containers.Reader.Parse (Parsed, Source, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the byte-pair fixture did not parse");
+
+               Vocab.Load (Words, Parsed, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the engine did not read the byte-pair vocabulary");
+
+               Reference_Tokenizer.Load (Second, Parsed, Loaded);
+               Assert (Loaded,
+                       "the reference did not read the byte-pair vocabulary");
+               Assert (Reference_Tokenizer.Kind (Second)
+                       = Reference_Tokenizer.Byte_Pair,
+                       "the reference read it as something else");
+
+               for Which of Cases loop
+                  declare
+                     Mine     : Vocab.Token_Array (1 .. 64);
+                     Mine_N   : Natural;
+                     Theirs   : Reference_Tokenizer.Token_Vector (1 .. 64);
+                     Theirs_N : Natural;
+                  begin
+                     Vocab.Encode
+                       (Words, Which.all, False, False, Mine, Mine_N, Status);
+                     Assert (E.Is_Ok (Status),
+                             "the engine refused """ & Which.all
+                             & """ under " & Rule.all & ": "
+                             & E.Error_Code'Image (Status.Code));
+
+                     Reference_Tokenizer.Encode
+                       (Second, Which.all, False, Theirs, Theirs_N);
+
+                     Assert (Mine_N = Theirs_N,
+                             "under " & Rule.all
+                             & " the two disagree on how many tokens """
+                             & Which.all & """ makes:"
+                             & Natural'Image (Mine_N) & " against"
+                             & Natural'Image (Theirs_N));
+
+                     for Index in 1 .. Natural'Min (Mine_N, Theirs_N) loop
+                        Assert (Integer (Mine (Index)) = Theirs (Index),
+                                "under " & Rule.all
+                                & " the two disagree on token"
+                                & Natural'Image (Index) & " of """
+                                & Which.all & """:"
+                                & Vocab.Token_Id'Image (Mine (Index))
+                                & " against"
+                                & Integer'Image (Theirs (Index)));
+                     end loop;
+                  end;
+               end loop;
+
+               Reference_Tokenizer.Close (Second);
+               Vocab.Close (Words);
+               Containers.Close (Parsed);
+            end;
+
+            B.Free (Image);
+         end;
+      end loop;
+   end Byte_Pair_Matches_An_Independent_One;
+
    procedure Refused_Generation_Names_Its_Reason
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1282,6 +1398,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Tokenizer_Matches_An_Independent_One'Access,
          "the tokenizer agrees with one written from the description");
+      Register_Routine
+        (T, Byte_Pair_Matches_An_Independent_One'Access,
+         "the byte-pair tokenizer agrees with one written from the "
+         & "description");
       Register_Routine
         (T, Model_Prepares'Access,
          "the tiny model prepares and reports its configuration");

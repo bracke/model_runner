@@ -235,15 +235,31 @@ figure copied here to go stale.
 
 That establishes the *arithmetic* is right.
 
-The tokenizer has a second reader of its own: `Reference_Tokenizer`, written
-from the description in this document rather than from the engine's code. It
-reads the vocabulary out of the container, replaces spaces with the word
-marker, splits into UTF-8 characters and merges the best-scoring adjacent pair
-until none is left, looking every piece up by scanning. The suite runs both
-over a set of strings on the committed fixture and compares identifier for
-identifier. Two of those strings exist because a reader that merged the
-*leftmost* pair instead of the best-scoring one agreed with the engine on all
-the others.
+Both tokenizers have a second reader of their own: `Reference_Tokenizer`,
+written from the description in this document rather than from the engine's
+code, looking every piece up by scanning where the engine hashes.
+
+For a SentencePiece vocabulary it replaces spaces with the word marker, splits
+into UTF-8 characters and merges the best-scoring adjacent pair until none is
+left. For a byte-pair one it cuts the text by the rule the vocabulary names,
+rewrites each byte as the character that stands for it, and merges by rank
+within each piece. The suite runs both readers over a set of strings on
+committed fixtures and compares identifier for identifier — for byte-pair,
+under all five cutting rules.
+
+The strings were chosen against wrong readers rather than by inspection. Two
+of the SentencePiece cases exist because a reader that merged the *leftmost*
+pair instead of the best-scoring one agreed with the engine on all the others;
+`"abc"` is in the byte-pair set for the same reason, against a reader that
+merged by position rather than by rank.
+
+Writing the byte-pair reader is also what found two defects on that road,
+which no test reached because the suite had no byte-pair vocabulary at all: a
+buffer too small for the answer was filled as far as it went and reported
+success, where the SentencePiece road raises `MR-TOK-0013`; and a piece the
+vocabulary could not spell was dropped, deleting part of the caller's own
+prompt without saying so. Both are fixed, and the second is what `MR-TOK-0014`
+now reports.
 
 What a reference runtime adds beyond that is agreement on the *conventions* at
 a scale a fixture cannot reach: tokenization of real text against a vocabulary

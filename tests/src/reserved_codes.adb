@@ -18,7 +18,6 @@ package body Reserved_Codes is
             | E.IO_Output_Closed
             | E.IO_Seek_Failed
             | E.GGUF_Unsupported_Tensor_Type
-            | E.Tokenizer_Missing_Byte_Fallback
             | E.Template_Unsupported_Role
             | E.Arch_Missing_Metadata
             | E.Arch_Invalid_Metadata

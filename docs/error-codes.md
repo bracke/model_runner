@@ -104,7 +104,7 @@ ordinal is never reused, not because they might appear.
 | `MR-TOK-0011` | `error.tokenizer.input_too_long` | recovery_resource_limited | 3 | raised |
 | `MR-TOK-0012` | `error.tokenizer.invalid_utf8` | recovery_none | 3 | raised |
 | `MR-TOK-0013` | `error.tokenizer.buffer_too_small` | recovery_none | 3 | raised |
-| `MR-TOK-0014` | `error.tokenizer.missing_byte_fallback` | recovery_unsupported | 4 | reserved |
+| `MR-TOK-0014` | `error.tokenizer.missing_byte_fallback` | recovery_unsupported | 4 | raised |
 
 ## TMPL
 
