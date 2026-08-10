@@ -1,6 +1,6 @@
 with Model_Runner.Errors;
 
---  Diagnostics the program raises that no test reaches.
+--  Diagnostics the program raises that no test names.
 --
 --  Reserved_Codes names the codes nothing raises at all, and the repository
 --  checks hold that list in both directions. Between "declared" and "raised"
@@ -17,6 +17,16 @@ with Model_Runner.Errors;
 --  This is the list that remains, each with why it is not reached, and the
 --  checks hold it in both directions: a code that becomes tested fails until
 --  it is taken off, and one that stops being tested fails until it is put on.
+--
+--  What the check measures is naming, not reaching: whether a test source
+--  writes the code's name outside a comment. That is a proxy, and it is the
+--  strongest one available without running under coverage. It errs towards
+--  saying a code is reached -- naming one in an allowlist counts, and
+--  Tokenizer_Missing_Byte_Fallback sat on the reached side for exactly that
+--  reason, named once in the text-fuzzing campaign's list of codes it will
+--  accept and caused by nothing. A test reaches it now. The lesson is that
+--  this list going empty would not mean every refusal has been made to
+--  happen, and nobody should read it that way.
 --
 --  Task safety: pure.
 package Unreached_Codes is

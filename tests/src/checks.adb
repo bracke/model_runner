@@ -4285,6 +4285,60 @@ package body Checks is
       --  one of these checks weighs every file in the tree, so a generated
       --  config or a fixture the suite wrote changes it by a few either way.
       --  Well under the count so that ordinary work is not an event, and far
+      --  No host call is bound straight from the tests crate.
+      --
+      --  A host call is reached from a directory the project file picks per
+      --  host -- src/platform in the library, tests/src/platform here, which
+      --  is how raise_interrupt has a body for each. Anywhere else in the
+      --  tests crate is one directory built for whatever machine you are on,
+      --  so an import bound by its POSIX name links here and nowhere else,
+      --  in the crate whose own checks demand that every host body compile
+      --  for every host.
+      --
+      --  That happened. Captured_Output bound open, dup, dup2 and close by
+      --  name, in tests/src, where there is no per-host anything. Hostkit
+      --  already had the portable form: Assign is dup2 on POSIX and
+      --  SetStdHandle on Windows, and says so in its own comment. So the
+      --  rule is not that a test may never reach the host; it is that it
+      --  does so from a directory the project file chooses, or through
+      --  hostkit, and never by naming a symbol in the portable half.
+      declare
+         procedure Visit_Binding (Relative : String) is
+            Text : constant String := Contents (Relative);
+
+            function Holds (Word : String) return Boolean is
+            begin
+               for Index in Text'First .. Text'Last - Word'Length + 1 loop
+                  if Text (Index .. Index + Word'Length - 1) = Word then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            end Holds;
+         begin
+            --  Not this file: it names the pragma in the string it compares
+            --  against, which is not a binding. And not the per-host
+            --  directories, which are where a binding belongs.
+            if Relative = "tests/src/checks.adb"
+              or else T.Starts_With (Relative, "tests/src/platform/")
+            then
+               return;
+            end if;
+
+            Result.Performed := Result.Performed + 1;
+
+            if Holds ("External_Name") or else Holds ("Convention => C") then
+               Fail (Relative & " binds a host call by name; the tests crate "
+                     & "is one directory for every host, so that links here "
+                     & "and nowhere else -- reach the host through hostkit");
+            end if;
+         end Visit_Binding;
+
+         procedure Scan_Bindings is new For_Each_Source (Visit_Binding);
+      begin
+         Scan_Bindings ("tests/src");
+      end;
+
       --  A test that can run the command can catch what it writes.
       --
       --  Generated text goes through the raw stream of
@@ -4391,6 +4445,19 @@ package body Checks is
             new String'("unsupported"),
             new String'("windows")];
 
+         --  The two trees that hold per-host bodies. The tests crate has one
+         --  too -- raise_interrupt, a body for each host -- and it was left
+         --  out of this walk, which is how a POSIX-only binding got into the
+         --  crate that holds this check.
+         type Tree is record
+            Root  : Name_Access;
+            Under : Name_Access;
+         end record;
+
+         Trees : constant array (1 .. 2) of Tree :=
+           [(new String'("src/platform"), new String'("src/library")),
+            (new String'("tests/src/platform"), new String'("tests/src"))];
+
          Parsed : Natural := 0;
       begin
          Result.Performed := Result.Performed + 1;
@@ -4402,70 +4469,74 @@ package body Checks is
          else
             Ada.Directories.Create_Path (Scratch);
 
-            for Host of Hosts loop
-               declare
-                  Where  : constant String :=
-                    Full & "/src/platform/" & Host.all;
-                  Search : Ada.Directories.Search_Type;
-                  Item   : Ada.Directories.Directory_Entry_Type;
-               begin
-                  if Ada.Directories.Exists (Where) then
-                     Ada.Directories.Start_Search (Search, Where, "*.ad[sb]");
+            for Each of Trees loop
+               for Host of Hosts loop
+                  declare
+                     Where  : constant String :=
+                       Full & "/" & Each.Root.all & "/" & Host.all;
+                     Search : Ada.Directories.Search_Type;
+                     Item   : Ada.Directories.Directory_Entry_Type;
+                  begin
+                     if Ada.Directories.Exists (Where) then
+                        Ada.Directories.Start_Search (Search, Where, "*.ad[sb]");
 
-                     while Ada.Directories.More_Entries (Search) loop
-                        Ada.Directories.Get_Next_Entry (Search, Item);
+                        while Ada.Directories.More_Entries (Search) loop
+                           Ada.Directories.Get_Next_Entry (Search, Item);
 
-                        declare
-                           Name : constant String :=
-                             Ada.Directories.Simple_Name (Item);
-                           Args : Project_Tools.Processes.Argument_Vectors
-                                    .Vector;
-                        begin
-                           Args.Append
-                             (Ada.Strings.Unbounded.To_Unbounded_String
-                                ("-c"));
-                           Args.Append
-                             (Ada.Strings.Unbounded.To_Unbounded_String
-                                ("-gnatc"));
-                           Args.Append
-                             (Ada.Strings.Unbounded.To_Unbounded_String
-                                ("-I"));
-                           Args.Append
-                             (Ada.Strings.Unbounded.To_Unbounded_String
-                                (Full & "/src/library"));
-                           Args.Append
-                             (Ada.Strings.Unbounded.To_Unbounded_String
-                                ("-gnat2022"));
-                           Args.Append
-                             (Ada.Strings.Unbounded.To_Unbounded_String
-                                ("-x"));
-                           Args.Append
-                             (Ada.Strings.Unbounded.To_Unbounded_String
-                                ("ada"));
-                           Args.Append
-                             (Ada.Strings.Unbounded.To_Unbounded_String
-                                (Where & "/" & Name));
+                           declare
+                              Name : constant String :=
+                                Ada.Directories.Simple_Name (Item);
+                              Args : Project_Tools.Processes.Argument_Vectors
+                                       .Vector;
+                           begin
+                              Args.Append
+                                (Ada.Strings.Unbounded.To_Unbounded_String
+                                   ("-c"));
+                              Args.Append
+                                (Ada.Strings.Unbounded.To_Unbounded_String
+                                   ("-gnatc"));
+                              Args.Append
+                                (Ada.Strings.Unbounded.To_Unbounded_String
+                                   ("-I"));
+                              Args.Append
+                                (Ada.Strings.Unbounded.To_Unbounded_String
+                                   (Full & "/" & Each.Under.all));
+                              Args.Append
+                                (Ada.Strings.Unbounded.To_Unbounded_String
+                                   ("-gnat2022"));
+                              Args.Append
+                                (Ada.Strings.Unbounded.To_Unbounded_String
+                                   ("-x"));
+                              Args.Append
+                                (Ada.Strings.Unbounded.To_Unbounded_String
+                                   ("ada"));
+                              Args.Append
+                                (Ada.Strings.Unbounded.To_Unbounded_String
+                                   (Where & "/" & Name));
 
-                           Result.Performed := Result.Performed + 1;
-                           Parsed := Parsed + 1;
+                              Result.Performed := Result.Performed + 1;
+                              Parsed := Parsed + 1;
 
-                           if Project_Tools.Processes.Run_Status
-                                (Label   => "parse " & Host.all & "/" & Name,
-                                 Dir     => Scratch,
-                                 Program => Compiler,
-                                 Args    => Args,
-                                 Quiet   => True) /= 0
-                           then
-                              Fail ("src/platform/" & Host.all & "/" & Name
-                                    & " does not compile; it would fail on "
-                                    & "that host and nowhere else");
-                           end if;
-                        end;
-                     end loop;
+                              if Project_Tools.Processes.Run_Status
+                                   (Label   => "parse " & Each.Root.all & "/"
+                                               & Host.all & "/" & Name,
+                                    Dir     => Scratch,
+                                    Program => Compiler,
+                                    Args    => Args,
+                                    Quiet   => True) /= 0
+                              then
+                                 Fail (Each.Root.all & "/" & Host.all & "/"
+                                       & Name
+                                       & " does not compile; it would fail on "
+                                       & "that host and nowhere else");
+                              end if;
+                           end;
+                        end loop;
 
-                     Ada.Directories.End_Search (Search);
-                  end if;
-               end;
+                        Ada.Directories.End_Search (Search);
+                     end if;
+                  end;
+               end loop;
             end loop;
 
             --  And that each host gets exactly one body for each spec.

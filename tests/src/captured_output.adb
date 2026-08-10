@@ -1,41 +1,29 @@
 with Ada.Text_IO;
-with Interfaces.C;
-with Interfaces.C.Strings;
+
+with Hostkit.Descriptors;
 
 with Project_Tools.Files;
 
 package body Captured_Output is
 
-   use type Interfaces.C.int;
+   package D renames Hostkit.Descriptors;
 
-   --  The three host calls this needs, bound directly. Binding to a host
-   --  call is not writing in another language, which is how the library
-   --  itself reaches mmap and isatty.
-   function C_Open
-     (Path : Interfaces.C.Strings.chars_ptr;
-      Flags : Interfaces.C.int;
-      Mode  : Interfaces.C.int) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "open";
+   use type D.Descriptor;
 
-   function C_Close (Descriptor : Interfaces.C.int) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "close";
-
-   function C_Dup (Descriptor : Interfaces.C.int) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "dup";
-
-   function C_Dup2 (From, To : Interfaces.C.int) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "dup2";
-
-   --  O_WRONLY or O_CREAT or O_TRUNC, and mode 0644, as Linux and macOS
-   --  spell them. A host that spells them otherwise fails to open and says
-   --  so through Took_Effect rather than writing somewhere unexpected.
-   Write_Create_Truncate : constant Interfaces.C.int := 8#1101#;
-   Owner_Read_Write      : constant Interfaces.C.int := 8#644#;
-
-   Standard_Output : constant Interfaces.C.int := 1;
-
-   Saved   : Interfaces.C.int := -1;
-   Opened  : Interfaces.C.int := -1;
+   --  Where standard output goes while a capture is open, and where it came
+   --  from. Both are host descriptors rather than Ada objects, because what
+   --  has to move is the descriptor: Ada.Text_IO.Set_Output moves
+   --  Current_Output, and the stream generated text is written through is
+   --  Standard_Output, which is not the same thing.
+   --
+   --  The first version bound open, dup, dup2 and close by their POSIX
+   --  names. That worked here and would not have linked on Windows, where
+   --  they are spelled with a leading underscore -- in the crate whose own
+   --  checks demand that every host body compile for every host. Hostkit
+   --  already knew the answer: Assign is dup2 on POSIX and SetStdHandle on
+   --  Windows, and says so in its own comment.
+   Saved   : D.Descriptor := D.Invalid;
+   Opened  : D.Descriptor := D.Invalid;
    Working : Boolean := False;
    Worked  : Boolean := False;
    Where   : String (1 .. 512);
@@ -46,8 +34,6 @@ package body Captured_Output is
    ----------
 
    procedure Open (Path : String) is
-      Name : Interfaces.C.Strings.chars_ptr :=
-        Interfaces.C.Strings.New_String (Path);
    begin
       --  One at a time. This holds a single saved descriptor, so a second
       --  Open inside the first would overwrite it and the first Close would
@@ -64,10 +50,7 @@ package body Captured_Output is
       Where_L := Natural'Min (Path'Length, Where'Length);
       Where (1 .. Where_L) := Path (Path'First .. Path'First + Where_L - 1);
 
-      Opened := C_Open (Name, Write_Create_Truncate, Owner_Read_Write);
-      Interfaces.C.Strings.Free (Name);
-
-      if Opened < 0 then
+      if not D.Open_File (Path, D.Open_Write_Truncate, Opened) then
          return;
       end if;
 
@@ -75,24 +58,15 @@ package body Captured_Output is
       --  output and not to the file about to take its place.
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
 
-      Saved := C_Dup (Standard_Output);
-      if Saved < 0 then
-         if C_Close (Opened) < 0 then
-            null;
-         end if;
-         Opened := -1;
+      Saved := D.Duplicate (D.Standard_Output);
+      if Saved = D.Invalid then
+         D.Close (Opened);
          return;
       end if;
 
-      if C_Dup2 (Opened, Standard_Output) < 0 then
-         if C_Close (Saved) < 0 then
-            null;
-         end if;
-         if C_Close (Opened) < 0 then
-            null;
-         end if;
-         Saved := -1;
-         Opened := -1;
+      if not D.Assign (Opened, D.Stream_Output) then
+         D.Close (Saved);
+         D.Close (Opened);
          return;
       end if;
 
@@ -105,6 +79,7 @@ package body Captured_Output is
    -----------
 
    function Close return String is
+      Put_Back : Boolean;
    begin
       if not Working then
          return "";
@@ -112,28 +87,19 @@ package body Captured_Output is
 
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
 
-      if C_Dup2 (Saved, Standard_Output) < 0 then
-         null;
-      end if;
+      Put_Back := D.Assign (Saved, D.Stream_Output);
+      pragma Unreferenced (Put_Back);
 
-      if C_Close (Saved) < 0 then
-         null;
-      end if;
-
-      if C_Close (Opened) < 0 then
-         null;
-      end if;
-
-      Saved := -1;
-      Opened := -1;
+      D.Close (Saved);
+      D.Close (Opened);
       Working := False;
 
       return Project_Tools.Files.Read_Raw_File (Where (1 .. Where_L));
    end Close;
 
-   ------------------
+   -----------------
    -- Took_Effect --
-   ------------------
+   -----------------
 
    function Took_Effect return Boolean is (Worked);
 

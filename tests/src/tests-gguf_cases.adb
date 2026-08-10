@@ -2637,6 +2637,61 @@ package body Tests.GGUF_Cases is
          B.Free (Image);
       end;
 
+      --  Text a byte-pair vocabulary cannot spell, and no unknown token to
+      --  stand in for it.
+      --
+      --  A byte-level vocabulary carries a piece for every one of the 256
+      --  stand-in characters, so this cannot happen to a file written
+      --  properly -- and a file that was not is what this program exists to
+      --  survive. The refusal was added when the drop it replaced was found,
+      --  and no test made it happen: every fixture had an unknown token, so
+      --  the branch that reports this was never taken. It was named in one
+      --  place, an allowlist in the text-fuzzing campaign, which is naming
+      --  and not reaching.
+      declare
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Item    : Containers.Container;
+         Words   : Vocab.Vocabulary;
+         Parse   : E.Error_Info;
+         Status  : E.Error_Info;
+         Tokens  : Vocab.Token_Array (1 .. 16);
+         Last    : Natural;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "gpt2");
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, 2);
+         Fixtures.String_Element (Builder, "a");
+         Fixtures.String_Element (Builder, "b");
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.merges", G.Value_String, 1);
+         Fixtures.String_Element (Builder, "a b");
+         Fixtures.End_Array (Builder);
+         Fixtures.Build (Builder, Image);
+
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse), "the fallback-less fixture did not parse");
+
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a vocabulary with no unknown token was refused at load: "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  "z" has no piece and there is nothing to put in its place.
+         Vocab.Encode (Words, "z", False, False, Tokens, Last, Status);
+         Assert (Status.Code = E.Tokenizer_Missing_Byte_Fallback,
+                 "text the vocabulary cannot spell, with nothing to stand in "
+                 & "for it, was accepted: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+
       --  A vocabulary naming a rule this does not implement is refused by
       --  name rather than cut by the wrong one.
       declare
