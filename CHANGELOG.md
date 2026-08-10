@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The release checklist checks itself. `check_all_selftest` runs the
+  checklist from a directory that is not a model_runner tree and requires it
+  to refuse -- the one thing a checklist cannot establish by passing, since a
+  checklist that accepted anything would pass too. It was written, declared
+  as an executable, and called by nothing: not by the checklist, not by the
+  README, not by any test. It runs as the checklist's last step now.
+
+  It also asks *why* the run failed. A non-zero status was not enough: run
+  outside a tree, the checklist fails at the toolchain check as well, so
+  taking the working-directory guard out left the self-test passing. It reads
+  the refusal message now, with standard error merged in, because a
+  diagnostic goes there and the first version looked for it in an empty
+  string.
+
+- The tools crate is held to the rules the rest of the repository is held to.
+  Of the twenty-seven directory walks in the checks it appeared in two, line
+  length and GNATdoc, and in none of the rules about what may be written --
+  although it holds the program that gates every release, and the
+  specification calls every piece of project tooling production code. It is
+  now scanned for hand-written instructions and for host calls bound by name.
+
 - Both tokenizers are compared against a reader written from the description
   rather than from the code. The forward pass has had one since the
   beginning; the tokenizer had three recordings from `llama.cpp`, each
@@ -81,6 +102,13 @@ Keep a Changelog and the project uses semantic versioning.
 - The core count that sets the default worker count keeps a contract, and the
   rule its Linux body applies to each line it reads is somewhere a test can
   hand it a string.
+
+- The changelog itself is checked, against git: no commit touching the
+  library, the message catalog or the release gate may be newer than the
+  newest commit touching this file. Committing both together satisfies it, so
+  the rule in practice is that a change and its entry arrive together. It
+  watched `src` alone at first, which left every user-visible string
+  uncovered -- a reworded diagnostic is a notable change by any reading.
 
 - Conformance hands a prompt over in several calls as well as one: 1170
   sequences. A prompt longer than `--batch-size` is evaluated in chunks, and

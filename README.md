@@ -618,6 +618,13 @@ raise everybody reaches. Ten of the seventeen are now reached; the rest are on
 the list with a reason. Both lists are held in both directions. The checks are
 negative-tested: injecting a violation makes them fail.
 
+They also hold the changelog against git — no commit touching the library, the
+message catalog or the release gate may be newer than the newest commit
+touching `CHANGELOG.md`, so a change and its entry arrive together — and the
+release checklist ends by running `check_all_selftest`, which requires the
+checklist to refuse a directory that is not a model_runner tree, and to refuse
+it for that reason rather than by failing somewhere else.
+
 They also compile every host body, not only the two a build uses — in the
 tests crate as well as the library, which has its own per-host directories and
 had been left out of the walk. And a host call may only be bound by name from
