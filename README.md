@@ -402,6 +402,39 @@ the first line.
 
 ### Fuzzing
 
+`tests fuzz` runs two campaigns: one over model files, one over the text a
+caller supplies. Both are seeded, so a failure replays exactly.
+
+#### Text
+
+The second is `Text_Fuzzing`, and it exists because everything fuzzed before
+it was a container. A prompt file, standard input and a command-line value are
+untrusted too, and they reach `Model_Runner.Tokenizer.Encode` whole. A case
+fails when the call raises, when it reports a code the interface does not
+document, when it says it succeeded and hands back a token the vocabulary does
+not hold, or when it takes longer than the limit for text of its size — which
+is 50 ms plus 20 µs a character, roughly a hundred times what encoding
+actually costs.
+
+The clock is there because the defect that prompted this could not have been
+found any other way. `Encode` looks for a control token wherever the text
+opens a bracket, and the scan reached the longest token the format allows —
+1024 bytes — at every one of them. Sixty thousand brackets, well inside the
+documented input limit, took **25.5 seconds** where the same length of
+ordinary text took **0.039**. Nothing was wrong with the answer. The scan is
+now bounded by the longest marker the vocabulary actually holds, which for the
+fixture is four bytes and for a real vocabulary about seventeen, and the same
+prompt takes 0.051 seconds.
+
+The longest cases are drawn from an alphabet where one character in two is a
+bracket, because a cost paid per bracket is invisible in text where one
+character in twenty is one, and drawing that shape by chance would need a
+campaign far longer than the release gate can afford. Against the unbounded
+scan the gate reports forty slow cases and a worst of 7054 ms; against the
+bounded one, none and 16 ms.
+
+#### Model files
+
 `tests fuzz` mutates the synthetic container — truncation at an arbitrary
 offset, single-bit flips, 64-bit and 32-bit field overwrites, and byte-run
 splices — and feeds it to the whole load path: the parser, the tokenizer, the

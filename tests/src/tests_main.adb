@@ -35,6 +35,7 @@ with Pristine;
 with Speed_Run;
 with Tool_Commands;
 with Fuzzing;
+with Text_Fuzzing;
 with Tiny_Model;
 
 --  Entry point of the model_runner test and tooling executable.
@@ -179,6 +180,33 @@ begin
             & ", prepared" & Natural'Image (Result.Prepared)
             & ", ran" & Natural'Image (Result.Ran));
 
+         --  The other untrusted input. Containers are what a model file is;
+         --  a prompt is what everybody else is, and it reaches the tokenizer
+         --  whole. Both roads are run.
+         declare
+            Text : Text_Fuzzing.Report;
+         begin
+            Text_Fuzzing.Run (Interfaces.Unsigned_64 (Seed), Cases, Text);
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "text fuzz seed" & Natural'Image (Seed)
+               & " cases" & Natural'Image (Text.Cases)
+               & ": encoded" & Natural'Image (Text.Encoded)
+               & ", refused" & Natural'Image (Text.Refused)
+               & ", escaped" & Natural'Image (Text.Escaped)
+               & ", undocumented" & Natural'Image (Text.Undocumented)
+               & ", out of range" & Natural'Image (Text.Out_Of_Range)
+               & ", slow" & Natural'Image (Text.Slow)
+               & ", worst" & Natural'Image (Text.Worst) & " ms at case"
+               & Natural'Image (Text.Worst_Case));
+
+            if not Text_Fuzzing.Is_Clean (Text)
+              or else not Text_Fuzzing.Reached_The_Merges (Text)
+            then
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            end if;
+         end;
+
          if not Fuzzing.Is_Clean (Result) then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
@@ -282,6 +310,37 @@ begin
                & "campaign checked only the parser");
             Failed := True;
          end if;
+
+         --  The same gate over text, which is the other untrusted input and
+         --  the one nothing fuzzed. It watches the clock as well as the
+         --  outcome: what it was written for was a scan whose cost grew with
+         --  the text times a constant from the file format, which no
+         --  correctness check could have seen.
+         declare
+            Texted : Text_Fuzzing.Report;
+         begin
+            Text_Fuzzing.Run (1, 150, Texted);
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "  text fuzz: cases" & Natural'Image (Texted.Cases)
+               & ", encoded" & Natural'Image (Texted.Encoded)
+               & ", refused" & Natural'Image (Texted.Refused)
+               & ", escaped" & Natural'Image (Texted.Escaped)
+               & ", slow" & Natural'Image (Texted.Slow)
+               & ", worst" & Natural'Image (Texted.Worst) & " ms");
+
+            if not Text_Fuzzing.Is_Clean (Texted) then
+               Failed := True;
+            end if;
+
+            if not Text_Fuzzing.Reached_The_Merges (Texted) then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "  fail: no text case encoded, so the text campaign "
+                  & "checked only the refusals");
+               Failed := True;
+            end if;
+         end;
 
          if Failed then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);

@@ -59,6 +59,7 @@ package body Model_Runner.Tokenizer is
       Item.Unknown := No_Token;
       Item.Byte_Tokens := [others => No_Token];
       Item.Byte_Fallback := False;
+      Item.Longest_Marker := 0;
    exception
       when others =>
          Item.Loaded := False;
@@ -431,6 +432,13 @@ package body Model_Runner.Tokenizer is
             end if;
 
             Item.Entries.Append (Entry_Value);
+
+            if Entry_Value.Class in Class_Control | Class_User_Defined
+              and then Last > 0
+              and then Buffer (1) = '<'
+            then
+               Item.Longest_Marker := Natural'Max (Item.Longest_Marker, Last);
+            end if;
 
             declare
                Text : constant String :=
@@ -899,12 +907,16 @@ package body Model_Runner.Tokenizer is
       Token := No_Token;
       Length := 0;
 
-      if Text (From) /= '<' then
+      if Item.Longest_Marker = 0 or else Text (From) /= '<' then
          return;
       end if;
 
+      --  As far as the longest marker this vocabulary holds and no further.
+      --  The bound used to be Max_Token_Bytes, which is thirty times longer
+      --  than any real marker, and the cost of that fell on whoever wrote
+      --  the text rather than on whoever wrote the file.
       for Reach in reverse 1 .. Natural'Min
-        (Max_Token_Bytes, Text'Last - From + 1)
+        (Item.Longest_Marker, Text'Last - From + 1)
       loop
          declare
             Candidate : constant Token_Id :=

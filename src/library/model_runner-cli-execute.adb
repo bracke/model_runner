@@ -1288,6 +1288,26 @@ package body Model_Runner.CLI.Execute is
                            (L.Capability (Prepared).Kind))]);
                end if;
                Request.Retain_Text := False;
+
+               --  Who puts the beginning token in front.
+               --
+               --  With --raw there is no template, so nothing else can: the
+               --  request asks for one and the vocabulary decides whether it
+               --  wants one, which Generation checks.
+               --
+               --  With a template the template does it. It is handed the
+               --  beginning token's own text and writes it where the model
+               --  expects it, which for some models is not the front -- and
+               --  the tokenizer turns that spelling back into the one token
+               --  it stands for. Asking here as well would put two in front
+               --  of a model that wants one, and a marker that model did not
+               --  ask for moves a logit by nearly two.
+               --
+               --  What follows from that: a model whose template writes no
+               --  beginning token gets none, whatever its add_bos_token
+               --  says. That is the template's answer and this defers to it,
+               --  because the template is the part that knows where in the
+               --  rendered text the token belongs.
                Request.Add_Beginning := Item.Raw;
 
                Gen.Generate

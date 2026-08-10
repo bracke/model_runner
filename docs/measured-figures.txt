@@ -174,3 +174,16 @@ reference 8BAF8A6AF56C8A96 src/library/model_runner-backend-reference.adb src/li
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
+
+# The tokenizer's cost on hostile text, measured with 'model_runner run
+# fixtures/tiny-model.gguf --raw --prompt-file F --max-tokens 1' on a file
+# of 60,000 characters, timed by the shell. Two files: all 'a', and all '<'.
+#
+#   all 'a'   0.039 s
+#   all '<'   25.5 s   before the marker scan was bounded
+#   all '<'   0.051 s  after
+#
+# The prompt is refused for length in every case; the time is spent before
+# that refusal. The README quotes these three. 'tests fuzz' reports the same
+# thing continuously as its worst case in milliseconds, which is what keeps
+# them from going stale without anybody noticing.

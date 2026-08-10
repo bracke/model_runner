@@ -1492,6 +1492,97 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Byte_Pair_Model_Runs_End_To_End;
 
+   --  Exactly one beginning token, whoever put it there.
+   --
+   --  Two paths reach the tokenizer with a prompt. With --raw there is no
+   --  template, the request asks for the beginning token and the vocabulary
+   --  decides whether it wants one. With a template the template writes the
+   --  token's own text, where the model expects it, and the tokenizer turns
+   --  that spelling back into the token -- so the request must not ask as
+   --  well. Whether it does was one uncommented line and no test at all.
+   --
+   --  The cost of getting it wrong is not a rounding difference. A beginning
+   --  marker in front of a model that declares it wants none moved a logit by
+   --  nearly two, where two honest implementations of the same arithmetic
+   --  differ by hundredths; it is written up in docs/reference-runtime.md.
+   procedure One_Beginning_Token_However_It_Arrives
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Image : B.Byte_Array_Access;
+
+      --  How many times the beginning token appears.
+      function Beginnings
+        (Words : Vocab.Vocabulary; Tokens : Vocab.Token_Array) return Natural
+      is
+         Seen : Natural := 0;
+      begin
+         for Token of Tokens loop
+            if Token = Vocab.Beginning_Token (Words) then
+               Seen := Seen + 1;
+            end if;
+         end loop;
+         return Seen;
+      end Beginnings;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Status : E.Error_Info;
+         Tokens : Vocab.Token_Array (1 .. 32);
+         Last   : Natural;
+
+         --  What a template that writes bos_token renders to: the token's
+         --  own text in front of the conversation.
+         Rendered : constant String := "<s>" & "abc";
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         Vocab.Load (Words, Parsed, Status => Status);
+         Assert (E.Is_Ok (Status), "the vocabulary did not load");
+
+         --  The templated path: the request does not ask, the text carries
+         --  it. One beginning token, and it is the first.
+         Vocab.Encode
+           (Words, Rendered, False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status), "a rendered prompt was refused");
+         Assert (Tokens (1) = Vocab.Beginning_Token (Words),
+                 "a rendered prompt did not begin with the beginning token");
+         Assert (Beginnings (Words, Tokens (1 .. Last)) = 1,
+                 "a rendered prompt carried"
+                 & Natural'Image (Beginnings (Words, Tokens (1 .. Last)))
+                 & " beginning tokens where one was due");
+
+         --  The raw path: no template, so the request asks. One again.
+         Vocab.Encode (Words, "abc", True, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status), "a raw prompt was refused");
+         Assert (Tokens (1) = Vocab.Beginning_Token (Words),
+                 "a raw prompt did not begin with the beginning token");
+         Assert (Beginnings (Words, Tokens (1 .. Last)) = 1,
+                 "a raw prompt carried more than one beginning token");
+
+         --  Both at once is what the rule exists to prevent, and it is worth
+         --  saying that the two would in fact collide rather than trusting
+         --  that they would.
+         Vocab.Encode (Words, Rendered, True, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status), "asking twice was refused");
+         Assert (Beginnings (Words, Tokens (1 .. Last)) = 2,
+                 "asking for the beginning token over a prompt that already"
+                 & " spells it did not produce two, so the rule that keeps"
+                 & " them apart is guarding nothing");
+
+         Vocab.Close (Words);
+         Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end One_Beginning_Token_However_It_Arrives;
+
    procedure Refused_Generation_Names_Its_Reason
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1566,6 +1657,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Byte_Pair_Model_Runs_End_To_End'Access,
          "a byte-pair model prepares, evaluates and reads back");
+      Register_Routine
+        (T, One_Beginning_Token_However_It_Arrives'Access,
+         "a prompt carries exactly one beginning token, however it arrives");
       Register_Routine
         (T, Model_Prepares'Access,
          "the tiny model prepares and reports its configuration");

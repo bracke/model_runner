@@ -402,6 +402,10 @@ package body Model_Runner.CLI.Interactive is
            (if L.Capability (Prepared).Supports_Batched
             then Item.Batch_Size
             else 1);
+         --  Never here: a conversation is always rendered through a
+         --  template, and the template is handed the beginning token's text
+         --  and writes it where the model expects it. See the same decision,
+         --  argued, in CLI.Execute.
          Request.Add_Beginning := False;
          Request.Retain_Text := True;
          --  The rendered conversation grows by an appended turn, so the cache

@@ -340,6 +340,18 @@ private
       Byte_Fallback : Boolean := False;
       Merges        : Merge_Maps.Map;
       Cutting       : Cut_Rule := Rule_GPT2;
+
+      --  The longest piece this vocabulary calls a control token or one of
+      --  its author's own and that opens a bracket, which is as far as the
+      --  scan for a marker in the text can ever have to look. Zero when
+      --  there is no such piece, and then the scan does not run at all.
+      --
+      --  It is here because the scan used to reach Max_Token_Bytes at every
+      --  bracket in the text, and text is untrusted: sixty thousand brackets
+      --  -- well inside the documented input limit -- took twenty-five
+      --  seconds where the same length of ordinary text took four
+      --  hundredths.
+      Longest_Marker : Natural := 0;
    end record;
 
    overriding procedure Finalize (Item : in out Vocabulary);
