@@ -9,7 +9,9 @@ with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
 
+with Ada.Strings.Unbounded;
 with Project_Tools.Files;
+with Project_Tools.Processes;
 with Project_Tools.Text;
 with Model_Runner.CLI.Options;
 with Model_Runner.Cancellation;
@@ -2126,59 +2128,111 @@ package body Tests.CLI_Cases is
       --  and --no-mmap is the arrangement where they are read rather than
       --  mapped -- which is also the one where holding them after the copy
       --  was made cost real memory rather than reclaimable pages.
+      --
+      --  Run as a child process, and that is the whole point of the rewrite.
+      --  This used to call the driver in this process with Set_Output aimed
+      --  at a file, which cannot work: generated text is written through the
+      --  raw stream of Ada.Text_IO.Standard_Output, deliberately, so that
+      --  Text_IO cannot touch the bytes -- and Set_Output redirects
+      --  Current_Output, which that stream is not. Every run wrote its text
+      --  to the terminal and the file caught one newline, so all three
+      --  strings were "\n" and the two assertions below compared "\n" with
+      --  "\n". The suite printed the generated text on every run and nobody
+      --  read it as evidence of anything.
+      --
+      --  The second run was not even a repacked one: the option arrived as
+      --  the single argument "--repack f32", which the command refuses as an
+      --  unknown option, and the refusal went to standard error where the
+      --  empty capture hid it.
       declare
-         use Ada.Text_IO;
+         Model  : constant String := "obj/repack-model.gguf";
+         Binary : constant String := "../bin/model_runner";
 
-         Model : constant String := "obj/repack-model.gguf";
+         --  What the command writes on standard output for one run.
+         function Text_Of (First, Second : String) return String is
+            Args   : Project_Tools.Processes.Argument_Vectors.Vector;
+            Status : aliased Integer := 0;
 
-         function Text_Of (Extra : String) return String is
-            Source : Fixed_Arguments;
-            Status : Natural;
-            Handle : File_Type;
+            procedure Add_Word (Word : String) is
+            begin
+               Project_Tools.Processes.Argument_Vectors.Append
+                 (Args, Ada.Strings.Unbounded.To_Unbounded_String (Word));
+            end Add_Word;
          begin
-            Add (Source, "run");
-            Add (Source, Model);
-            Add (Source, "--raw");
-            Add (Source, "--prompt");
-            Add (Source, "ab");
-            Add (Source, "--max-tokens");
-            Add (Source, "6");
-            Add (Source, "--seed");
-            Add (Source, "1");
-            Add (Source, "--temperature");
-            Add (Source, "0");
-            if Extra /= "" then
-               Add (Source, Extra);
+            Add_Word ("run");
+            Add_Word (Model);
+            Add_Word ("--raw");
+            Add_Word ("--prompt");
+            Add_Word ("ab");
+            Add_Word ("--max-tokens");
+            Add_Word ("6");
+            Add_Word ("--seed");
+            Add_Word ("1");
+            Add_Word ("--temperature");
+            Add_Word ("0");
+
+            --  Two arguments, because that is what a command line is.
+            if First /= "" then
+               Add_Word (First);
+            end if;
+            if Second /= "" then
+               Add_Word (Second);
             end if;
 
-            Create (Handle, Out_File, "obj/repack-out.txt");
-            Set_Output (Handle);
+            declare
+               Text : constant String :=
+                 Project_Tools.Processes.Command_Output
+                   (Command   => Binary,
+                    Arguments => Args,
+                    Status    => Status'Access);
             begin
-               Model_Runner.CLI.Driver.Run (Source, Status);
-            exception
-               when others =>
-                  Set_Output (Standard_Output);
-                  Close (Handle);
-                  raise;
+               Assert (Status = 0,
+                       "the command failed with status"
+                       & Integer'Image (Status) & " for '" & First & " "
+                       & Second & "'");
+               return Text;
             end;
-            Set_Output (Standard_Output);
-            Close (Handle);
-
-            return Project_Tools.Files.Read_Raw_File ("obj/repack-out.txt");
          end Text_Of;
       begin
          Tiny_Model.Write (Model, Room => 64);
 
+         Assert (Ada.Directories.Exists (Binary),
+                 "the command is not built at " & Binary & ", so this "
+                 & "comparison cannot be made rather than passing on "
+                 & "nothing");
+
          declare
-            Plain    : constant String := Text_Of ("");
-            Repacked : constant String := Text_Of ("--repack f32");
-            Unmapped : constant String := Text_Of ("--no-mmap");
+            Plain    : constant String := Text_Of ("", "");
+            Repacked : constant String := Text_Of ("--repack", "f32");
+            Unmapped : constant String := Text_Of ("--no-mmap", "");
          begin
+            --  There is text, said outright, and text means more than a
+            --  line ending. Three equal strings are equal whatever they
+            --  hold, and what the old capture caught was a single newline,
+            --  so a length test alone would have passed on it too.
+            declare
+               Real : Natural := 0;
+            begin
+               for Character_Value of Plain loop
+                  if Character_Value not in
+                       Character'Val (10) | Character'Val (13) | ' '
+                  then
+                     Real := Real + 1;
+                  end if;
+               end loop;
+
+               Assert (Real >= 2,
+                       "the command produced" & Natural'Image (Real)
+                       & " characters of text, so the comparisons below "
+                       & "would hold whatever repacking did");
+            end;
+
             Assert (Plain = Repacked,
-                    "repacking changed the text: " & Plain & " against "
-                    & Repacked);
+                    "repacking changed the text: '" & Plain & "' against '"
+                    & Repacked & "'");
             Assert (Plain = Unmapped,
-                    "reading rather than mapping changed the text");
+                    "reading rather than mapping changed the text: '" & Plain
+                    & "' against '" & Unmapped & "'");
          end;
       end;
 
@@ -2286,6 +2340,253 @@ package body Tests.CLI_Cases is
          Containers.Close (Under.Parsed);
       end;
    end Backends_Agree;
+
+   --  Every interactive command, run rather than parsed.
+   --
+   --  Which word means which command was checked in both directions, and the
+   --  handlers were not. One session was driven anywhere in the suite and it
+   --  typed "hello", a blank line, /stats and /exit, so five of the eight
+   --  kinds -- Reset, Help, Settings, Context and Set_System -- had their
+   --  spelling tested and their behaviour tested nowhere.
+   --
+   --  Two things are asked here. Every command has to do something, which is
+   --  what tells a handler that reports from one that returns silently; and
+   --  /reset has to actually clear the conversation, which is the one whose
+   --  failure is invisible -- a session that kept the previous turn would go
+   --  on answering, with the old turn still in the context it was told to
+   --  forget.
+   procedure Interactive_Commands_Do_Something
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Back renames Model_Runner.Backend;
+      use Ada.Text_IO;
+
+      Image : B.Byte_Array_Access;
+
+      --  Drive one scripted session and return what it wrote to standard
+      --  error, which is where the interactive layer answers.
+      function Session_Saying
+        (Held  : B.Byte_Array_Access;
+         Lines : String) return String
+      is
+         Input  : constant String := "obj/commands-in.txt";
+         Log    : constant String := "obj/commands-err.txt";
+         Script : File_Type;
+      begin
+         Create (Script, Out_File, Input);
+         Put (Script, Lines);
+         Close (Script);
+
+         declare
+            Copy    : aliased constant B.Byte_Array := Held.all;
+            Rig     : Harness (Copy'Access);
+            Session : L.Session;
+            Catalog : aliased Model_Runner.Localization.Catalog;
+            Screen  : aliased Model_Runner.Presentation.Console;
+            Options : Opt.Command;
+            From    : File_Type;
+            Err     : File_Type;
+            Status  : Natural := 0;
+            Outcome : E.Error_Info;
+         begin
+            Start (Rig, Back.Backend_Reference);
+            L.Open (Session, Rig.Ready, Status => Outcome);
+            Assert (E.Is_Ok (Outcome), "the session did not open");
+
+            Model_Runner.Localization.Open
+              (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+            Model_Runner.Presentation.Open
+              (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+               (Output_Is_Terminal => False,
+                Error_Is_Terminal  => False,
+                Input_Is_Terminal  => False,
+                Colour_Suppressed  => True),
+               Opt.Normal);
+
+            Options.Max_Tokens := 4;
+            Options.Sampling.Temperature := 0.0;
+
+            Open (From, In_File, Input);
+            Create (Err, Out_File, Log);
+            Set_Input (From);
+            Set_Error (Err);
+            begin
+               Model_Runner.CLI.Interactive.Run
+                 (Options, Screen, Rig.Ready, Session, Status);
+            exception
+               when others =>
+                  Set_Input (Standard_Input);
+                  Set_Error (Standard_Error);
+                  Close (From);
+                  Close (Err);
+                  raise;
+            end;
+            Set_Input (Standard_Input);
+            Set_Error (Standard_Error);
+            Close (From);
+            Close (Err);
+
+            Assert (Status = 0,
+                    "a scripted session left with status"
+                    & Natural'Image (Status));
+
+            L.Close (Session);
+            Model_Runner.Localization.Close (Catalog);
+         end;
+
+         return Project_Tools.Files.Read_Raw_File (Log);
+      end Session_Saying;
+
+      Newline : constant String := [1 => Character'Val (10)];
+   begin
+      Tiny_Model.Build (Image, Room => 256);
+
+      declare
+         --  A session that types nothing but the word that leaves. Whatever
+         --  every session says -- a banner, a farewell -- is in here, so what
+         --  a command adds is what the others hold and this does not.
+         Bare : constant String :=
+           Session_Saying (Image, "/exit" & Newline);
+
+         --  Each command has to add something to that.
+         procedure Says_More (Word : String) is
+            Said : constant String :=
+              Session_Saying (Image, Word & Newline & "/exit" & Newline);
+         begin
+            Assert (Said'Length > Bare'Length,
+                    "'" & Word & "' wrote no more than a session that only "
+                    & "leaves, so its handler answered nothing");
+         end Says_More;
+      begin
+         Assert (Bare'Length > 0,
+                 "a session that only leaves wrote nothing at all, so the "
+                 & "comparisons below would hold for a build where every "
+                 & "command is silent");
+
+         Says_More ("/help");
+         Says_More ("/settings");
+         Says_More ("/context");
+         Says_More ("/stats");
+
+         --  A word this build does not know is answered too, and answered
+         --  differently from one it does.
+         Says_More ("/nonsense");
+      end;
+
+      --  /reset clears the conversation, and what says so from outside is
+      --  how much context the turn after it takes.
+      --
+      --  Two scripts ask the same question twice and end by asking how full
+      --  the context is; one clears the conversation between them. Cleared,
+      --  the second turn renders one exchange and takes less room than the
+      --  two the other renders. Comparing the whole session would not say
+      --  this: the scripts differ by a line, so their output differs however
+      --  the handler behaves, which is what the first version of this
+      --  compared and why it passed with the clearing taken out. The context
+      --  line alone is the answer, and it is the last line either writes.
+      declare
+         --  The line the context command wrote.
+         --
+         --  Found by what it says rather than by where it is: the last line
+         --  of a session is the prompt marker and the progress dots, which
+         --  differ between two scripts of different lengths whatever the
+         --  handlers did. Comparing those was the first version of this and
+         --  it passed with the clearing taken out.
+         Marker : constant String := "context tokens used";
+
+         --  The message alone, without the prompt markers that precede it on
+         --  the same line. Those count the turns, so leaving them in made
+         --  two sessions of different lengths differ whatever the numbers
+         --  said -- which is how the version before this one passed with the
+         --  clearing taken out, reporting 48 tokens both times.
+         Prefix : constant String := "model_runner: ";
+
+         function Context_Line (Text : String) return String is
+            First : Natural := Text'First;
+         begin
+            for Index in Text'First .. Text'Last - Marker'Length + 1 loop
+               if Index >= Text'First + Prefix'Length
+                 and then Text (Index - Prefix'Length .. Index - 1) = Prefix
+               then
+                  First := Index;
+               end if;
+
+               if Text (Index .. Index + Marker'Length - 1) = Marker then
+                  declare
+                     Stop : Natural := Index;
+                  begin
+                     while Stop < Text'Last
+                       and then Text (Stop + 1) /= Character'Val (10)
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+                     return Text (First .. Stop);
+                  end;
+               end if;
+            end loop;
+
+            return "";
+         end Context_Line;
+
+         --  A blank line is what submits a turn, so each question is two
+         --  lines. Without the blank the text is only held and the session
+         --  never generates anything -- which is how the first version of
+         --  this asked for two turns and got none.
+         Turn : constant String := "ab" & Newline & Newline;
+
+         Twice : constant String :=
+           Session_Saying
+             (Image, Turn & Turn & "/context" & Newline & "/exit" & Newline);
+         Cleared : constant String :=
+           Session_Saying
+             (Image,
+              Turn & "/reset" & Newline & Turn & "/context" & Newline
+              & "/exit" & Newline);
+      begin
+         Assert (Context_Line (Twice) /= "",
+                 "no session reported how full the context is, so the "
+                 & "comparison below is between two empty strings");
+
+         Assert (Context_Line (Twice) /= Context_Line (Cleared),
+                 "two turns and two turns with the conversation cleared "
+                 & "between them filled the context alike -- '"
+                 & Context_Line (Twice) & "' against '"
+                 & Context_Line (Cleared)
+                 & "' -- so /reset left the turn it was told to forget in "
+                 & "place");
+
+         --  What this holds is the conversation being cleared. The session
+         --  reset beside it is not held: taking it out changes nothing
+         --  observable, because the next turn's tokens are then not a prefix
+         --  of what the session committed and generation resets it anyway.
+         --  Belt and braces, and the test can only see the belt.
+      end;
+
+      --  A system message, set and then taken away. Neither is refused, and
+      --  what they change is the text rendered for the next turn, which this
+      --  cannot see from here -- so what it says is that both are commands
+      --  and the session goes on after them, which is what /system being
+      --  matched with its trailing space got wrong.
+      declare
+         Set_And_Cleared : constant String :=
+           Session_Saying
+             (Image,
+              "/system be brief" & Newline & "/system" & Newline
+              & "ab" & Newline & "/exit" & Newline);
+         Refused : constant String :=
+           Session_Saying
+             (Image,
+              "/systematic" & Newline & "/systematic" & Newline
+              & "ab" & Newline & "/exit" & Newline);
+      begin
+         Assert (Set_And_Cleared /= Refused,
+                 "a system message set and taken away read the same as two "
+                 & "unknown commands, so neither was a command");
+      end;
+
+      B.Free (Image);
+   end Interactive_Commands_Do_Something;
 
    --  A backend that cannot batch is asked for one token at a time.
    --
@@ -6095,6 +6396,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Architectures_Are_Read_By_Name'Access,
          "each architecture is read with its own keys and its own rotation");
+      Register_Routine
+        (T, Interactive_Commands_Do_Something'Access,
+         "every interactive command does something, and reset clears the "
+         & "conversation");
       Register_Routine
         (T, Interactive_Reads_Its_Commands'Access,
          "interactive reads a line of input as the command it is");

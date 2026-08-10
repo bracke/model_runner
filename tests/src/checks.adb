@@ -4308,6 +4308,92 @@ package body Checks is
                end;
             end loop;
 
+            --  And that each host gets exactly one body for each spec.
+            --
+            --  Compiling a body says it is well formed; it says nothing
+            --  about whether the host that needs it has one. The project
+            --  file builds linux with posix, macos with posix, windows
+            --  alone and unsupported alone, so a spec whose bodies were
+            --  written for some of those and not the rest fails to link on
+            --  the others -- on that host and nowhere else, which is the
+            --  failure this whole section exists to stop. Two bodies for
+            --  one spec on the same host is the same mistake the other way
+            --  round, and the project file would refuse it there.
+            declare
+               --  Each host as the directories the project file gives it.
+               type Host_Set is array (1 .. 2) of Name_Access;
+
+               Nothing_More : constant Name_Access := new String'("");
+               Posix        : constant Name_Access := new String'("posix");
+
+               Sets : constant array (1 .. 4) of Host_Set :=
+                 [[Hosts (1), Posix],
+                  [Hosts (2), Posix],
+                  [Hosts (4), Nothing_More],
+                  [Hosts (5), Nothing_More]];
+
+               --  Every platform spec, by the body name it asks for.
+               Specs : Natural := 0;
+
+               function Bodies_For (Spec : String; Set : Host_Set)
+                 return Natural
+               is
+                  Found : Natural := 0;
+               begin
+                  for Where of Set loop
+                     if Where.all /= ""
+                       and then Ada.Directories.Exists
+                                  (Full & "/src/platform/" & Where.all
+                                   & "/" & Spec)
+                     then
+                        Found := Found + 1;
+                     end if;
+                  end loop;
+                  return Found;
+               end Bodies_For;
+
+               Search : Ada.Directories.Search_Type;
+               Item   : Ada.Directories.Directory_Entry_Type;
+            begin
+               Ada.Directories.Start_Search
+                 (Search, Full & "/src/library",
+                  "model_runner-platform-*.ads");
+
+               while Ada.Directories.More_Entries (Search) loop
+                  Ada.Directories.Get_Next_Entry (Search, Item);
+                  Specs := Specs + 1;
+
+                  declare
+                     Spec : constant String :=
+                       Ada.Directories.Simple_Name (Item);
+                     Body_Name : constant String :=
+                       Spec (Spec'First .. Spec'Last - 1) & 'b';
+                  begin
+                     for Set of Sets loop
+                        Result.Performed := Result.Performed + 1;
+
+                        if Bodies_For (Body_Name, Set) /= 1 then
+                           Fail (Body_Name & " has"
+                                 & Natural'Image (Bodies_For (Body_Name, Set))
+                                 & " bodies for the host built from "
+                                 & Set (1).all
+                                 & (if Set (2).all = "" then ""
+                                    else " and " & Set (2).all)
+                                 & ", where a host needs exactly one");
+                        end if;
+                     end loop;
+                  end;
+               end loop;
+
+               Ada.Directories.End_Search (Search);
+
+               Result.Performed := Result.Performed + 1;
+               if Specs = 0 then
+                  Fail ("no platform specs were found, so the check that "
+                        & "each host implements them all matched nothing");
+               end if;
+            end;
+
             --  A run that compiled nothing found nothing, and would say so
             --  by saying nothing at all.
             Result.Performed := Result.Performed + 1;

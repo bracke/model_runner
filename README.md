@@ -619,6 +619,13 @@ libraries, because these bodies reach their host through `Interfaces.C`, whose
 declarations are the same everywhere. That is what makes the question askable
 from a machine of the wrong kind.
 
+They also check that each host gets exactly one body for each platform spec.
+Compiling a body says it is well formed and says nothing about whether the
+host that needs it has one; the project file builds `linux` with `posix`,
+`macos` with `posix`, `windows` alone and `unsupported` alone, so a spec whose
+bodies were written for some of those and not the rest fails to link on the
+others — on that host and nowhere else.
+
 ## Layering
 
 CLI and presentation sit above command execution, which sits above generation,
