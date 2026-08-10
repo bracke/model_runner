@@ -65,11 +65,18 @@ package body Reference_Tokenizer is
 
          declare
             Score : Model_Runner.Numerics.Wide_Real;
+            Sort  : Long_Long_Integer;
          begin
             Containers.Get_Float_Element
               (Source, "tokenizer.ggml.scores", Index, Score, Status);
             Item.Pieces (Index).Score :=
               (if E.Is_Error (Status) then 0.0 else Float (Score));
+
+            Containers.Get_Integer_Element
+              (Source, "tokenizer.ggml.token_type", Index, Sort, Status);
+            Item.Pieces (Index).Sort :=
+              (if E.Is_Error (Status) or else Sort < 0 then 0
+               else Natural (Sort));
          end;
       end loop;
 
@@ -391,6 +398,8 @@ package body Reference_Tokenizer is
       Tokens        : out Token_Vector;
       Last          : out Natural)
    is
+      Marker_Length : Natural := 0;
+
       function Is_Letter (Value : Character) return Boolean
       is (Value in 'a' .. 'z' | 'A' .. 'Z'
           or else Character'Pos (Value) > 127);
@@ -629,6 +638,35 @@ package body Reference_Tokenizer is
          end loop;
       end Emit;
 
+      --  A marker such as <|im_start|> is one token and not the dozen its
+      --  spelling would merge into: the longest piece starting here that the
+      --  vocabulary calls a control token or one of its author's own, or
+      --  zero when there is none. Only a position opening a bracket is
+      --  tried, so text that merely starts with one is left alone.
+      function Marker_At (From : Positive) return Integer is
+         Found : Integer := -1;
+      begin
+         if Text (From) /= '<' then
+            return -1;
+         end if;
+
+         for Reach in 1 .. Natural'Min (Max_Piece, Text'Last - From + 1) loop
+            declare
+               Which : constant Integer :=
+                 Find (Item, Text (From .. From + Reach - 1));
+            begin
+               if Which >= 0
+                 and then Item.Pieces (Which + 1).Sort in 3 | 4
+               then
+                  Found := Which;
+                  Marker_Length := Reach;
+               end if;
+            end;
+         end loop;
+
+         return Found;
+      end Marker_At;
+
       At_Index : Natural;
    begin
       Last := 0;
@@ -641,10 +679,20 @@ package body Reference_Tokenizer is
       At_Index := Text'First;
       while At_Index <= Text'Last loop
          declare
-            Ends : constant Natural := Cut_Last (At_Index);
+            Marker : constant Integer := Marker_At (At_Index);
          begin
-            Emit (At_Index, Ends);
-            At_Index := Ends + 1;
+            if Marker >= 0 then
+               Last := Last + 1;
+               Tokens (Last) := Marker;
+               At_Index := At_Index + Marker_Length;
+            else
+               declare
+                  Ends : constant Natural := Cut_Last (At_Index);
+               begin
+                  Emit (At_Index, Ends);
+                  At_Index := Ends + 1;
+               end;
+            end if;
          end;
       end loop;
    end Encode_By_Rank;

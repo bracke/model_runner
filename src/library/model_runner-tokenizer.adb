@@ -622,14 +622,30 @@ package body Model_Runner.Tokenizer is
    --  arbitrary bytes. Then the pieces are merged, lowest rank first, until
    --  no adjacent pair appears in the table.
    --
-   --  What is not here is the whole of the first step. The vocabularies name
-   --  a pre-tokenizer -- gpt-2, llama3, qwen2 and others -- and they differ
-   --  in how they cut, chiefly around non-ASCII text, where a letter has to
-   --  be told from a symbol by its Unicode category. This implements the
-   --  ASCII rules exactly and treats every code point above 127 as a letter,
-   --  which is right for running text in most scripts and wrong for
-   --  punctuation and symbols outside ASCII. Encode says so by refusing
-   --  rather than guessing: see Pre_Token_Cut.
+   --  The first step is the one the vocabularies disagree about. They name a
+   --  pre-tokenizer -- gpt-2, llama3, qwen2 and others -- and Cut_At carries
+   --  the five this build accepts, refusing any other by name at load. What
+   --  a letter is, and what a digit, is asked of Ada.Wide_Wide_Characters,
+   --  which knows the Unicode categories, so a CJK ideograph is a letter and
+   --  a CJK comma is not, in any script and not only in ASCII.
+   --
+   --  What Cut_At carries is a rule per vocabulary and not a general engine
+   --  for the expressions those pre-tokenizers are written as. Two things
+   --  follow, and both are in Cut_At below rather than hidden:
+   --
+   --  The contractions are the seven the original names, matched exactly as
+   --  written and so in lower case only.
+   --
+   --  A run of line endings is a run of whitespace and not a run of its own,
+   --  so it gives its last character to the word that follows as any run of
+   --  spaces does.
+   --
+   --  Whether either is the boundary a given model was trained on is a
+   --  question about that model. The tests here settle that the engine cuts
+   --  as this says and that an independent reader written from this
+   --  description agrees; what they cannot settle is the description itself,
+   --  which needs a second runtime and a real vocabulary -- see
+   --  docs/reference-runtime.md.
    package BPE is
 
       --  Each byte as the printable character that stands for it, as the
@@ -675,11 +691,11 @@ package body Model_Runner.Tokenizer is
       --  Where one pre-token ends, starting at From.
       --
       --  A run of letters, a run of digits, or a run of neither, each
-      --  allowed one leading space; a run of spaces on its own; and the
-      --  handful of English contractions the original tokenizer named. Every
-      --  vocabulary of this kind cuts roughly this way and they differ in the
-      --  details, which is why Understood below refuses the text this cannot
-      --  cut faithfully rather than cutting it wrongly.
+      --  allowed one leading character; a run of whitespace on its own; and
+      --  the handful of English contractions the original tokenizer named.
+      --  Which character may lead a run, and how far a run of digits
+      --  reaches, is what the five rules disagree about, and every one of
+      --  those disagreements is a case in the body below.
       function Cut_At
         (Text : String; From : Positive; Rule : Cut_Rule) return Natural;
 

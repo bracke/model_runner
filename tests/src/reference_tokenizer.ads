@@ -99,6 +99,11 @@ private
       Text  : String (1 .. Max_Piece) := [others => ' '];
       Last  : Natural := 0;
       Score : Float := 0.0;
+
+      --  The token type as the file writes it: three is a control token and
+      --  four one the vocabulary's author added. Both are spelled out in the
+      --  text a chat template renders and both stand for one token.
+      Sort  : Natural := 0;
    end record;
 
    type Piece_Array is array (1 .. Max_Pieces) of Piece;

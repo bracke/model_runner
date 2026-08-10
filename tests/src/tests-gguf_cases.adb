@@ -2457,6 +2457,20 @@ package body Tests.GGUF_Cases is
       --  "a b" last for exactly this.
       Same ("gpt-2", "x ab", "4 13", "a merge decided by rank");
       Same ("gpt-2", "abc", "1 23", "a merge decided by rank");
+
+      --  A marker a chat template writes is one token and not the dozen its
+      --  spelling would merge into. Nothing downstream would notice the
+      --  difference: the tokens read back as the same text, and the model
+      --  answers in letters, ending its turn by spelling the marker out
+      --  instead of stopping.
+      Same ("gpt-2", "ab<|im_start|>ab", "11 24 11", "a marker in the text");
+      Same ("llama3", "<|im_end|>", "25", "a marker on its own");
+
+      --  Text that opens a bracket without being a marker is cut by the
+      --  ordinary rules. The longest match wins, so a marker's own prefix
+      --  must not be mistaken for it either.
+      Same ("gpt-2", "<ab", "0 11", "text that merely opens a bracket");
+      Same ("gpt-2", "<|im_", "0 0 0 0 0", "a marker cut short");
       Same ("falcon", "x ab", "4 13", "a merge decided by rank");
       Same ("smollm", "x ab", "4 13", "a merge decided by rank");
       Same ("llama3", "x ab", "4 13", "a merge decided by rank");
@@ -2555,6 +2569,112 @@ package body Tests.GGUF_Cases is
          B.Free (Image);
       end;
    end Byte_Pair_Cutting_Follows_The_Named_Rule;
+
+   --  Byte-pair decoding undoes byte-pair encoding.
+   --
+   --  Token text on this road is written in stand-in characters, one for
+   --  each byte, so that a merge table written as text can describe
+   --  arbitrary bytes. Decoding has to undo that mapping or a model's output
+   --  arrives as the stand-ins themselves and a space reads as the character
+   --  that stands for one. That branch of Decode_Token had no test, because
+   --  until now the suite had no byte-pair vocabulary for one to use.
+   --
+   --  Every string here is one the fixture can spell whole, so anything the
+   --  round trip loses is the mapping and not the vocabulary.
+   procedure Byte_Pair_Decoding_Undoes_Encoding
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+
+      Tab : constant String := [1 => Character'Val (16#09#)];
+
+      type Case_Text is access constant String;
+      Cases : constant array (1 .. 6) of Case_Text :=
+        [new String'("ab"),
+         new String'("abc"),
+         new String'("x ab"),
+         new String'("x" & Tab & "ab"),
+         new String'("ab 1234"),
+         new String'("x 12 abc")];
+
+      Image  : B.Byte_Array_Access;
+      Item   : Containers.Container;
+      Words  : Vocab.Vocabulary;
+      Parse  : E.Error_Info;
+      Status : E.Error_Info;
+   begin
+      BPE_Vocabulary.Build ("gpt-2", Image);
+      Parse_Image (Image.all, Item, Parse);
+      Assert (E.Is_Ok (Parse), "the byte-pair fixture did not parse");
+
+      Vocab.Load (Words, Item, Status => Status);
+      Assert (E.Is_Ok (Status), "the byte-pair vocabulary did not load");
+
+      for Which of Cases loop
+         declare
+            Tokens : Vocab.Token_Array (1 .. 32);
+            Last   : Natural;
+         begin
+            Vocab.Encode
+              (Words, Which.all, False, False, Tokens, Last, Status);
+            Assert (E.Is_Ok (Status),
+                    "the engine refused """ & Which.all & """");
+
+            declare
+               Back : constant String :=
+                 Vocab.Decode (Words, Tokens (1 .. Last));
+            begin
+               Assert (Back = Which.all,
+                       "decoding did not undo encoding: """ & Which.all
+                       & """ came back as """ & Back & """");
+            end;
+
+            --  One token at a time through the incremental decoder, which is
+            --  what streaming uses, arrives at the same text.
+            declare
+               Stream : Vocab.Decoder;
+               Built  : String (1 .. 128);
+               Used   : Natural := 0;
+            begin
+               Vocab.Reset (Stream);
+               for Index in 1 .. Last loop
+                  declare
+                     Piece : constant String :=
+                       Vocab.Push (Stream, Words, Tokens (Index));
+                  begin
+                     Built (Used + 1 .. Used + Piece'Length) := Piece;
+                     Used := Used + Piece'Length;
+                  end;
+               end loop;
+
+               Assert (Built (1 .. Used) = Which.all,
+                       "streaming did not arrive at the same text: """
+                       & Which.all & """ came back as """
+                       & Built (1 .. Used) & """");
+            end;
+         end;
+      end loop;
+
+      --  A control token decodes to its spelling on this road, which is what
+      --  makes a rendered template survive a round trip. What keeps it out
+      --  of what a reader sees is the generation loop, not this.
+      declare
+         Tokens : Vocab.Token_Array (1 .. 8);
+         Last   : Natural;
+      begin
+         Vocab.Encode
+           (Words, "<|im_start|>ab", False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status), "the engine refused a marker");
+         Assert (Last = 2, "a marker was not one token:" & Natural'Image (Last));
+         Assert (Vocab.Decode (Words, Tokens (1 .. Last)) = "<|im_start|>ab",
+                 "a marker did not decode to its spelling");
+      end;
+
+      Vocab.Close (Words);
+      Containers.Close (Item);
+      B.Free (Image);
+   end Byte_Pair_Decoding_Undoes_Encoding;
 
    --  Every refusal the tokenizer can give, reported by name.
    --
@@ -4808,6 +4928,9 @@ package body Tests.GGUF_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Byte_Pair_Decoding_Undoes_Encoding'Access,
+         "byte-pair decoding undoes byte-pair encoding");
       Register_Routine
         (T, Byte_Pair_Cutting_Follows_The_Named_Rule'Access,
          "the byte-pair tokenizer cuts by the rule the vocabulary names");

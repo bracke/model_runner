@@ -18,7 +18,7 @@ package body BPE_Vocabulary is
    type Text_Access is access constant String;
 
    --  The pieces, in identifier order.
-   Pieces : constant array (1 .. 24) of Text_Access :=
+   Pieces : constant array (1 .. 27) of Text_Access :=
      [new String'("<unk>"),
       new String'("a"),
       new String'("b"),
@@ -42,7 +42,21 @@ package body BPE_Vocabulary is
       new String'(Space_Mark & "12"),
       new String'(Space_Mark & "123"),
       new String'(Space_Mark & "1234"),
-      new String'("bc")];
+      new String'("bc"),
+
+      --  Two markers, which a chat template writes into the text it renders.
+      --  Their spelling merges into nothing here -- no piece and no merge
+      --  covers "<", "|" or any of their letters -- so a reader that missed
+      --  them would produce a run of unknown tokens rather than one token,
+      --  which is the shape of the mistake this is here to catch.
+      new String'("<|im_start|>"),
+      new String'("<|im_end|>"),
+
+      --  A marker that is a proper prefix of another one. Without it the
+      --  rule that the longest match wins cannot be told from the rule that
+      --  the first match does, and a vocabulary is untrusted input: a file
+      --  may carry such a pair whether or not a trained model would.
+      new String'("<|im_start")];
 
    --  The merge table, in rank order, which is deliberately not the order the
    --  pieces are written above. "a b" is last and "b c" is next to last, so
@@ -109,9 +123,12 @@ package body BPE_Vocabulary is
       Fixtures.Begin_Array
         (Builder, "tokenizer.ggml.token_type", G.Value_Int32, Pieces'Length);
       Fixtures.Int32_Element (Builder, 2);   --  <unk>
-      for Index in 2 .. Pieces'Length loop
+      for Index in 2 .. Pieces'Length - 3 loop
          Fixtures.Int32_Element (Builder, 1);
       end loop;
+      Fixtures.Int32_Element (Builder, 3);   --  <|im_start|>, a control token
+      Fixtures.Int32_Element (Builder, 3);   --  <|im_end|>
+      Fixtures.Int32_Element (Builder, 3);   --  <|im_start
       Fixtures.End_Array (Builder);
 
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);

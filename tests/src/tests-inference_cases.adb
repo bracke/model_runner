@@ -1240,12 +1240,17 @@ package body Tests.Inference_Cases is
          new String'("llama3"),
          new String'("qwen2")];
 
-      --  Text that reaches every part of the rule: a bare word, a word whose
-      --  merges are decided by rank rather than by position, a word led by a
-      --  space, a tab before a word, runs of digits of each length the three
-      --  groupings tell apart, and a contraction.
-      Cases : constant array (1 .. 7) of Case_Text :=
+      --  Text that reaches every part of the rule: a bare word, the markers
+      --  a chat template writes and two strings that open a bracket without
+      --  being one, a word whose merges are decided by rank rather than by
+      --  position, a word led by a space, a tab before a word, runs of
+      --  digits of each length the three groupings tell apart, and a
+      --  contraction.
+      Cases : constant array (1 .. 10) of Case_Text :=
         [new String'("ab"),
+         new String'("<|im_start|>ab<|im_end|>"),
+         new String'("<ab"),
+         new String'("<|im_"),
          new String'("abc"),
          new String'("x ab"),
          new String'("x" & Tab & "ab"),

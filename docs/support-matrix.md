@@ -83,7 +83,18 @@ than cut by the wrong one.
 | Special tokens: beginning, end, unknown | Implemented |
 | `add_bos_token` / `add_eos_token` policy | Implemented |
 | UTF-8-boundary-safe incremental decoding | Implemented |
-| BPE merge tables | Implemented for the `gpt-2`, `falcon`, `starcoder`, `smollm`, `llama3` and `qwen2` cutting rules, in any script; a vocabulary naming another rule is refused by name |
+| BPE merge tables | Implemented for the `gpt-2`, `falcon`, `starcoder`, `smollm`, `llama3` and `qwen2` cutting rules, in any script -- a letter is told from a symbol by its Unicode category, not by whether it is ASCII; a vocabulary naming another rule is refused by name |
+| BPE byte-to-character mapping, both ways | Implemented; encoding rewrites each byte as the character that stands for it and decoding undoes that, which the suite checks by round trip |
+| Markers such as `<|im_start|>` in byte-pair text | Implemented; the longest piece the vocabulary calls a control or user-defined token wins, so a rendered chat template reaches the model as the tokens it meant |
+
+What the byte-pair cut carries is a rule per vocabulary rather than a general
+engine for the expressions those pre-tokenizers are written as. Two limits
+follow: the contractions are the seven the original names, matched as written
+and so in lower case only; and a run of line endings is a run of whitespace
+rather than a run of its own. The suite settles that the engine cuts as this
+says, and that a reader written independently from this description agrees.
+What it cannot settle is the description -- that needs a second runtime and a
+real vocabulary, which is what `docs/reference-runtime.md` is about.
 
 ## Chat-template constructs
 
