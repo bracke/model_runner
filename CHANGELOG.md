@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `--validate` is tested, in both directions. Of the thirty-eight registered
+  options it was one of three no test named, and the only one of those that
+  does work: `inspect MODEL --validate` parses the file, says so and reports
+  nothing else. Its failure direction -- a truncated file must be refused and
+  the code named -- is why the option exists.
+
 - The release checklist checks itself. `check_all_selftest` runs the
   checklist from a directory that is not a model_runner tree and requires it
   to refuse -- the one thing a checklist cannot establish by passing, since a
@@ -333,6 +339,19 @@ Keep a Changelog and the project uses semantic versioning.
   knowable only by remembering what was typed.
 
 ### Fixed
+
+- `run --help` prints the help for `run`. It printed the top-level screen,
+  byte for byte identical to bare `help`, discarding the command it was typed
+  against; `help run` gave the useful answer and the flag did not. The option
+  registry marks `--help` as belonging to every command, which reads like it
+  was meant to be command-aware, and no test named the option at all, so this
+  was nobody's decision.
+
+- The changelog gate asks git about ancestry rather than about dates. It
+  compared committer timestamps, which a rebase rewrites and a skewed clock
+  gets wrong, and two commits made in the same second compared equal and
+  passed. It now asks whether the commit that last touched the program is an
+  ancestor of the one that last touched this file.
 
 - A marker written into the text -- `<|im_start|>`, `</s>` -- is one token on
   both tokenizer roads. The rule that turns a marker back into the token it

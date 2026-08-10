@@ -797,6 +797,22 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
+
+                     --  The command it was typed against becomes the topic,
+                     --  so that 'run --help' answers the question 'help run'
+                     --  answers rather than the one bare 'help' answers.
+                     --  It used to discard the command and print the
+                     --  top-level screen, byte for byte, which is the less
+                     --  useful of the two answers and was nobody's decision:
+                     --  no test named the option at all.
+                     if Result.Kind /= Command_None
+                       and then Result.Kind /= Command_Help
+                       and then T.To_String (Result.Help_Topic) = ""
+                     then
+                        Result.Help_Topic :=
+                          T.To_Bounded (Command_Word (Result.Kind));
+                     end if;
+
                      Result.Kind := Command_Help;
 
                   elsif Name = "--version" then

@@ -337,6 +337,21 @@ package body Checks is
            [1 => Ada.Strings.Unbounded.To_Unbounded_String ("Machine_Code")],
          Purpose          => "instructions written by hand");
 
+      --  The tools crate too. Of the walks in this file it was in two --
+      --  line length and GNATdoc -- and in none of the rules about what may
+      --  be written, although it holds the program that gates every release
+      --  and the specification calls every piece of project tooling
+      --  production code. A rule that applies to the tests crate and not to
+      --  this one is a rule with a door in it.
+      Result.Performed := Result.Performed + 1;
+
+      Project_Tools.Tree_Checks.Check_No_Forbidden_Tokens
+        (Errors           => Result.Failed,
+         Dir              => Path ("tools/src"),
+         Forbidden_Tokens =>
+           [1 => Ada.Strings.Unbounded.To_Unbounded_String ("Machine_Code")],
+         Purpose          => "instructions written by hand");
+
       --  Layering: nothing below the presentation layer may reach the message
       --  catalog, terminal styling or the command line.
       declare
@@ -4295,19 +4310,42 @@ package body Checks is
       --  reader deciding whether to upgrade would have learned none of it,
       --  and the only thing checked about the file was that it exists.
       --
-      --  What is asked is that no commit touching src is newer than the
-      --  newest commit touching CHANGELOG.md. Committing both together
-      --  satisfies it -- the timestamps are then equal -- so the rule in
-      --  practice is that a change to the library and its entry arrive in
-      --  the same commit. It is asked of git, which the pristine command
-      --  already needs, and of committed history rather than of the working
-      --  tree: an entry written and not committed has not been published.
-      --  Without git the question cannot be asked, and saying so is better
-      --  than passing.
+      --  What is asked is that the newest commit touching the program is an
+      --  ancestor of -- or the same as -- the newest commit touching
+      --  CHANGELOG.md. Committing both together satisfies it, since a commit
+      --  is its own ancestor, so the rule in practice is that a change and
+      --  its entry arrive together.
+      --
+      --  Ancestry rather than dates. The first version compared committer
+      --  timestamps, which are metadata a rebase rewrites and a skewed clock
+      --  gets wrong, and two commits made in the same second compared equal
+      --  and passed. Git can answer the question that was meant, and
+      --  merge-base is how it is asked.
+      --
+      --  The program is the library, the messages it prints and the
+      --  checklist that decides whether a release goes out. It watched src
+      --  alone at first, which left every user-visible string uncovered: a
+      --  reworded diagnostic is a notable change by any reading.
+      --
+      --  Of committed history rather than of the working tree: an entry
+      --  written and not committed has not been published. Without git the
+      --  question cannot be asked, and saying so is better than passing.
       declare
          Git : constant String :=
            Project_Tools.Processes.Locate_Command ("git");
 
+         Tree : constant String := Ada.Directories.Full_Name (Root);
+
+         procedure Add
+           (Args : in out Project_Tools.Processes.Argument_Vectors.Vector;
+            Word : String) is
+         begin
+            Project_Tools.Processes.Argument_Vectors.Append
+              (Args, Ada.Strings.Unbounded.To_Unbounded_String (Word));
+         end Add;
+
+         --  The commit that last touched a path, or nothing when the tree
+         --  has no history -- which a source archive has not.
          function Newest (Path : String) return String is
             Args : Project_Tools.Processes.Argument_Vectors.Vector;
 
@@ -4315,18 +4353,13 @@ package body Checks is
             --  dereferences it without asking whether it is there.
             Status : aliased Integer := 0;
          begin
-            Args.Append
-              (Ada.Strings.Unbounded.To_Unbounded_String ("-C"));
-            Args.Append
-              (Ada.Strings.Unbounded.To_Unbounded_String
-                 (Ada.Directories.Full_Name (Root)));
-            Args.Append (Ada.Strings.Unbounded.To_Unbounded_String ("log"));
-            Args.Append
-              (Ada.Strings.Unbounded.To_Unbounded_String ("-1"));
-            Args.Append
-              (Ada.Strings.Unbounded.To_Unbounded_String ("--format=%ct"));
-            Args.Append (Ada.Strings.Unbounded.To_Unbounded_String ("--"));
-            Args.Append (Ada.Strings.Unbounded.To_Unbounded_String (Path));
+            Add (Args, "-C");
+            Add (Args, Tree);
+            Add (Args, "log");
+            Add (Args, "-1");
+            Add (Args, "--format=%H");
+            Add (Args, "--");
+            Add (Args, Path);
 
             return T.Trim
               (Project_Tools.Processes.Command_Output
@@ -4334,6 +4367,25 @@ package body Checks is
                   Arguments => Args,
                   Status    => Status'Access));
          end Newest;
+
+         --  Whether Earlier is an ancestor of Later, or is Later itself.
+         function Comes_Before (Earlier, Later : String) return Boolean is
+            Args : Project_Tools.Processes.Argument_Vectors.Vector;
+         begin
+            Add (Args, "-C");
+            Add (Args, Tree);
+            Add (Args, "merge-base");
+            Add (Args, "--is-ancestor");
+            Add (Args, Earlier);
+            Add (Args, Later);
+
+            return Project_Tools.Processes.Run_Status
+                     (Label   => "changelog ancestry",
+                      Dir     => Tree,
+                      Program => Git,
+                      Args    => Args,
+                      Quiet   => True) = 0;
+         end Comes_Before;
       begin
          Result.Performed := Result.Performed + 1;
 
@@ -4342,18 +4394,25 @@ package body Checks is
                   & "with the library could not be asked");
          else
             declare
-               Sources : constant String := Newest ("src");
+               Library : constant String := Newest ("src");
+               Text    : constant String := Newest ("resources");
+               Gate    : constant String := Newest ("tools");
                Changes : constant String := Newest ("CHANGELOG.md");
             begin
-               if Sources = "" or else Changes = "" then
-                  --  A tree with no history, which a source archive is.
-                  --  Nothing to compare, and nothing wrong.
-                  null;
-               elsif T.Leading_Number (Sources) > T.Leading_Number (Changes)
+               --  A tree with no history, which a source archive is, has
+               --  nothing to compare and nothing wrong.
+               if Changes /= ""
+                 and then ((Library /= ""
+                            and then not Comes_Before (Library, Changes))
+                           or else (Text /= ""
+                                    and then not Comes_Before (Text, Changes))
+                           or else (Gate /= ""
+                                    and then not Comes_Before (Gate, Changes)))
                then
-                  Fail ("src has changed since the changelog last did; put "
-                        & "the entry under [Unreleased] and commit it with "
-                        & "the change it describes");
+                  Fail ("the library, its messages or the release gate has "
+                        & "changed since the changelog last did; put the "
+                        & "entry under [Unreleased] and commit it with the "
+                        & "change it describes");
                end if;
             end;
          end if;
@@ -4411,6 +4470,10 @@ package body Checks is
          procedure Scan_Bindings is new For_Each_Source (Visit_Binding);
       begin
          Scan_Bindings ("tests/src");
+
+         --  And the tools crate, which has no per-host directories at all,
+         --  so a binding there has nowhere it could legitimately live.
+         Scan_Bindings ("tools/src");
       end;
 
       --  A test that can run the command can catch what it writes.

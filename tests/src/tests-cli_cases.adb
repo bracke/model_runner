@@ -228,10 +228,13 @@ package body Tests.CLI_Cases is
    --  Every call site goes through this, including the ones that write
    --  nothing, so that a command which starts generating does not have to
    --  remember.
+   Said      : String (1 .. 64 * 1024);
+   Said_Used : Natural := 0;
+
    procedure Ran (Source : Opt.Arguments'Class; Status : out Natural) is
-      Caught : constant Boolean := True;
-      pragma Unreferenced (Caught);
    begin
+      Said_Used := 0;
+
       Captured_Output.Open ("obj/command-output.txt");
 
       begin
@@ -248,12 +251,22 @@ package body Tests.CLI_Cases is
       end;
 
       declare
-         Ignored : constant String := Captured_Output.Close;
-         pragma Unreferenced (Ignored);
+         Caught : constant String := Captured_Output.Close;
+         Room   : constant Natural :=
+           Natural'Min (Caught'Length, Said'Length);
       begin
-         null;
+         Said (1 .. Room) :=
+           Caught (Caught'First .. Caught'First + Room - 1);
+         Said_Used := Room;
       end;
    end Ran;
+
+   --  What the command wrote on standard output, from the last Ran.
+   --
+   --  Held here rather than opened again by the caller: the capture is one
+   --  at a time, and a caller that wrapped Ran in a capture of its own met
+   --  the guard that says so -- which is how this came to exist.
+   function Last_Output return String is (Said (1 .. Said_Used));
 
    procedure Every_Backend_Can_Be_Named
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -2382,6 +2395,136 @@ package body Tests.CLI_Cases is
          Containers.Close (Under.Parsed);
       end;
    end Backends_Agree;
+
+   --  Three options nothing named.
+   --
+   --  Of the thirty-eight in the registry, --validate, --help and --version
+   --  were named by no test. The first does real work: it parses a model,
+   --  says so, and reports nothing else, and its failure direction -- a file
+   --  that is not valid -- is the whole point of having it.
+   procedure Flag_Only_Options_Work
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model  : constant String := "obj/flags-model.gguf";
+      Broken : constant String := "obj/flags-broken.gguf";
+
+      --  Run and return standard output, which is where an answer goes.
+      function Answer (Words : Fixed_Arguments) return String is
+         Status : Natural;
+      begin
+         Ran (Words, Status);
+         Assert (Status = 0,
+                 "a run that should have succeeded left with status"
+                 & Natural'Image (Status));
+         return Last_Output;
+      end Answer;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      --  A sound file is reported valid, and nothing else is reported: the
+      --  option exists so that a caller can ask the question without reading
+      --  a page of metadata.
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "inspect");
+         Add (Source, Model);
+         Add (Source, "--validate");
+
+         declare
+            Said : constant String := Answer (Source);
+         begin
+            Assert (Said'Length > 0, "--validate said nothing at all");
+            Assert (not Project_Tools.Text.Contains (Said, "GGUF version"),
+                    "--validate reported the container as well as the "
+                    & "verdict: " & Said);
+         end;
+      end;
+
+      --  And a file that is not sound is refused rather than called valid.
+      --  Written by truncating the sound one, which is the shape of damage
+      --  a partial download leaves.
+      declare
+         Source : Fixed_Arguments;
+         Whole  : constant String :=
+           Project_Tools.Files.Read_Raw_File (Model);
+         Handle : File_Type;
+         Status : Natural;
+         Log    : constant String := "obj/flags-err.txt";
+         Errors : File_Type;
+      begin
+         Create (Handle, Out_File, Broken);
+         Put (Handle, Whole (Whole'First .. Whole'First + Whole'Length / 2));
+         Close (Handle);
+
+         Add (Source, "inspect");
+         Add (Source, Broken);
+         Add (Source, "--validate");
+
+         Create (Errors, Out_File, Log);
+         Set_Error (Errors);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Errors);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Errors);
+
+         Assert (Status /= 0,
+                 "a truncated file was called valid");
+         Assert (Project_Tools.Text.Contains
+                   (Project_Tools.Files.Read_Raw_File (Log), "MR-"),
+                 "a truncated file was refused without naming a code");
+      end;
+
+      --  --help answers for the command it was typed against. It used to
+      --  discard the command and print the top-level screen, which is the
+      --  less useful of the two answers.
+      declare
+         Flagged : Fixed_Arguments;
+         Asked   : Fixed_Arguments;
+         Bare    : Fixed_Arguments;
+      begin
+         Add (Flagged, "run");
+         Add (Flagged, "--help");
+         Add (Asked, "help");
+         Add (Asked, "run");
+         Add (Bare, "help");
+
+         declare
+            By_Flag : constant String := Answer (Flagged);
+            By_Word : constant String := Answer (Asked);
+            Top     : constant String := Answer (Bare);
+         begin
+            Assert (By_Flag = By_Word,
+                    "'run --help' and 'help run' gave different screens");
+            Assert (By_Flag /= Top,
+                    "'run --help' gave the top-level screen, which is what "
+                    & "bare help is for");
+         end;
+      end;
+
+      --  --version answers whatever command it was typed against, because a
+      --  version is not a property of a command.
+      declare
+         Flagged : Fixed_Arguments;
+         Asked   : Fixed_Arguments;
+      begin
+         Add (Flagged, "run");
+         Add (Flagged, "--version");
+         Add (Asked, "version");
+
+         Assert (Answer (Flagged) = Answer (Asked),
+                 "'run --version' and 'version' gave different answers");
+      end;
+   end Flag_Only_Options_Work;
 
    --  Refusals the command makes that no test had ever made it make.
    --
@@ -6748,6 +6891,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Architectures_Are_Read_By_Name'Access,
          "each architecture is read with its own keys and its own rotation");
+      Register_Routine
+        (T, Flag_Only_Options_Work'Access,
+         "the options that take no value do what they say");
       Register_Routine
         (T, Unreached_Refusals_Are_Reached'Access,
          "refusals the command had never been made to make are made");

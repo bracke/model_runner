@@ -115,6 +115,23 @@ begin
    --  the only thing that looked at build logs looked at the other two trees.
    Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/tools/obj");
 
+   --  And the gate checks itself. check_all_selftest runs this program from
+   --  a directory that is not a model_runner tree and requires it to refuse,
+   --  which is the one thing a checklist cannot establish by passing: a
+   --  checklist that accepted anything would pass too.
+   --
+   --  It was written, declared as an executable, and called by nothing --
+   --  not here, not in the README, not by any test. Fifty-nine lines
+   --  guarding the thing that gates every release, run only if somebody
+   --  remembered the name.
+   --
+   --  Last, so that a failure here is read against a run that otherwise
+   --  passed, and safe from running forever: the copy it starts finds no
+   --  model_runner.gpr and returns before it reaches this line.
+   Project_Tools.Release_Checks.Run
+     ("the checklist refuses what it should", Root,
+      Root & "/tools/bin/check_all_selftest", GNAT.OS_Lib.Argument_List'[]);
+
    Put_Line ("model_runner aggregate release checklist passed");
    Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Success);
 exception
