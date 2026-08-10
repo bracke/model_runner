@@ -17,6 +17,9 @@ with Interfaces;
 with Model_Runner.Llama;
 with Model_Runner.Memory;
 with Model_Runner.Numerics;
+with Model_Runner.Generation;
+with Model_Runner.Sampling;
+with Model_Runner.Stops;
 with Model_Runner.Tokenizer;
 
 with Conformance;
@@ -1583,6 +1586,204 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end One_Beginning_Token_However_It_Arrives;
 
+   --  Reusing a committed prefix must not change the answer.
+   --
+   --  An interactive turn re-renders the whole conversation and hands it over
+   --  again. Evaluating all of it every turn would be quadratic in the
+   --  conversation, so a request may ask for the committed context to be kept
+   --  when the tokens already evaluated are an exact prefix of the sequence
+   --  about to be evaluated, and only the new suffix is evaluated. Anything
+   --  else resets the session.
+   --
+   --  Nothing tested it. Three occurrences in the tree, all in src. A wrong
+   --  answer in the reusing direction does not crash: it feeds the model a
+   --  context that does not match the text that was rendered, so the turn
+   --  answers a different conversation and says nothing about it.
+   --
+   --  Two properties, and both are needed. The cheap one is that reuse
+   --  happened at all -- prefill starting past the committed tokens, which
+   --  the progress events say outright. The one that matters is that it
+   --  changed nothing: the same turn on a session that reused and on a
+   --  session that did not must produce the same tokens.
+   procedure Reused_Prefix_Changes_Nothing
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Gen renames Model_Runner.Generation;
+
+      use type Model_Runner.Progress.Event_Kind;
+      use type Model_Runner.Progress.Generation_Stage;
+      use type Gen.Completion_Reason;
+      use type B.Byte_Array;
+
+      --  Where prefill began, which is the only outside sign that a prefix
+      --  was kept. The first Prefill_Progress event reports how many prompt
+      --  tokens have been evaluated, counting the ones that were skipped.
+      type Watcher is limited new Model_Runner.Progress.Observer with record
+         First_Report : Natural := 0;
+         Seen         : Boolean := False;
+      end record;
+
+      overriding procedure Notify
+        (Self : in out Watcher; Item : Model_Runner.Progress.Event);
+
+      overriding procedure Notify
+        (Self : in out Watcher; Item : Model_Runner.Progress.Event) is
+      begin
+         if Item.Kind = Model_Runner.Progress.Generation_Event
+           and then Item.Generation = Model_Runner.Progress.Prefill_Progress
+           and then not Self.Seen
+         then
+            Self.First_Report := Natural (Item.Completed);
+            Self.Seen := True;
+         end if;
+      end Notify;
+
+      --  A prompt whose tokens extend by exactly one: "abb" is "ab" and one
+      --  more piece, where "abc" would not be -- the merge that takes b and c
+      --  together changes the token before it.
+      Prompt : constant String := "abb";
+
+      Image  : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+
+         Status : E.Error_Info;
+         Tokens : Vocab.Token_Array (1 .. 32);
+         Last   : Natural;
+
+         --  Run the turn on a session, having first committed the tokens
+         --  given, and report what came back.
+         procedure Turn
+           (Prime   : Vocab.Token_Array;
+            Reuse   : Boolean;
+            Started : out Natural;
+            Text    : out Model_Runner.Bytes.Byte_Array_Access;
+            Length  : out Natural)
+         is
+            Live    : L.Session;
+            Logits  : Logit_Vector;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Watch   : aliased Watcher;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+         begin
+            L.Open (Live, Under.Ready, Status => Local);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            for Token of Prime loop
+               L.Evaluate (Live, Under.Ready, Token, Logits, Status => Local);
+               Assert (E.Is_Ok (Local), "priming the session failed");
+            end loop;
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 3;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 7;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Retain_Text := True;
+            Request.Reuse_Committed_Prefix := Reuse;
+
+            --  One token a pass, so that the progress events count up rather
+            --  than arriving as a single report for the whole prompt. With
+            --  the default batch the first event already says the prompt is
+            --  done and says nothing about where it started -- which is how
+            --  the first version of this test read a reset session as a
+            --  reused one.
+            Request.Batch_Size := 1;
+
+            Gen.Generate
+              (Under.Ready, Live, Prompt, Request, Stop, null,
+               Watch'Unchecked_Access, null, null, null, Outcome => Outcome);
+
+            Assert (Outcome.Reason /= Gen.Runtime_Error,
+                    "the turn failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Started := Watch.First_Report;
+            Text := Outcome.Text;
+            Length := Outcome.Text_Length;
+
+            Model_Runner.Stops.Close (Stop);
+            L.Close (Live);
+         end Turn;
+      begin
+         Start (Under);
+
+         declare
+            Words : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Under.Ready);
+         begin
+            Vocab.Encode
+              (Words.all, Prompt, True, False, Tokens, Last, Status);
+            Assert (E.Is_Ok (Status), "the prompt did not encode");
+            Assert (Last >= 3,
+                    "the prompt makes too few tokens to leave a prefix");
+         end;
+
+         declare
+            --  Everything but the last token: an exact prefix.
+            Exact : constant Vocab.Token_Array := Tokens (1 .. Last - 1);
+
+            --  The same length, differing in the last token, which is not.
+            Wrong : Vocab.Token_Array := Tokens (1 .. Last - 1);
+
+            Fresh_At, Reused_At, Reset_At : Natural;
+            Fresh_Text, Reused_Text, Reset_Text : B.Byte_Array_Access;
+            Fresh_N, Reused_N, Reset_N : Natural;
+         begin
+            Wrong (Wrong'Last) :=
+              (if Tokens (Last - 1) = 4 then 5 else 4);
+
+            --  No prefix to keep, so prefill starts at the beginning. This
+            --  is the answer the other two have to match.
+            Turn ([], False, Fresh_At, Fresh_Text, Fresh_N);
+
+            --  An exact prefix, kept. Prefill reports past it.
+            Turn (Exact, True, Reused_At, Reused_Text, Reused_N);
+
+            --  The same number of tokens, one of them different, so the
+            --  session is reset and everything is evaluated again.
+            Turn (Wrong, True, Reset_At, Reset_Text, Reset_N);
+
+            Assert (Reused_At > Exact'Length,
+                    "prefill began at" & Natural'Image (Reused_At)
+                    & " over a committed prefix of"
+                    & Natural'Image (Exact'Length)
+                    & ", so nothing was reused and the rest of this test "
+                    & "would pass on a build where the option does nothing");
+
+            Assert (Reset_At <= Exact'Length,
+                    "prefill began at" & Natural'Image (Reset_At)
+                    & " over a committed sequence that is not a prefix, so a "
+                    & "context describing a different conversation was kept");
+
+            Assert (Reused_N = Fresh_N
+                    and then Reused_Text.all
+                               (1 .. B.Byte_Index (Reused_N))
+                             = Fresh_Text.all (1 .. B.Byte_Index (Fresh_N)),
+                    "reusing a committed prefix changed the answer");
+
+            Assert (Reset_N = Fresh_N
+                    and then Reset_Text.all (1 .. B.Byte_Index (Reset_N))
+                             = Fresh_Text.all (1 .. B.Byte_Index (Fresh_N)),
+                    "resetting after a mismatched prefix changed the answer");
+
+            B.Free (Fresh_Text);
+            B.Free (Reused_Text);
+            B.Free (Reset_Text);
+         end;
+      end;
+
+      B.Free (Image);
+   end Reused_Prefix_Changes_Nothing;
+
    procedure Refused_Generation_Names_Its_Reason
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1660,6 +1861,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, One_Beginning_Token_However_It_Arrives'Access,
          "a prompt carries exactly one beginning token, however it arrives");
+      Register_Routine
+        (T, Reused_Prefix_Changes_Nothing'Access,
+         "reusing a committed prefix changes nothing about the answer");
       Register_Routine
         (T, Model_Prepares'Access,
          "the tiny model prepares and reports its configuration");

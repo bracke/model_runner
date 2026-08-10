@@ -4194,9 +4194,18 @@ package body Checks is
       --  check written there is this one; bringing it here was overdue,
       --  because this tree has three unbuilt directories to that one's two.
       --
-      --  Syntax only: -gnats stops after parsing, so nothing here needs the
-      --  host's own headers or bindings, which is what makes it possible to
-      --  ask the question at all from a machine of the wrong kind.
+      --  Semantics, not only syntax. -gnatc stops before code generation but
+      --  after analysis, so the profiles in a body are checked against the
+      --  spec all five share, names are resolved, and types have to agree.
+      --  Nothing here needs the host's own libraries: these bodies bind to
+      --  their host through Interfaces.C, whose declarations are the same
+      --  everywhere, which is what makes the question askable at all from a
+      --  machine of the wrong kind.
+      --
+      --  It was -gnats for a day, which parses and no more. A body whose
+      --  Physical_Cores returned Integer where the spec says Natural passed
+      --  that and fails this -- and a body nothing compiles is exactly where
+      --  a profile drifts from the spec it implements.
       declare
          Compiler : constant String :=
            Project_Tools.Processes.Locate_Command ("gcc");
@@ -4208,6 +4217,11 @@ package body Checks is
          --  ten bodies failed to parse, including the two this build had
          --  just compiled.
          Full : constant String := Ada.Directories.Full_Name (Root);
+
+         --  Where the compiler is run, and so where it drops the .ali files
+         --  analysis produces. The first version ran it in the tree root and
+         --  left three of them lying there.
+         Scratch : constant String := Full & "/obj/host-bodies";
 
          type Name_Access is access constant String;
          Hosts : constant array (1 .. 5) of Name_Access :=
@@ -4222,10 +4236,12 @@ package body Checks is
          Result.Performed := Result.Performed + 1;
 
          if Compiler = "" then
-            Fail ("no gcc on the path, so no host body could be parsed and "
-                  & "the three directories this build does not compile went "
+            Fail ("no gcc on the path, so no host body could be compiled and "
+                  & "the three directories this build does not build went "
                   & "unchecked");
          else
+            Ada.Directories.Create_Path (Scratch);
+
             for Host of Hosts loop
                declare
                   Where  : constant String :=
@@ -4250,7 +4266,13 @@ package body Checks is
                                 ("-c"));
                            Args.Append
                              (Ada.Strings.Unbounded.To_Unbounded_String
-                                ("-gnats"));
+                                ("-gnatc"));
+                           Args.Append
+                             (Ada.Strings.Unbounded.To_Unbounded_String
+                                ("-I"));
+                           Args.Append
+                             (Ada.Strings.Unbounded.To_Unbounded_String
+                                (Full & "/src/library"));
                            Args.Append
                              (Ada.Strings.Unbounded.To_Unbounded_String
                                 ("-gnat2022"));
@@ -4269,13 +4291,13 @@ package body Checks is
 
                            if Project_Tools.Processes.Run_Status
                                 (Label   => "parse " & Host.all & "/" & Name,
-                                 Dir     => Full,
+                                 Dir     => Scratch,
                                  Program => Compiler,
                                  Args    => Args,
                                  Quiet   => True) /= 0
                            then
                               Fail ("src/platform/" & Host.all & "/" & Name
-                                    & " does not parse; it would fail on "
+                                    & " does not compile; it would fail on "
                                     & "that host and nowhere else");
                            end if;
                         end;
@@ -4286,14 +4308,21 @@ package body Checks is
                end;
             end loop;
 
-            --  A run that parsed nothing found nothing, and would say so by
-            --  saying nothing at all.
+            --  A run that compiled nothing found nothing, and would say so
+            --  by saying nothing at all.
             Result.Performed := Result.Performed + 1;
             if Parsed < 8 then
                Fail ("only" & Natural'Image (Parsed) & " host bodies were "
-                     & "parsed; this tree has ten, so the walk is no longer "
-                     & "finding them");
+                     & "compiled; this tree has ten, so the walk is no "
+                     & "longer finding them");
             end if;
+
+            begin
+               Ada.Directories.Delete_Tree (Scratch);
+            exception
+               when others =>
+                  null;
+            end;
          end if;
       end;
 

@@ -175,15 +175,21 @@ reference 8BAF8A6AF56C8A96 src/library/model_runner-backend-reference.adb src/li
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
 
-# The tokenizer's cost on hostile text, measured with 'model_runner run
-# fixtures/tiny-model.gguf --raw --prompt-file F --max-tokens 1' on a file
-# of 60,000 characters, timed by the shell. Two files: all 'a', and all '<'.
+# covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
+# ordinary characters, 25.5 s for sixty thousand brackets before the marker
+# scan was bounded and 0.045 s after -- re-measured against the sources this
+# fingerprint names, which is why the figure moved from the 0.051 first
+# reported: the same run on a quieter machine. Measured with
+#   model_runner run tests/fixtures/tiny-model.gguf --raw --prompt-file F \
+#     --max-tokens 1
+# on a file of sixty thousand characters, timed by the shell, with F holding
+# all 'a' and then all '<'. The prompt is refused for length in every case and
+# the time is spent before that refusal.
 #
-#   all 'a'   0.039 s
-#   all '<'   25.5 s   before the marker scan was bounded
-#   all '<'   0.051 s  after
-#
-# The prompt is refused for length in every case; the time is spent before
-# that refusal. The README quotes these three. 'tests fuzz' reports the same
-# thing continuously as its worst case in milliseconds, which is what keeps
-# them from going stale without anybody noticing.
+# These went in as prose and not as a group, which made them the only measured
+# figures in the README that nothing guarded -- and the ones most likely to
+# move, because they are about a scan somebody may well touch again. 'tests
+# fuzz' watches the same thing continuously as its worst case in milliseconds,
+# but that is a limit and not a figure: it says the cost is not absurd, not
+# what the cost is.
+tokenizer C31707CC57513F4B src/library/model_runner-tokenizer.adb

@@ -424,7 +424,7 @@ documented input limit, took **25.5 seconds** where the same length of
 ordinary text took **0.039**. Nothing was wrong with the answer. The scan is
 now bounded by the longest marker the vocabulary actually holds, which for the
 fixture is four bytes and for a real vocabulary about seventeen, and the same
-prompt takes 0.051 seconds.
+prompt takes 0.045 seconds.
 
 The longest cases are drawn from an alphabet where one character in two is a
 bracket, because a cost paid per bracket is invisible in text where one
@@ -607,13 +607,17 @@ the 120-character line budget, a catalog entry for every diagnostic code, and
 that the generated error-code reference is current. The checks are
 negative-tested: injecting a violation makes them fail.
 
-They also parse every host body, not only the two a build compiles.
+They also compile every host body, not only the two a build uses.
 `src/platform` holds five directories and a Linux build uses `linux` and
 `posix`; the other three are production code no compiler here would otherwise
-see, and reading them as text is not parsing. The sibling `hostkit` crate
-shipped a Windows body holding `('\\')` where Ada spells a backslash, found by
-building on Windows and nowhere else. `gcc -gnats` stops after the syntax, so
-the question can be asked from a machine of the wrong kind.
+see, and reading them as text is not compiling them. The sibling `hostkit`
+crate shipped a Windows body holding `('\\')` where Ada spells a backslash,
+found by building on Windows and nowhere else. `gcc -gnatc` stops before code
+generation but after analysis, so profiles are checked against the spec all
+five share and names are resolved — and nothing here needs the host's own
+libraries, because these bodies reach their host through `Interfaces.C`, whose
+declarations are the same everywhere. That is what makes the question askable
+from a machine of the wrong kind.
 
 ## Layering
 
