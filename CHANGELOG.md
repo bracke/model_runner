@@ -7,6 +7,81 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Both tokenizers are compared against a reader written from the description
+  rather than from the code. The forward pass has had one since the
+  beginning; the tokenizer had three recordings from `llama.cpp`, each
+  needing a model nobody can commit, so on a clean checkout the strongest
+  thing said about it was that its own unit tests agreed with themselves.
+  `Reference_Tokenizer` reads the vocabulary out of the container and encodes
+  by the documented rule, scanning where the engine hashes, on both roads and
+  under all five byte-pair cutting rules.
+
+  Every case string was chosen against a wrong reader rather than by
+  inspection. Two of the SentencePiece cases exist because a reader that
+  merged the *leftmost* pair instead of the best-scoring one agreed with the
+  engine on all the others; `"abc"` is in the byte-pair set against a reader
+  that merged by position rather than by rank.
+
+- The byte-pair half of the tokenizer is covered at all. Every tokenizer test
+  built a `llama` vocabulary, so the merge table, the byte-to-character
+  mapping and all five cutting rules ran nowhere, while the support matrix
+  marked those rows implemented under a definition that requires coverage.
+  `BPE_Vocabulary` is the smallest vocabulary on which the five rules give
+  five different answers, and `Tiny_Model` can now write its vocabulary as a
+  byte-pair one, so a byte-pair model prepares, evaluates and reads back.
+
+- `--top-p` has a test of what it does. It was set below one in two places:
+  once at zero to prove it is refused, and once at a random value in a test
+  asserting only that some usable token comes back. A build in which it did
+  nothing at all passed the suite.
+
+- Text is fuzzed, not only model files. A prompt file, standard input and a
+  command-line value are untrusted too and reach `Encode` whole.
+  `Text_Fuzzing` fails a case that raises, that reports a code the interface
+  does not document, that succeeds and hands back a token outside the
+  vocabulary, or that takes longer than 50 ms plus 20 µs a character. The
+  clock is there because the bracket cost above could not have been found any
+  other way.
+
+- Every host body is compiled for every host, in the tests crate as well as
+  the library. `src/platform` holds five directories and a build uses two, so
+  three were production code no compiler here would otherwise see; `gcc
+  -gnatc` stops before code generation but after analysis, so profiles are
+  checked against the spec all five share. The sibling `hostkit` crate had
+  shipped a Windows body holding `('\\')` where Ada spells a backslash, found
+  by building on Windows and nowhere else. Each host must also have exactly
+  one body for each platform spec, and a host call may be bound by name only
+  from a per-host directory.
+
+- Diagnostics are held in three states rather than two. `Reserved_Codes`
+  names the codes nothing raises; `Unreached_Codes` names the codes the
+  program raises that no test names, each with why. Seventeen were in that
+  third state with nothing saying so -- a refusal written and never made to
+  happen is a promise the program has not been asked to keep. Eleven are
+  reached now.
+
+- `--repack` and `--no-mmap` are compared through the whole command for the
+  first time. The comparison ran the driver in-process with `Set_Output`
+  aimed at a file, which cannot catch generated text, so all three strings
+  were a single newline and the assertions compared it with itself -- and the
+  middle run was not a repacked one at all, because `"--repack f32"` arrived
+  as one argument and was refused as an unknown option.
+
+- Every interactive command runs, rather than only parsing. One session was
+  driven anywhere in the suite and it typed `hello`, a blank line, `/stats`
+  and `/exit`. `/reset` now has to clear the conversation, seen through
+  `/context`; a line past the 8192-byte buffer and a line that is not UTF-8
+  both have to be refused by name.
+
+- Reusing a committed prefix has to change nothing. It decides whether an
+  interactive turn keeps its context and evaluates only the new suffix, and a
+  wrong answer in the reusing direction does not crash -- it feeds the model
+  a context that does not match the text that was rendered.
+
+- The core count that sets the default worker count keeps a contract, and the
+  rule its Linux body applies to each line it reads is somewhere a test can
+  hand it a string.
+
 - Conformance hands a prompt over in several calls as well as one: 1170
   sequences. A prompt longer than `--batch-size` is evaluated in chunks, and
   the seam between them -- where the cache position carries from one call to
@@ -230,6 +305,54 @@ Keep a Changelog and the project uses semantic versioning.
   knowable only by remembering what was typed.
 
 ### Fixed
+
+- A marker written into the text -- `<|im_start|>`, `</s>` -- is one token on
+  both tokenizer roads. The rule that turns a marker back into the token it
+  stands for lived inside the byte-pair road alone, and a chat template
+  substitutes `bos_token` and `eos_token` as their *spelling* before anything
+  is tokenized. So every templated turn handed a SentencePiece model its own
+  end marker as a run of byte tokens, and a model that sees the letters
+  answers in letters, spelling its end marker out instead of stopping. On the
+  fixture `"a</s>b"` was seven tokens and is four. `Encode` now cuts the text
+  at every marker and encodes what lies between on whichever road the
+  vocabulary names; text holding no marker tokenizes exactly as before.
+
+- A prompt of brackets no longer costs six hundred times what ordinary text
+  costs. The scan for a control token runs wherever the text opens a bracket
+  and tried every length up to `Max_Token_Bytes`, 1024 -- thirty times longer
+  than any real marker -- so the cost fell on whoever wrote the text rather
+  than on whoever wrote the file. Prompt files and standard input are
+  untrusted and the documented input limit is 65,536 code points, so this was
+  a denial of service anyone could send: sixty thousand brackets took 25.5
+  seconds where sixty thousand ordinary characters took 0.039. The vocabulary
+  records the longest piece it calls a control token that opens a bracket and
+  the scan stops there -- four bytes for the fixture, about seventeen for a
+  real vocabulary. The same prompt takes 0.045 seconds.
+
+- A byte-pair buffer too small for the answer is reported rather than filled
+  as far as it goes. That road wrote into the target under a test for room
+  and did nothing when there was none, so a cramped caller got a short answer
+  and a success, where the SentencePiece road has always raised
+  `MR-TOK-0013`.
+
+- A piece a byte-pair vocabulary cannot spell is marked unknown rather than
+  dropped. It used to be deleted from the caller's own prompt without a word.
+  A byte-level vocabulary carries a piece for every one of the 256 stand-in
+  characters so it cannot happen to a file written properly, and a file that
+  was not is the case this program exists to survive. `MR-TOK-0014` was
+  reserved for it and now reports it.
+
+- `tests speed` fails when it measured nothing. With no `--model`, and with a
+  path to a file that is not there, it printed "nothing measured" and left
+  with a success. Every other campaign here refuses to pass on having done
+  nothing.
+
+- The suite no longer writes the program's generated text into its own
+  report. Generated text goes through the raw stream of
+  `Ada.Text_IO.Standard_Output`, which `Set_Output` does not redirect, so
+  seven fragments of it sat in the middle of the AUnit report on every run --
+  and the same mechanism let a comparison of generated text compare one
+  newline with itself for as long as it existed.
 
 - The `inspect` report goes to standard output. All of it went to standard
   error, so `inspect MODEL > report.txt` wrote an empty file, and

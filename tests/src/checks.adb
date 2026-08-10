@@ -4285,6 +4285,80 @@ package body Checks is
       --  one of these checks weighs every file in the tree, so a generated
       --  config or a fixture the suite wrote changes it by a few either way.
       --  Well under the count so that ordinary work is not an event, and far
+      --  The changelog keeps up with the library.
+      --
+      --  It says on its first line that all notable changes are recorded in
+      --  it, and nothing held that. Eleven commits went by unrecorded, among
+      --  them a denial of service anyone could send, a tokenizer defect that
+      --  made every SentencePiece model read its own template's end marker
+      --  as a run of bytes, and two silent losses on the byte-pair road. A
+      --  reader deciding whether to upgrade would have learned none of it,
+      --  and the only thing checked about the file was that it exists.
+      --
+      --  What is asked is that no commit touching src is newer than the
+      --  newest commit touching CHANGELOG.md. Committing both together
+      --  satisfies it -- the timestamps are then equal -- so the rule in
+      --  practice is that a change to the library and its entry arrive in
+      --  the same commit. It is asked of git, which the pristine command
+      --  already needs, and of committed history rather than of the working
+      --  tree: an entry written and not committed has not been published.
+      --  Without git the question cannot be asked, and saying so is better
+      --  than passing.
+      declare
+         Git : constant String :=
+           Project_Tools.Processes.Locate_Command ("git");
+
+         function Newest (Path : String) return String is
+            Args : Project_Tools.Processes.Argument_Vectors.Vector;
+
+            --  Passed even though it is not read: Command_Output
+            --  dereferences it without asking whether it is there.
+            Status : aliased Integer := 0;
+         begin
+            Args.Append
+              (Ada.Strings.Unbounded.To_Unbounded_String ("-C"));
+            Args.Append
+              (Ada.Strings.Unbounded.To_Unbounded_String
+                 (Ada.Directories.Full_Name (Root)));
+            Args.Append (Ada.Strings.Unbounded.To_Unbounded_String ("log"));
+            Args.Append
+              (Ada.Strings.Unbounded.To_Unbounded_String ("-1"));
+            Args.Append
+              (Ada.Strings.Unbounded.To_Unbounded_String ("--format=%ct"));
+            Args.Append (Ada.Strings.Unbounded.To_Unbounded_String ("--"));
+            Args.Append (Ada.Strings.Unbounded.To_Unbounded_String (Path));
+
+            return T.Trim
+              (Project_Tools.Processes.Command_Output
+                 (Command   => Git,
+                  Arguments => Args,
+                  Status    => Status'Access));
+         end Newest;
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if Git = "" then
+            Fail ("no git on the path, so whether the changelog keeps up "
+                  & "with the library could not be asked");
+         else
+            declare
+               Sources : constant String := Newest ("src");
+               Changes : constant String := Newest ("CHANGELOG.md");
+            begin
+               if Sources = "" or else Changes = "" then
+                  --  A tree with no history, which a source archive is.
+                  --  Nothing to compare, and nothing wrong.
+                  null;
+               elsif T.Leading_Number (Sources) > T.Leading_Number (Changes)
+               then
+                  Fail ("src has changed since the changelog last did; put "
+                        & "the entry under [Unreleased] and commit it with "
+                        & "the change it describes");
+               end if;
+            end;
+         end if;
+      end;
+
       --  No host call is bound straight from the tests crate.
       --
       --  A host call is reached from a directory the project file picks per

@@ -14,6 +14,21 @@ allocations, invalid UTF-8, overlapping tensor ranges, invalid quantization
 block structure, and unbounded recursion or iteration driven by file content.
 No compatibility mode disables a bounds or integrity check.
 
+It also treats **cost** as an attack. Input that is bounded, valid and cheap
+to write must be cheap to process: work that grows faster than the input, or
+that multiplies the input by a constant taken from a file, is a way to spend a
+machine's time without a malformed byte anywhere. This is not hypothetical
+here. A prompt of sixty thousand `<` characters -- well inside the documented
+input limit of 65,536 code points -- took 25.5 seconds where sixty thousand
+ordinary characters took 0.039, because the scan for a control token tried
+every length the format allows at every bracket. The bound is now the longest
+marker the vocabulary actually holds, and the same prompt takes 0.045 seconds.
+
+What holds it is `tests fuzz`, which watches the clock as well as the outcome:
+a case that takes longer than 50 ms plus 20 µs a character fails the campaign,
+which is about a hundred times what encoding costs. A correctness check could
+not have found this, because nothing was wrong with the answer.
+
 Model files are opened read-only and are never modified. Embedded metadata and
 templates never cause additional file access: only explicitly supplied paths
 are opened.

@@ -21,7 +21,13 @@ package body Captured_Output is
    --  they are spelled with a leading underscore -- in the crate whose own
    --  checks demand that every host body compile for every host. Hostkit
    --  already knew the answer: Assign is dup2 on POSIX and SetStdHandle on
-   --  Windows, and says so in its own comment.
+   --  Windows.
+   --
+   --  Its comment described only the caller it was written for -- a child,
+   --  between fork and exec -- so using it here was relying on a guarantee
+   --  nobody had written down. It names this caller too now, and says what
+   --  in-process redirection costs: the assigned stream becomes inheritable,
+   --  which a standard stream already is.
    Saved   : D.Descriptor := D.Invalid;
    Opened  : D.Descriptor := D.Invalid;
    Working : Boolean := False;
