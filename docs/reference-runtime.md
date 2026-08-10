@@ -253,13 +253,23 @@ pair instead of the best-scoring one agreed with the engine on all the others;
 `"abc"` is in the byte-pair set for the same reason, against a reader that
 merged by position rather than by rank.
 
-Writing the byte-pair reader is also what found two defects on that road,
-which no test reached because the suite had no byte-pair vocabulary at all: a
-buffer too small for the answer was filled as far as it went and reported
-success, where the SentencePiece road raises `MR-TOK-0013`; and a piece the
-vocabulary could not spell was dropped, deleting part of the caller's own
-prompt without saying so. Both are fixed, and the second is what `MR-TOK-0014`
-now reports.
+Writing the byte-pair reader is also what found three defects, two of them on
+that road, which no test reached because the suite had no byte-pair vocabulary
+at all: a buffer too small for the answer was filled as far as it went and
+reported success, where the SentencePiece road raises `MR-TOK-0013`; and a
+piece the vocabulary could not spell was dropped, deleting part of the caller's
+own prompt without saying so. Both are fixed, and the second is what
+`MR-TOK-0014` now reports.
+
+The third was the more serious, and it came from having the two readers side by
+side: the rule that turns a marker such as `<|im_start|>` or `</s>` into a
+single token lived inside the byte-pair road alone. A chat template substitutes
+`bos_token` and `eos_token` as their *spelling* before anything is tokenized,
+so a SentencePiece model was reading its own template's end marker as a run of
+byte tokens on every templated turn — and a model that sees the letters answers
+in letters, spelling its end marker out instead of stopping. The rule is now
+one rule above both roads. Text holding no marker tokenizes exactly as it did,
+which is what the dummy word marker going on the first stretch only is for.
 
 What a reference runtime adds beyond that is agreement on the *conventions* at
 a scale a fixture cannot reach: tokenization of real text against a vocabulary

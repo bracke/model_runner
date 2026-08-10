@@ -131,7 +131,11 @@ package body BPE_Vocabulary is
       Fixtures.Int32_Element (Builder, 3);   --  <|im_start
       Fixtures.End_Array (Builder);
 
+      --  The markers double as the beginning and end tokens, so that asking
+      --  for them and writing them into the text reach the same identifier.
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);
+      Fixtures.Add_U32 (Builder, "tokenizer.ggml.bos_token_id", 24);
+      Fixtures.Add_U32 (Builder, "tokenizer.ggml.eos_token_id", 25);
       Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_bos_token", False);
       Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
 

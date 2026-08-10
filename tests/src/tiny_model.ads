@@ -108,6 +108,13 @@ package Tiny_Model is
    --  @param Omit_Biases Leave the attention biases out of a qwen2 file, so
    --    that a model claiming an architecture it does not carry the weights
    --    for is refused rather than read.
+   --  @param Byte_Pair Write the vocabulary as a byte-pair one -- a `gpt2`
+   --    model with a merge table, pieces in the stand-in alphabet and the
+   --    same three control tokens -- instead of a SentencePiece one. That
+   --    road had no model of its own: every session, every generated token
+   --    and the whole conformance sweep went through SentencePiece, so
+   --    nothing said whether a byte-pair vocabulary survives being driven
+   --    rather than called.
    procedure Build
      (Result         : out Model_Runner.Bytes.Byte_Array_Access;
       Format         : Weight_Format := F32;
@@ -115,6 +122,7 @@ package Tiny_Model is
       Adds_Beginning : Boolean := True;
       Room           : Positive := Context;
       Qwen           : Boolean := False;
-      Omit_Biases    : Boolean := False);
+      Omit_Biases    : Boolean := False;
+      Byte_Pair      : Boolean := False);
 
 end Tiny_Model;

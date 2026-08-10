@@ -875,14 +875,63 @@ package body Model_Runner.Tokenizer is
 
    end BPE;
 
-   procedure Encode
-     (Item          : Vocabulary;
-      Text          : String;
-      Add_Beginning : Boolean;
-      Add_End       : Boolean;
-      Target        : out Token_Array;
-      Last          : out Natural;
-      Status        : out E.Error_Info)
+   --  The longest piece starting at From that the vocabulary calls a control
+   --  token or one of its author's own, with how many characters it spans.
+   --
+   --  A marker such as <|im_start|> or </s> is one token, not the dozen its
+   --  spelling would merge into. A chat template writes them into the text it
+   --  renders -- bos_token and eos_token are substituted as their spelling
+   --  before anything is tokenized -- so a model reading that text has to see
+   --  the token the template meant rather than its letters, and a model that
+   --  sees the letters answers in letters, ending its turn by spelling the
+   --  marker out instead of stopping.
+   --
+   --  Only positions opening a bracket are tried, so ordinary text that
+   --  merely starts with one is untouched, and the longest match wins, so a
+   --  marker that is a prefix of another cannot take its place.
+   procedure Marker_At
+     (Item   : Vocabulary;
+      Text   : String;
+      From   : Positive;
+      Token  : out Token_Id;
+      Length : out Natural) is
+   begin
+      Token := No_Token;
+      Length := 0;
+
+      if Text (From) /= '<' then
+         return;
+      end if;
+
+      for Reach in reverse 1 .. Natural'Min
+        (Max_Token_Bytes, Text'Last - From + 1)
+      loop
+         declare
+            Candidate : constant Token_Id :=
+              Find (Item, Text (From .. From + Reach - 1));
+         begin
+            if Candidate /= No_Token
+              and then Class_Of (Item, Candidate) in
+                         Class_Control | Class_User_Defined
+            then
+               Token := Candidate;
+               Length := Reach;
+               return;
+            end if;
+         end;
+      end loop;
+   end Marker_At;
+
+   --  Encode text that holds no marker, on whichever road the vocabulary
+   --  names. Lead says whether this text begins the caller's text, which is
+   --  the only place SentencePiece puts its dummy word marker.
+   procedure Encode_Plain
+     (Item   : Vocabulary;
+      Text   : String;
+      Lead   : Boolean;
+      Target : out Token_Array;
+      Last   : out Natural;
+      Status : out E.Error_Info)
    is
       --  A symbol is a slice of the working text. Symbols form a doubly
       --  linked list so that a merge is a constant-time splice.
@@ -917,7 +966,7 @@ package body Model_Runner.Tokenizer is
          end if;
 
          --  Measure first so the buffer is exact rather than a worst case.
-         Needed := Space_Marker'Length;
+         Needed := (if Lead then Space_Marker'Length else 0);
          for Character_Value of Text loop
             Needed := Needed
               + (if Character_Value = ' ' then Space_Marker'Length else 1);
@@ -934,7 +983,10 @@ package body Model_Runner.Tokenizer is
                Length := Length + Piece'Length;
             end Put;
          begin
-            Put (Space_Marker);
+            if Lead then
+               Put (Space_Marker);
+            end if;
+
             for Character_Value of Text loop
                if Character_Value = ' ' then
                   Put (Space_Marker);
@@ -1151,66 +1203,18 @@ package body Model_Runner.Tokenizer is
                end loop;
             end Emit;
          begin
-            if Add_Beginning and then Item.Beginning /= No_Token then
-               Put (Item.Beginning);
-            end if;
-
-            --  A marker such as <|im_start|> is one token, not the dozen
-            --  its spelling would merge into. A chat template writes them
-            --  into the text it renders, so a model reading that text has to
-            --  see the token the template meant rather than its letters --
-            --  and a model that sees the letters answers in letters, ending
-            --  its turn by spelling the marker out instead of stopping.
-            --
-            --  Only positions beginning a bracket are tried, and the longest
-            --  match that the vocabulary calls a control token wins, so
-            --  ordinary text that merely starts with one is untouched.
             while From <= Text'Last loop
                declare
-                  Marker : Natural := 0;
-                  Ending : Natural := 0;
+                  Stop : constant Natural :=
+                    BPE.Cut_At (Text, From, Item.Cutting);
                begin
-                  if Text (From) = '<' then
-                     for Reach in reverse 1 .. Natural'Min
-                       (Max_Token_Bytes, Text'Last - From + 1)
-                     loop
-                        declare
-                           Candidate : constant Token_Id :=
-                             Find (Item, Text (From .. From + Reach - 1));
-                        begin
-                           if Candidate /= No_Token
-                             and then Class_Of (Item, Candidate) in
-                                        Class_Control | Class_User_Defined
-                           then
-                              Marker := Natural (Candidate);
-                              Ending := From + Reach - 1;
-                              exit;
-                           end if;
-                        end;
-                     end loop;
-                  end if;
-
-                  if Ending > 0 then
-                     Put (Token_Id (Marker));
-                     From := Ending + 1;
-                  else
-                     declare
-                        Stop : constant Natural :=
-                          BPE.Cut_At (Text, From, Item.Cutting);
-                     begin
-                        exit when Stop < From;
-                        Emit (Text (From .. Stop));
-                        From := Stop + 1;
-                     end;
-                  end if;
+                  exit when Stop < From;
+                  Emit (Text (From .. Stop));
+                  From := Stop + 1;
                end;
 
                exit when Refused;
             end loop;
-
-            if Add_End and then Item.Ending /= No_Token then
-               Put (Item.Ending);
-            end if;
 
             Last := (if Refused then 0 else Produced);
             return;
@@ -1218,14 +1222,6 @@ package body Model_Runner.Tokenizer is
       end if;
 
       Build_Working (Working);
-
-      if Add_Beginning and then Item.Beginning /= No_Token then
-         Emit (Item.Beginning, Ok);
-         if not Ok then
-            Status := E.Make (E.Tokenizer_Buffer_Too_Small);
-            return;
-         end if;
-      end if;
 
       --  Split into code points, substituting the space marker.
       declare
@@ -1342,14 +1338,6 @@ package body Model_Runner.Tokenizer is
       end;
 
       Release;
-
-      if Add_End and then Item.Ending /= No_Token then
-         Emit (Item.Ending, Ok);
-         if not Ok then
-            Status := E.Make (E.Tokenizer_Buffer_Too_Small);
-            return;
-         end if;
-      end if;
    exception
       when Occurrence : others =>
          Release;
@@ -1357,6 +1345,158 @@ package body Model_Runner.Tokenizer is
          E.Add_Frame (Status, "tokenizer.encode");
          E.Add_Frame
            (Status, Ada.Exceptions.Exception_Name (Occurrence));
+   end Encode_Plain;
+
+   ------------
+   -- Encode --
+   ------------
+
+   procedure Encode
+     (Item          : Vocabulary;
+      Text          : String;
+      Add_Beginning : Boolean;
+      Add_End       : Boolean;
+      Target        : out Token_Array;
+      Last          : out Natural;
+      Status        : out E.Error_Info)
+   is
+      Produced : Natural := 0;
+
+      --  Append a token, reporting a full target buffer.
+      procedure Put (Token : Token_Id; Ok : out Boolean) is
+      begin
+         if Produced >= Target'Length then
+            Status := E.Make (E.Tokenizer_Buffer_Too_Small);
+            E.Add_Integer (Status, "size", Long_Long_Integer (Target'Length));
+            Ok := False;
+         else
+            Produced := Produced + 1;
+            Target (Target'First + Produced - 1) := Token;
+            Ok := True;
+         end if;
+      end Put;
+
+      --  Encode one stretch of ordinary text into what is left of Target.
+      procedure Part (Text : String; Lead : Boolean; Ok : out Boolean) is
+         Made : Natural;
+      begin
+         Encode_Plain
+           (Item, Text, Lead,
+            Target (Target'First + Produced .. Target'Last), Made, Status);
+         Ok := E.Is_Ok (Status);
+         if Ok then
+            Produced := Produced + Made;
+         end if;
+      end Part;
+
+      From : Positive := Text'First;
+      Lead : Boolean := True;
+      Ok   : Boolean;
+   begin
+      Last := 0;
+      Status := E.Success;
+
+      if not Item.Loaded then
+         Status := E.Make (E.Tokenizer_Invalid_Vocabulary);
+         return;
+      end if;
+
+      if not Model_Runner.UTF8.Is_Valid (Text) then
+         Status := E.Make (E.Tokenizer_Invalid_UTF8);
+         return;
+      end if;
+
+      --  Reject an oversized input before allocating anything for it: the
+      --  symbol limit is a code point count, and counting needs no copy.
+      if Model_Runner.UTF8.Code_Point_Count (Text) > Max_Symbols then
+         Status := E.Make (E.Tokenizer_Input_Too_Long);
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Symbols));
+         return;
+      end if;
+
+      if Add_Beginning and then Item.Beginning /= No_Token then
+         Put (Item.Beginning, Ok);
+         if not Ok then
+            return;
+         end if;
+      end if;
+
+      --  Cut the text at every marker and encode what lies between. Both
+      --  roads come through here, so the rule is one rule: it used to live
+      --  inside the byte-pair road alone, which left a SentencePiece model
+      --  reading its own template's end marker as a run of bytes.
+      --
+      --  The dummy word marker SentencePiece puts in front goes on the first
+      --  stretch only. A stretch that follows a marker is a continuation of
+      --  the text rather than the start of it, and this way a text holding
+      --  no marker is tokenized exactly as it was before the rule arrived.
+      --  Empty text is a stretch of its own and not no stretch at all: on the
+      --  SentencePiece road the dummy word marker is a token, and a caller
+      --  asking for the beginning token and nothing else gets both.
+      if Text'Length = 0 then
+         Part (Text, True, Ok);
+         if not Ok then
+            Last := 0;
+            return;
+         end if;
+      end if;
+
+      while From <= Text'Last loop
+         declare
+            Token : Token_Id;
+            Span  : Natural;
+            Found : Natural := 0;
+            Reach : Natural := 0;
+            Scan  : Positive := From;
+         begin
+            loop
+               Marker_At (Item, Text, Scan, Token, Span);
+               if Token /= No_Token then
+                  Found := Scan;
+                  Reach := Span;
+                  exit;
+               end if;
+
+               exit when Scan = Text'Last;
+               Scan := Scan + 1;
+            end loop;
+
+            declare
+               Stop : constant Natural :=
+                 (if Found = 0 then Text'Last else Found - 1);
+            begin
+               if Stop >= From then
+                  Part (Text (From .. Stop), Lead, Ok);
+                  if not Ok then
+                     Last := 0;
+                     return;
+                  end if;
+                  Lead := False;
+               end if;
+            end;
+
+            exit when Found = 0;
+
+            Put (Token, Ok);
+            if not Ok then
+               Last := 0;
+               return;
+            end if;
+
+            Lead := False;
+            From := Found + Reach;
+         end;
+      end loop;
+
+      if Add_End and then Item.Ending /= No_Token then
+         Put (Item.Ending, Ok);
+         if not Ok then
+            Last := 0;
+            return;
+         end if;
+      end if;
+
+      Last := Produced;
    end Encode;
 
    --------------------

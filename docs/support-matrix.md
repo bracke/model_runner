@@ -85,7 +85,7 @@ than cut by the wrong one.
 | UTF-8-boundary-safe incremental decoding | Implemented |
 | BPE merge tables | Implemented for the `gpt-2`, `falcon`, `starcoder`, `smollm`, `llama3` and `qwen2` cutting rules, in any script -- a letter is told from a symbol by its Unicode category, not by whether it is ASCII; a vocabulary naming another rule is refused by name |
 | BPE byte-to-character mapping, both ways | Implemented; encoding rewrites each byte as the character that stands for it and decoding undoes that, which the suite checks by round trip |
-| Markers such as `<|im_start|>` in byte-pair text | Implemented; the longest piece the vocabulary calls a control or user-defined token wins, so a rendered chat template reaches the model as the tokens it meant |
+| Markers such as `<|im_start|>` or `</s>` written into the text | Implemented on both roads; the longest piece the vocabulary calls a control or user-defined token wins, so a rendered chat template reaches the model as the tokens it meant. A template substitutes `bos_token` and `eos_token` as their spelling before anything is tokenized, which is why this matters on every templated turn. The rule used to be inside the byte-pair road alone, so a SentencePiece model read its own template's end marker as a run of bytes |
 
 What the byte-pair cut carries is a rule per vocabulary rather than a general
 engine for the expressions those pre-tokenizers are written as. Two limits

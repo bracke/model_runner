@@ -2549,6 +2549,54 @@ package body Tests.GGUF_Cases is
          B.Free (Image);
       end;
 
+      --  The beginning and end tokens, asked for rather than written into
+      --  the text. Nothing came down this road with either flag set, and it
+      --  is the road where asking for the beginning token used to write into
+      --  the buffer with no test for room at all -- which on a buffer of no
+      --  room is a constraint error and not a diagnostic.
+      declare
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+         Tokens : Vocab.Token_Array (1 .. 8);
+         Nothing : Vocab.Token_Array (1 .. 0);
+         Last   : Natural;
+      begin
+         BPE_Vocabulary.Build ("gpt-2", Image);
+         Parse_Image (Image.all, Item, Parse);
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status), "the byte-pair vocabulary did not load");
+
+         Vocab.Encode (Words, "ab", True, True, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status), "the engine refused to bracket a prompt");
+         Assert (Last = 3 and then Tokens (1) = 24 and then Tokens (2) = 11
+                 and then Tokens (3) = 25,
+                 "the beginning and end tokens did not bracket the prompt");
+
+         Vocab.Encode (Words, "ab", True, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status) and then Last = 2
+                 and then Tokens (1) = 24 and then Tokens (2) = 11,
+                 "the end token was added when it was not asked for");
+
+         Vocab.Encode (Words, "ab", False, True, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status) and then Last = 2
+                 and then Tokens (1) = 11 and then Tokens (2) = 25,
+                 "the beginning token was added when it was not asked for");
+
+         --  A buffer with no room at all, which is where writing without
+         --  asking would raise rather than report.
+         Vocab.Encode (Words, "ab", True, False, Nothing, Last, Status);
+         Assert (Status.Code = E.Tokenizer_Buffer_Too_Small,
+                 "a buffer of no room accepted the beginning token: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+
       --  A vocabulary naming a rule this does not implement is refused by
       --  name rather than cut by the wrong one.
       declare

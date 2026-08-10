@@ -30,7 +30,8 @@ package body Tiny_Model is
       Adds_Beginning : Boolean := True;
       Room      : Positive := Context;
       Qwen      : Boolean := False;
-      Omit_Biases : Boolean := False)
+      Omit_Biases : Boolean := False;
+      Byte_Pair : Boolean := False)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -191,7 +192,9 @@ package body Tiny_Model is
         (Builder, Prefix & ".rope.dimension_count", Interfaces.Unsigned_32 (Head_Size));
       Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base", 10_000.0);
 
-      Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+      Fixtures.Add_String
+        (Builder, "tokenizer.ggml.model",
+         (if Byte_Pair then "gpt2" else "llama"));
 
       --  A minimal template inside the supported subset, so that the
       --  conversation path can be exercised end to end without a real model.
@@ -202,56 +205,131 @@ package body Tiny_Model is
          & "{% endfor %}"
          & "{% if add_generation_prompt %}{{ 'assistant: ' }}{% endif %}");
 
-      --  A vocabulary with three control tokens, a handful of ordinary
-      --  pieces and byte-fallback tokens, which is the smallest shape that
-      --  still exercises every decoding path.
-      Fixtures.Begin_Array
-        (Builder, "tokenizer.ggml.tokens", G.Value_String, Vocabulary);
-      Fixtures.String_Element (Builder, "<unk>");
-      Fixtures.String_Element (Builder, "<s>");
-      Fixtures.String_Element (Builder, "</s>");
-      Fixtures.String_Element
-        (Builder,
-         [1 => Character'Val (16#E2#), 2 => Character'Val (16#96#),
-          3 => Character'Val (16#81#)]);
-      Fixtures.String_Element (Builder, "a");
-      Fixtures.String_Element (Builder, "b");
-      Fixtures.String_Element (Builder, "c");
-      Fixtures.String_Element (Builder, "ab");
-      Fixtures.String_Element (Builder, "bc");
-      Fixtures.String_Element
-        (Builder,
-         [1 => Character'Val (16#E2#), 2 => Character'Val (16#96#),
-          3 => Character'Val (16#81#)] & "a");
-      Fixtures.String_Element (Builder, "<0x61>");
-      Fixtures.String_Element (Builder, "<0x62>");
-      Fixtures.String_Element (Builder, "<0x63>");
-      Fixtures.String_Element (Builder, "<0x64>");
-      Fixtures.String_Element (Builder, "<0x20>");
-      Fixtures.String_Element (Builder, "<0x0A>");
-      Fixtures.End_Array (Builder);
+      --  The byte-pair vocabulary. Sixteen pieces again, so the embedding
+      --  matrix fits either, and the same three control tokens at the same
+      --  identifiers, so a test varying the end token means the same thing
+      --  on both roads. The pieces are written in the stand-in alphabet
+      --  those vocabularies use, where a space is U+0120.
+      if Byte_Pair then
+         declare
+            Space : constant String :=
+              [Character'Val (16#C4#), Character'Val (16#A0#)];
 
-      Fixtures.Begin_Array
-        (Builder, "tokenizer.ggml.scores", G.Value_Float32, Vocabulary);
-      for Index in 0 .. Vocabulary - 1 loop
-         --  Longer pieces score higher so that the merge order is
-         --  deterministic and easy to predict.
-         Fixtures.Float_Element (Builder, N.Real (Index) * 0.5);
-      end loop;
-      Fixtures.End_Array (Builder);
+            type Text_Access is access constant String;
+            Pieces : constant array (1 .. Vocabulary) of Text_Access :=
+              [new String'("<unk>"),
+               new String'("<s>"),
+               new String'("</s>"),
+               new String'(Space),
+               new String'("a"),
+               new String'("b"),
+               new String'("c"),
+               new String'("ab"),
+               new String'("bc"),
+               new String'(Space & "a"),
+               new String'(Space & "ab"),
+               new String'("abc"),
+               new String'("x"),
+               new String'(Space & "b"),
+               new String'("1"),
+               new String'("2")];
 
-      Fixtures.Begin_Array
-        (Builder, "tokenizer.ggml.token_type", G.Value_Int32, Vocabulary);
-      Fixtures.Int32_Element (Builder, 2);   --  <unk>
-      Fixtures.Int32_Element (Builder, 3);   --  <s>
-      Fixtures.Int32_Element (Builder, 3);   --  </s>
-      for Index in 3 .. 9 loop
-         Fixtures.Int32_Element (Builder, 1);
-      end loop;
-      for Index in 10 .. Vocabulary - 1 loop
-         Fixtures.Int32_Element (Builder, 6);
-      end loop;
-      Fixtures.End_Array (Builder);
+            --  Rank order, and not the order the pieces are written: what
+            --  decides a merge here is the rank and not the score.
+            Merges : constant array (1 .. 6) of Text_Access :=
+              [new String'(Space & " a"),
+               new String'(Space & "a b"),
+               new String'(Space & " b"),
+               new String'("b c"),
+               new String'("a b"),
+               new String'("ab c")];
+         begin
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.tokens", G.Value_String, Vocabulary);
+            for Index in Pieces'Range loop
+               Fixtures.String_Element (Builder, Pieces (Index).all);
+            end loop;
+            Fixtures.End_Array (Builder);
+
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.merges", G.Value_String,
+               Merges'Length);
+            for Index in Merges'Range loop
+               Fixtures.String_Element (Builder, Merges (Index).all);
+            end loop;
+            Fixtures.End_Array (Builder);
+
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.scores", G.Value_Float32, Vocabulary);
+            for Index in 0 .. Vocabulary - 1 loop
+               Fixtures.Float_Element (Builder, 0.0);
+            end loop;
+            Fixtures.End_Array (Builder);
+
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.token_type", G.Value_Int32,
+               Vocabulary);
+            Fixtures.Int32_Element (Builder, 2);   --  <unk>
+            Fixtures.Int32_Element (Builder, 3);   --  <s>
+            Fixtures.Int32_Element (Builder, 3);   --  </s>
+            for Index in 4 .. Vocabulary loop
+               Fixtures.Int32_Element (Builder, 1);
+            end loop;
+            Fixtures.End_Array (Builder);
+         end;
+      else
+
+         --  A vocabulary with three control tokens, a handful of ordinary
+         --  pieces and byte-fallback tokens, which is the smallest shape that
+         --  still exercises every decoding path.
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, Vocabulary);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "<s>");
+         Fixtures.String_Element (Builder, "</s>");
+         Fixtures.String_Element
+           (Builder,
+            [1 => Character'Val (16#E2#), 2 => Character'Val (16#96#),
+             3 => Character'Val (16#81#)]);
+         Fixtures.String_Element (Builder, "a");
+         Fixtures.String_Element (Builder, "b");
+         Fixtures.String_Element (Builder, "c");
+         Fixtures.String_Element (Builder, "ab");
+         Fixtures.String_Element (Builder, "bc");
+         Fixtures.String_Element
+           (Builder,
+            [1 => Character'Val (16#E2#), 2 => Character'Val (16#96#),
+             3 => Character'Val (16#81#)] & "a");
+         Fixtures.String_Element (Builder, "<0x61>");
+         Fixtures.String_Element (Builder, "<0x62>");
+         Fixtures.String_Element (Builder, "<0x63>");
+         Fixtures.String_Element (Builder, "<0x64>");
+         Fixtures.String_Element (Builder, "<0x20>");
+         Fixtures.String_Element (Builder, "<0x0A>");
+         Fixtures.End_Array (Builder);
+
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.scores", G.Value_Float32, Vocabulary);
+         for Index in 0 .. Vocabulary - 1 loop
+            --  Longer pieces score higher so that the merge order is
+            --  deterministic and easy to predict.
+            Fixtures.Float_Element (Builder, N.Real (Index) * 0.5);
+         end loop;
+         Fixtures.End_Array (Builder);
+
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.token_type", G.Value_Int32, Vocabulary);
+         Fixtures.Int32_Element (Builder, 2);   --  <unk>
+         Fixtures.Int32_Element (Builder, 3);   --  <s>
+         Fixtures.Int32_Element (Builder, 3);   --  </s>
+         for Index in 3 .. 9 loop
+            Fixtures.Int32_Element (Builder, 1);
+         end loop;
+         for Index in 10 .. Vocabulary - 1 loop
+            Fixtures.Int32_Element (Builder, 6);
+         end loop;
+         Fixtures.End_Array (Builder);
+      end if;
 
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.bos_token_id", 1);

@@ -1163,7 +1163,7 @@ package body Tests.Inference_Cases is
          --  writing one.
          declare
             type Case_Text is access constant String;
-            Cases : constant array (1 .. 10) of Case_Text :=
+            Cases : constant array (1 .. 14) of Case_Text :=
               [new String'(""),
                new String'("a"),
                new String'("ab"),
@@ -1173,7 +1173,17 @@ package body Tests.Inference_Cases is
                new String'("dab"),
                new String'("a" & Character'Val (16#0A#) & "b"),
                new String'("cabc"),
-               new String'("cabcab")];
+               new String'("cabcab"),
+
+               --  A control token written into the text, which is what a
+               --  chat template does with bos_token and eos_token before
+               --  anything is tokenized. Until the rule that reads them was
+               --  made to cover this road too, "</s>" came back as its
+               --  letters, one byte token each.
+               new String'("a</s>b"),
+               new String'("<s>ab"),
+               new String'("</s>"),
+               new String'("<s>a</s>")];
          begin
             for Which of Cases loop
                declare
@@ -1206,6 +1216,26 @@ package body Tests.Inference_Cases is
                   end loop;
                end;
             end loop;
+         end;
+
+         --  Said outright, because the two agreeing would not tell a rule
+         --  that reads control tokens from two readers that both miss them.
+         --  A chat template substitutes bos_token and eos_token as their
+         --  spelling before anything is tokenized, so this is the shape the
+         --  tokenizer is handed on every templated turn.
+         declare
+            Mine   : Vocab.Token_Array (1 .. 16);
+            Mine_N : Natural;
+         begin
+            Vocab.Encode
+              (Words, "a</s>b", True, False, Mine, Mine_N, Status);
+            Assert (E.Is_Ok (Status), "the engine refused a control token");
+            Assert (Mine_N = 4,
+                    "a control token in the text was not one token:"
+                    & Natural'Image (Mine_N) & " tokens where four were due");
+            Assert (Mine (1) = 1 and then Mine (2) = 9
+                    and then Mine (3) = 2 and then Mine (4) = 5,
+                    "the control token did not come back as itself");
          end;
 
          Reference_Tokenizer.Close (Second);
@@ -1336,6 +1366,132 @@ package body Tests.Inference_Cases is
       end loop;
    end Byte_Pair_Matches_An_Independent_One;
 
+   --  A byte-pair model, driven rather than called.
+   --
+   --  Every session this suite ran, every token it generated and the whole
+   --  conformance sweep went through a SentencePiece vocabulary, because the
+   --  fixture writer could write no other kind. The byte-pair road was well
+   --  covered as a tokenizer and covered nowhere as part of a run, so a
+   --  defect in how a session hands tokens to it -- the end-token policy, the
+   --  streaming decoder between turns, a stop string matched against text
+   --  that came back through the stand-in mapping -- would have shown up
+   --  nowhere at all.
+   procedure Byte_Pair_Model_Runs_End_To_End
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Byte_Pair => True);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+         Tokens : Vocab.Token_Array (1 .. 64);
+         Last   : Natural;
+      begin
+         Start (Under);
+
+         declare
+            Words : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Under.Ready);
+         begin
+            Assert (Vocab.Is_Loaded (Words.all),
+                    "the byte-pair vocabulary did not load in a session");
+            Assert (Vocab.Kind (Words.all) = Vocab.Kind_BPE,
+                    "the session read it as something other than byte-pair");
+            Assert (Vocab.Size (Words.all) = Tiny_Model.Vocabulary,
+                    "the byte-pair vocabulary is a different size");
+            Assert (Vocab.Beginning_Token (Words.all) = 1, "wrong bos");
+            Assert (Vocab.End_Token (Words.all) = 2, "wrong eos");
+
+            --  A prompt through the whole path: encode, evaluate every
+            --  position, and read the logits the last one leaves.
+            Vocab.Encode
+              (Words.all, "abc ab", True, False, Tokens, Last, Status);
+            Assert (E.Is_Ok (Status),
+                    "the session could not encode a prompt: "
+                    & E.Error_Code'Image (Status.Code));
+            Assert (Last >= 3, "the prompt made too few tokens");
+            Assert (Tokens (1) = 1, "the beginning token was not prepended");
+
+            for Index in 1 .. Last loop
+               Assert (Vocab.Is_Valid (Words.all, Tokens (Index)),
+                       "the prompt made a token outside the vocabulary");
+            end loop;
+
+            declare
+               Decoded : constant String :=
+                 Vocab.Decode (Words.all, Tokens (2 .. Last));
+            begin
+               Assert (Decoded = "abc ab",
+                       "the prompt did not survive the round trip: """
+                       & Decoded & """");
+            end;
+
+            declare
+               Live   : L.Session;
+               Scores : Logit_Vector;
+            begin
+               L.Open (Live, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "a session did not open on a byte-pair model: "
+                       & E.Error_Code'Image (Status.Code));
+
+               for Index in 1 .. Last loop
+                  L.Evaluate
+                    (Live, Under.Ready, Tokens (Index), Scores,
+                     Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "evaluation failed at position"
+                          & Natural'Image (Index) & ": "
+                          & E.Error_Code'Image (Status.Code));
+                  Assert (Model_Runner.Kernels.All_Finite (Scores),
+                          "a byte-pair prompt produced a logit that is not"
+                          & " finite");
+               end loop;
+
+               Assert (L.Position (Live) = Last,
+                       "the session did not commit one position per token");
+
+               --  What generation would do next: take a token from those
+               --  logits and read it back as text through the stand-in
+               --  mapping, one token at a time, as streaming does.
+               declare
+                  Best   : Vocab.Token_Id := 0;
+                  Stream : Vocab.Decoder;
+               begin
+                  for Index in Scores'Range loop
+                     if Scores (Index)
+                       > Scores (N.Element_Count (Best))
+                     then
+                        Best := Vocab.Token_Id (Index);
+                     end if;
+                  end loop;
+
+                  Assert (Vocab.Is_Valid (Words.all, Best),
+                          "the most probable token is outside the vocabulary");
+
+                  Vocab.Reset (Stream);
+                  declare
+                     Shown : constant String :=
+                       Vocab.Push (Stream, Words.all, Best);
+                  begin
+                     Assert (Shown'Length <= 32,
+                             "streaming a byte-pair token produced more text"
+                             & " than one piece can hold");
+                  end;
+               end;
+
+               L.Close (Live);
+            end;
+         end;
+      end;
+
+      B.Free (Image);
+   end Byte_Pair_Model_Runs_End_To_End;
+
    procedure Refused_Generation_Names_Its_Reason
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1407,6 +1563,9 @@ package body Tests.Inference_Cases is
         (T, Byte_Pair_Matches_An_Independent_One'Access,
          "the byte-pair tokenizer agrees with one written from the "
          & "description");
+      Register_Routine
+        (T, Byte_Pair_Model_Runs_End_To_End'Access,
+         "a byte-pair model prepares, evaluates and reads back");
       Register_Routine
         (T, Model_Prepares'Access,
          "the tiny model prepares and reports its configuration");

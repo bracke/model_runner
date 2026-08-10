@@ -237,13 +237,43 @@ package body Reference_Tokenizer is
               else Item.Pieces (Which + 1).Score);
    end Score;
 
+   --  The longest piece starting at From that the vocabulary calls a control
+   --  token or one of its author's own, with how many characters it spans.
+   --  Only a position opening a bracket is tried, and the longest match wins.
+   procedure Marker_At
+     (Item   : Vocabulary;
+      Text   : String;
+      From   : Positive;
+      Token  : out Integer;
+      Length : out Natural) is
+   begin
+      Token := -1;
+      Length := 0;
+
+      if Text (From) /= '<' then
+         return;
+      end if;
+
+      for Reach in 1 .. Natural'Min (Max_Piece, Text'Last - From + 1) loop
+         declare
+            Which : constant Integer :=
+              Find (Item, Text (From .. From + Reach - 1));
+         begin
+            if Which >= 0 and then Item.Pieces (Which + 1).Sort in 3 | 4 then
+               Token := Which;
+               Length := Reach;
+            end if;
+         end;
+      end loop;
+   end Marker_At;
+
    --  SentencePiece: substitute, split, then merge by score.
    procedure Encode_By_Score
-     (Item          : Vocabulary;
-      Text          : String;
-      Add_Beginning : Boolean;
-      Tokens        : out Token_Vector;
-      Last          : out Natural)
+     (Item   : Vocabulary;
+      Text   : String;
+      Lead   : Boolean;
+      Tokens : out Token_Vector;
+      Last   : out Natural)
    is
       --  The text with every space replaced by the marker and one in front,
       --  which is what the format's own encoder does before it starts.
@@ -268,7 +298,10 @@ package body Reference_Tokenizer is
    begin
       Last := 0;
 
-      Add (Marker);
+      if Lead then
+         Add (Marker);
+      end if;
+
       for Index in Text'Range loop
          if Text (Index) = ' ' then
             Add (Marker);
@@ -340,11 +373,6 @@ package body Reference_Tokenizer is
          end;
       end loop;
 
-      if Add_Beginning and then Item.Beginning >= 0 then
-         Last := Last + 1;
-         Tokens (Last) := Item.Beginning;
-      end if;
-
       --  What is left is either a piece or a run of bytes.
       for Index in 1 .. Count loop
          if Symbols (Index).Live then
@@ -392,14 +420,11 @@ package body Reference_Tokenizer is
    type Contraction is access constant String;
 
    procedure Encode_By_Rank
-     (Item          : Vocabulary;
-      Text          : String;
-      Add_Beginning : Boolean;
-      Tokens        : out Token_Vector;
-      Last          : out Natural)
+     (Item   : Vocabulary;
+      Text   : String;
+      Tokens : out Token_Vector;
+      Last   : out Natural)
    is
-      Marker_Length : Natural := 0;
-
       function Is_Letter (Value : Character) return Boolean
       is (Value in 'a' .. 'z' | 'A' .. 'Z'
           or else Character'Pos (Value) > 127);
@@ -638,61 +663,17 @@ package body Reference_Tokenizer is
          end loop;
       end Emit;
 
-      --  A marker such as <|im_start|> is one token and not the dozen its
-      --  spelling would merge into: the longest piece starting here that the
-      --  vocabulary calls a control token or one of its author's own, or
-      --  zero when there is none. Only a position opening a bracket is
-      --  tried, so text that merely starts with one is left alone.
-      function Marker_At (From : Positive) return Integer is
-         Found : Integer := -1;
-      begin
-         if Text (From) /= '<' then
-            return -1;
-         end if;
-
-         for Reach in 1 .. Natural'Min (Max_Piece, Text'Last - From + 1) loop
-            declare
-               Which : constant Integer :=
-                 Find (Item, Text (From .. From + Reach - 1));
-            begin
-               if Which >= 0
-                 and then Item.Pieces (Which + 1).Sort in 3 | 4
-               then
-                  Found := Which;
-                  Marker_Length := Reach;
-               end if;
-            end;
-         end loop;
-
-         return Found;
-      end Marker_At;
-
       At_Index : Natural;
    begin
       Last := 0;
 
-      if Add_Beginning and then Item.Beginning >= 0 then
-         Last := Last + 1;
-         Tokens (Last) := Item.Beginning;
-      end if;
-
       At_Index := Text'First;
       while At_Index <= Text'Last loop
          declare
-            Marker : constant Integer := Marker_At (At_Index);
+            Ends : constant Natural := Cut_Last (At_Index);
          begin
-            if Marker >= 0 then
-               Last := Last + 1;
-               Tokens (Last) := Marker;
-               At_Index := At_Index + Marker_Length;
-            else
-               declare
-                  Ends : constant Natural := Cut_Last (At_Index);
-               begin
-                  Emit (At_Index, Ends);
-                  At_Index := Ends + 1;
-               end;
-            end if;
+            Emit (At_Index, Ends);
+            At_Index := Ends + 1;
          end;
       end loop;
    end Encode_By_Rank;
@@ -706,16 +687,88 @@ package body Reference_Tokenizer is
       Text          : String;
       Add_Beginning : Boolean;
       Tokens        : out Token_Vector;
-      Last          : out Natural) is
+      Last          : out Natural)
+   is
+      From : Positive := Text'First;
+      Lead : Boolean := True;
+
+      --  Encode one stretch of ordinary text and append what it makes.
+      procedure Part (Piece : String; Leading : Boolean) is
+         Made : Token_Vector (1 .. Tokens'Length);
+         Count : Natural;
+      begin
+         case Item.Model is
+            when SentencePiece =>
+               Encode_By_Score (Item, Piece, Leading, Made, Count);
+            when Byte_Pair =>
+               Encode_By_Rank (Item, Piece, Made, Count);
+            when Unreadable =>
+               Count := 0;
+         end case;
+
+         for Index in 1 .. Count loop
+            Last := Last + 1;
+            Tokens (Tokens'First + Last - 1) := Made (Index);
+         end loop;
+      end Part;
    begin
-      case Item.Model is
-         when SentencePiece =>
-            Encode_By_Score (Item, Text, Add_Beginning, Tokens, Last);
-         when Byte_Pair =>
-            Encode_By_Rank (Item, Text, Add_Beginning, Tokens, Last);
-         when Unreadable =>
-            Last := 0;
-      end case;
+      Last := 0;
+
+      if Item.Model = Unreadable then
+         return;
+      end if;
+
+      if Add_Beginning and then Item.Beginning >= 0 then
+         Last := Last + 1;
+         Tokens (Tokens'First) := Item.Beginning;
+      end if;
+
+      --  Cut the text at every marker and encode what lies between, which is
+      --  the same rule on both roads. The dummy word marker SentencePiece
+      --  puts in front goes on the first stretch only.
+      if Text'Length = 0 then
+         Part (Text, True);
+         return;
+      end if;
+
+      while From <= Text'Last loop
+         declare
+            Token : Integer;
+            Span  : Natural;
+            Found : Natural := 0;
+            Reach : Natural := 0;
+            Scan  : Positive := From;
+         begin
+            loop
+               Marker_At (Item, Text, Scan, Token, Span);
+               if Token >= 0 then
+                  Found := Scan;
+                  Reach := Span;
+                  exit;
+               end if;
+
+               exit when Scan = Text'Last;
+               Scan := Scan + 1;
+            end loop;
+
+            declare
+               Stop : constant Natural :=
+                 (if Found = 0 then Text'Last else Found - 1);
+            begin
+               if Stop >= From then
+                  Part (Text (From .. Stop), Lead);
+                  Lead := False;
+               end if;
+            end;
+
+            exit when Found = 0;
+
+            Last := Last + 1;
+            Tokens (Tokens'First + Last - 1) := Token;
+            Lead := False;
+            From := Found + Reach;
+         end;
+      end loop;
    end Encode;
 
 end Reference_Tokenizer;
