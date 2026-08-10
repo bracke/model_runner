@@ -367,6 +367,25 @@ Keep a Changelog and the project uses semantic versioning.
   taken from. The command asks for four now, so the line is the program's
   answer rather than the machine's.
 
+  Four more were the host's line ending. Every capture in the command-line
+  tests is written through `Ada.Text_IO`, which ends a line the way its host
+  does -- one character here and two on Windows -- and a test comparing a
+  captured line against a literal then found `cpu` followed by a carriage
+  return and reported that the program printed something else. The same
+  applied to the README, which a checkout gives back the host's way. Both
+  come in without carriage returns now; the model file, which is not text,
+  is still read raw.
+
+  One was the executable's name: the repacking comparison looked for
+  `../bin/model_runner` and refused to compare when it found none, which is
+  what a host that writes `.exe` gives it.
+
+  And one is a difference between hosts rather than a fault. Replacing a
+  file this process still has open is a POSIX arrangement -- the name is
+  unlinked and the open handle keeps the bytes -- and Windows refuses to
+  delete an open file at all. The test says so and checks the half that
+  holds on both, rather than staging something else and calling it the same.
+
 - `run --help` prints the help for `run`. It printed the top-level screen,
   byte for byte identical to bare `help`, discarding the command it was typed
   against; `help run` gave the useful answer and the flag did not. The option

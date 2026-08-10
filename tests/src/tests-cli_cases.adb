@@ -215,6 +215,33 @@ package body Tests.CLI_Cases is
    --  written beside it, and so does this: a backend added to the enumeration
    --  and not to the parser fails here without anyone remembering to come and
    --  add a case.
+   --  A text file read back with carriage returns taken out.
+   --
+   --  Every capture in this file is written through Ada.Text_IO, which ends
+   --  a line the way its host does: one character here and two on Windows.
+   --  A test that compares a captured line against a literal then looks for
+   --  "cpu" and finds "cpu" followed by a carriage return, and says the
+   --  program printed something else. Four tests failed that way on Windows
+   --  and nowhere else. What is compared is what the program meant, so the
+   --  ending the host adds comes off on the way in.
+   --
+   --  Not for anything that is not text: the model file is read raw a few
+   --  lines below, and taking bytes out of it would be reading a different
+   --  file.
+   function Text_Of (Path : String) return String is
+      Whole : constant String := Project_Tools.Files.Read_Raw_File (Path);
+      Room  : String (1 .. Whole'Length);
+      Used  : Natural := 0;
+   begin
+      for Character_Value of Whole loop
+         if Character_Value /= Character'Val (13) then
+            Used := Used + 1;
+            Room (Used) := Character_Value;
+         end if;
+      end loop;
+
+      return Room (1 .. Used);
+   end Text_Of;
    --  Run the command with its generated text caught.
    --
    --  Generated text goes through the raw stream of
@@ -449,7 +476,7 @@ package body Tests.CLI_Cases is
          Assert (Status = 0,
                  "help " & Topic & " failed with status"
                  & Natural'Image (Status));
-         return Project_Tools.Files.Read_Raw_File (Captured);
+         return Text_Of (Captured);
       end Screen;
 
       --  Assert every option line in Text is indented by exactly two spaces,
@@ -619,7 +646,7 @@ package body Tests.CLI_Cases is
          Assert (Status = 0,
                  """" & Words & """ failed with status"
                  & Natural'Image (Status));
-         return Project_Tools.Files.Read_Raw_File (Captured);
+         return Text_Of (Captured);
       end Reported;
 
       --  Every field line in Text starts its value at the same column, and
@@ -663,7 +690,7 @@ package body Tests.CLI_Cases is
          Assert (Status = 0,
                  """" & Words & """ failed with status"
                  & Natural'Image (Status));
-         return Project_Tools.Files.Read_Raw_File (Captured);
+         return Text_Of (Captured);
       end Printed;
 
       --  Whether Text holds a catalog placeholder: a brace, a run of
@@ -903,7 +930,7 @@ package body Tests.CLI_Cases is
          Assert (Status = Expect,
                  """" & Words & """ gave status" & Natural'Image (Status)
                  & " and not" & Natural'Image (Expect));
-         return Project_Tools.Files.Read_Raw_File (Captured);
+         return Text_Of (Captured);
       end Traced;
 
       --  Whether a screen holds Text as a line: the whole of one when Whole,
@@ -1524,7 +1551,7 @@ package body Tests.CLI_Cases is
 
          declare
             Said : constant String :=
-              Project_Tools.Files.Read_Raw_File ("obj/memory.txt");
+              Text_Of ("obj/memory.txt");
          begin
             Assert (Project_Tools.Text.Contains (Said, "kv_cache"),
                     "the refusal did not name the category: " & Said);
@@ -1664,6 +1691,9 @@ package body Tests.CLI_Cases is
       --  and the whole point is that the source stays open across it. That
       --  is also what actually happens in the field: a download or a build
       --  writes beside the file and moves it into place.
+      --  Whether this host let the file be replaced while it was open.
+      Replaceable : Boolean := False;
+
       procedure Grow (Extra : Positive) is
          From, Into : Stream_IO.File_Type;
          Block      : Stream_Element_Array (1 .. 65_536);
@@ -1681,8 +1711,22 @@ package body Tests.CLI_Cases is
          Stream_IO.Write (Into, Padding);
          Stream_IO.Close (Into);
          Stream_IO.Close (From);
-         Ada.Directories.Delete_File (Path);
-         Ada.Directories.Rename (Path & ".next", Path);
+
+         --  Replacing a file this process still has open is a POSIX
+         --  arrangement: the name is unlinked and the open handle keeps the
+         --  bytes. Windows refuses to delete an open file at all, so the
+         --  case this test is about cannot be staged there, and saying so is
+         --  better than staging something else and calling it the same.
+         --  What is checked on both hosts is the half above -- an untouched
+         --  file reports no change.
+         begin
+            Ada.Directories.Delete_File (Path);
+            Ada.Directories.Rename (Path & ".next", Path);
+            Replaceable := True;
+         exception
+            when Ada.Directories.Use_Error =>
+               Replaceable := False;
+         end;
       end Grow;
    begin
       Tiny_Model.Write (Path, Room => 256);
@@ -1728,14 +1772,17 @@ package body Tests.CLI_Cases is
          --  Between the checking and the reading, which is the whole window
          --  this guards.
          Grow (4096);
-         Assert (Source.Changed, "a grown file reported no change");
 
-         L.Prepare (Ready, Parsed, Source, Status => Status);
-         Assert (Status.Code = E.GGUF_File_Changed,
-                 "a file replaced after validation was read anyway: "
-                 & E.Error_Code'Image (Status.Code));
+         if Replaceable then
+            Assert (Source.Changed, "a grown file reported no change");
 
-         L.Close (Ready, Status);
+            L.Prepare (Ready, Parsed, Source, Status => Status);
+            Assert (Status.Code = E.GGUF_File_Changed,
+                    "a file replaced after validation was read anyway: "
+                    & E.Error_Code'Image (Status.Code));
+
+            L.Close (Ready, Status);
+         end if;
          Containers.Close (Parsed);
          Files.Close (Source);
       end;
@@ -2201,7 +2248,13 @@ package body Tests.CLI_Cases is
       --  empty capture hid it.
       declare
          Model  : constant String := "obj/repack-model.gguf";
-         Binary : constant String := "../bin/model_runner";
+         --  The name the linker gives it, which differs by host. Asking for
+         --  the Unix one alone reported the command as not built on
+         --  Windows, where the comparison then could not be made.
+         Plain  : constant String := "../bin/model_runner";
+         Binary : constant String :=
+           (if Ada.Directories.Exists (Plain) then Plain
+            else Plain & ".exe");
 
          --  What the command writes on standard output for one run.
          function Text_Of (First, Second : String) return String is
@@ -2480,7 +2533,7 @@ package body Tests.CLI_Cases is
          Assert (Status /= 0,
                  "a truncated file was called valid");
          Assert (Project_Tools.Text.Contains
-                   (Project_Tools.Files.Read_Raw_File (Log), "MR-"),
+                   (Text_Of (Log), "MR-"),
                  "a truncated file was refused without naming a code");
       end;
 
@@ -2563,7 +2616,7 @@ package body Tests.CLI_Cases is
          Assert (Status /= 0,
                  "a run that should have been refused left with a success");
 
-         return Project_Tools.Files.Read_Raw_File (Log);
+         return Text_Of (Log);
       end Refusal;
 
       --  Whether a diagnostic names a code, by the MR-XXX-NNNN identifier
@@ -2856,7 +2909,7 @@ package body Tests.CLI_Cases is
             Model_Runner.Localization.Close (Catalog);
          end;
 
-         return Project_Tools.Files.Read_Raw_File (Log);
+         return Text_Of (Log);
       end Session_Saying;
 
       Newline : constant String := [1 => Character'Val (10)];
@@ -3109,7 +3162,7 @@ package body Tests.CLI_Cases is
          Assert (Status = 0,
                  "a run on the backend that cannot batch failed with status"
                  & Natural'Image (Status) & ": "
-                 & Project_Tools.Files.Read_Raw_File ("obj/clamp.txt"));
+                 & Text_Of ("obj/clamp.txt"));
       end;
 
       --  And the interactive path, which builds its own request.
@@ -3193,7 +3246,7 @@ package body Tests.CLI_Cases is
             --  A completed turn, not a refusal. /stats says which it was.
             declare
                Said : constant String :=
-                 Project_Tools.Files.Read_Raw_File ("obj/clamp-err.txt");
+                 Text_Of ("obj/clamp-err.txt");
                None : constant String :=
                  Model_Runner.Localization.Text
                    (Catalog, "cli.interactive.no_stats");
@@ -4494,7 +4547,7 @@ package body Tests.CLI_Cases is
          L.Close (Rig.Ready, Outcome);
          Containers.Close (Rig.Parsed);
 
-         return Project_Tools.Files.Read_Raw_File (Errors);
+         return Text_Of (Errors);
       end Conversed;
 
       --  Whether the loop said no turn had completed. Read from the catalog
@@ -5936,10 +5989,10 @@ package body Tests.CLI_Cases is
       end Coloured;
 
       function Answered return String
-      is (Project_Tools.Files.Read_Raw_File (Out_Path));
+      is (Text_Of (Out_Path));
 
       function Complained return String
-      is (Project_Tools.Files.Read_Raw_File (Err_Path));
+      is (Text_Of (Err_Path));
    begin
       --  A report on a terminal, with the diagnostics redirected. This is
       --  the arrangement that was wrong the other way round.
@@ -6041,10 +6094,10 @@ package body Tests.CLI_Cases is
       end Ran;
 
       function Answered return String
-      is (Project_Tools.Files.Read_Raw_File (Out_Path));
+      is (Text_Of (Out_Path));
 
       function Complained return String
-      is (Project_Tools.Files.Read_Raw_File (Err_Path));
+      is (Text_Of (Err_Path));
 
       function Holds (Text, Token : String) return Boolean
       is (Project_Tools.Text.Contains (Text, Token));
@@ -6189,7 +6242,7 @@ package body Tests.CLI_Cases is
          Set_Output (Standard_Output);
          Set_Error (Standard_Error);
          Close (Handle);
-         return Project_Tools.Files.Read_Raw_File (Stream);
+         return Text_Of (Stream);
       end Output_Of;
 
       --  The value of a labelled field, or empty when there is no such line.
@@ -6362,10 +6415,32 @@ package body Tests.CLI_Cases is
          return Room (1 .. Used);
       end Output_Of;
 
-      Readme : constant String :=
-        (if Project_Tools.Files.File_Exists ("../README.md")
-         then Project_Tools.Files.Read_Raw_File ("../README.md")
-         else "");
+      --  A file the repository carries, with carriage returns taken out.
+      --
+      --  A checkout on a host whose line ending is two characters gives them
+      --  back that way, and the program writes one. Comparing the two as
+      --  they stand looked for a published line that ends in a carriage
+      --  return and never found it: three tests failed on Windows and
+      --  nowhere else, saying that inspect does not print "Container" when
+      --  it prints exactly that.
+      function Repository_Text (Path : String) return String is
+         Whole : constant String :=
+           (if Project_Tools.Files.File_Exists (Path)
+            then Project_Tools.Files.Read_Raw_File (Path) else "");
+         Room  : String (1 .. Whole'Length);
+         Used  : Natural := 0;
+      begin
+         for Character_Value of Whole loop
+            if Character_Value /= Character'Val (13) then
+               Used := Used + 1;
+               Room (Used) := Character_Value;
+            end if;
+         end loop;
+
+         return Room (1 .. Used);
+      end Repository_Text;
+
+      Readme : constant String := Repository_Text ("../README.md");
 
       --  The fenced block holding a line, without its fences.
       function Block_Holding (Anchor : String) return String is
