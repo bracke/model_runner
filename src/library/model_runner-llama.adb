@@ -63,6 +63,9 @@ package body Model_Runner.Llama is
    procedure Deallocate_Layers is
      new Ada.Unchecked_Deallocation (Layer_Array, Layer_Array_Access);
 
+   procedure Deallocate_Experts is
+     new Ada.Unchecked_Deallocation (Expert_Array, Expert_Array_Access);
+
    procedure Deallocate_History is
      new Ada.Unchecked_Deallocation (Token_History, Token_History_Access);
 
@@ -243,13 +246,97 @@ package body Model_Runner.Llama is
          end if;
       end;
 
-      --  Features this profile does not implement. Presence of the key is
-      --  enough to reject: the model is not the one this crate can run.
+      --  A mixture of experts, when the model names one. The count is what
+      --  each layer holds and the used count is how many of them run for one
+      --  position; a file naming either names both, because one without the
+      --  other describes no model.
       if Containers.Has (Source, Model_Key (Settings.Kind, "expert_count"))
-        or else Containers.Has (Source, Model_Key (Settings.Kind, "expert_used_count"))
+        or else Containers.Has
+                  (Source, Model_Key (Settings.Kind, "expert_used_count"))
       then
-         Reject_Feature ("mixture_of_experts");
-         return;
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "expert_count"),
+            0, Long_Long_Integer (Bounds.Max_Experts), Number, Local);
+         if E.Is_Error (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Experts := Natural (Number);
+
+         --  A count of zero is a dense model that said so. The used count
+         --  then has to say the same thing, since a model cannot run experts
+         --  it does not have.
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "expert_used_count"),
+            (if Settings.Experts = 0 then 0 else 1),
+            Long_Long_Integer (Natural'Max (Settings.Experts, 1)),
+            Number, Local);
+         if E.Is_Error (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Experts_Used := Natural (Number);
+
+         if Settings.Experts = 0 then
+            Settings.Experts_Used := 0;
+         end if;
+      end if;
+
+      if Settings.Experts > 0 then
+         --  What is understood is a softmax over every expert, the highest
+         --  few taken, and their weights renormalized over that few. A file
+         --  naming a different gate or asking for the weights unnormalized
+         --  describes a mixture this does not compute, and running it as
+         --  though it did would produce a plausible wrong answer rather than
+         --  a refusal.
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "expert_gating_func"),
+            1, 1, Number, Local);
+         if Present_And_Wrong (Local) then
+            Reject_Feature ("expert_gating_function");
+            return;
+         end if;
+
+         declare
+            Normalized : Boolean;
+         begin
+            Containers.Get_Boolean
+              (Source, Model_Key (Settings.Kind, "expert_weights_norm"),
+               Normalized, Local);
+            if Present_And_Wrong (Local)
+              or else (E.Is_Ok (Local) and then not Normalized)
+            then
+               Reject_Feature ("unnormalized_expert_weights");
+               return;
+            end if;
+         end;
+
+         --  A shared expert runs for every position beside the chosen ones.
+         --  Nothing here computes it, and a model that has one produces a
+         --  different answer without it.
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "expert_shared_count"),
+            0, 0, Number, Local);
+         if Present_And_Wrong (Local) then
+            Reject_Feature ("shared_expert");
+            return;
+         end if;
+
+         --  One expert's width, when the file states it separately. A
+         --  mixture-of-experts file often carries both numbers, and they are
+         --  not the same: feed_forward_length describes the dense block the
+         --  model does not have.
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "expert_feed_forward_length"),
+            1, Long_Long_Integer (Bounds.Max_Embedding) * 64, Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Expert_Feed :=
+           (if E.Is_Ok (Local)
+            then Natural (Number)
+            else Settings.Feed_Forward);
       end if;
 
       --  A sliding window, when the model names one. Read rather than
@@ -535,6 +622,105 @@ package body Model_Runner.Llama is
       end if;
    end Resolve_Norm;
 
+   --  Resolve a layer's router and the stack of expert matrices behind it.
+   --
+   --  A file writes the experts of one layer as a single tensor with the
+   --  expert axis outermost, so one expert's rows are contiguous and a view
+   --  over them is arithmetic on an offset rather than a copy. That is the
+   --  whole reason this is cheap: a mixture model holds no more bytes than
+   --  the file does, and no expert is materialized until a position routes
+   --  to it.
+   procedure Resolve_Experts
+     (Item    : in out Model;
+      Source  : Containers.Container;
+      Index   : Natural;
+      Current : in out Layer;
+      Status  : out E.Error_Info)
+   is
+      Width : constant Element_Count :=
+        Element_Count (Item.Settings.Embedding);
+      Feed  : constant Element_Count :=
+        Element_Count (Item.Settings.Expert_Feed);
+      Count : constant Element_Count :=
+        Element_Count (Item.Settings.Experts);
+
+      --  One expert's rows out of the stack.
+      procedure Slice
+        (Whole  : T.View;
+         Which  : Element_Count;
+         Rows   : Element_Count;
+         Result : out T.View;
+         Status : out E.Error_Info) is
+      begin
+         T.Make
+           (Format  => Whole.Format,
+            Rows    => Rows,
+            Columns => Whole.Columns,
+            Data    => Whole.Data,
+            Offset  =>
+              Whole.Offset
+              + B.Byte_Count (Which) * B.Byte_Count (Rows)
+                * T.Row_Bytes (Whole),
+            Result  => Result,
+            Status  => Status);
+      end Slice;
+
+      Gates, Ups, Downs : T.View;
+   begin
+      Resolve
+        (Item, Source, Layer_Key (Index, "ffn_gate_inp.weight"),
+         Count, Width, Current.Router, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Resolve
+        (Item, Source, Layer_Key (Index, "ffn_gate_exps.weight"),
+         Feed * Count, Width, Gates, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Resolve
+        (Item, Source, Layer_Key (Index, "ffn_up_exps.weight"),
+         Feed * Count, Width, Ups, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Resolve
+        (Item, Source, Layer_Key (Index, "ffn_down_exps.weight"),
+         Width * Count, Feed, Downs, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Current.Experts := new Expert_Array (0 .. Item.Settings.Experts - 1);
+
+      for Which in Current.Experts.all'Range loop
+         Slice
+           (Gates, Element_Count (Which), Feed,
+            Current.Experts.all (Which).Gate, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Slice
+           (Ups, Element_Count (Which), Feed,
+            Current.Experts.all (Which).Up, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Slice
+           (Downs, Element_Count (Which), Width,
+            Current.Experts.all (Which).Down, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end loop;
+   end Resolve_Experts;
+
    -------------
    -- Prepare --
    -------------
@@ -816,20 +1002,25 @@ package body Model_Runner.Llama is
                   Current.Feed_Norm, Status);
                exit when E.Is_Error (Status);
 
-               Resolve
-                 (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
-                  Feed, Width, Current.Gate, Status);
-               exit when E.Is_Error (Status);
+               if Item.Settings.Experts = 0 then
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
+                     Feed, Width, Current.Gate, Status);
+                  exit when E.Is_Error (Status);
 
-               Resolve
-                 (Item, Source, Layer_Key (Index, "ffn_up.weight"),
-                  Feed, Width, Current.Up, Status);
-               exit when E.Is_Error (Status);
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                     Feed, Width, Current.Up, Status);
+                  exit when E.Is_Error (Status);
 
-               Resolve
-                 (Item, Source, Layer_Key (Index, "ffn_down.weight"),
-                  Width, Feed, Current.Down, Status);
-               exit when E.Is_Error (Status);
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ffn_down.weight"),
+                     Width, Feed, Current.Down, Status);
+                  exit when E.Is_Error (Status);
+               else
+                  Resolve_Experts (Item, Source, Index, Current, Status);
+                  exit when E.Is_Error (Status);
+               end if;
             end;
          end loop;
 
@@ -871,7 +1062,14 @@ package body Model_Runner.Llama is
             Skipped : Natural := 0;
 
             function Matrices return View_List is
-               Room  : View_List (1 .. 2 + 7 * Item.Settings.Layers);
+               --  Seven a dense layer, and a mixture layer instead carries a
+               --  router and three matrices an expert.
+               Per_Layer : constant Positive :=
+                 (if Item.Settings.Experts = 0
+                  then 7
+                  else 4 + 1 + 3 * Item.Settings.Experts);
+
+               Room  : View_List (1 .. 2 + Per_Layer * Item.Settings.Layers);
                Count : Natural := 0;
 
                Target : constant Model_Runner.GGUF.Tensor_Type :=
@@ -906,6 +1104,15 @@ package body Model_Runner.Llama is
                   Add (Item.Layers (Index).Gate'Access);
                   Add (Item.Layers (Index).Up'Access);
                   Add (Item.Layers (Index).Down'Access);
+                  Add (Item.Layers (Index).Router'Access);
+
+                  if Item.Layers (Index).Experts /= null then
+                     for Which in Item.Layers (Index).Experts.all'Range loop
+                        Add (Item.Layers (Index).Experts.all (Which).Gate'Access);
+                        Add (Item.Layers (Index).Experts.all (Which).Up'Access);
+                        Add (Item.Layers (Index).Experts.all (Which).Down'Access);
+                     end loop;
+                  end if;
                end loop;
 
                return Room (1 .. Count);
@@ -1196,6 +1403,115 @@ package body Model_Runner.Llama is
       end case;
    end Product_Batch;
 
+   --  The feed-forward block of one position, through the experts its router
+   --  chose for it.
+   --
+   --  The router scores every expert, the softmax turns the scores into a
+   --  distribution, the highest few are taken and their shares renormalized
+   --  over that few, and each of them runs the same gate-up-silu-down block
+   --  a dense model has one of. The outputs are summed in proportion to
+   --  those shares.
+   --
+   --  Ties go to the lower-numbered expert, which is what the strict
+   --  comparison below buys: two experts scoring the same must not make the
+   --  answer depend on which one the search happened to reach first.
+   --
+   --  Input and Result must not be the same buffer: every expert reads the
+   --  input after the sum has started being written.
+   procedure Mixture
+     (Item    : in out Session;
+      Current : Layer;
+      Input   : T.Real_Array_Access;
+      Result  : T.Real_Array_Access;
+      Status  : out E.Error_Info)
+   is
+      Settings : Configuration renames Item.Owner.Settings;
+      Used     : constant Natural := Settings.Experts_Used;
+
+      Chosen : array (0 .. Used - 1) of Natural := [others => 0];
+      Share  : array (0 .. Used - 1) of Real := [others => 0.0];
+      Taken  : array (0 .. Settings.Experts - 1) of Boolean :=
+        [others => False];
+
+      Total  : Real := 0.0;
+      Usable : Boolean;
+   begin
+      Product (Item, Current.Router, Input, Item.Routing, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      K.Softmax (Item.Routing.all, Usable);
+      if not Usable then
+         Status := E.Make (E.Tensor_Non_Finite_Value);
+         return;
+      end if;
+
+      for Slot in Chosen'Range loop
+         declare
+            Best : Integer := -1;
+         begin
+            for Which in Taken'Range loop
+               if not Taken (Which)
+                 and then
+                   (Best < 0
+                    or else Item.Routing (Element_Count (Which))
+                            > Item.Routing (Element_Count (Best)))
+               then
+                  Best := Which;
+               end if;
+            end loop;
+
+            Taken (Best) := True;
+            Chosen (Slot) := Best;
+            Share (Slot) := Item.Routing (Element_Count (Best));
+            Total := Total + Share (Slot);
+         end;
+      end loop;
+
+      --  The shares came out of a softmax, so they are positive and sum to
+      --  one over every expert; over the chosen few they sum to less, and
+      --  this is what puts them back on a scale where the sum below is a
+      --  weighted average rather than an arbitrarily shrunken one.
+      if not (Total > 0.0) then
+         Status := E.Make (E.Tensor_Non_Finite_Value);
+         return;
+      end if;
+
+      for Slot in Share'Range loop
+         Share (Slot) := Share (Slot) / Total;
+      end loop;
+
+      Result.all := [others => 0.0];
+
+      for Slot in Chosen'Range loop
+         declare
+            Which : Expert renames Current.Experts.all (Chosen (Slot));
+         begin
+            Product (Item, Which.Gate, Input, Item.Gate, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            Product (Item, Which.Up, Input, Item.Up, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            K.SiLU (Item.Gate.all);
+            K.Multiply (Item.Gate.all, Item.Up.all);
+
+            Product (Item, Which.Down, Item.Gate, Item.Expert_Row, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            K.Scale (Item.Expert_Row.all, Share (Slot));
+            K.Add (Result.all, Item.Expert_Row.all);
+         end;
+      end loop;
+   end Mixture;
+
    -----------
    -- Enter --
    -----------
@@ -1230,6 +1546,18 @@ package body Model_Runner.Llama is
          for Index in Item.Layers.all'Range loop
             T.Free (Item.Layers.all (Index).Attention_Norm);
             T.Free (Item.Layers.all (Index).Feed_Norm);
+
+            --  The attention biases, which nothing released: a qwen2 model
+            --  held three vectors a layer past its own closing, and only
+            --  that architecture has them, which is why closing a llama
+            --  model looked clean.
+            T.Free (Item.Layers.all (Index).Query_Bias);
+            T.Free (Item.Layers.all (Index).Key_Bias);
+            T.Free (Item.Layers.all (Index).Value_Bias);
+
+            if Item.Layers.all (Index).Experts /= null then
+               Deallocate_Experts (Item.Layers.all (Index).Experts);
+            end if;
          end loop;
          Deallocate_Layers (Item.Layers);
       end if;
@@ -1369,7 +1697,11 @@ package body Model_Runner.Llama is
       Plan.Activation_Bytes :=
         Interfaces.Unsigned_64 (Settings.Embedding) * 4 * 4;
       Plan.Batch_Bytes :=
-        Interfaces.Unsigned_64 (Settings.Feed_Forward) * 4 * 2;
+        Interfaces.Unsigned_64 (Feed_Width (Settings)) * 4 * 2
+        + Interfaces.Unsigned_64 (Settings.Experts) * 4
+        + (if Settings.Experts > 0
+           then Interfaces.Unsigned_64 (Settings.Embedding) * 4 * 2
+           else 0);
       Plan.Logits_Bytes := Interfaces.Unsigned_64 (Settings.Vocabulary) * 4;
       Plan.Sampling_Bytes := Plan.Logits_Bytes;
       Plan.Token_History_Bytes := Interfaces.Unsigned_64 (Capacity) * 4;
@@ -1470,7 +1802,7 @@ package body Model_Runner.Llama is
          Width : constant Element_Count :=
            Element_Count (Settings.Embedding);
          Feed  : constant Element_Count :=
-           Element_Count (Settings.Feed_Forward);
+           Element_Count (Feed_Width (Settings));
          KV    : constant Element_Count :=
            Element_Count (Settings.KV_Heads * Settings.Head_Size);
          Cache : constant Element_Count :=
@@ -1489,6 +1821,23 @@ package body Model_Runner.Llama is
          T.Allocate (Feed, Item.Up);
          T.Allocate (Element_Count (Settings.Vocabulary), Item.Logit_Row);
          Item.History := new Token_History (0 .. Capacity - 1);
+
+         --  A mixture of experts needs three more, and a dense model needs
+         --  none of them: allocating them anyway would charge every model
+         --  for a feature almost none of them have.
+         if Settings.Experts > 0 then
+            T.Allocate (Element_Count (Settings.Experts), Item.Routing);
+            T.Allocate (Width, Item.Mixture);
+            T.Allocate (Width, Item.Expert_Row);
+
+            if Item.Routing = null or else Item.Mixture = null
+              or else Item.Expert_Row = null
+            then
+               Close (Item);
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+         end if;
 
          if Item.Keys = null or else Item.Values = null
            or else Item.Activation = null or else Item.Normalized = null
@@ -1538,6 +1887,9 @@ package body Model_Runner.Llama is
       T.Free (Item.Scores);
       T.Free (Item.Gate);
       T.Free (Item.Up);
+      T.Free (Item.Routing);
+      T.Free (Item.Mixture);
+      T.Free (Item.Expert_Row);
       T.Free (Item.Logit_Row);
 
       if Item.History /= null then
@@ -1842,20 +2194,27 @@ package body Model_Runner.Llama is
               (Item.Activation.all, Current.Feed_Norm.all,
                Settings.Epsilon, Item.Normalized.all);
 
-            Product
-              (Item, Current.Gate, Item.Normalized, Item.Gate, Status);
-            exit when E.Is_Error (Status);
-            Product
-              (Item, Current.Up, Item.Normalized, Item.Up, Status);
-            exit when E.Is_Error (Status);
+            if Settings.Experts > 0 then
+               Mixture
+                 (Item, Current, Item.Normalized, Item.Mixture, Status);
+               exit when E.Is_Error (Status);
+               K.Add (Item.Activation.all, Item.Mixture.all);
+            else
+               Product
+                 (Item, Current.Gate, Item.Normalized, Item.Gate, Status);
+               exit when E.Is_Error (Status);
+               Product
+                 (Item, Current.Up, Item.Normalized, Item.Up, Status);
+               exit when E.Is_Error (Status);
 
-            K.SiLU (Item.Gate.all);
-            K.Multiply (Item.Gate.all, Item.Up.all);
+               K.SiLU (Item.Gate.all);
+               K.Multiply (Item.Gate.all, Item.Up.all);
 
-            Product
-              (Item, Current.Down, Item.Gate, Item.Normalized, Status);
-            exit when E.Is_Error (Status);
-            K.Add (Item.Activation.all, Item.Normalized.all);
+               Product
+                 (Item, Current.Down, Item.Gate, Item.Normalized, Status);
+               exit when E.Is_Error (Status);
+               K.Add (Item.Activation.all, Item.Normalized.all);
+            end if;
          end;
       end loop;
 
@@ -1906,8 +2265,13 @@ package body Model_Runner.Llama is
    is
       Settings  : constant Configuration := Source.Settings;
       Width     : constant Element_Count := Element_Count (Settings.Embedding);
+      --  Zero for a mixture of experts: the batch never holds a
+      --  feed-forward activation there, because that block runs a position
+      --  at a time through the session's own buffers.
       Feed      : constant Element_Count :=
-        Element_Count (Settings.Feed_Forward);
+        (if Settings.Experts > 0
+         then 0
+         else Element_Count (Settings.Feed_Forward));
       Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
       Heads     : constant Element_Count := Element_Count (Settings.Heads);
       KV_Heads  : constant Element_Count := Element_Count (Settings.KV_Heads);
@@ -2017,7 +2381,7 @@ package body Model_Runner.Llama is
 
       if Acts = null or else Norm = null or else Query = null
         or else Keys = null or else Values = null or else Attend = null
-        or else Gate = null or else Up = null
+        or else ((Gate = null or else Up = null) and then Feed > 0)
       then
          Release;
          Status := E.Make (E.Memory_Allocation_Failed);
@@ -2207,27 +2571,49 @@ package body Model_Runner.Llama is
                end;
             end loop;
 
-            Product_Batch
-              (Item, Current.Gate, Norm, Count, Gate, Status);
-            exit when E.Is_Error (Status);
-            Product_Batch
-              (Item, Current.Up, Norm, Count, Up, Status);
-            exit when E.Is_Error (Status);
+            --  Which experts run is decided per position, so a batch has no
+            --  one matrix to multiply the whole of it by: this is the one
+            --  block that runs a token at a time however many were handed
+            --  in. Everything before it -- the projections, the attention,
+            --  the output -- still goes through the batch.
+            if Settings.Experts > 0 then
+               for Which in 0 .. Count - 1 loop
+                  declare
+                     Origin : constant Element_Count := Slot (Which, Width);
+                  begin
+                     Item.Normalized.all :=
+                       Norm.all (Origin .. Origin + Width - 1);
+                     Mixture
+                       (Item, Current, Item.Normalized, Item.Mixture, Status);
+                     exit when E.Is_Error (Status);
+                     Norm.all (Origin .. Origin + Width - 1) :=
+                       Item.Mixture.all;
+                  end;
+               end loop;
+               exit when E.Is_Error (Status);
+            else
+               Product_Batch
+                 (Item, Current.Gate, Norm, Count, Gate, Status);
+               exit when E.Is_Error (Status);
+               Product_Batch
+                 (Item, Current.Up, Norm, Count, Up, Status);
+               exit when E.Is_Error (Status);
 
-            for Which in 0 .. Count - 1 loop
-               declare
-                  Origin : constant Element_Count := Slot (Which, Feed);
-               begin
-                  K.SiLU (Gate.all (Origin .. Origin + Feed - 1));
-                  K.Multiply
-                    (Gate.all (Origin .. Origin + Feed - 1),
-                     Up.all (Origin .. Origin + Feed - 1));
-               end;
-            end loop;
+               for Which in 0 .. Count - 1 loop
+                  declare
+                     Origin : constant Element_Count := Slot (Which, Feed);
+                  begin
+                     K.SiLU (Gate.all (Origin .. Origin + Feed - 1));
+                     K.Multiply
+                       (Gate.all (Origin .. Origin + Feed - 1),
+                        Up.all (Origin .. Origin + Feed - 1));
+                  end;
+               end loop;
 
-            Product_Batch
-              (Item, Current.Down, Gate, Count, Norm, Status);
-            exit when E.Is_Error (Status);
+               Product_Batch
+                 (Item, Current.Down, Gate, Count, Norm, Status);
+               exit when E.Is_Error (Status);
+            end if;
 
             for Which in 0 .. Count - 1 loop
                declare

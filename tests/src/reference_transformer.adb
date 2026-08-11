@@ -985,6 +985,14 @@ package body Reference_Transformer is
       --  because the engine does.
       Item.Window :=
         Metadata (Source, Prefix (Item) & "attention.sliding_window", 0);
+
+      Item.Experts := Metadata (Source, Prefix (Item) & "expert_count", 0);
+      Item.Experts_Used :=
+        Metadata (Source, Prefix (Item) & "expert_used_count", 0);
+      Item.Expert_Feed :=
+        Metadata
+          (Source, Prefix (Item) & "expert_feed_forward_length",
+           Item.Feed_Forward);
       if Item.Window >= Item.Context then
          Item.Window := 0;
       end if;
@@ -1090,22 +1098,52 @@ package body Reference_Transformer is
                return;
             end if;
 
-            Current.Gate :=
-              Read_Matrix (Layer_Name (Index, "ffn_gate.weight"), Present);
-            if not Present then
-               return;
-            end if;
+            if Item.Experts > 0 then
+               Current.Router :=
+                 Read_Matrix (Layer_Name (Index, "ffn_gate_inp.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
 
-            Current.Up :=
-              Read_Matrix (Layer_Name (Index, "ffn_up.weight"), Present);
-            if not Present then
-               return;
-            end if;
+               Current.Gate_Experts :=
+                 Read_Matrix (Layer_Name (Index, "ffn_gate_exps.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
 
-            Current.Down :=
-              Read_Matrix (Layer_Name (Index, "ffn_down.weight"), Present);
-            if not Present then
-               return;
+               Current.Up_Experts :=
+                 Read_Matrix (Layer_Name (Index, "ffn_up_exps.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Down_Experts :=
+                 Read_Matrix (Layer_Name (Index, "ffn_down_exps.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+            else
+               Current.Gate :=
+                 Read_Matrix (Layer_Name (Index, "ffn_gate.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Up :=
+                 Read_Matrix (Layer_Name (Index, "ffn_up.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Down :=
+                 Read_Matrix (Layer_Name (Index, "ffn_down.weight"), Present);
+               if not Present then
+                  return;
+               end if;
             end if;
          end;
       end loop;
@@ -1129,6 +1167,10 @@ package body Reference_Transformer is
             Free_Matrix (Item.Blocks (Index).Value);
             Free_Matrix (Item.Blocks (Index).Attention_Out);
             Free_Vector (Item.Blocks (Index).Feed_Norm);
+            Free_Matrix (Item.Blocks (Index).Router);
+            Free_Matrix (Item.Blocks (Index).Gate_Experts);
+            Free_Matrix (Item.Blocks (Index).Up_Experts);
+            Free_Matrix (Item.Blocks (Index).Down_Experts);
             Free_Matrix (Item.Blocks (Index).Gate);
             Free_Matrix (Item.Blocks (Index).Up);
             Free_Matrix (Item.Blocks (Index).Down);
@@ -1221,6 +1263,28 @@ package body Reference_Transformer is
             end;
          end loop;
       end Project;
+
+      --  The same product over a band of rows starting at First, which is
+      --  how one expert is reached inside the stack the file writes.
+      procedure Project_Rows
+        (Weight : Matrix;
+         First  : Natural;
+         Input  : Real_Vector;
+         Target : out Real_Vector)
+      is
+      begin
+         for Row in Target'Range loop
+            declare
+               Total : Long_Float := 0.0;
+            begin
+               for Column in Weight'Range (2) loop
+                  Total := Total
+                    + Weight (First + Row, Column) * Input (Column);
+               end loop;
+               Target (Row) := Total;
+            end;
+         end loop;
+      end Project_Rows;
 
       --  Rotary encoding over the leading Rotary elements of each head.
       procedure Rotate
@@ -1407,23 +1471,135 @@ package body Reference_Transformer is
                --  Feed-forward block.
                Normalize (State, Current.Feed_Norm.all, Normed);
 
-               declare
-                  Gate : Real_Vector (0 .. Item.Feed_Forward - 1) :=
-                    [others => 0.0];
-                  Up   : Real_Vector (0 .. Item.Feed_Forward - 1) :=
-                    [others => 0.0];
-               begin
-                  Project (Current.Gate.all, Normed, Gate);
-                  Project (Current.Up.all, Normed, Up);
+               if Item.Experts > 0 then
+                  --  A mixture: the router scores the experts, the softmax
+                  --  turns the scores into shares, the highest few are kept
+                  --  and their shares put back on a scale of one, and each
+                  --  of them runs the block a dense model has one of.
+                  declare
+                     Width_Feed : constant Natural := Item.Expert_Feed;
 
-                  for Index in Gate'Range loop
-                     Gate (Index) :=
-                       Gate (Index) / (1.0 + Functions.Exp (-Gate (Index)))
-                       * Up (Index);
-                  end loop;
+                     Scores : Real_Vector (0 .. Item.Experts - 1) :=
+                       [others => 0.0];
+                     Taken  : array (0 .. Item.Experts - 1) of Boolean :=
+                       [others => False];
+                     Picked : array (0 .. Item.Experts_Used - 1) of Natural :=
+                       [others => 0];
+                     Share  : array (0 .. Item.Experts_Used - 1) of Long_Float
+                       := [others => 0.0];
 
-                  Project (Current.Down.all, Gate, Normed);
-               end;
+                     Input  : constant Real_Vector := Normed;
+                     Sum    : Real_Vector (0 .. Width - 1) := [others => 0.0];
+
+                     Largest, Total : Long_Float;
+                  begin
+                     Project (Current.Router.all, Input, Scores);
+
+                     Largest := Scores (0);
+                     for Index in Scores'Range loop
+                        if Scores (Index) > Largest then
+                           Largest := Scores (Index);
+                        end if;
+                     end loop;
+
+                     Total := 0.0;
+                     for Index in Scores'Range loop
+                        Scores (Index) := Functions.Exp (Scores (Index)
+                                                         - Largest);
+                        Total := Total + Scores (Index);
+                     end loop;
+                     for Index in Scores'Range loop
+                        Scores (Index) := Scores (Index) / Total;
+                     end loop;
+
+                     --  The highest few, ties going to the lower-numbered
+                     --  expert.
+                     Total := 0.0;
+                     for Slot in Picked'Range loop
+                        declare
+                           Best : Integer := -1;
+                        begin
+                           for Index in Scores'Range loop
+                              if not Taken (Index)
+                                and then (Best < 0
+                                          or else Scores (Index)
+                                                  > Scores (Best))
+                              then
+                                 Best := Index;
+                              end if;
+                           end loop;
+
+                           Taken (Best) := True;
+                           Picked (Slot) := Best;
+                           Share (Slot) := Scores (Best);
+                           Total := Total + Share (Slot);
+                        end;
+                     end loop;
+
+                     for Slot in Share'Range loop
+                        Share (Slot) := Share (Slot) / Total;
+                     end loop;
+
+                     for Slot in Picked'Range loop
+                        declare
+                           --  Where this expert's rows start in each stack.
+                           Rows_Feed : constant Natural :=
+                             Picked (Slot) * Width_Feed;
+                           Rows_Down : constant Natural :=
+                             Picked (Slot) * Width;
+
+                           Gate : Real_Vector (0 .. Width_Feed - 1) :=
+                             [others => 0.0];
+                           Up   : Real_Vector (0 .. Width_Feed - 1) :=
+                             [others => 0.0];
+                           Out_Row : Real_Vector (0 .. Width - 1) :=
+                             [others => 0.0];
+                        begin
+                           Project_Rows
+                             (Current.Gate_Experts.all, Rows_Feed, Input,
+                              Gate);
+                           Project_Rows
+                             (Current.Up_Experts.all, Rows_Feed, Input, Up);
+
+                           for Index in Gate'Range loop
+                              Gate (Index) :=
+                                Gate (Index)
+                                / (1.0 + Functions.Exp (-Gate (Index)))
+                                * Up (Index);
+                           end loop;
+
+                           Project_Rows
+                             (Current.Down_Experts.all, Rows_Down, Gate,
+                              Out_Row);
+
+                           for Index in Sum'Range loop
+                              Sum (Index) :=
+                                Sum (Index) + Share (Slot) * Out_Row (Index);
+                           end loop;
+                        end;
+                     end loop;
+
+                     Normed := Sum;
+                  end;
+               else
+                  declare
+                     Gate : Real_Vector (0 .. Item.Feed_Forward - 1) :=
+                       [others => 0.0];
+                     Up   : Real_Vector (0 .. Item.Feed_Forward - 1) :=
+                       [others => 0.0];
+                  begin
+                     Project (Current.Gate.all, Normed, Gate);
+                     Project (Current.Up.all, Normed, Up);
+
+                     for Index in Gate'Range loop
+                        Gate (Index) :=
+                          Gate (Index) / (1.0 + Functions.Exp (-Gate (Index)))
+                          * Up (Index);
+                     end loop;
+
+                     Project (Current.Down.all, Gate, Normed);
+                  end;
+               end if;
 
                for Index in 0 .. Width - 1 loop
                   State (Index) := State (Index) + Normed (Index);

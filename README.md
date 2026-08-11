@@ -476,7 +476,7 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 1950, logits compared 24960,
+conformance: sequences 2730, logits compared 37440,
              worst absolute 2.14340155850756E-05,
              worst relative 8.94395650089654E-04,
              rounded logits compared 6240,
@@ -485,7 +485,8 @@ conformance: sequences 1950, logits compared 24960,
              outside tolerance 0
 ```
 
-Both architectures, with and without a sliding window, both backends, every
+Both architectures, in each of the three shapes a supported model comes in --
+dense, sliding-window, and a mixture of experts -- both backends, every
 evaluation path -- a token at a
 time, a whole prompt in one pass, and a prompt handed over in several --
 serial and across a worker pool, every repacking mode, and every one of the
@@ -496,26 +497,35 @@ rather than by calling the engine, so a packing mistake cannot be common to
 the two sides. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
 outside it.
 
-One combination is left out of that sweep, and the reason is a measurement.
-Repacking to brain floats halves the mantissa, and a sliding window makes the
-softmax sharper, so a perturbation that full attention averages away moves a
-logit instead. Against the reference, worst absolute over this sweep:
+Two combinations are left out of that sweep, and the reason for both is a
+measurement. Repacking to brain floats halves the mantissa, and both a sliding
+window and a mixture sharpen what that perturbation reaches: a window makes the
+attention softmax sharper, so a difference full attention would average away
+moves a logit instead, and a mixture puts a softmax on the router, where the
+same difference moves the shares the experts are summed with and, where two
+experts score nearly the same, moves which of them runs at all. Against the
+reference, worst absolute over this sweep:
 
-| window | `--repack bf16` |
+| model | `--repack bf16` |
 |---|---|
-| none | 0.137 |
-| 6 | 0.137 |
-| 5 | 0.517 |
-| 4 | 0.517 |
-| 3 | 1.677 |
+| dense, no window | 0.137 |
+| window 6 | 0.137 |
+| window 5 | 0.517 |
+| window 4 | 0.517 |
+| window 3 | 1.677 |
+| experts, four of four used | 0.330 |
+| experts, two of four used | 0.509 |
 
-against a lossy tolerance of 0.3. The exact repacking modes agree at every one
-of those windows -- 2.1e-05 at a window of three against 3.5e-06 with none --
-so this says nothing about whether the window is right and everything about
-what `--repack bf16` costs on a windowed model. Comparing it in the sweep
-would mean asserting a tolerance nobody has grounds for. **Do not use
-`--repack bf16` with a narrow sliding window**; `--repack f32` is exact and
-costs memory instead.
+against a lossy tolerance of 0.3. The two expert rows are what separate the
+mixture's two causes: running every expert leaves no choice to flip, so 0.330
+is what the shares alone cost, and the rest of the way to 0.509 is the route
+changing. The exact repacking modes agree everywhere in that table -- 2.1e-05
+at a window of three and on the mixture, against 3.5e-06 dense -- so none of
+this says the window or the routing is wrong, and all of it says what
+`--repack bf16` costs on those models. Comparing them in the sweep would mean
+asserting a tolerance nobody has grounds for. **Do not use `--repack bf16`
+with a narrow sliding window or a mixture of experts**; `--repack f32` is
+exact and costs memory instead.
 
 The rounded figures are `--repack bf16`, counted apart because mixing them in
 would let the lossy path's error hide the exact path's. They are the number

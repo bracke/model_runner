@@ -113,6 +113,13 @@ package Tiny_Model is
    --    everything committed. A model with a window is not a model with a
    --    shorter context: the context is what may be held and the window is
    --    what each position may see.
+   --  @param Experts How many experts each layer carries. Zero writes a
+   --    dense model: one feed-forward block a layer and no router. Any other
+   --    count writes a router, a stack of expert matrices, and the metadata
+   --    naming both -- including the expert width, which is narrower than the
+   --    dense block this fixture would otherwise have.
+   --  @param Experts_Used How many of those experts run for one position.
+   --    Meaningful only beside a non-zero count.
    --  @param Byte_Pair Write the vocabulary as a byte-pair one -- a `gpt2`
    --    model with a merge table, pieces in the stand-in alphabet and the
    --    same three control tokens -- instead of a SentencePiece one. That
@@ -129,6 +136,8 @@ package Tiny_Model is
       Qwen           : Boolean := False;
       Omit_Biases    : Boolean := False;
       Byte_Pair      : Boolean := False;
-      Window         : Natural := 0);
+      Window         : Natural := 0;
+      Experts        : Natural := 0;
+      Experts_Used   : Natural := 0);
 
 end Tiny_Model;

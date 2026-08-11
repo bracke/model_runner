@@ -46,8 +46,10 @@ container validation and is rejected by `Model_Runner.Tensors.Make` with
 
 | Sliding-window attention | Implemented: a model naming `<arch>.attention.sliding_window` has each position attend to that many positions ending at itself, uniformly across layers, on every evaluation path and both backends. The cache still holds the whole context -- the window narrows what may be read, not what is kept -- so this buys the model's answer and not the model's memory. An architecture that alternates windowed and full layers needs a per-layer pattern this does not have and is not claimed |
 
-Explicitly rejected features: mixture of experts, asymmetric key and value
-widths, and rotary scaling other than `none` and `linear`.
+| Mixture of experts | Implemented: a model naming `<arch>.expert_count` and `<arch>.expert_used_count` carries a router beside each layer's feed-forward block and a stack of expert matrices instead of one. The router scores every expert for the position being computed, a softmax turns the scores into shares, the highest few run, and their outputs are summed in proportion to those shares renormalized over that few. Ties go to the lower-numbered expert. One expert's width comes from `<arch>.expert_feed_forward_length` when the file states it and from `feed_forward_length` otherwise. Because the route is decided per position, this is the one block a batch runs a token at a time; everything else about a batch is still one matrix against many vectors. A shared expert, a gate that is not a softmax, and unnormalized expert weights are each refused by name |
+
+Explicitly rejected features: asymmetric key and value widths, and rotary
+scaling other than `none` and `linear`.
 
 ## Tokenizer
 

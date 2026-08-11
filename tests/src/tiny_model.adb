@@ -32,7 +32,9 @@ package body Tiny_Model is
       Qwen      : Boolean := False;
       Omit_Biases : Boolean := False;
       Byte_Pair : Boolean := False;
-      Window    : Natural := 0)
+      Window    : Natural := 0;
+      Experts      : Natural := 0;
+      Experts_Used : Natural := 0)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -54,6 +56,15 @@ package body Tiny_Model is
         (if Deep then Deep_Head_Size
          elsif Quantized then Wide_Head_Size
          else Tiny_Model.Head_Size);
+
+      --  One expert is narrower than the dense block, which is the whole
+      --  point of having several of them, and the file states that width
+      --  separately. A quantized row is still a whole number of blocks, so
+      --  the narrowest each fixture can be is what it is.
+      Expert_Feed : constant Natural :=
+        (if Deep then Deep_Feed_Forward
+         elsif Quantized then 32
+         else 8);
       Builder : Fixtures.Builder;
       Seed    : Interfaces.Unsigned_64 := 12_345;
 
@@ -192,6 +203,20 @@ package body Tiny_Model is
       Fixtures.Add_U32
         (Builder, Prefix & ".rope.dimension_count", Interfaces.Unsigned_32 (Head_Size));
       Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base", 10_000.0);
+
+      --  A mixture of experts, when one is asked for. Absent otherwise,
+      --  which is what a dense model looks like.
+      if Experts > 0 then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".expert_count",
+            Interfaces.Unsigned_32 (Experts));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".expert_used_count",
+            Interfaces.Unsigned_32 (Experts_Used));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".expert_feed_forward_length",
+            Interfaces.Unsigned_32 (Expert_Feed));
+      end if;
 
       --  A sliding window, when one is asked for. Absent otherwise, which
       --  is what a model that attends to everything looks like.
@@ -368,11 +393,27 @@ package body Tiny_Model is
          Weight (Layer_Name (Index, "attn_output.weight"),
                  [G.U64 (Embedding), G.U64 (Embedding)]);
          Norm (Layer_Name (Index, "ffn_norm.weight"));
-         Weight (Layer_Name (Index, "ffn_gate.weight"),
-                 [G.U64 (Embedding), G.U64 (Feed_Forward)]);
-         Weight (Layer_Name (Index, "ffn_up.weight"), [G.U64 (Embedding), G.U64 (Feed_Forward)]);
-         Weight (Layer_Name (Index, "ffn_down.weight"),
-                 [G.U64 (Feed_Forward), G.U64 (Embedding)]);
+
+         if Experts > 0 then
+            --  The router, then the experts stacked on an outermost axis,
+            --  which is how a file writes them: one tensor a matrix rather
+            --  than one tensor an expert.
+            Weight (Layer_Name (Index, "ffn_gate_inp.weight"),
+                    [G.U64 (Embedding), G.U64 (Experts)]);
+            Weight (Layer_Name (Index, "ffn_gate_exps.weight"),
+                    [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Experts)]);
+            Weight (Layer_Name (Index, "ffn_up_exps.weight"),
+                    [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Experts)]);
+            Weight (Layer_Name (Index, "ffn_down_exps.weight"),
+                    [G.U64 (Expert_Feed), G.U64 (Embedding), G.U64 (Experts)]);
+         else
+            Weight (Layer_Name (Index, "ffn_gate.weight"),
+                    [G.U64 (Embedding), G.U64 (Feed_Forward)]);
+            Weight (Layer_Name (Index, "ffn_up.weight"),
+                    [G.U64 (Embedding), G.U64 (Feed_Forward)]);
+            Weight (Layer_Name (Index, "ffn_down.weight"),
+                    [G.U64 (Feed_Forward), G.U64 (Embedding)]);
+         end if;
       end loop;
 
       Norm ("output_norm.weight");

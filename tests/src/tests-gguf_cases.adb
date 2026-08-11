@@ -3410,12 +3410,55 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Unsupported_Rope_Scaling,
               "an unsupported rotary scaling was accepted");
 
-      --  Features that make it a different model. The key being there is
-      --  enough: its value would only say how different.
+      --  A mixture of experts is read rather than refused: the
+      --  configuration is sound and preparation goes on to want the router
+      --  and the expert matrices. This asserted the refusal until the
+      --  mixture was implemented.
       Sound (Builder);
       Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
+      Fixtures.Add_U32 (Builder, "llama.expert_used_count", 2);
+      Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
+              "a mixture-of-experts model was refused rather than read");
+
+      --  One of the two keys without the other describes no model: a count
+      --  of experts says nothing about how many of them run.
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
+      Assert (Outcome (Builder) = E.GGUF_Missing_Metadata_Key,
+              "an expert count with no used count was accepted");
+
+      --  And running more experts than the model has is not a model.
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.expert_count", 4);
+      Fixtures.Add_U32 (Builder, "llama.expert_used_count", 5);
+      Assert (Outcome (Builder) = E.GGUF_Metadata_Out_Of_Range,
+              "a model running more experts than it has was accepted");
+
+      --  Parts of a mixture this does not compute. Each would produce a
+      --  plausible wrong answer rather than a refusal if it were ignored:
+      --  a shared expert runs for every position beside the chosen ones, a
+      --  different gate turns the scores into different shares, and
+      --  unnormalized weights shrink the block's whole output.
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
+      Fixtures.Add_U32 (Builder, "llama.expert_used_count", 2);
+      Fixtures.Add_U32 (Builder, "llama.expert_shared_count", 1);
       Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
-              "a mixture-of-experts model was accepted");
+              "a model with a shared expert was accepted");
+
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
+      Fixtures.Add_U32 (Builder, "llama.expert_used_count", 2);
+      Fixtures.Add_U32 (Builder, "llama.expert_gating_func", 2);
+      Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
+              "a model with another expert gate was accepted");
+
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
+      Fixtures.Add_U32 (Builder, "llama.expert_used_count", 2);
+      Fixtures.Add_Bool (Builder, "llama.expert_weights_norm", False);
+      Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
+              "a model with unnormalized expert weights was accepted");
 
       --  A sliding window is read rather than refused: the configuration is
       --  sound and preparation goes on to want the tensors, exactly as it

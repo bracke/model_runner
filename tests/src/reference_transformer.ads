@@ -102,6 +102,16 @@ private
       Gate           : Matrix_Access := null;
       Up             : Matrix_Access := null;
       Down           : Matrix_Access := null;
+
+      --  What a mixture-of-experts layer carries instead. The experts are
+      --  kept stacked, exactly as the file writes them, and an expert is
+      --  reached by an offset into the rows rather than by a copy -- which
+      --  is also the arithmetic the engine does, arrived at from the shape
+      --  of the tensor rather than from the engine.
+      Router         : Matrix_Access := null;
+      Gate_Experts   : Matrix_Access := null;
+      Up_Experts     : Matrix_Access := null;
+      Down_Experts   : Matrix_Access := null;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -128,6 +138,13 @@ private
       --  implementations agree because they read the same file rather than
       --  because one was told what the other found.
       Window       : Natural := 0;
+
+      --  How many experts a layer holds, how many of them run for one
+      --  position, and how wide one of them is. Zero experts is a dense
+      --  model, which is what a file without the keys describes.
+      Experts      : Natural := 0;
+      Experts_Used : Natural := 0;
+      Expert_Feed  : Natural := 0;
       Embeddings   : Matrix_Access := null;
       Output       : Matrix_Access := null;
       Output_Norm  : Vector_Access := null;

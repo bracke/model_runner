@@ -30,10 +30,24 @@ with Model_Runner.Tokenizer;
 --  that gets its own profile, because a profile that answers for everything
 --  answers for nothing.
 --
---  Rejected features. Mixture of experts, attention sinks, cross-attention,
---  multimodal projections, recurrent state, unsupported rotary scaling,
---  unsupported normalization and unsupported activations are rejected during
---  preparation, before any evaluation.
+--  Rejected features. Attention sinks, cross-attention, multimodal
+--  projections, recurrent state, unsupported rotary scaling, unsupported
+--  normalization and unsupported activations are rejected during preparation,
+--  before any evaluation.
+--
+--  Mixture of experts is implemented. A model that names an expert count
+--  carries a router beside each layer's feed-forward block and a stack of
+--  expert matrices instead of one; the router scores the experts for the
+--  position being computed, the highest few are run, and their outputs are
+--  summed in proportion to the scores the softmax gave them, renormalized
+--  over the chosen few. Which experts run is decided per position, so this
+--  is the one place where evaluating a batch is not evaluating a matrix
+--  against many vectors at once.
+--
+--  What is not claimed there is a shared expert that runs for every position
+--  beside the chosen ones, and a gate that is not a softmax. A model
+--  carrying either is refused by name rather than run with the part that is
+--  understood.
 --
 --  Sliding-window attention is implemented rather than rejected: a model that
 --  names a window has each position attend to the window's worth of
@@ -107,7 +121,30 @@ package Model_Runner.Llama is
       --  the bound on how much each position may see. Both are needed and
       --  they are not the same number.
       Window          : Natural := 0;
+
+      --  How many experts each layer holds and how many of them run for one
+      --  position. Zero experts is a dense model: one feed-forward block per
+      --  layer, no router, which is what a model without the key means.
+      Experts         : Natural := 0;
+      Experts_Used    : Natural := 0;
+
+      --  Width of one expert's feed-forward block. A mixture-of-experts file
+      --  may state this separately from feed_forward_length, because the two
+      --  are different numbers: one expert is narrower than the dense block
+      --  the model would have had. Equal to Feed_Forward when the file does
+      --  not say, and unused by a dense model.
+      Expert_Feed     : Natural := 0;
    end record;
+
+   --  The feed-forward width one activation buffer has to hold: an expert's
+   --  when the model has experts, and the dense block's when it does not.
+   --
+   --  @param Settings Configuration to inspect.
+   --  @return Width in elements.
+   function Feed_Width (Settings : Configuration) return Natural
+   is (if Settings.Experts > 0
+       then Settings.Expert_Feed
+       else Settings.Feed_Forward);
 
    --  A prepared, immutable model.
    type Model is tagged limited private;
@@ -495,6 +532,18 @@ package Model_Runner.Llama is
 
 private
 
+   --  One expert's feed-forward block. The three matrices are views into the
+   --  stacked tensor the file carries -- the expert axis is the outermost, so
+   --  an expert's rows are contiguous and a view over them needs no copy.
+   type Expert is record
+      Gate : aliased Model_Runner.Tensors.View;
+      Up   : aliased Model_Runner.Tensors.View;
+      Down : aliased Model_Runner.Tensors.View;
+   end record;
+
+   type Expert_Array is array (Natural range <>) of Expert;
+   type Expert_Array_Access is access Expert_Array;
+
    type Layer is record
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
       Query : aliased Model_Runner.Tensors.View;
@@ -511,6 +560,13 @@ private
       Gate : aliased Model_Runner.Tensors.View;
       Up : aliased Model_Runner.Tensors.View;
       Down : aliased Model_Runner.Tensors.View;
+
+      --  What a mixture-of-experts layer carries instead: the router, which
+      --  scores every expert for a position, and the experts themselves.
+      --  Both are absent from a dense layer, where Gate, Up and Down are the
+      --  whole feed-forward block.
+      Router  : aliased Model_Runner.Tensors.View;
+      Experts : Expert_Array_Access := null;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -573,6 +629,14 @@ private
       Scores     : Model_Runner.Tensors.Real_Array_Access := null;
       Gate       : Model_Runner.Tensors.Real_Array_Access := null;
       Up         : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  What a mixture of experts needs beyond the dense block: the
+      --  router's scores, the sum being accumulated over the chosen experts,
+      --  and the one expert's output being added into it. All three are null
+      --  for a dense model, which allocates none of them.
+      Routing    : Model_Runner.Tensors.Real_Array_Access := null;
+      Mixture    : Model_Runner.Tensors.Real_Array_Access := null;
+      Expert_Row : Model_Runner.Tensors.Real_Array_Access := null;
       Plan       : Model_Runner.Memory.Session_Plan;
       Team       : Model_Runner.Backend.CPU.Pool_Reference := null;
       Logit_Row  : Model_Runner.Tensors.Real_Array_Access := null;

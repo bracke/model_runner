@@ -38,6 +38,12 @@ package body Conformance is
       --  attention reads several past positions.
       type Sequence is array (Positive range <>) of Natural;
 
+      --  The shapes a supported model comes in. Not flags, because they are
+      --  not independent of each other in what they are worth crossing: each
+      --  is a different route through the evaluator and each is worth every
+      --  format, backend and repack mode on its own.
+      type Model_Shape is (Plain, Windowed, Mixed);
+
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
       --  A pool for the half of the sweep that runs in parallel. Made once
@@ -258,6 +264,11 @@ package body Conformance is
       --  does and the one that had no number attached to it.
       --  Which backends take more than a token at a time, asked of the
       --  backends rather than named here.
+      --  And every shape a supported model comes in: dense, sliding-window,
+      --  and a mixture of experts. Each is a different route through the
+      --  same evaluator -- the mixture is the one place where a batch is not
+      --  one matrix against many vectors -- and the reference reads the same
+      --  file and arrives at each of them from the description.
       declare
          --  Which backends run their products across a pool, asked of them.
          function Shares
@@ -284,14 +295,28 @@ package body Conformance is
          for Backend in Model_Runner.Backend.Backend_Kind loop
             for Qwen in Boolean loop
                for Format in Tiny_Model.Weight_Format loop
-                  for Windowed in Boolean loop
-                     --  With and without a sliding window. Three is chosen so
-                     --  that the eight-token sequences cross it repeatedly and
-                     --  the shortest do not reach it, which is where a window
-                     --  applied one position out shows.
+                  for Shape in Model_Shape loop
+                     --  The three shapes a supported model comes in. The
+                     --  window is three so that the eight-token sequences
+                     --  cross it repeatedly and the shortest do not reach it,
+                     --  which is where a window applied one position out
+                     --  shows. Two experts of four is the same idea for
+                     --  routing: enough that the choice is a choice, few
+                     --  enough that positions disagree about it.
                      Tiny_Model.Build
                        (Image, Format, Qwen => Qwen,
-                        Window => (if Windowed then 3 else 0));
+                        Window =>
+                          (case Shape is
+                             when Windowed => 3,
+                             when Plain | Mixed => 0),
+                        Experts =>
+                          (case Shape is
+                             when Mixed => 4,
+                             when Plain | Windowed => 0),
+                        Experts_Used =>
+                          (case Shape is
+                             when Mixed => 2,
+                             when Plain | Windowed => 0));
 
                      for Repack in L.Repack_Mode loop
                         --  Brain floats and a narrow window are not compared,
@@ -314,7 +339,30 @@ package body Conformance is
                         --  the figure published for a full-attention one.
                         --  Comparing it here would assert a tolerance nobody
                         --  has grounds for; the docs say the cost instead.
-                        if Windowed and then Repack = L.To_BF16 then
+                        if Shape = Windowed and then Repack = L.To_BF16 then
+                           goto Next_Repack;
+                        end if;
+
+                        --  And not on a mixture, for a related reason that
+                        --  the same sweep separates into two. Halving the
+                        --  mantissa moves the router's scores, which moves
+                        --  the shares the experts are summed with; and where
+                        --  two experts score nearly the same it moves which
+                        --  of them runs at all, which is a discrete change
+                        --  that no tolerance on the arithmetic covers.
+                        --  Measured here, worst absolute against the
+                        --  reference with brain floats:
+                        --
+                        --    dense                      0.137
+                        --    four of four experts       0.330
+                        --    two of four experts        0.509
+                        --
+                        --  against a lossy tolerance of 0.3. The middle row
+                        --  is the one that isolates it: running every expert
+                        --  leaves no choice to flip, so what it measures is
+                        --  the shares alone. The exact modes agree at
+                        --  2.1E-05 either way.
+                        if Shape = Mixed and then Repack = L.To_BF16 then
                            goto Next_Repack;
                         end if;
 
@@ -401,7 +449,10 @@ package body Conformance is
             Repacks : constant Natural :=
               L.Repack_Mode'Pos (L.Repack_Mode'Last) + 1;
 
-            --  Two architectures, each with and without a sliding window.
+            Shapes : constant Natural :=
+              Model_Shape'Pos (Model_Shape'Last) + 1;
+
+            --  Two architectures, each in every shape a model comes in.
             --  Four sequences a token at a time on every backend; three of
             --  them again in one pass on the backends that batch; two across
             --  a pool on the backends that partition, and one of those in
@@ -412,8 +463,11 @@ package body Conformance is
               Backends * 4 + Batching * 3 + Sharing * 2
               + (if Batching > 0 and then Sharing > 0 then 2 else 0);
 
+            --  Every shape runs every repack mode except the windowed one
+            --  and the mixture, which each run one fewer for the reasons
+            --  written where they are skipped.
             Expected : constant Natural :=
-              Formats * 2 * (Repacks + Repacks - 1) * Per_Model;
+              Formats * 2 * (Shapes * Repacks - 2) * Per_Model;
          begin
             Result.Ran := Result.Sequences = Expected;
          end;

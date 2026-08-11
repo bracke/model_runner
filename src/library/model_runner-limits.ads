@@ -75,6 +75,11 @@ package Model_Runner.Limits is
       --  Largest attention-head count accepted from architecture metadata.
       Max_Heads : Natural := 1024;
 
+      --  Largest expert count accepted from architecture metadata. Every
+      --  expert is three matrices, so this bounds how many tensors a single
+      --  layer resolves as much as it bounds the routing.
+      Max_Experts : Natural := 1024;
+
       --  Largest chat template accepted, in bytes.
       Max_Template_Bytes : Natural := 262_144;
 

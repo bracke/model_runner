@@ -184,11 +184,23 @@ kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/m
 # measured, it needs its own figures rather than these -- a narrower window
 # does less arithmetic per token, so it would be faster, and none of the
 # numbers below would describe it.
-engine CE0E23E77EF859A6 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# 2026-08-11, mixture of experts. The same two groups again, and the same
+# judgement, for the same reason: a model without expert metadata has
+# Experts = 0, and every one of the additions is inside a branch on that.
+# The dense path runs the products it ran before, in the order it ran them,
+# with the loop bounds it had. What is added to it is one test of an integer
+# per layer per token. The figures were NOT re-measured and the model they
+# need is still not on this machine.
+#
+# A mixture model would need its own figures and could not use these: it
+# runs its feed-forward block a position at a time rather than a batch at a
+# time, and it runs several experts where a dense model runs one block, so
+# neither the twelve-token figure nor the batch-size table would describe it.
+engine D120C1CA908D90CC src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
-reference F26546CEDF39E62A src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+reference 241DDC03B3D17A76 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

@@ -7,6 +7,53 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Mixture of experts.** A model naming `<arch>.expert_count` and
+  `<arch>.expert_used_count` carries a router beside each layer's
+  feed-forward block and a stack of expert matrices instead of one. The
+  router scores every expert for the position being computed, a softmax
+  turns those scores into shares, the highest few run, and their outputs are
+  summed in proportion to the shares renormalized over that few. Ties go to
+  the lower-numbered expert, so two experts scoring the same do not make the
+  answer depend on which one the search reached first. It was refused by
+  name until now.
+
+  One expert's width comes from `<arch>.expert_feed_forward_length` when the
+  file states it and from `feed_forward_length` otherwise, because on a
+  mixture those are different numbers: `feed_forward_length` describes the
+  dense block the model does not have.
+
+  Nothing is copied to make this work. A file writes a layer's experts as one
+  tensor with the expert axis outermost, so an expert's rows are contiguous
+  and reaching one is arithmetic on an offset -- a mixture holds no more bytes
+  than the file does.
+
+  Which experts run is decided per position, so this is the one block that
+  runs a token at a time however many were handed over. Everything else about
+  a batch -- the projections, the attention, the output -- is still one matrix
+  against many vectors.
+
+  A shared expert that runs for every position beside the chosen ones, a gate
+  that is not a softmax, and expert weights the file asks not to be
+  normalized are each refused by name rather than run with the part that is
+  understood: each would produce a plausible wrong answer instead of a
+  refusal.
+
+  The conformance sweep gained the mixture as a third model shape beside
+  dense and sliding-window -- 2730 sequences against the independent
+  implementation, which reads the same keys and the same stacked tensors and
+  arrives at the routing from the description.
+
+  Repacking to brain floats is left out of the sweep for a mixture, as it is
+  for a window, and the same sweep separates the two reasons: with every
+  expert running, so that no choice can flip, the worst disagreement is 0.330;
+  with two of four, where the route can change, it is 0.509, against a lossy
+  tolerance of 0.3 and 0.137 dense. The exact modes agree at 2.1E-05 either
+  way. The README carries the table.
+
+- **The attention biases are released when a model closes.** A qwen2 model
+  held three vectors a layer past its own closing. Only that architecture has
+  them, which is why closing a llama model looked clean.
+
 - **Sliding-window attention.** A model naming
   `<arch>.attention.sliding_window` has each position attend to that many
   positions ending at itself, uniformly across layers, on every evaluation
