@@ -220,9 +220,14 @@ private
    --  rest are where to return to when the rule it belongs to ends.
    type Position_Stack is array (1 .. Max_Depth) of Natural;
 
+   --  Slots carries no default. A matcher holds two hundred and fifty-six
+   --  of these and each has sixty-four of them, so defaulting them means
+   --  writing sixty-five kilobytes to declare a variable -- which the token
+   --  filter used to do for every token of the vocabulary. Depth says how
+   --  many are meaningful and nothing reads past it.
    type Stack_Entry is record
       Depth : Natural := 0;
-      Slots : Position_Stack := [others => 0];
+      Slots : Position_Stack;
    end record;
 
    type Stack_Array is array (1 .. Max_Stacks) of Stack_Entry;

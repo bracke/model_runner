@@ -775,6 +775,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The grammar filter is 725 times faster.** It runs over the whole
+  vocabulary at every step, and the fixtures this suite uses have sixteen
+  tokens, so nothing in the tests would have shown what it cost on a real
+  one: 7.4 microseconds a token, which is 0.24 s a step over 32,000 tokens
+  -- several times the forward pass it was filtering.
+
+  All of it was copying. A matcher holds 256 stacks of 64 positions;
+  stepping cleared the whole array and testing a token copied it twice,
+  whether or not the stacks were in use. Now the count bounds what is copied
+  and what is cleared, the slots carry no default so declaring a matcher does
+  not write 65 kilobytes, and a token whose first character no live stack
+  accepts is refused before anything is copied at all -- which is most tokens
+  at most steps.
+
+  10 ns a token where the grammar allows one character next, 116 ns inside a
+  run of letters where most tokens survive to be matched in full. Over 32,000
+  tokens: 0.3 ms and 3.7 ms a step, against about 85 ms for a token of
+  TinyLlama-1.1B. `tests benchmark` reports both, because they are different
+  enough to be worth reporting apart.
+
 - **The conformance sweep runs the reference once per fixture and sequence
   instead of once per comparison.** It reads the file and the tokens and
   nothing else -- it does not know which backend it is being compared

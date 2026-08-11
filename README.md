@@ -130,6 +130,22 @@ sampler with an empty distribution and reporting that instead.
 In a conversation the grammar applies to each reply, and starts again for
 each: what a grammar describes is an answer, not a whole conversation.
 
+**What it costs.** The filter runs over the whole vocabulary at every step,
+so it is worth a figure rather than an assurance. Measured on a stand-in
+vocabulary of 32,000 short pieces, one token filtered takes **10 ns** where
+the grammar allows one character next and **116 ns** inside a run of letters,
+where most tokens survive their first character and are matched to the end.
+Over 32,000 tokens that is 0.3 ms and 3.7 ms a step, against about 85 ms for
+a token of TinyLlama-1.1B: four per cent at worst.
+
+The first version cost 7.4 microseconds a token -- 0.24 s a step, several
+times the forward pass -- and the whole difference was copying. A matcher
+holds 256 stacks of 64 positions, and both stepping and testing a token were
+clearing or copying all of it whether or not it was in use. Now the count
+bounds what is copied, nothing is cleared that will not be read, and a token
+whose first character no live stack accepts is refused before anything is
+copied at all. `tests benchmark` reports both figures.
+
 ### Embedding
 
 `embed` prints what the model made of a text rather than what it would say

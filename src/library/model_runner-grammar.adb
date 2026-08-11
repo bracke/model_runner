@@ -1069,7 +1069,7 @@ package body Model_Runner.Grammar is
       Empty : constant Stack_Entry := (Depth => 0, Slots => [others => 0]);
       Ok    : Boolean;
    begin
-      State := (Count => 0, Stacks => [others => <>]);
+      State.Count := 0;
       Status := E.Success;
 
       if not Item.Ready then
@@ -1084,7 +1084,7 @@ package body Model_Runner.Grammar is
 
       if not Ok then
          Status := E.Make (E.Grammar_Too_Ambiguous);
-         State := (Count => 0, Stacks => [others => <>]);
+         State.Count := 0;
       end if;
    end Start;
 
@@ -1093,11 +1093,15 @@ package body Model_Runner.Grammar is
      (Item  : Compiled;
       From  : Matcher;
       Value : Code_Point;
-      Into  : out Matcher;
+      Into  : in out Matcher;
       Ok    : out Boolean)
    is
    begin
-      Into := (Count => 0, Stacks => [others => <>]);
+      --  Only the count is reset. The stacks past it are never read, and
+      --  clearing them wrote sixty-five kilobytes for every token of the
+      --  vocabulary at every step -- which is most of what a grammar used
+      --  to cost.
+      Into.Count := 0;
       Ok := True;
 
       for Index in 1 .. From.Count loop
@@ -1140,19 +1144,85 @@ package body Model_Runner.Grammar is
    -- Accepts --
    -------------
 
+   --  Whether any way the grammar is in the middle of could take this code
+   --  point next.
+   --
+   --  Asked before anything is copied. A step offers every token of the
+   --  vocabulary to the matcher and almost all of them are refused by their
+   --  first character, so answering that question without building a
+   --  successor state is the difference between a grammar costing more than
+   --  the model and costing almost nothing.
+   function Could_Begin
+     (Item  : Compiled;
+      State : Matcher;
+      Value : Code_Point) return Boolean is
+   begin
+      for Index in 1 .. State.Count loop
+         declare
+            Stack : Stack_Entry renames State.Stacks (Index);
+         begin
+            if Stack.Depth > 0 then
+               declare
+                  What : constant Element :=
+                    Item.Elements (Stack.Slots (Stack.Depth));
+               begin
+                  if What.Kind = Element_Char
+                    and then In_Set (Item, What, Value)
+                  then
+                     return True;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+
+      return False;
+   end Could_Begin;
+
    function Accepts
      (Item  : Compiled;
       State : Matcher;
       Text  : String) return Boolean
    is
-      Here : Matcher := State;
-      Next : Matcher;
       At_Byte : Natural := Text'First;
-      Ok   : Boolean;
    begin
       if not Item.Ready then
          return False;
       end if;
+
+      --  The cheap answer first, and for most tokens it is the answer.
+      if Text'Length > 0 then
+         declare
+            Value  : Natural;
+            Length : Natural;
+         begin
+            Model_Runner.UTF8.Decode_First (Text, Value, Length);
+            if Length = 0 then
+               return False;
+            end if;
+
+            if not Could_Begin (Item, State, Code_Point (Value)) then
+               return False;
+            end if;
+
+            --  One code point, and it was accepted: there is nothing left
+            --  to simulate.
+            if Length = Text'Length then
+               return True;
+            end if;
+         end;
+      end if;
+
+      declare
+         Here : Matcher;
+         Next : Matcher;
+         Ok   : Boolean;
+      begin
+         --  Only the stacks in use are copied. The rest of the array is not
+         --  read, and copying it is the whole of what a long token used to
+         --  cost.
+         Here.Count := State.Count;
+         Here.Stacks (1 .. State.Count) := State.Stacks (1 .. State.Count);
 
       while At_Byte <= Text'Last loop
          declare
@@ -1170,12 +1240,14 @@ package body Model_Runner.Grammar is
                return False;
             end if;
 
-            Here := Next;
+            Here.Count := Next.Count;
+            Here.Stacks (1 .. Next.Count) := Next.Stacks (1 .. Next.Count);
             At_Byte := At_Byte + Length;
          end;
       end loop;
 
       return Here.Count > 0;
+      end;
    end Accepts;
 
    -------------
@@ -1222,7 +1294,9 @@ package body Model_Runner.Grammar is
                return;
             end if;
 
-            State := Next;
+            State.Count := Next.Count;
+            State.Stacks (1 .. Next.Count) :=
+              Next.Stacks (1 .. Next.Count);
             At_Byte := At_Byte + Length;
          end;
       end loop;

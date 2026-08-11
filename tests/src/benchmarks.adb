@@ -10,6 +10,7 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Reference;
+with Model_Runner.Grammar;
 with Model_Runner.Kernels;
 with Model_Runner.Platform;
 with Model_Runner.Numerics;
@@ -321,6 +322,119 @@ package body Benchmarks is
 
          B.Free (Data);
       end Measure;
+
+      --  What a grammar costs a step.
+      --
+      --  Every token of the vocabulary is offered to the matcher before
+      --  anything is sampled, so the filter runs as often as a token is
+      --  produced and over as many texts as the model has tokens. The
+      --  fixtures this suite uses have sixteen; a real vocabulary has tens
+      --  of thousands, and nothing in the tests would show the difference.
+      --  This does: one step over a vocabulary of that size.
+      procedure Measure_Grammar (Name : String; Inside : Boolean) is
+         Words : constant := 32_000;
+
+         --  A quote, written once: the grammar below is full of them and
+         --  doubling them inside a literal makes it unreadable.
+         Q : constant String := [1 => Character'Val (34)];
+
+         Source : constant String :=
+           "root ::= object" & ASCII.LF
+           & "object ::= " & Q & "{" & Q & " ws pair (ws " & Q & "," & Q
+           & " ws pair)* ws " & Q & "}" & Q & ASCII.LF
+           & "pair ::= string ws " & Q & ":" & Q & " ws value" & ASCII.LF
+           & "value ::= string | number | object" & ASCII.LF
+           & "string ::= " & Q & "\" & Q & Q & " [a-z]* " & Q & "\" & Q
+           & Q & ASCII.LF
+           & "number ::= [0-9]+" & ASCII.LF
+           & "ws ::= [ ]*";
+
+         --  A stand-in vocabulary: short pieces over the printable range,
+         --  which is what a real one is mostly made of.
+         type Piece is record
+            Last : Natural := 0;
+            Text : String (1 .. 8) := [others => ' '];
+         end record;
+
+         type Piece_Array is array (1 .. Words) of Piece;
+         type Piece_Array_Access is access Piece_Array;
+
+         Pieces : constant Piece_Array_Access := new Piece_Array;
+
+         Item   : Model_Runner.Grammar.Compiled;
+         State  : Model_Runner.Grammar.Matcher;
+         Status : E.Error_Info;
+
+         Started : Ada.Real_Time.Time;
+         Done    : N.Element_Count := 0;
+         Guard   : Natural := 0;
+         Rates   : Rate_Array (1 .. Rounds) := [others => 0.0];
+      begin
+         for Index in Pieces'Range loop
+            declare
+               Length : constant Natural := 1 + (Index mod 6);
+            begin
+               Pieces (Index).Last := Length;
+               for Where in 1 .. Length loop
+                  Pieces (Index).Text (Where) :=
+                    Character'Val
+                      (32 + ((Index * 7 + Where * 13) mod 94));
+               end loop;
+            end;
+         end loop;
+
+         Model_Runner.Grammar.Compile (Item, Source, Status);
+         if E.Is_Error (Status) then
+            IO.Put_Line ("  grammar filter: the grammar did not compile");
+            return;
+         end if;
+
+         Model_Runner.Grammar.Start (Item, State, Status);
+
+         --  Two states, because they cost differently and both are real. At
+         --  the start only one character may follow, so almost every token
+         --  is refused by its first byte and never simulated. Inside a
+         --  string most letters may follow, so most tokens are simulated to
+         --  the end -- and that is the case a grammar is slowest in.
+         if Inside then
+            Model_Runner.Grammar.Advance (Item, State, "{", Status);
+            Model_Runner.Grammar.Advance
+              (Item, State, [1 => Character'Val (34)], Status);
+            Model_Runner.Grammar.Advance (Item, State, "ab", Status);
+         end if;
+
+         for Pass in Rates'Range loop
+            Done := 0;
+            Started := Ada.Real_Time.Clock;
+            loop
+               for Index in Pieces'Range loop
+                  if Model_Runner.Grammar.Accepts
+                       (Item, State,
+                        Pieces (Index).Text (1 .. Pieces (Index).Last))
+                  then
+                     Guard := Guard + 1;
+                  end if;
+               end loop;
+
+               Done := Done + Words;
+               exit when Ada.Real_Time.To_Duration
+                 (Ada.Real_Time.Clock - Started) >= Seconds;
+            end loop;
+
+            Rates (Pass) :=
+              Rate_Of (Long_Long_Integer (Done),
+                       Ada.Real_Time.To_Duration
+                         (Ada.Real_Time.Clock - Started));
+         end loop;
+
+         Report_Rate (Name, Middle (Rates));
+
+         if Guard = Natural'Last then
+            IO.Put_Line ("");
+         end if;
+
+         Model_Runner.Grammar.Close (Item);
+      end Measure_Grammar;
 
       --  The vector kernels each token passes through, which the measures
       --  above do not touch: normalization before every attention and feed
@@ -877,6 +991,11 @@ package body Benchmarks is
       Measure_Reference_Ratio ("q8_0");
       Measure_Reference_Ratio ("q4_k", G.Type_Q4_K);
       Measure_Reference_Ratio ("f32 ", G.Type_F32);
+      IO.New_Line;
+
+      IO.Put_Line ("output grammar, one token filtered");
+      Measure_Grammar ("at a place one character may follow", False);
+      Measure_Grammar ("inside a string, where most may", True);
       IO.New_Line;
 
       IO.Put_Line ("vector kernels");
