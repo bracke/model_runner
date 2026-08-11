@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `tests check --repository` runs the half of the gate that asks about this
+  host. The gate is one gate and stays one on the host that releases -- suite,
+  checks, conformance, two fuzzing campaigns -- but asking another host for
+  the checks meant repeating a suite that had just run and a conformance sweep
+  that is the same arithmetic everywhere: measured, that took Windows from
+  397 seconds to 668 and macOS from 521 to 844. The narrow form takes four.
+
+- Every option is given to the parser rather than listed. Seventeen of the
+  thirty-eight appeared in one place only, the test asserting each is on its
+  command's help screen, so a parser that accepted `--top-p` and dropped the
+  number would have passed -- the sampling tests build their configuration in
+  Ada, so both halves were tested and the join between them was not. The
+  value on the command line now has to reach the field it names, and a value
+  the field cannot hold has to be refused.
+
+- A system message read from a file is read, and refused by name. `--system`
+  had a test and `--system-file` had none, although it is the one the program
+  recommends: a value on a command line may be visible to other local
+  processes, which the help says outright. A missing path, a directory and
+  text that is not UTF-8 are each asked for.
+
 - The repository checks see one path separator on every host. The walk joined
   the host's way, so on Windows a check was handed `tests\src\checks.adb` and
   compared it against `tests/src/checks.adb`; every comparison of that shape

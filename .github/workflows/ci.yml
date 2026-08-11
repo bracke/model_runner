@@ -92,7 +92,7 @@ jobs:
       # these passed, because they were never asked here.
       - name: Run the repository checks
         working-directory: model_runner/tests
-        run: ./bin/tests check ..
+        run: ./bin/tests check .. --repository
 
   windows-build-check:
     name: Windows native build check
@@ -129,4 +129,4 @@ jobs:
       - name: Run the repository checks
         working-directory: model_runner/tests
         shell: bash
-        run: ./bin/tests.exe check ..
+        run: ./bin/tests.exe check .. --repository

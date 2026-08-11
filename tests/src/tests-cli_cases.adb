@@ -2449,6 +2449,158 @@ package body Tests.CLI_Cases is
       end;
    end Backends_Agree;
 
+   --  Every option, given rather than listed.
+   --
+   --  Seventeen of the thirty-eight were named in one place only: the test
+   --  that asserts each appears on its command's help screen. That an option
+   --  is documented is worth checking and is not the same as its being read.
+   --  Nothing gave --top-p a value and asked what the parser made of it, so
+   --  a parser that accepted the option and dropped the number would have
+   --  passed -- and the sampling test that does exist builds its
+   --  configuration in Ada rather than from a command line, so the two
+   --  halves were each tested and the join between them was not.
+   --
+   --  What is asked here is the join: the value on the command line reaches
+   --  the field it names, and a value the field cannot hold is refused.
+   procedure Options_Reach_What_They_Name
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Model_Runner.Byte_Sources.Files.Mapping_Policy;
+
+      --  Parse a run command line and hand back what it made.
+      procedure Reading
+        (First, Second : String;
+         Result        : out Opt.Command;
+         Status        : out E.Error_Info)
+      is
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, "model.gguf");
+         Add (Source, First);
+         if Second /= "" then
+            Add (Source, Second);
+         end if;
+
+         Opt.Parse (Source, Result, Status);
+      end Reading;
+
+      --  Parse and require success.
+      function Read (First, Second : String := "") return Opt.Command is
+         Result : Opt.Command;
+         Status : E.Error_Info;
+      begin
+         Reading (First, Second, Result, Status);
+         Assert (E.Is_Ok (Status),
+                 "'" & First & " " & Second & "' was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         return Result;
+      end Read;
+
+      --  Parse and require a refusal.
+      procedure Refuses (First, Second : String; Why : String) is
+         Result : Opt.Command;
+         Status : E.Error_Info;
+      begin
+         Reading (First, Second, Result, Status);
+         Assert (E.Is_Error (Status),
+                 "'" & First & " " & Second & "' was accepted, where " & Why);
+      end Refuses;
+   begin
+      --  The numbers that bound a run.
+      Assert (Read ("--context-size", "512").Context_Size = 512,
+              "--context-size did not reach the context size");
+      Assert (Read ("--max-tokens", "9").Max_Tokens = 9,
+              "--max-tokens did not reach the token bound");
+      Assert (Read ("--batch-size", "7").Batch_Size = 7,
+              "--batch-size did not reach the batch size");
+      Assert (Read ("--threads", "3").Threads = 3,
+              "--threads did not reach the worker count");
+
+      --  The sampler's settings, which had no path from a command line to
+      --  the configuration that any test walked.
+      Assert (Read ("--top-k", "40").Sampling.Top_K = 40,
+              "--top-k did not reach the sampler");
+      Assert (Read ("--top-p", "0.9").Sampling.Top_P = 0.9,
+              "--top-p did not reach the sampler");
+      Assert (Read ("--min-p", "0.05").Sampling.Min_P = 0.05,
+              "--min-p did not reach the sampler");
+      Assert (Read ("--temperature", "0.25").Sampling.Temperature = 0.25,
+              "--temperature did not reach the sampler");
+      Assert (Read ("--repeat-penalty", "1.2").Sampling.Repeat_Penalty = 1.2,
+              "--repeat-penalty did not reach the sampler");
+      Assert (Read ("--repeat-window", "64").Sampling.Repeat_Window = 64,
+              "--repeat-window did not reach the sampler");
+      Assert (Read ("--frequency-penalty", "0.5").Sampling.Frequency_Penalty
+              = 0.5,
+              "--frequency-penalty did not reach the sampler");
+      Assert (Read ("--presence-penalty", "0.5").Sampling.Presence_Penalty
+              = 0.5,
+              "--presence-penalty did not reach the sampler");
+
+      --  Where a prompt and a system message come from.
+      Assert (Model_Runner.Text.To_String
+                (Read ("--system-file", "sys.txt").System_Path) = "sys.txt",
+              "--system-file did not reach the system path");
+      Assert (Model_Runner.Text.To_String
+                (Read ("--prompt-file", "p.txt").Prompt_Path) = "p.txt",
+              "--prompt-file did not reach the prompt path");
+
+      --  Stopping.
+      Assert (Read ("--stop-token", "11").Stop_Token_Count = 1,
+              "--stop-token did not reach the stop set");
+      Assert (Read ("--stop", "END").Stop_Count = 1,
+              "--stop did not reach the stop set");
+
+      --  The flags that take no value.
+      Assert (Read ("--quiet").Level = Opt.Quiet,
+              "--quiet did not reach the verbosity");
+      Assert (Read ("--verbose").Level = Opt.Verbose,
+              "--verbose did not reach the verbosity");
+      Assert (Read ("--no-stats").Stats_Set
+              and then not Read ("--no-stats").Show_Stats,
+              "--no-stats did not reach the statistics setting");
+      Assert (Read ("--show-stats").Show_Stats,
+              "--show-stats did not reach the statistics setting");
+      Assert (Read ("--mmap").Mapping
+              = Model_Runner.Byte_Sources.Files.Mapping_Required,
+              "--mmap did not reach the mapping policy");
+      Assert (Read ("--no-mmap").Mapping
+              = Model_Runner.Byte_Sources.Files.Mapping_Disabled,
+              "--no-mmap did not reach the mapping policy");
+      Assert (Read ("--raw").Raw, "--raw did not reach the raw flag");
+
+      --  And the two that belong to inspect, given to inspect.
+      declare
+         Source : Fixed_Arguments;
+         Result : Opt.Command;
+         Status : E.Error_Info;
+      begin
+         Add (Source, "inspect");
+         Add (Source, "model.gguf");
+         Add (Source, "--metadata");
+         Add (Source, "--tensors");
+         Opt.Parse (Source, Result, Status);
+
+         Assert (E.Is_Ok (Status), "an inspection with both flags was refused");
+         Assert (Result.Show_Metadata,
+                 "--metadata did not reach the metadata flag");
+         Assert (Result.Show_Tensors,
+                 "--tensors did not reach the tensor flag");
+      end;
+
+      --  A value the field cannot hold is refused rather than clamped. One
+      --  per kind: a count, a probability, and a name.
+      Refuses ("--top-p", "2.0", "a probability is at most one");
+      Refuses ("--top-k", "-1", "a count is not negative");
+      Refuses ("--temperature", "-0.5", "a temperature is not negative");
+      Refuses ("--repeat-window", "-2", "a window is not negative");
+      Refuses ("--batch-size", "0", "a batch of nothing evaluates nothing");
+      Refuses ("--backend", "nonesuch", "no such backend is built");
+      Refuses ("--repack", "nonesuch", "no such repacking mode exists");
+   end Options_Reach_What_They_Name;
+
    --  Three options nothing named.
    --
    --  Of the thirty-eight in the registry, --validate, --help and --version
@@ -5042,6 +5194,125 @@ package body Tests.CLI_Cases is
       end;
    end Caller_Refusals_Report_Themselves;
 
+   --  A system message read from a file, and what it can be wrong about.
+   --
+   --  Two ways a system message arrives and only one was exercised. The
+   --  file is the one this program recommends -- a value on a command line
+   --  may be visible to other local processes, which the help says outright
+   --  -- and it is the one that had no test: --system-file appeared once in
+   --  the whole suite, in the list asserting that it is on the help screen.
+   --
+   --  The refusals are the same shapes a prompt file has and they are not
+   --  the same code path, so a missing file, a directory and text that is
+   --  not UTF-8 are each asked for by name here as well.
+   procedure System_File_Is_Read_And_Refused
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model  : constant String := "obj/sysfile-model.gguf";
+      Log    : constant String := "obj/sysfile-errors.txt";
+
+      --  Run with a system file and return what reached standard error.
+      function Diagnostics (Path : String) return String is
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--system-file");
+         Add (Source, Path);
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+
+         Create (Handle, Out_File, Log);
+         Set_Error (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         return Text_Of (Log);
+      end Diagnostics;
+
+      function Contains (Text, Word : String) return Boolean
+      is (Project_Tools.Text.Contains (Text, Word));
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      --  A sound file is read and the run goes through. The message itself
+      --  reaches the template, which the conversation tests hold; what this
+      --  says is that the file was opened, read and accepted.
+      declare
+         Good   : constant String := "obj/sysfile-good.txt";
+         Handle : File_Type;
+      begin
+         Create (Handle, Out_File, Good);
+         Put (Handle, "be brief");
+         Close (Handle);
+
+         declare
+            Said : constant String := Diagnostics (Good);
+         begin
+            Assert (not Contains (Said, "MR-"),
+                    "a sound system file was refused: " & Said);
+         end;
+      end;
+
+      --  A path that is not there.
+      declare
+         Said : constant String :=
+           Diagnostics ("obj/no-such-system-file-xyzzy");
+      begin
+         Assert (Contains (Said, "MR-IO-0001"),
+                 "a missing system file was not reported as missing: "
+                 & Said);
+      end;
+
+      --  A path that is a directory.
+      declare
+         Said : constant String := Diagnostics ("obj");
+      begin
+         Assert (Contains (Said, "MR-IO-0005"),
+                 "a directory given as a system file was not reported as "
+                 & "one: " & Said);
+      end;
+
+      --  A file that is not text.
+      declare
+         Bad    : constant String := "obj/sysfile-bad.txt";
+         Handle : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Create
+           (Handle, Ada.Streams.Stream_IO.Out_File, Bad);
+         Ada.Streams.Stream_IO.Write
+           (Handle,
+            Ada.Streams.Stream_Element_Array'
+              (1 => 16#C4#, 2 => 16#C4#, 3 => 16#41#));
+         Ada.Streams.Stream_IO.Close (Handle);
+
+         declare
+            Said : constant String := Diagnostics (Bad);
+         begin
+            Assert (Contains (Said, "MR-IO-0006"),
+                    "a system file that is not UTF-8 was not reported as "
+                    & "one: " & Said);
+         end;
+      end;
+   end System_File_Is_Read_And_Refused;
+
    --  What a prompt file can be wrong about, each reported by name.
    --
    --  A prompt file is named by the reader and read by the program, so the
@@ -6977,6 +7248,9 @@ package body Tests.CLI_Cases is
         (T, Architectures_Are_Read_By_Name'Access,
          "each architecture is read with its own keys and its own rotation");
       Register_Routine
+        (T, Options_Reach_What_They_Name'Access,
+         "every option reaches the setting it names");
+      Register_Routine
         (T, Flag_Only_Options_Work'Access,
          "the options that take no value do what they say");
       Register_Routine
@@ -7002,6 +7276,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Caller_Refusals_Report_Themselves'Access,
          "requests, conversations and models refuse by name");
+      Register_Routine
+        (T, System_File_Is_Read_And_Refused'Access,
+         "a system message read from a file is read, and refused by name");
       Register_Routine
         (T, Prompt_File_Failures_Report_Themselves'Access,
          "each way a prompt file can be wrong reports the code that names it");

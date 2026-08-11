@@ -16,6 +16,7 @@ package body Tool_Commands is
    Nothing : aliased constant String := "";
 
    Opts_None      : aliased constant String := " ";
+   Opts_Check     : aliased constant String := " --repository ";
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
@@ -25,7 +26,7 @@ package body Tool_Commands is
      " --model --prompt --max-tokens --threads --expect --repack ";
    Opts_Tokenize  : aliased constant String := " --model --prompt ";
 
-   Takes_Check     : aliased constant String := "[ROOT]";
+   Takes_Check     : aliased constant String := "[ROOT] [--repository]";
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
    Takes_Speed     : aliased constant String :=
      "--model PATH [--prompt-file PATH] [--max-tokens N] [--threads N]"
@@ -70,7 +71,7 @@ package body Tool_Commands is
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
-       Opts_None'Access),
+       Opts_Check'Access),
       (Name_Conformance'Access, Nothing'Access, Says_Conformance'Access,
        Opts_None'Access),
       (Name_Fuzz'Access, Takes_Fuzz'Access, Says_Fuzz'Access,
