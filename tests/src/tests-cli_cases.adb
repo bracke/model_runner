@@ -3238,6 +3238,40 @@ package body Tests.CLI_Cases is
                  & "', so the one before it had not been closed");
       end;
 
+      --  The same file twice, the second time with less in it. A capture
+      --  that opened without truncating would leave the tail of the first
+      --  behind and hand back a longer string than was written -- which is
+      --  what happened on macOS, where the create-and-truncate flags this
+      --  hard-coded mean something else: a run that produced one byte read
+      --  back as the nine before it, and the stop test compared a truncated
+      --  run against an untruncated one and found them equal.
+      declare
+         Once  : constant String := "obj/capture-probe.txt";
+         Short : constant String := "s";
+      begin
+         Captured_Output.Open (Once);
+         Say ("a much longer first write");
+
+         declare
+            First : constant String := Captured_Output.Close;
+            pragma Unreferenced (First);
+         begin
+            null;
+         end;
+
+         Captured_Output.Open (Once);
+         Say (Short);
+
+         declare
+            Second : constant String := Captured_Output.Close;
+         begin
+            Assert (Second = Short,
+                    "a second capture on the same file returned '" & Second
+                    & "' where '" & Short & "' was written, so the file was "
+                    & "not emptied first");
+         end;
+      end;
+
       --  Nesting is refused. A second Open inside the first would overwrite
       --  the one saved descriptor, and then neither Close could put things
       --  back -- which is exactly how the report went missing.

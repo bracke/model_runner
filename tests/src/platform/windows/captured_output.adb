@@ -35,13 +35,23 @@ package body Captured_Output is
    function C_Dup2 (From, To : Interfaces.C.int) return Interfaces.C.int
      with Import, Convention => C, External_Name => "_dup2";
 
-   --  _O_WRONLY or _O_CREAT or _O_TRUNC or _O_BINARY, and _S_IWRITE.
-   --  Binary because the point of the capture is the bytes the program
-   --  wrote: the text mode this runtime defaults to would turn each line
-   --  ending into two and the comparison would be against something the
-   --  program never produced.
-   Write_Create_Truncate : constant Interfaces.C.int := 16#8301#;
-   Owner_Read_Write      : constant Interfaces.C.int := 16#0080#;
+   --  The file is emptied through the standard library and then opened
+   --  write-only, rather than opened with create-and-truncate flags.
+   --
+   --  Those flag values are not the same on every host: O_CREAT is 8#100# on
+   --  Linux and 16#200# on macOS, O_TRUNC 8#1000# and 16#400#. The Linux
+   --  numbers written here meant that on macOS the open asked for create and
+   --  something else entirely and never asked for truncate, so a capture
+   --  wrote over the start of the previous one and left its tail behind. A
+   --  run that produced one byte read back as the nine bytes before it, and
+   --  the stop test on that host compared a truncated run against an
+   --  untruncated one and found them equal -- which is exactly what it
+   --  reported.
+   --
+   --  O_WRONLY is 1 everywhere, which is the one value worth hard-coding.
+   --  Write only, and binary so that the runtime does not turn each
+   --  line ending into two on the way out. The file is emptied first.
+   Write_Only : constant Interfaces.C.int := 16#8001#;
 
    Standard_Output_Fd : constant Interfaces.C.int := 1;
 
@@ -52,6 +62,18 @@ package body Captured_Output is
    --  check that compiles every host body for every host gives it the
    --  crate's own sources and not a dependency's, and a body that reaches
    --  outside cannot be compiled from a machine of the wrong kind.
+   --  Empty the file, portably, before the descriptor is opened on it.
+   procedure Empty (Path : String) is
+      Handle : Ada.Streams.Stream_IO.File_Type;
+   begin
+      Ada.Streams.Stream_IO.Create
+        (Handle, Ada.Streams.Stream_IO.Out_File, Path);
+      Ada.Streams.Stream_IO.Close (Handle);
+   exception
+      when others =>
+         null;
+   end Empty;
+
    function Contents (Path : String) return String is
       use Ada.Streams;
 
@@ -119,7 +141,8 @@ package body Captured_Output is
       Where_L := Natural'Min (Path'Length, Where'Length);
       Where (1 .. Where_L) := Path (Path'First .. Path'First + Where_L - 1);
 
-      Opened := C_Open (Name, Write_Create_Truncate, Owner_Read_Write);
+      Empty (Path);
+      Opened := C_Open (Name, Write_Only, 0);
       Interfaces.C.Strings.Free (Name);
 
       if Opened < 0 then

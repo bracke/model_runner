@@ -414,6 +414,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- A capture empties its file through the standard library before opening a
+  descriptor on it, instead of asking for create-and-truncate with flag values
+  that are not the same on every host. `O_CREAT` is 8#100# on Linux and
+  16#200# on macOS; `O_TRUNC` is 8#1000# and 16#400#. The Linux numbers meant
+  that on macOS the open never asked for truncation, so each capture wrote
+  over the start of the previous one and left its tail behind: a run producing
+  one byte read back as the nine before it. That is what made the stop test
+  compare a truncated run against an untruncated one and find them equal, and
+  it would have done the same to any test comparing two captures. `O_WRONLY`
+  is 1 everywhere, which is the one value worth hard-coding.
+
 - The suite passes on every host the project supports, not only on the one
   it was written on. Three separate faults, all found by continuous
   integration and none by the release checklist, which had been passing

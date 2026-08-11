@@ -35,9 +35,22 @@ package body Captured_Output is
    function C_Dup2 (From, To : Interfaces.C.int) return Interfaces.C.int
      with Import, Convention => C, External_Name => "dup2";
 
-   --  O_WRONLY or O_CREAT or O_TRUNC, and mode 0644.
-   Write_Create_Truncate : constant Interfaces.C.int := 8#1101#;
-   Owner_Read_Write      : constant Interfaces.C.int := 8#644#;
+   --  The file is emptied through the standard library and then opened
+   --  write-only, rather than opened with create-and-truncate flags.
+   --
+   --  Those flag values are not the same on every host: O_CREAT is 8#100# on
+   --  Linux and 16#200# on macOS, O_TRUNC 8#1000# and 16#400#. The Linux
+   --  numbers written here meant that on macOS the open asked for create and
+   --  something else entirely and never asked for truncate, so a capture
+   --  wrote over the start of the previous one and left its tail behind. A
+   --  run that produced one byte read back as the nine bytes before it, and
+   --  the stop test on that host compared a truncated run against an
+   --  untruncated one and found them equal -- which is exactly what it
+   --  reported.
+   --
+   --  O_WRONLY is 1 everywhere, which is the one value worth hard-coding.
+   --  Write only. The file is emptied first, so nothing else is needed.
+   Write_Only : constant Interfaces.C.int := 1;
 
    Standard_Output_Fd : constant Interfaces.C.int := 1;
 
@@ -48,6 +61,18 @@ package body Captured_Output is
    --  check that compiles every host body for every host gives it the
    --  crate's own sources and not a dependency's, and a body that reaches
    --  outside cannot be compiled from a machine of the wrong kind.
+   --  Empty the file, portably, before the descriptor is opened on it.
+   procedure Empty (Path : String) is
+      Handle : Ada.Streams.Stream_IO.File_Type;
+   begin
+      Ada.Streams.Stream_IO.Create
+        (Handle, Ada.Streams.Stream_IO.Out_File, Path);
+      Ada.Streams.Stream_IO.Close (Handle);
+   exception
+      when others =>
+         null;
+   end Empty;
+
    function Contents (Path : String) return String is
       use Ada.Streams;
 
@@ -115,7 +140,8 @@ package body Captured_Output is
       Where_L := Natural'Min (Path'Length, Where'Length);
       Where (1 .. Where_L) := Path (Path'First .. Path'First + Where_L - 1);
 
-      Opened := C_Open (Name, Write_Create_Truncate, Owner_Read_Write);
+      Empty (Path);
+      Opened := C_Open (Name, Write_Only, 0);
       Interfaces.C.Strings.Free (Name);
 
       if Opened < 0 then
