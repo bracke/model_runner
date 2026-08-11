@@ -48,8 +48,9 @@ container validation and is rejected by `Model_Runner.Tensors.Make` with
 
 | Mixture of experts | Implemented: a model naming `<arch>.expert_count` and `<arch>.expert_used_count` carries a router beside each layer's feed-forward block and a stack of expert matrices instead of one. The router scores every expert for the position being computed, a softmax turns the scores into shares, the highest few run, and their outputs are summed in proportion to those shares renormalized over that few. Ties go to the lower-numbered expert. One expert's width comes from `<arch>.expert_feed_forward_length` when the file states it and from `feed_forward_length` otherwise. Because the route is decided per position, this is the one block a batch runs a token at a time; everything else about a batch is still one matrix against many vectors. A shared expert, a gate that is not a softmax, and unnormalized expert weights are each refused by name |
 
-Explicitly rejected features: asymmetric key and value widths, and rotary
-scaling other than `none` and `linear`.
+| Rotary scaling | Implemented for `none`, `linear` and `yarn`, named by `<arch>.rope.scaling.type` and refused by name otherwise. Linear divides every position by `<arch>.rope.scaling.factor`. Yarn divides only the frequencies slow enough that a long context needs them, ramping across the band between `beta_fast` and `beta_slow` turns over `original_context_length`, and scales the rotated vector by the method's own correction times `attn_factor`. A `rope_freqs.weight` table of per-dimension divisors is applied when the file carries one, which is how a file states a schedule that is not one number. `rope_factors_long.weight` and `rope_factors_short.weight` are refused, by the tensors as well as by the name: choosing between two tables by prompt length makes the rotation depend on the sequence rather than on the position |
+
+Explicitly rejected features: asymmetric key and value widths.
 
 ## Tokenizer
 

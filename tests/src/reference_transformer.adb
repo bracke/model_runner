@@ -1015,7 +1015,63 @@ package body Reference_Transformer is
          if Model_Runner.Errors.Is_Ok (Status) then
             Item.Rope_Base := Long_Float (Value);
          end if;
+
+         --  How the rotation is stretched, read from the same keys the
+         --  method is described by.
+         declare
+            Named : constant String :=
+              Containers.String_Value
+                (Source, Prefix (Item) & "rope.scaling.type");
+         begin
+            if Named = "yarn" then
+               Item.Stretch := Yarn;
+            elsif Named = "linear" then
+               Item.Stretch := Linear;
+            end if;
+
+            Containers.Get_Float
+              (Source, Prefix (Item) & "rope.scaling.factor",
+               0.0, 1.0E6, Value, Status);
+            if Model_Runner.Errors.Is_Ok (Status)
+              and then Long_Float (Value) > 0.0
+            then
+               Item.Frequency := 1.0 / Long_Float (Value);
+               if Named = "" and then Long_Float (Value) /= 1.0 then
+                  Item.Stretch := Linear;
+               end if;
+            end if;
+
+            Containers.Get_Float
+              (Source, Prefix (Item) & "rope.scaling.attn_factor",
+               0.0, 1.0E3, Value, Status);
+            if Model_Runner.Errors.Is_Ok (Status) then
+               Item.Attenuation := Long_Float (Value);
+            end if;
+
+            Containers.Get_Float
+              (Source, Prefix (Item) & "rope.scaling.beta_fast",
+               0.0, 1.0E6, Value, Status);
+            if Model_Runner.Errors.Is_Ok (Status)
+              and then Long_Float (Value) > 0.0
+            then
+               Item.Beta_Fast := Long_Float (Value);
+            end if;
+
+            Containers.Get_Float
+              (Source, Prefix (Item) & "rope.scaling.beta_slow",
+               0.0, 1.0E6, Value, Status);
+            if Model_Runner.Errors.Is_Ok (Status)
+              and then Long_Float (Value) > 0.0
+            then
+               Item.Beta_Slow := Long_Float (Value);
+            end if;
+         end;
       end;
+
+      Item.Trained :=
+        Metadata
+          (Source, Prefix (Item) & "rope.scaling.original_context_length",
+           Item.Context);
 
       Item.Embeddings := Read_Matrix ("token_embd.weight", Present);
       if not Present then
@@ -1027,6 +1083,14 @@ package body Reference_Transformer is
       if not Present then
          return;
       end if;
+
+      --  The per-dimension divisors, when the file carries them. Absent is
+      --  not a failure: most files have none.
+      declare
+         Ignored : Boolean;
+      begin
+         Item.Rope_Factors := Read_Vector ("rope_freqs.weight", Ignored);
+      end;
 
       Item.Output := Read_Matrix ("output.weight", Present);
       if not Present then
@@ -1185,6 +1249,7 @@ package body Reference_Transformer is
 
       Free_Matrix (Item.Embeddings);
       Free_Vector (Item.Output_Norm);
+      Free_Vector (Item.Rope_Factors);
       Item.Loaded := False;
       Item.Words := 0;
    end Close;
@@ -1287,6 +1352,30 @@ package body Reference_Transformer is
       end Project_Rows;
 
       --  Rotary encoding over the leading Rotary elements of each head.
+      --  Where a pair sits in the band Yarn mixes across: one where the
+      --  angle is kept as trained, zero where it is fully stretched.
+      function Ramp (Pair : Long_Float) return Long_Float is
+         --  The dimension that turns Turns times over the trained context.
+         function Edge (Turns : Long_Float) return Long_Float is
+           (Long_Float (Item.Rotary)
+            * Functions.Log
+                (Long_Float (Item.Trained) / (Turns * 2.0 * Ada.Numerics.Pi))
+            / (2.0 * Functions.Log (Item.Rope_Base)));
+
+         Low  : constant Long_Float :=
+           Long_Float'Max (0.0, Long_Float'Floor (Edge (Item.Beta_Fast)));
+         High : constant Long_Float :=
+           Long_Float'Min
+             (Long_Float (Item.Rotary / 2 - 1),
+              Long_Float'Ceiling (Edge (Item.Beta_Slow)));
+      begin
+         return Long_Float'Max
+           (0.0,
+            Long_Float'Min
+              (1.0,
+               1.0 - (Pair - Low) / Long_Float'Max (0.001, High - Low)));
+      end Ramp;
+
       procedure Rotate
         (Vector   : in out Real_Vector;
          Heads    : Natural;
@@ -1296,13 +1385,48 @@ package body Reference_Transformer is
          for Head in 0 .. Heads - 1 loop
             for Pair in 0 .. Item.Rotary / 2 - 1 loop
                declare
+                  Divisor : constant Long_Float :=
+                    (if Item.Rope_Factors /= null
+                       and then Item.Rope_Factors'Length = Item.Rotary / 2
+                     then Item.Rope_Factors (Item.Rope_Factors'First + Pair)
+                     else 1.0);
+
                   Frequency : constant Long_Float :=
                     1.0 / Functions."**"
                             (Item.Rope_Base,
                              2.0 * Long_Float (Pair)
-                             / Long_Float (Item.Rotary));
-                  Angle : constant Long_Float :=
+                             / Long_Float (Item.Rotary))
+                    / Divisor;
+
+                  --  The angle as trained, and the angle the model's factor
+                  --  stretches it to.
+                  Trained_Angle : constant Long_Float :=
                     Long_Float (Position) * Frequency;
+                  Stretched : constant Long_Float :=
+                    Item.Frequency * Trained_Angle;
+
+                  --  Yarn keeps the fast dimensions as trained and stretches
+                  --  the slow ones, mixing across the band between them. The
+                  --  band's edges are the dimensions that turn Beta_Fast and
+                  --  Beta_Slow times over the context the model was trained
+                  --  on, which is what solving the frequency for the
+                  --  dimension gives.
+                  Mixed : constant Long_Float :=
+                    (if Item.Stretch /= Yarn then 0.0
+                     else Ramp (Long_Float (Pair)));
+
+                  Angle : constant Long_Float :=
+                    (if Item.Stretch = Yarn
+                     then Stretched * (1.0 - Mixed) + Trained_Angle * Mixed
+                     else Stretched);
+
+                  --  And it scales what comes out, because interpolating
+                  --  angles brings the scores they produce together.
+                  Size : constant Long_Float :=
+                    (if Item.Stretch = Yarn
+                     then Item.Attenuation
+                          * (1.0 + 0.1 * Functions.Log (1.0 / Item.Frequency))
+                     else 1.0);
                   --  Llama pairs an element with its neighbour; Qwen2
                   --  pairs it with the one half a rotation later. Written
                   --  out here rather than shared with the engine: the point
@@ -1320,9 +1444,11 @@ package body Reference_Transformer is
                   Right : constant Long_Float := Vector (Odd);
                begin
                   Vector (Even) :=
-                    Left * Functions.Cos (Angle) - Right * Functions.Sin (Angle);
+                    (Left * Functions.Cos (Angle)
+                     - Right * Functions.Sin (Angle)) * Size;
                   Vector (Odd) :=
-                    Left * Functions.Sin (Angle) + Right * Functions.Cos (Angle);
+                    (Left * Functions.Sin (Angle)
+                     + Right * Functions.Cos (Angle)) * Size;
                end;
             end loop;
          end loop;

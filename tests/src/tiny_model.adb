@@ -34,7 +34,9 @@ package body Tiny_Model is
       Byte_Pair : Boolean := False;
       Window    : Natural := 0;
       Experts      : Natural := 0;
-      Experts_Used : Natural := 0)
+      Experts_Used : Natural := 0;
+      Stretch      : Rope_Stretch := Plain;
+      Rope_Table   : Boolean := False)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -203,6 +205,29 @@ package body Tiny_Model is
       Fixtures.Add_U32
         (Builder, Prefix & ".rope.dimension_count", Interfaces.Unsigned_32 (Head_Size));
       Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base", 10_000.0);
+
+      --  How the rotation is stretched, when it is. A factor of four with
+      --  a trained context of half what the model declares is a model asked
+      --  to reach well past what it saw, which is the case the method
+      --  exists for.
+      if Stretch /= Plain then
+         Fixtures.Add_String
+           (Builder, Prefix & ".rope.scaling.type",
+            (if Stretch = Yarn then "yarn" else "linear"));
+         Fixtures.Add_F32 (Builder, Prefix & ".rope.scaling.factor", 4.0);
+
+         if Stretch = Yarn then
+            Fixtures.Add_U32
+              (Builder, Prefix & ".rope.scaling.original_context_length",
+               Interfaces.Unsigned_32 (Positive'Max (1, Room / 2)));
+            Fixtures.Add_F32
+              (Builder, Prefix & ".rope.scaling.attn_factor", 1.0);
+            Fixtures.Add_F32
+              (Builder, Prefix & ".rope.scaling.beta_fast", 32.0);
+            Fixtures.Add_F32
+              (Builder, Prefix & ".rope.scaling.beta_slow", 1.0);
+         end if;
+      end if;
 
       --  A mixture of experts, when one is asked for. Absent otherwise,
       --  which is what a dense model looks like.
@@ -373,6 +398,23 @@ package body Tiny_Model is
       Fixtures.Add_Bool
         (Builder, "tokenizer.ggml.add_bos_token", Adds_Beginning);
       Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
+
+      --  The per-dimension divisors, when the file carries them. Written
+      --  deliberately rather than drawn from the sequence: a divisor near
+      --  zero is a huge angle, which says nothing about whether the table is
+      --  read and everything about floating point.
+      if Rope_Table then
+         declare
+            Values : N.Real_Array (0 .. N.Element_Count (Head_Size / 2) - 1);
+         begin
+            for Index in Values'Range loop
+               Values (Index) := 1.0 + N.Real (Index) * 0.5;
+            end loop;
+            Fixtures.Add_Tensor
+              (Builder, "rope_freqs.weight", [G.U64 (Head_Size / 2)],
+               G.Type_F32, Fixtures.Encode_F32 (Values));
+         end;
+      end if;
 
       Weight ("token_embd.weight", [G.U64 (Embedding), Vocabulary]);
 

@@ -15,6 +15,10 @@ package body Model_Runner.Kernels is
 
    package N renames Model_Runner.Numerics;
 
+   --  Written out rather than taken from Ada.Numerics, which declares it in
+   --  a fixed precision this package does not otherwise depend on.
+   Pi : constant N.Wide_Real := 3.14159_26535_89793_23846;
+
    ---------
    -- Add --
    ---------
@@ -219,11 +223,43 @@ package body Model_Runner.Kernels is
       Rotary          : Element_Count;
       Position        : Natural;
       Base            : Wide_Real;
-      Frequency_Scale : Wide_Real := 1.0;
+      Scaling         : Rotary_Scaling := No_Scaling;
+      Factors         : Real_Array := No_Factors;
       Pairing         : Rotary_Pairing := Interleaved)
    is
-      Effective : constant Wide_Real :=
-        Wide_Real (Position) * Frequency_Scale;
+      --  A pair's frequency divisor, when the model carries one. A table of
+      --  the wrong length is not used at all: applying the part that fits
+      --  would rotate some dimensions by a model's numbers and the rest by
+      --  nobody's.
+      Divided : constant Boolean := Factors'Length = Rotary / 2;
+
+      --  The band of dimensions Yarn ramps across, in pairs.
+      --
+      --  A dimension makes Original / (2 pi b ** (2 i / D)) turns over the
+      --  context the model was trained on. Solving that for the dimension
+      --  that makes a given number of turns is what names the two edges of
+      --  the band, and everything between them is mixed rather than either
+      --  extrapolated or interpolated.
+      function Edge (Turns : Wide_Real) return Wide_Real is
+        (Wide_Real (Rotary)
+         * N.Log (Wide_Real (Scaling.Original)
+                  / (Turns * 2.0 * Pi))
+         / (2.0 * N.Log (Base)));
+
+      Ramped : constant Boolean :=
+        Scaling.Kind = Yarn
+        and then Scaling.Original > 0
+        and then Scaling.Frequency > 0.0
+        and then Base > 1.0;
+
+      Low  : Wide_Real := 0.0;
+      High : Wide_Real := 0.0;
+
+      --  What Yarn multiplies the rotated vector by. Interpolating the
+      --  angles brings the dot products they produce closer together, and
+      --  this is the correction the method states for that; a file may scale
+      --  it further, which is what Attenuation is.
+      Magnitude : Wide_Real := 1.0;
    begin
       if Heads = 0 or else Head_Size = 0 or else Rotary = 0
         or else Rotary > Head_Size
@@ -232,6 +268,18 @@ package body Model_Runner.Kernels is
         or else Base <= 0.0
       then
          return;
+      end if;
+
+      if Ramped then
+         Low := Wide_Real'Max (0.0, Wide_Real'Floor (Edge (Scaling.Beta_Fast)));
+         High := Wide_Real'Min
+           (Wide_Real (Rotary / 2 - 1),
+            Wide_Real'Ceiling (Edge (Scaling.Beta_Slow)));
+         Magnitude :=
+           Scaling.Attenuation
+           * (1.0 + 0.1 * N.Log (1.0 / Scaling.Frequency));
+      else
+         Magnitude := 1.0;
       end if;
 
       for Head in 0 .. Heads - 1 loop
@@ -243,10 +291,36 @@ package body Model_Runner.Kernels is
                declare
                   Exponent : constant Wide_Real :=
                     -2.0 * Wide_Real (Pair) / Wide_Real (Rotary);
+
+                  --  The angle as trained, and the angle the model's factor
+                  --  stretches it to. Unscaled and linear are the same
+                  --  arithmetic with a frequency of one and of the factor.
+                  Extended : constant Wide_Real :=
+                    (if Divided
+                     then Wide_Real (Position) * N.Power (Base, Exponent)
+                          / Wide_Real (Factors (Factors'First + Pair))
+                     else Wide_Real (Position) * N.Power (Base, Exponent));
+                  Between  : constant Wide_Real :=
+                    Scaling.Frequency * Extended;
+
+                  --  Where this pair sits in the ramped band: one at the
+                  --  fast edge, where the angle is left as trained, and zero
+                  --  at the slow edge, where it is fully stretched.
+                  Mix : constant Wide_Real :=
+                    (if not Ramped
+                     then 0.0
+                     else Wide_Real'Max
+                            (0.0,
+                             Wide_Real'Min
+                               (1.0,
+                                1.0
+                                - (Wide_Real (Pair) - Low)
+                                  / Wide_Real'Max (0.001, High - Low))));
+
                   Theta    : constant Wide_Real :=
-                    Effective * N.Power (Base, Exponent);
-                  Cosine   : constant Wide_Real := N.Cos (Theta);
-                  Sine     : constant Wide_Real := N.Sin (Theta);
+                    Between * (1.0 - Mix) + Extended * Mix;
+                  Cosine   : constant Wide_Real := N.Cos (Theta) * Magnitude;
+                  Sine     : constant Wide_Real := N.Sin (Theta) * Magnitude;
                   Even     : constant Element_Count :=
                     (if Pairing = Interleaved
                      then Origin + 2 * Pair

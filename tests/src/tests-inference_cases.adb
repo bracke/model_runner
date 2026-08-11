@@ -1871,6 +1871,161 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  Each way of stretching the rotation changes the answer, and to the
+   --  answer written from the description.
+   --
+   --  The conformance sweep runs a model that declares yarn and carries a
+   --  table of divisors at once, over every format and every path. What it
+   --  cannot say is that either of them did anything: a fixture whose table
+   --  never loaded would agree with a reference whose table never loaded.
+   --  This holds one thing still at a time.
+   --
+   --  Four models: as trained, linearly stretched, stretched by yarn, and
+   --  as trained but carrying the divisor table. Each has to differ from
+   --  the one before it and to match the independent implementation.
+   procedure Rotary_Scaling_Changes_The_Rotation
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array :=
+        [1, 4, 5, 6, 7, 4, 5, 6];
+
+      procedure Engine_Logits
+        (Stretch : Tiny_Model.Rope_Stretch;
+         Table   : Boolean;
+         Result  : out Logit_Vector)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build
+           (Image, Stretch => Stretch, Rope_Table => Table);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "evaluation failed: "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+
+            L.Close (Live);
+         end;
+
+         B.Free (Image);
+      end Engine_Logits;
+
+      procedure Reference_Logits
+        (Stretch : Tiny_Model.Rope_Stretch;
+         Table   : Boolean;
+         Result  : out Reference_Transformer.Real_Vector)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build
+           (Image, Stretch => Stretch, Rope_Table => Table);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Second : Reference_Transformer.Model;
+            Loaded : Boolean;
+            Made   : Boolean;
+
+            Tokens : Reference_Transformer.Token_Vector (Prompt'Range);
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+            Assert (Loaded, "the reference did not read the model");
+
+            for Index in Prompt'Range loop
+               Tokens (Index) := Integer (Prompt (Index));
+            end loop;
+
+            Reference_Transformer.Run (Second, Tokens, Result, Made);
+            Assert (Made, "the reference produced no logits");
+
+            Reference_Transformer.Close (Second);
+            Containers.Close (Parsed);
+         end;
+
+         B.Free (Image);
+      end Reference_Logits;
+
+      --  How far apart two logit vectors are.
+      function Apart (Left, Right : Logit_Vector) return Long_Float is
+         Worst : Long_Float := 0.0;
+      begin
+         for Index in Left'Range loop
+            Worst := Long_Float'Max
+              (Worst, abs (Long_Float (Left (Index))
+                           - Long_Float (Right (Index))));
+         end loop;
+         return Worst;
+      end Apart;
+
+      --  And how far the engine is from the implementation written from the
+      --  description, for the same model.
+      procedure Agrees
+        (Stretch : Tiny_Model.Rope_Stretch;
+         Table   : Boolean;
+         About   : String;
+         Result  : out Logit_Vector)
+      is
+         Expected : Reference_Transformer.Real_Vector
+           (0 .. Tiny_Model.Vocabulary - 1);
+         Worst : Long_Float := 0.0;
+      begin
+         Engine_Logits (Stretch, Table, Result);
+         Reference_Logits (Stretch, Table, Expected);
+
+         for Index in Expected'Range loop
+            Worst := Long_Float'Max
+              (Worst,
+               abs (Long_Float (Result
+                      (Model_Runner.Numerics.Element_Count (Index)))
+                    - Expected (Index)));
+         end loop;
+
+         Assert (Worst < 1.0E-3,
+                 "the engine and the independent implementation disagree "
+                 & "about " & About & " by" & Long_Float'Image (Worst));
+      end Agrees;
+
+      Trained, Straight, Ramped, Divided : Logit_Vector;
+   begin
+      Agrees (Tiny_Model.Plain, False, "an unscaled rotation", Trained);
+      Agrees (Tiny_Model.Linear, False, "a linear stretch", Straight);
+      Agrees (Tiny_Model.Yarn, False, "a yarn stretch", Ramped);
+      Agrees (Tiny_Model.Plain, True, "a table of divisors", Divided);
+
+      Assert (Apart (Trained, Straight) > 0.0,
+              "a model declaring a linear stretch computed what an unscaled "
+              & "one computes, so the factor was not applied");
+
+      Assert (Apart (Straight, Ramped) > 0.0,
+              "a model declaring yarn computed what a linear stretch of the "
+              & "same factor computes, so the ramp was not applied");
+
+      Assert (Apart (Trained, Divided) > 0.0,
+              "a model carrying a table of divisors computed what a model "
+              & "without one computes, so the table was not read");
+   end Rotary_Scaling_Changes_The_Rotation;
+
    --  A mixture of experts routes each position and mixes what it chose.
    --
    --  Three claims. The model has to run at all -- a router, four stacked
@@ -2218,6 +2373,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, Rotary_Scaling_Changes_The_Rotation'Access,
+         "each way of stretching the rotation changes the answer, and to "
+         & "the one written from the description");
       Register_Routine
         (T, Mixture_Of_Experts_Routes_Each_Position'Access,
          "a mixture of experts routes each position and mixes what it "

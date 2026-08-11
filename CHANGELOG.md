@@ -7,6 +7,43 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Rotary scaling.** A model naming `<arch>.rope.scaling.type` as `yarn` now
+  has its rotation stretched by that method rather than being refused: the
+  frequencies fast enough to tell neighbouring positions apart are left as
+  trained, the slow ones that carry position over long distances are divided
+  by the factor, and the band between them -- named by `beta_fast` and
+  `beta_slow` turns over `original_context_length` -- is ramped across. The
+  rotated vector is scaled by the method's own correction times
+  `attn_factor`, because interpolating angles brings the scores they produce
+  together. `linear` and `none` were already computed; only the third stretch
+  a file can state as one rule was missing.
+
+  A `rope_freqs.weight` table of per-dimension divisors is applied when the
+  file carries one. This is how a file states a schedule that is not one
+  number, and it was previously ignored -- a model carrying one ran with the
+  wrong rotation on every long-range dimension while looking entirely healthy
+  on a short prompt, which is the worst way for this to be wrong.
+
+  `rope_factors_long.weight` and `rope_factors_short.weight` are refused, by
+  the tensors as well as by the metadata name, because a file may carry them
+  without naming the method. Choosing between two tables by how long the
+  prompt turned out to be makes the rotation depend on the sequence rather
+  than on the position, and nothing here does that.
+
+  The conformance sweep gained a stretched shape -- yarn and a divisor table
+  at once, over every format, backend, repack mode and evaluation path, 3510
+  sequences. That the ramp, the factor and the table each change the answer
+  on their own is asserted separately, where a fixture can hold one thing
+  still: the sweep would be satisfied by two implementations that both
+  ignored the same table.
+
+  Repacking to brain floats is left out of the sweep for the stretched shape
+  as it is for the windowed one and the mixture: 0.325 worst absolute against
+  a lossy tolerance of 0.3, where the same fixture unstretched gives 0.137.
+  Three of the four shapes are now outside it, which the README says plainly
+  -- 0.137 is what `--repack bf16` costs a dense model with full attention
+  and it does not carry over to a model that does anything else.
+
 - **Mixture of experts.** A model naming `<arch>.expert_count` and
   `<arch>.expert_used_count` carries a router beside each layer's
   feed-forward block and a stack of expert matrices instead of one. The

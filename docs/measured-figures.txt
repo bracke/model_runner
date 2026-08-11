@@ -196,11 +196,31 @@ kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/m
 # runs its feed-forward block a position at a time rather than a batch at a
 # time, and it runs several experts where a dense model runs one block, so
 # neither the twelve-token figure nor the batch-size table would describe it.
-engine D120C1CA908D90CC src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# 2026-08-11, rotary scaling. This one touches code every model runs, not a
+# branch a model opts into, so the reasoning has to be arithmetic rather than
+# "it is behind an if".
+#
+# Per rotated pair the rotation now does: one more multiply to form the
+# stretched angle, a mix of two angles whose weight is loop-invariant and zero
+# for an unscaled model, and two multiplies applying a magnitude that is one.
+# Call it six floating-point operations a pair, against the power, the cosine
+# and the sine that pair already costs -- on the order of a hundred cycles.
+# For TinyLlama that is 36 heads by 32 pairs by 22 layers, about 25 thousand
+# pairs a token, so the rotation is under one percent of a token's work and it
+# grew by a few percent of that. The published figure is a median of three
+# wall-clock runs; this is two orders of magnitude below what that can see.
+#
+# The figures were NOT re-measured and the model they need is still not on
+# this machine. This is the third such note in a row and they are cumulative:
+# taken together the three changes add, to a model with no window, no experts
+# and no scaling, one integer test per layer per token, one more per layer,
+# and the six operations above per rotated pair. Still nothing a stopwatch
+# reaches. If that stops being true, the note has to become a measurement.
+engine F3DA0CE1773BD02E src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
-reference 241DDC03B3D17A76 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+reference F358B9E3A17504E6 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

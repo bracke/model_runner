@@ -100,6 +100,46 @@ package Model_Runner.Kernels is
    --  this came to be told apart.
    type Rotary_Pairing is (Interleaved, Split);
 
+   --  How a model stretches the rotation to reach past the context it was
+   --  trained on.
+   --
+   --  Unscaled is the rotation as trained. Linear divides every position by
+   --  the factor, which reaches further at the cost of resolution between
+   --  neighbouring positions everywhere. Yarn divides the low frequencies,
+   --  which carry position over long distances, and leaves the high ones --
+   --  which tell neighbours apart -- alone, ramping between the two across a
+   --  band of dimensions; it also scales the rotated vector, because
+   --  interpolating the angles shrinks the attention scores they produce.
+   type Rotary_Scaling_Kind is (Unscaled, Linear, Yarn);
+
+   --  Everything the rotation needs about that stretch.
+   --
+   --  Frequency is the reciprocal of the factor the file states, so 0.25 is
+   --  a model stretched fourfold. Original is the context the model was
+   --  trained on, which is what the band of ramped dimensions is derived
+   --  from. Beta_Fast and Beta_Slow name that band by how many turns a
+   --  dimension makes over the original context: dimensions faster than
+   --  Beta_Fast are left as trained, dimensions slower than Beta_Slow are
+   --  fully interpolated, and the rest are mixed. Attenuation is the file's
+   --  own multiplier on the rotated vector.
+   --
+   --  The defaults are a model that says nothing, which is the rotation as
+   --  trained.
+   type Rotary_Scaling is record
+      Kind        : Rotary_Scaling_Kind := Unscaled;
+      Frequency   : Wide_Real := 1.0;
+      Original    : Natural := 0;
+      Beta_Fast   : Wide_Real := 32.0;
+      Beta_Slow   : Wide_Real := 1.0;
+      Attenuation : Wide_Real := 1.0;
+   end record;
+
+   No_Scaling : constant Rotary_Scaling := (others => <>);
+
+   --  Per-dimension divisors for the rotation's frequencies, when a model
+   --  carries them. A model that does not is every element one.
+   No_Factors : constant Real_Array (1 .. 0) := [others => 0.0];
+
    --  Rotary positional encoding, in place.
    --
    --  Elements beyond Rotary are left unchanged.
@@ -112,8 +152,10 @@ package Model_Runner.Kernels is
    --    even and at most Head_Size.
    --  @param Position Absolute token position.
    --  @param Base RoPE frequency base from the model metadata.
-   --  @param Frequency_Scale Multiplier applied to the position, 1.0 when no
-   --    rotary scaling is configured.
+   --  @param Scaling How the model stretches the rotation, if it does.
+   --  @param Factors One divisor per rotated pair, indexed from its own
+   --    first element, or an empty array when the model carries none. A
+   --    wrong length is ignored rather than applied part way.
    --  @param Pairing Which elements of a head are rotated against which.
    procedure Apply_Rotary
      (Vector          : in out Real_Array;
@@ -122,7 +164,8 @@ package Model_Runner.Kernels is
       Rotary          : Element_Count;
       Position        : Natural;
       Base            : Wide_Real;
-      Frequency_Scale : Wide_Real := 1.0;
+      Scaling         : Rotary_Scaling := No_Scaling;
+      Factors         : Real_Array := No_Factors;
       Pairing         : Rotary_Pairing := Interleaved);
 
    --  Report whether every element is finite.

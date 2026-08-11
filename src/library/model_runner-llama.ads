@@ -31,9 +31,15 @@ with Model_Runner.Tokenizer;
 --  answers for nothing.
 --
 --  Rejected features. Attention sinks, cross-attention, multimodal
---  projections, recurrent state, unsupported rotary scaling, unsupported
---  normalization and unsupported activations are rejected during preparation,
---  before any evaluation.
+--  projections, recurrent state, unsupported normalization and unsupported
+--  activations are rejected during preparation, before any evaluation.
+--
+--  Rotary scaling is implemented for the stretches a file can state as one
+--  rule: none, linear, and yarn, together with the table of per-dimension
+--  divisors a file writes when the schedule is not one number. What is
+--  refused is a method that picks between two tables by how long the prompt
+--  turned out to be, which makes the rotation depend on the sequence rather
+--  than on the position.
 --
 --  Mixture of experts is implemented. A model that names an expert count
 --  carries a router beside each layer's feed-forward block and a stack of
@@ -109,7 +115,12 @@ package Model_Runner.Llama is
       Vocabulary      : Natural := 0;
       Epsilon         : Real := 0.0;
       Rope_Base       : Wide_Real := 10_000.0;
-      Rope_Scale      : Wide_Real := 1.0;
+
+      --  How the model stretches the rotation to reach past the context it
+      --  was trained on, and by how much. The default is the rotation as
+      --  trained, which is what a model that says nothing means.
+      Scaling         : Model_Runner.Kernels.Rotary_Scaling :=
+        Model_Runner.Kernels.No_Scaling;
       Tied_Output     : Boolean := False;
 
       --  How far back attention may look, in positions, counting the
@@ -588,6 +599,12 @@ private
       Embeddings  : aliased Model_Runner.Tensors.View;
       Output      : aliased Model_Runner.Tensors.View;
       Output_Norm : Model_Runner.Tensors.Real_Array_Access;
+
+      --  One divisor per rotated pair, when the model carries the table.
+      --  Null otherwise, which is every element one. Decoded once here
+      --  rather than read per token: it is a few dozen numbers and the
+      --  rotation reads all of them for every head of every layer.
+      Rope_Factors : Model_Runner.Tensors.Real_Array_Access := null;
       Words       : aliased Model_Runner.Tokenizer.Vocabulary;
       Chat        : aliased Model_Runner.Templates.Compiled;
       Chat_Present : Boolean := False;

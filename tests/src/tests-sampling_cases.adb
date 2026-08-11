@@ -894,8 +894,8 @@ package body Tests.Sampling_Cases is
          Values : N.Real_Array (0 .. Head_Size - 1) := [1.0, 2.0, 3.0, 4.0];
       begin
          Model_Runner.Kernels.Apply_Rotary
-           (Values, 1, Head_Size, Head_Size, Position, 10_000.0, 1.0,
-            Pairing);
+           (Values, 1, Head_Size, Head_Size, Position, 10_000.0,
+            Pairing => Pairing);
          return Values;
       end Rotated;
    begin

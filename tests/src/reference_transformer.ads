@@ -89,6 +89,11 @@ private
    --  different functions and blames the engine for the difference.
    type Architecture is (Llama, Qwen2);
 
+   --  How a model stretches the rotation to reach past what it was trained
+   --  on: not at all, by dividing every position, or by dividing only the
+   --  frequencies slow enough that a long context needs them.
+   type Rotary_Stretch is (Unscaled, Linear, Yarn);
+
    type Layer is record
       Attention_Norm : Vector_Access := null;
       Query          : Matrix_Access := null;
@@ -132,6 +137,16 @@ private
       Epsilon      : Long_Float := 1.0E-5;
       Rope_Base    : Long_Float := 10_000.0;
 
+      --  How the model stretches the rotation, and what the stretch needs.
+      --  Read from the file here as everything else is, and computed from
+      --  the description of the method rather than from the engine.
+      Stretch      : Rotary_Stretch := Unscaled;
+      Frequency    : Long_Float := 1.0;
+      Trained      : Natural := 0;
+      Beta_Fast    : Long_Float := 32.0;
+      Beta_Slow    : Long_Float := 1.0;
+      Attenuation  : Long_Float := 1.0;
+
       --  How far back a position may attend, counting itself. Zero is no
       --  window: everything before it is visible. Read from the model's own
       --  metadata here, as everything else is, so that the two
@@ -148,6 +163,9 @@ private
       Embeddings   : Matrix_Access := null;
       Output       : Matrix_Access := null;
       Output_Norm  : Vector_Access := null;
+
+      --  One divisor per rotated pair, when the file carries the table.
+      Rope_Factors : Vector_Access := null;
       Blocks       : Layer_Array_Access := null;
    end record;
 

@@ -221,30 +221,113 @@ package body Model_Runner.Llama is
       end if;
       Settings.Rope_Base := (if E.Is_Ok (Local) then Value else 10_000.0);
 
-      --  Rotary scaling. Only "none" and "linear" are implemented; anything
-      --  else changes the position mapping and would silently produce a
-      --  different model.
+      --  Rotary scaling. A model that says nothing rotates as it was
+      --  trained; "linear" divides every position by the factor; "yarn"
+      --  divides the low frequencies and leaves the high ones alone. Any
+      --  other name changes the position mapping in a way this does not
+      --  compute, and running it as though it did would produce a model that
+      --  reads its own context wrongly at long range and says nothing about
+      --  it.
       declare
-         Scaling : constant String :=
-           Containers.String_Value (Source, Model_Key (Settings.Kind, "rope.scaling.type"));
+         Named : constant String :=
+           Containers.String_Value
+             (Source, Model_Key (Settings.Kind, "rope.scaling.type"));
       begin
-         if Scaling /= "" and then Scaling /= "none" and then Scaling /= "linear"
+         if Named /= "" and then Named /= "none" and then Named /= "linear"
+           and then Named /= "yarn"
          then
             Status := E.Make (E.Arch_Unsupported_Rope_Scaling);
-            E.Add_Text (Status, "scaling", Scaling, E.Param_Identifier);
+            E.Add_Text (Status, "scaling", Named, E.Param_Identifier);
             return;
          end if;
 
+         --  Two tables, chosen by how long the prompt turned out to be, is
+         --  a different method again: it makes the rotation depend on the
+         --  whole sequence rather than on the position, and nothing here
+         --  does that. Refused by the tensors as well as by the name,
+         --  because a file may carry them without naming the method.
+         if Containers.Find_Tensor (Source, "rope_factors_long.weight") /= 0
+           or else Containers.Find_Tensor
+                     (Source, "rope_factors_short.weight") /= 0
+         then
+            Status := E.Make (E.Arch_Unsupported_Rope_Scaling);
+            E.Add_Text (Status, "scaling", "longrope", E.Param_Identifier);
+            return;
+         end if;
+
+         Settings.Scaling.Kind :=
+           (if Named = "yarn" then K.Yarn
+            elsif Named = "linear" then K.Linear
+            else K.Unscaled);
+
          Containers.Get_Float
-           (Source, Model_Key (Settings.Kind, "rope.scaling.factor"), 0.0, 1.0E6, Value, Local);
+           (Source, Model_Key (Settings.Kind, "rope.scaling.factor"), 0.0,
+            1.0E6, Value, Local);
          if Present_And_Wrong (Local) then
             Status := Local;
             return;
          end if;
          if E.Is_Ok (Local) and then Value > 0.0 then
-            Settings.Rope_Scale := 1.0 / Value;
+            Settings.Scaling.Frequency := 1.0 / Value;
+
+            --  A factor with no name is the linear stretch, which is what
+            --  the key meant before there was more than one kind of it.
+            if Named = "" and then Value /= 1.0 then
+               Settings.Scaling.Kind := K.Linear;
+            end if;
          end if;
       end;
+
+      --  What the ramp is derived from, which only Yarn reads. The context
+      --  the model was trained on is the default for the context it was
+      --  trained on, so a file that omits it is saying the two are the same.
+      if K."=" (Settings.Scaling.Kind, K.Yarn) then
+         Containers.Get_Integer
+           (Source,
+            Model_Key (Settings.Kind, "rope.scaling.original_context_length"),
+            1, Long_Long_Integer (Bounds.Max_Context_Length), Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Scaling.Original :=
+           (if E.Is_Ok (Local)
+            then Natural (Number)
+            else Settings.Context_Length);
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "rope.scaling.attn_factor"),
+            0.0, 1.0E3, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         if E.Is_Ok (Local) then
+            Settings.Scaling.Attenuation := Value;
+         end if;
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "rope.scaling.beta_fast"),
+            0.0, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         if E.Is_Ok (Local) and then Value > 0.0 then
+            Settings.Scaling.Beta_Fast := Value;
+         end if;
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "rope.scaling.beta_slow"),
+            0.0, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         if E.Is_Ok (Local) and then Value > 0.0 then
+            Settings.Scaling.Beta_Slow := Value;
+         end if;
+      end if;
 
       --  A mixture of experts, when the model names one. The count is what
       --  each layer holds and the used count is how many of them run for one
@@ -923,6 +1006,23 @@ package body Model_Runner.Llama is
             return;
          end if;
 
+         --  A table of per-dimension divisors for the rotation, when the
+         --  model carries one. This is how a file states a stretch that is
+         --  not one number: the conversion works the schedule out and writes
+         --  it as a tensor, and a model carrying one and not having it
+         --  applied would rotate every long-range dimension wrongly while
+         --  looking entirely healthy on a short prompt.
+         if Containers.Find_Tensor (Source, "rope_freqs.weight") /= 0 then
+            Resolve_Norm
+              (Item, Source, "rope_freqs.weight",
+               Element_Count (Item.Settings.Rotary / 2), Item.Rope_Factors,
+               Status);
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
+         end if;
+
          --  A model with no output projection ties the output to the embedding
          --  table. The alias is explicit and immutable; nothing is copied.
          if Containers.Find_Tensor (Source, "output.weight") = 0 then
@@ -1403,6 +1503,12 @@ package body Model_Runner.Llama is
       end case;
    end Product_Batch;
 
+   --  The model's per-dimension divisors, or none when it carries no table.
+   function Turns (Item : Model'Class) return Real_Array
+   is (if Item.Rope_Factors = null
+       then K.No_Factors
+       else Item.Rope_Factors.all);
+
    --  The feed-forward block of one position, through the experts its router
    --  chose for it.
    --
@@ -1563,6 +1669,7 @@ package body Model_Runner.Llama is
       end if;
 
       T.Free (Item.Output_Norm);
+      T.Free (Item.Rope_Factors);
       B.Free (Item.Arena);
       B.Free (Item.Repacked);
       Item.Arena_Base := 0;
@@ -2106,11 +2213,13 @@ package body Model_Runner.Llama is
             K.Apply_Rotary
               (Item.Query.all, Heads, Head_Size,
                Element_Count (Settings.Rotary), Item.Committed,
-               Settings.Rope_Base, Settings.Rope_Scale, Settings.Pairing);
+               Settings.Rope_Base, Settings.Scaling, Turns (Source),
+               Settings.Pairing);
             K.Apply_Rotary
               (Item.Key_Row.all, KV_Heads, Head_Size,
                Element_Count (Settings.Rotary), Item.Committed,
-               Settings.Rope_Base, Settings.Rope_Scale, Settings.Pairing);
+               Settings.Rope_Base, Settings.Scaling, Turns (Source),
+               Settings.Pairing);
 
             --  Write into the reserved slot. The slot is only readable as
             --  context once Committed is advanced, at the end of this call.
@@ -2469,13 +2578,13 @@ package body Model_Runner.Llama is
                     (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
                      Element_Count (Settings.Rotary),
                      Item.Committed + Natural (Which),
-                     Settings.Rope_Base, Settings.Rope_Scale,
+                     Settings.Rope_Base, Settings.Scaling, Turns (Source),
                      Settings.Pairing);
                   K.Apply_Rotary
                     (Keys.all (KV_At .. KV_At + KV_Width - 1),
                      KV_Heads, Head_Size, Element_Count (Settings.Rotary),
                      Item.Committed + Natural (Which),
-                     Settings.Rope_Base, Settings.Rope_Scale,
+                     Settings.Rope_Base, Settings.Scaling, Turns (Source),
                      Settings.Pairing);
 
                   for Offset in 0 .. KV_Width - 1 loop

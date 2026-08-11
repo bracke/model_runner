@@ -3404,11 +3404,29 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Invalid_Rope,
               "an odd rotary width was accepted");
 
-      --  A rotary scaling that changes the position mapping.
+      --  A rotary scaling that changes the position mapping. Yarn is read
+      --  rather than refused now that it is computed, so the refusal is
+      --  asserted about one that is not.
       Sound (Builder);
-      Fixtures.Add_String (Builder, "llama.rope.scaling.type", "yarn");
+      Fixtures.Add_String (Builder, "llama.rope.scaling.type", "longrope");
       Assert (Outcome (Builder) = E.Arch_Unsupported_Rope_Scaling,
               "an unsupported rotary scaling was accepted");
+
+      --  Yarn reaches the tensors, as a sound configuration does.
+      Sound (Builder);
+      Fixtures.Add_String (Builder, "llama.rope.scaling.type", "yarn");
+      Fixtures.Add_F32 (Builder, "llama.rope.scaling.factor", 4.0);
+      Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
+              "a yarn-scaled model was refused rather than read");
+
+      --  And two tables chosen by prompt length are refused by the tensors
+      --  as well, since a file may carry them without naming the method.
+      Sound (Builder);
+      Fixtures.Add_Tensor
+        (Builder, "rope_factors_long.weight", [1 => 2], G.Type_F32,
+         [1 .. 8 => 0]);
+      Assert (Outcome (Builder) = E.Arch_Unsupported_Rope_Scaling,
+              "a model carrying two rotary tables was accepted");
 
       --  A mixture of experts is read rather than refused: the
       --  configuration is sound and preparation goes on to want the router

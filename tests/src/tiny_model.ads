@@ -90,6 +90,10 @@ package Tiny_Model is
    Deep_Feed_Forward : constant := 256;
    Deep_Head_Size    : constant := 128;
 
+   --  How the fixture stretches the rotation. Plain is a model that says
+   --  nothing, which rotates as it was trained.
+   type Rope_Stretch is (Plain, Linear, Yarn);
+
    --  Build the fixture in memory.
    --
    --  @param Result Newly allocated file bytes; the caller frees them.
@@ -120,6 +124,15 @@ package Tiny_Model is
    --    dense block this fixture would otherwise have.
    --  @param Experts_Used How many of those experts run for one position.
    --    Meaningful only beside a non-zero count.
+   --  @param Stretch Which rotary scaling the file declares. Linear states
+   --    a factor and nothing else; Yarn states the factor, the context the
+   --    model was trained on -- half the one it declares, so the stretch has
+   --    something to reach past -- and the two ends of the band it ramps
+   --    across.
+   --  @param Rope_Table Write a rope_freqs.weight table of per-dimension
+   --    divisors. A file states a schedule that is not one number this way,
+   --    and a model carrying one that is not applied rotates its long-range
+   --    dimensions wrongly while looking healthy on a short prompt.
    --  @param Byte_Pair Write the vocabulary as a byte-pair one -- a `gpt2`
    --    model with a merge table, pieces in the stand-in alphabet and the
    --    same three control tokens -- instead of a SentencePiece one. That
@@ -138,6 +151,8 @@ package Tiny_Model is
       Byte_Pair      : Boolean := False;
       Window         : Natural := 0;
       Experts        : Natural := 0;
-      Experts_Used   : Natural := 0);
+      Experts_Used   : Natural := 0;
+      Stretch        : Rope_Stretch := Plain;
+      Rope_Table     : Boolean := False);
 
 end Tiny_Model;
