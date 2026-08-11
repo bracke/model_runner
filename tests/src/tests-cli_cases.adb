@@ -2449,6 +2449,100 @@ package body Tests.CLI_Cases is
       end;
    end Backends_Agree;
 
+   --  A stop given on the command line stops the run.
+   --
+   --  Both halves were tested and the wire between them was not.
+   --  Stop_String_Truncates builds the set in Ada and drives generation
+   --  directly; the parser test proves "--stop END" reaches Stop_Count = 1.
+   --  Between them is the loop in CLI.Execute that copies what was parsed
+   --  into the set the run is given, and it could have copied nothing while
+   --  both of those passed.
+   procedure Stops_From_The_Command_Line_Stop
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Model : constant String := "obj/stopcli-model.gguf";
+
+      --  Run and return the generated text.
+      function Text_Produced (First, Second : String := "") return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "8");
+         Add (Source, "--seed");
+         Add (Source, "1");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         if First /= "" then
+            Add (Source, First);
+            Add (Source, Second);
+         end if;
+
+         Ran (Source, Status);
+         Assert (Status = 0,
+                 "a run with '" & First & " " & Second & "' failed with"
+                 & Natural'Image (Status));
+         return Last_Output;
+      end Text_Produced;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      declare
+         Whole : constant String := Text_Produced;
+      begin
+         Assert (Whole'Length > 2,
+                 "the run produced too little text to stop inside: '"
+                 & Whole & "'");
+
+         --  A stop string taken from what the run produces, so the test does
+         --  not depend on guessing what these weights say. Everything from
+         --  it onwards must be gone, and the text before it must be what it
+         --  was.
+         declare
+            Cut : constant String :=
+              Whole (Whole'First + 1 .. Whole'First + 1);
+
+            Stopped : constant String := Text_Produced ("--stop", Cut);
+         begin
+            Assert (Stopped'Length < Whole'Length,
+                    "a stop string on the command line did not shorten the "
+                    & "run: '" & Stopped & "' against '" & Whole & "'");
+
+            Assert (Stopped
+                    = Whole (Whole'First .. Whole'First + Stopped'Length - 1),
+                    "what came before the stop string changed: '" & Stopped
+                    & "' against '" & Whole & "'");
+
+            for Character_Value of Stopped loop
+               Assert (Character_Value /= Cut (Cut'First),
+                       "the stop string itself reached the output: '"
+                       & Stopped & "'");
+            end loop;
+         end;
+      end;
+
+      --  And a stop token, which is the other half of the same option and
+      --  travels by a different field.
+      declare
+         Whole : constant String := Text_Produced;
+
+         --  Whatever the second token is, asked of the vocabulary the run
+         --  uses rather than guessed.
+         Stopped : constant String := Text_Produced ("--stop-token", "5");
+      begin
+         Assert (Stopped'Length <= Whole'Length,
+                 "a stop token on the command line lengthened the run: '"
+                 & Stopped & "' against '" & Whole & "'");
+      end;
+   end Stops_From_The_Command_Line_Stop;
+
    --  Every option, given rather than listed.
    --
    --  Seventeen of the thirty-eight were named in one place only: the test
@@ -5929,6 +6023,28 @@ package body Tests.CLI_Cases is
          Close (Handle);
       end;
 
+      --  Anything an earlier run of this test left behind, taken away before
+      --  the listing is taken. The comparison is between two listings, so a
+      --  file left by a run that failed part way through makes the next run
+      --  fail for a reason that has nothing to do with what it checks --
+      --  which happened while this was being written.
+      declare
+         type Name_Access is access constant String;
+
+         Leftovers : constant array (1 .. 5) of Name_Access :=
+           [new String'("obj/privacy-prompt.txt"),
+            new String'("obj/privacy-system.txt"),
+            new String'("obj/privacy-in.txt"),
+            new String'("obj/privacy-interactive.txt"),
+            new String'("obj/privacy-answers.txt")];
+      begin
+         for Each of Leftovers loop
+            if Ada.Directories.Exists (Each.all) then
+               Ada.Directories.Delete_File (Each.all);
+            end if;
+         end loop;
+      end;
+
       declare
          Obj_Now  : constant String := Listing ("obj");
          Here_Now : constant String := Listing (".");
@@ -5989,6 +6105,170 @@ package body Tests.CLI_Cases is
                     "the system message appeared in a failure diagnostic: "
                     & Text);
          end;
+      end;
+
+      --  A prompt and a system message that arrived through files rather
+      --  than the command line. The program recommends the file, because a
+      --  value on a command line may be visible to other local processes, so
+      --  the recommended way is the one that must not be echoed either -- and
+      --  it had never been asked, the runs above both giving their text
+      --  inline.
+      declare
+         Prompt_At : constant String := "obj/privacy-prompt.txt";
+         System_At : constant String := "obj/privacy-system.txt";
+         Handle    : File_Type;
+         Source    : Fixed_Arguments;
+      begin
+         Create (Handle, Out_File, Prompt_At);
+         Put (Handle, Prompt);
+         Close (Handle);
+
+         Create (Handle, Out_File, System_At);
+         Put (Handle, System);
+         Close (Handle);
+
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--prompt-file");
+         Add (Source, Prompt_At);
+         Add (Source, "--system-file");
+         Add (Source, System_At);
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Add (Source, "--verbose");
+
+         declare
+            Text : constant String := Diagnostics (Source);
+         begin
+            Assert (Text'Length > 0, "the run said nothing at all");
+            Assert (not Contains (Text, Prompt),
+                    "a prompt read from a file appeared in the diagnostics: "
+                    & Text);
+            Assert (not Contains (Text, System),
+                    "a system message read from a file appeared in the "
+                    & "diagnostics: " & Text);
+         end;
+
+         Ada.Directories.Delete_File (Prompt_At);
+         Ada.Directories.Delete_File (System_At);
+      end;
+
+      --  And a conversation, which is the case the constraint is really
+      --  about: a session holds every turn and renders them all again each
+      --  time, so a diagnostic that echoed what it was given would leak the
+      --  whole conversation rather than one prompt. Nothing had driven this
+      --  path -- the two runs above are single-shot.
+      declare
+         Input   : constant String := "obj/privacy-in.txt";
+         Log     : constant String := "obj/privacy-interactive.txt";
+         Script  : File_Type;
+         Image   : B.Byte_Array_Access;
+      begin
+         Create (Script, Out_File, Input);
+         Put_Line (Script, Prompt);
+         Put_Line (Script, "");
+         Put_Line (Script, "/system " & System);
+         Put_Line (Script, Prompt);
+         Put_Line (Script, "");
+         Put_Line (Script, "/context");
+         Put_Line (Script, "/stats");
+         Put_Line (Script, "/exit");
+         Close (Script);
+
+         Tiny_Model.Build (Image, Room => 256);
+
+         declare
+            Held    : aliased constant B.Byte_Array := Image.all;
+            Rig     : Harness (Held'Access);
+            Session : L.Session;
+            Catalog : aliased Model_Runner.Localization.Catalog;
+            Screen  : aliased Model_Runner.Presentation.Console;
+            Options : Opt.Command;
+            From    : File_Type;
+            Err     : File_Type;
+            Status  : Natural := 0;
+            Outcome : E.Error_Info;
+         begin
+            Start (Rig, Model_Runner.Backend.Backend_Reference);
+            L.Open (Session, Rig.Ready, Status => Outcome);
+            Assert (E.Is_Ok (Outcome), "the session did not open");
+
+            Model_Runner.Localization.Open
+              (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+            Model_Runner.Presentation.Open
+              (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+               (Output_Is_Terminal => False,
+                Error_Is_Terminal  => False,
+                Input_Is_Terminal  => False,
+                Colour_Suppressed  => True),
+               Opt.Verbose);
+
+            Options.Max_Tokens := 2;
+            Options.Sampling.Temperature := 0.0;
+            Options.Level := Opt.Verbose;
+            Options.Show_Stats := True;
+
+            Open (From, In_File, Input);
+            Create (Err, Out_File, Log);
+            Set_Input (From);
+            Set_Error (Err);
+            Captured_Output.Open ("obj/privacy-answers.txt");
+            begin
+               Model_Runner.CLI.Interactive.Run
+                 (Options, Screen, Rig.Ready, Session, Status);
+            exception
+               when others =>
+                  declare
+                     Ignored : constant String := Captured_Output.Close;
+                     pragma Unreferenced (Ignored);
+                  begin
+                     null;
+                  end;
+                  Set_Input (Standard_Input);
+                  Set_Error (Standard_Error);
+                  Close (From);
+                  Close (Err);
+                  raise;
+            end;
+
+            declare
+               Ignored : constant String := Captured_Output.Close;
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+            Set_Input (Standard_Input);
+            Set_Error (Standard_Error);
+            Close (From);
+            Close (Err);
+
+            declare
+               Said : constant String := Text_Of (Log);
+            begin
+               Assert (Said'Length > 0,
+                       "a verbose conversation said nothing at all");
+               Assert (not Contains (Said, Prompt),
+                       "a turn appeared in the conversation's diagnostics: "
+                       & Said);
+               Assert (not Contains (Said, System),
+                       "the system message appeared in the conversation's "
+                       & "diagnostics: " & Said);
+            end;
+
+            L.Close (Session);
+            Model_Runner.Localization.Close (Catalog);
+         end;
+
+         B.Free (Image);
+
+         --  Everything this block made, taken away again: the listing below
+         --  compares obj before and after, and a test that leaves its own
+         --  working files behind fails the assertion it exists to make.
+         Ada.Directories.Delete_File (Input);
+         Ada.Directories.Delete_File (Log);
+         Ada.Directories.Delete_File ("obj/privacy-answers.txt");
       end;
 
       --  Nothing was written anywhere either: a conversation is not
@@ -7247,6 +7527,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Architectures_Are_Read_By_Name'Access,
          "each architecture is read with its own keys and its own rotation");
+      Register_Routine
+        (T, Stops_From_The_Command_Line_Stop'Access,
+         "a stop given on the command line stops the run");
       Register_Routine
         (T, Options_Reach_What_They_Name'Access,
          "every option reaches the setting it names");

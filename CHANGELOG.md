@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A stop given on the command line stops the run. The stop matcher had a
+  test that built its set in Ada, and the parser test proves `--stop END`
+  reaches the count -- between them was the loop in `CLI.Execute` that copies
+  one into the other, which could have copied nothing while both passed.
+  Copying none of them fails now.
+
+- What the reader typed is checked against the diagnostics on the paths that
+  had none. The rule -- do not log prompts, system messages or generated
+  text, do not persist conversation history -- was held for a single-shot run
+  with the text given inline. A prompt and a system message read from files
+  are now checked too, which is the way the program recommends since a value
+  on a command line may be visible to other local processes; and so is a
+  conversation, which is the case the rule is really about, because a session
+  holds every turn and renders them all again each time. Verified by making
+  the loop report the line it was given: the conversation check fails, the
+  single-shot ones do not.
+
 - `tests check --repository` runs the half of the gate that asks about this
   host. The gate is one gate and stays one on the host that releases -- suite,
   checks, conformance, two fuzzing campaigns -- but asking another host for
