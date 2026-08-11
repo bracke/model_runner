@@ -203,6 +203,8 @@ package body Model_Runner.Sampling is
            new Candidate_Array (0 .. Element_Count (Vocabulary) - 1);
          Item.Masked := new Mask_Array (0 .. Vocabulary - 1);
          Item.Masked.all := [others => False];
+         Item.Stepped := new Mask_Array (0 .. Vocabulary - 1);
+         Item.Stepped.all := [others => False];
          Item.History :=
            new History_Array (0 .. Natural'Max (Config.Repeat_Window, 1) - 1);
          Item.History.all := [others => Model_Runner.Tokenizer.No_Token];
@@ -233,6 +235,10 @@ package body Model_Runner.Sampling is
       if Item.History /= null then
          Free_History (Item.History);
       end if;
+      if Item.Stepped /= null then
+         Free_Mask (Item.Stepped);
+      end if;
+
       if Item.Masked /= null then
          Free_Mask (Item.Masked);
       end if;
@@ -291,6 +297,31 @@ package body Model_Runner.Sampling is
          Item.Masked.all (Natural (Token)) := True;
       end if;
    end Forbid;
+
+   -------------------------
+   -- Release_Step_Mask --
+   -------------------------
+
+   procedure Release_Step_Mask (Item : in out Sampler) is
+   begin
+      if Item.Stepped /= null then
+         Item.Stepped.all := [others => False];
+      end if;
+   end Release_Step_Mask;
+
+   ----------------------
+   -- Forbid_For_Step --
+   ----------------------
+
+   procedure Forbid_For_Step (Item : in out Sampler; Token : Token_Id) is
+   begin
+      if Item.Stepped /= null
+        and then Token >= 0
+        and then Natural (Token) < Item.Vocabulary
+      then
+         Item.Stepped.all (Natural (Token)) := True;
+      end if;
+   end Forbid_For_Step;
 
    -------------------
    -- Record_Token --
@@ -355,7 +386,9 @@ package body Model_Runner.Sampling is
       Status := E.Success;
 
       for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
-         if not Item.Masked.all (Natural (Index)) then
+         if not Item.Masked.all (Natural (Index))
+           and then not Item.Stepped.all (Natural (Index))
+         then
             declare
                Value : constant Real := Logits (Logits'First + Index);
             begin
@@ -434,7 +467,9 @@ package body Model_Runner.Sampling is
       --  logits in token order, before any reordering, so that the history
       --  lookup stays a direct comparison.
       for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
-         if not Item.Masked.all (Natural (Index)) then
+         if not Item.Masked.all (Natural (Index))
+           and then not Item.Stepped.all (Natural (Index))
+         then
             declare
                --  Suppressed for the same reason as the loop above: the
                --  arithmetic below can leave a value the check would fire on

@@ -166,6 +166,23 @@ package Model_Runner.Sampling is
    --  @param Token Token to mask.
    procedure Forbid (Item : in out Sampler; Token : Token_Id);
 
+   --  Forget every mask that was set for one step.
+   --
+   --  A permanent mask -- the beginning-of-sequence marker, say -- is set
+   --  once and meant to stay. A grammar's mask is different: it says what
+   --  may follow *here*, and the next step has its own answer. This clears
+   --  the second kind and leaves the first, so the two can be used together
+   --  without one of them quietly outliving its step.
+   --
+   --  @param Item Sampler to update.
+   procedure Release_Step_Mask (Item : in out Sampler);
+
+   --  Forbid a token for this step only.
+   --
+   --  @param Item Sampler to update.
+   --  @param Token Token to mask until the next release.
+   procedure Forbid_For_Step (Item : in out Sampler; Token : Token_Id);
+
    --  Select one token from a logit vector.
    --
    --  The vector holds raw logits: no softmax has been applied by the
@@ -228,6 +245,10 @@ private
       Used       : Natural := 0;
       Next_Slot  : Natural := 0;
       Masked     : Mask_Array_Access := null;
+
+      --  The masks that belong to one step, kept apart from the permanent
+      --  ones so that clearing them cannot clear those.
+      Stepped    : Mask_Array_Access := null;
    end record;
 
    overriding procedure Finalize (Item : in out Sampler);

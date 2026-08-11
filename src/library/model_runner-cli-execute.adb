@@ -17,6 +17,7 @@ with Model_Runner.GGUF;
 with Model_Runner.Quantization;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
+with Model_Runner.Grammar;
 with Model_Runner.Limits;
 with Model_Runner.Llama;
 with Model_Runner.Memory;
@@ -1070,6 +1071,12 @@ package body Model_Runner.CLI.Execute is
       Clock     : aliased Model_Runner.Clocks.System_Clock;
       Seeds     : aliased Model_Runner.Entropy.Host_Source;
       Prompt    : Opt.Text_Access := null;
+
+      --  The grammar the run must obey, when one was named. Held here so it
+      --  outlives the generation that reads it.
+      Rules       : aliased Model_Runner.Grammar.Compiled;
+      Rules_Ready : Boolean := False;
+
       Cancel    : aliased Model_Runner.Cancellation.Token;
       Attached  : Boolean := False;
       Condition : E.Error_Info;
@@ -1083,6 +1090,8 @@ package body Model_Runner.CLI.Execute is
             Attached := False;
          end if;
          Model_Runner.Stops.Close (Stop_Set);
+         Model_Runner.Grammar.Close (Rules);
+         Rules_Ready := False;
          L.Close (Session);
          L.Close (Prepared, Ignored);
          Containers.Close (Container);
@@ -1127,11 +1136,47 @@ package body Model_Runner.CLI.Execute is
             return;
          end if;
 
+         --  The grammar, before anything is generated. A grammar that will
+         --  not compile is the caller's mistake and is worth finding before
+         --  a model is asked to produce anything under it.
+         if Item.Grammar_Text /= null
+           or else not T.Is_Empty (Item.Grammar_Path)
+         then
+            declare
+               Text : Opt.Text_Access := null;
+            begin
+               if Item.Grammar_Text /= null then
+                  Text := new String'(Item.Grammar_Text.all);
+               else
+                  Read_File
+                    (T.To_String (Item.Grammar_Path),
+                     Model_Runner.Limits.Default_Session_Limits
+                       .Max_Prompt_Bytes,
+                     Text, Condition);
+                  if E.Is_Error (Condition) then
+                     Fail (Condition);
+                     return;
+                  end if;
+               end if;
+
+               Model_Runner.Grammar.Compile (Rules, Text.all, Condition);
+               Free_Text (Text);
+
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               Rules_Ready := True;
+            end;
+         end if;
+
          --  Interactive mode owns its own loop; it needs the same prepared model
          --  and session, so it is entered here rather than earlier.
          if Item.Prompt_Kind = Opt.Prompt_Interactive then
             Model_Runner.CLI.Interactive.Run
-              (Item, Screen, Prepared, Session, Status);
+              (Item, Screen, Prepared, Session,
+               (if Rules_Ready then Rules'Unchecked_Access else null), Status);
             Cleanup;
             return;
          end if;
@@ -1360,6 +1405,8 @@ package body Model_Runner.CLI.Execute is
                   Prompt   => Rendered.all,
                   Item     => Request,
                   Stop_Set => Stop_Set,
+                  Rules    =>
+                    (if Rules_Ready then Rules'Unchecked_Access else null),
                   Sink     => Sink'Unchecked_Access,
                   Observer => Reporter'Unchecked_Access,
                   Time     => Clock'Unchecked_Access,

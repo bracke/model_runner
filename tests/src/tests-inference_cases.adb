@@ -1700,7 +1700,7 @@ package body Tests.Inference_Cases is
             Request.Batch_Size := 1;
 
             Gen.Generate
-              (Under.Ready, Live, Prompt, Request, Stop, null,
+              (Under.Ready, Live, Prompt, Request, Stop, null, null,
                Watch'Unchecked_Access, null, null, null, Outcome => Outcome);
 
             Assert (Outcome.Reason /= Gen.Runtime_Error,
@@ -1858,7 +1858,7 @@ package body Tests.Inference_Cases is
 
          Gen.Generate
            (Under.Ready, Live, "", Request, Stop, null, null, null, null,
-            null, Outcome => Outcome);
+            null, null, Outcome => Outcome);
 
          Assert (Outcome.Error.Code = E.Generation_Empty_Prompt,
                  "a prompt that makes no tokens was accepted: "

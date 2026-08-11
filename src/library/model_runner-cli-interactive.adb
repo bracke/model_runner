@@ -5,7 +5,6 @@ with Model_Runner.Clocks;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Errors;
-with Model_Runner.Generation;
 with Model_Runner.Limits;
 with Model_Runner.Localization;
 with Model_Runner.Stops;
@@ -211,6 +210,7 @@ package body Model_Runner.CLI.Interactive is
       Screen   : in out Pres.Console;
       Prepared : in out L.Model;
       Session  : in out L.Session;
+      Rules    : Model_Runner.Generation.Grammar_Reference := null;
       Status   : out Natural)
    is
       Bounds : constant Model_Runner.Limits.Session_Limits :=
@@ -420,6 +420,7 @@ package body Model_Runner.CLI.Interactive is
             Prompt   => Rendered.all,
             Item     => Request,
             Stop_Set => Stop_Set,
+            Rules    => Rules,
             Sink     => Sink'Unchecked_Access,
             Observer => null,
             Time     => Clock'Unchecked_Access,

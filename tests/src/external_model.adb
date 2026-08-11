@@ -158,7 +158,7 @@ package body External_Model is
          Request.Add_Beginning := True;
 
          Gen.Generate
-           (Engine, Session, Effective_Prompt, Request, Stop,
+           (Engine, Session, Effective_Prompt, Request, Stop, null,
             Sink'Unchecked_Access, null, null, null, null, Outcome => Outcome);
 
          Result.Prompt_Tokens := Outcome.Prompt_Tokens;
@@ -425,7 +425,7 @@ package body External_Model is
                         Request.Add_Beginning := True;
 
                         Gen.Generate
-                          (Plain, Session, Effective_Prompt, Request, Stop,
+                          (Plain, Session, Effective_Prompt, Request, Stop, null,
                            Sink'Unchecked_Access, null, null, null, null,
                            Outcome => Outcome);
 

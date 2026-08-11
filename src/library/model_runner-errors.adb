@@ -60,6 +60,8 @@ package body Model_Runner.Errors is
          return Domain_Sampling;
       elsif Prefix = "CONVERSATION" then
          return Domain_Conversation;
+      elsif Prefix = "GRAMMAR" then
+         return Domain_Grammar;
       else
          return Domain_Internal;
       end if;
@@ -86,6 +88,7 @@ package body Model_Runner.Errors is
          when Domain_Generation   => return "GEN";
          when Domain_Sampling     => return "SAMPLE";
          when Domain_Conversation => return "CONV";
+         when Domain_Grammar      => return "GRAM";
          when Domain_Internal     => return "INTERNAL";
       end case;
    end Domain_Token;
@@ -109,6 +112,7 @@ package body Model_Runner.Errors is
          when Domain_Generation   => return "generation";
          when Domain_Sampling     => return "sampling";
          when Domain_Conversation => return "conversation";
+         when Domain_Grammar      => return "grammar";
          when Domain_Internal     => return "internal";
       end case;
    end Key_Segment;
@@ -444,7 +448,10 @@ package body Model_Runner.Errors is
          when Domain_None =>
             return Exit_Success;
 
-         when Domain_CLI | Domain_Conversation =>
+         --  A grammar comes from the command line, as a conversation's
+         --  shape does: a grammar that will not compile is something the
+         --  caller wrote, not something the model did.
+         when Domain_CLI | Domain_Conversation | Domain_Grammar =>
             return Exit_Usage;
 
          when Domain_IO =>

@@ -267,6 +267,12 @@ package Model_Runner.CLI.Options is
       --  because the usual thing to do with two embeddings is compare their
       --  directions, and a comparison of directions is a dot product only
       --  when both have length one.
+      --  A grammar the generated text must obey, as text or as a path to a
+      --  file holding it. Empty for neither, and naming both is a usage
+      --  error rather than a precedence rule nobody would remember.
+      Grammar_Text : Text_Access := null;
+      Grammar_Path : Model_Runner.Text.Bounded;
+
       Pooling    : Pooling_Kind := Pool_Mean;
       Normalize  : Boolean := True;
       Locale     : Model_Runner.Text.Bounded;

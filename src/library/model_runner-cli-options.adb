@@ -29,7 +29,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 41) of Registry_Row :=
+   Registry : constant array (1 .. 43) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -45,6 +45,10 @@ package body Model_Runner.CLI.Options is
        Text ("kv_cache")),
       (Text ("--pooling"), [Command_Embed => True, others => False],
        Text ("pooling")),
+      (Text ("--grammar"), [Command_Run => True, others => False],
+       Text ("grammar")),
+      (Text ("--grammar-file"), [Command_Run => True, others => False],
+       Text ("grammar_file")),
       (Text ("--no-normalize"), [Command_Embed => True, others => False],
        Text ("no_normalize")),
       (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
@@ -663,6 +667,8 @@ package body Model_Runner.CLI.Options is
          Flag_Repack,
          Flag_Cache,
          Flag_Pooling,
+         Flag_Grammar,
+         Flag_Grammar_File,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
@@ -904,6 +910,32 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Prompt_Kind := Prompt_Inline;
+
+                  elsif Name = "--grammar" then
+                     Mark (Flag_Grammar, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Result.Grammar_Text, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     if not T.Is_Empty (Result.Grammar_Path) then
+                        Fail (E.CLI_Conflicting_Prompt_Sources, Name);
+                        return;
+                     end if;
+
+                  elsif Name = "--grammar-file" then
+                     Bounded_Value
+                       (Flag_Grammar_File, Result.Grammar_Path, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     if Result.Grammar_Text /= null then
+                        Fail (E.CLI_Conflicting_Prompt_Sources, Name);
+                        return;
+                     end if;
 
                   elsif Name = "--prompt-file" then
                      Bounded_Value (Flag_Prompt_File, Result.Prompt_Path, Good);

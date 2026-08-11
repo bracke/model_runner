@@ -40,6 +40,7 @@ package Model_Runner.Errors is
       Domain_Generation,
       Domain_Sampling,
       Domain_Conversation,
+      Domain_Grammar,
       Domain_Internal);
 
    --  How serious a condition is for the operation that reported it.
@@ -160,6 +161,15 @@ package Model_Runner.Errors is
       Template_Unsupported_Role,
       Template_Variables_Too_Large,
       Template_Unknown_Format,
+
+      --  Output grammars.
+      Grammar_Syntax_Error,
+      Grammar_Unknown_Rule,
+      Grammar_Missing_Root,
+      Grammar_Too_Large,
+      Grammar_Nesting_Too_Deep,
+      Grammar_Too_Ambiguous,
+      Grammar_Rejected_Every_Token,
 
       --  Architecture profile.
       Arch_Missing_Identifier,

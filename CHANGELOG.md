@@ -7,6 +7,41 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Constrained output: `--grammar` and `--grammar-file`.** The generated
+  text can be held to a grammar. At each step every token whose text cannot
+  continue it is removed from the distribution before anything is sampled, so
+  what comes out is text the grammar accepts rather than text the model was
+  asked nicely to produce. This is the difference between a prompt that says
+  "answer in JSON" and an answer that is JSON.
+
+  The notation is GBNF: rules with `::=`, alternatives, sequences, literals
+  with escapes, `[a-z]` and `[^a-z]` sets, grouping, `?` `*` `+`, `{n}`
+  `{n,}` `{n,m}`, and `#` comments. Sets and literals match code points
+  rather than bytes, so a set means what it says whatever the tokenizer does
+  underneath.
+
+  A grammar arrives from a command line or a file, so it is untrusted input.
+  Everything is bounded -- rules, elements, ranges, nesting while parsing,
+  stack depth while matching, and how many ways the grammar may be in the
+  middle of at once -- and every bound is a refusal rather than an
+  allocation. Anything outside the notation is refused where it is met, with
+  its position; there is no construct the parser recognizes and then
+  declines, so there is no separate diagnostic for one.
+
+  Two masks a run needs and did not have: the end-of-sequence token is masked
+  until the grammar may end, so a run cannot stop half way through what it
+  was told to produce, and a token contributing no text is masked throughout,
+  because it cannot advance a grammar and allowing it would let a run produce
+  it forever while the grammar stood still. A step that leaves nothing at all
+  ends the run naming that, rather than leaving the sampler an empty
+  distribution and reporting that instead.
+
+  In a conversation the grammar applies to each reply and starts again for
+  each, because what a grammar describes is an answer rather than a whole
+  conversation.
+
+  Seven diagnostic codes, a `MR-GRAM` family of their own.
+
 - **An `embed` command.** It prints what the model made of a text rather than
   what it would say next: the hidden state after the final normalization,
   before the projection that turns a state into a distribution over tokens.
@@ -1841,7 +1876,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 149 diagnostic
+- Localization through `messages`, with a catalog entry for all 156 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

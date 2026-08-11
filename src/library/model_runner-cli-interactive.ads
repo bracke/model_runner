@@ -1,4 +1,5 @@
 with Model_Runner.CLI.Options;
+with Model_Runner.Generation;
 with Model_Runner.Llama;
 with Model_Runner.Presentation;
 
@@ -145,11 +146,15 @@ package Model_Runner.CLI.Interactive is
    --  @param Prepared Prepared model.
    --  @param Session Open session on that model.
    --  @param Status Process exit status.
+   --  @param Rules Grammar every reply must obey, or null. A conversation
+   --    starts the grammar again for each reply, because what the grammar
+   --    describes is an answer rather than a whole conversation.
    procedure Run
      (Item     : Model_Runner.CLI.Options.Command;
       Screen   : in out Model_Runner.Presentation.Console;
       Prepared : in out Model_Runner.Llama.Model;
       Session  : in out Model_Runner.Llama.Session;
+      Rules    : Model_Runner.Generation.Grammar_Reference := null;
       Status   : out Natural);
 
 private

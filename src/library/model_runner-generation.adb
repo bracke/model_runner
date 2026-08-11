@@ -104,6 +104,7 @@ package body Model_Runner.Generation is
       Prompt   : String;
       Item     : Request;
       Stop_Set : Model_Runner.Stops.Set;
+      Rules    : Grammar_Reference := null;
       Sink     : Model_Runner.Output.Sink_Reference;
       Observer : P.Observer_Reference;
       Time     : Model_Runner.Clocks.Clock_Reference;
@@ -120,6 +121,11 @@ package body Model_Runner.Generation is
         Model_Runner.Stops.Longest_String (Stop_Set);
 
       Sampler : S.Sampler;
+
+      --  Where the generated text has got to in the grammar, when there is
+      --  one. Started below, once the prompt is behind us: a grammar
+      --  constrains what the model produces, not what it was given.
+      Shape   : Model_Runner.Grammar.Matcher;
       Decoder : Vocab.Decoder;
       Logits  : T.Real_Array_Access := null;
       Tokens  : Token_Buffer := null;
@@ -269,6 +275,15 @@ package body Model_Runner.Generation is
          Conclude (Runtime_Error, Status);
          Cleanup;
          return;
+      end if;
+
+      if Rules /= null then
+         Model_Runner.Grammar.Start (Rules.all, Shape, Status);
+         if E.Is_Error (Status) then
+            Conclude (Runtime_Error, Status);
+            Cleanup;
+            return;
+         end if;
       end if;
 
       --  A beginning-of-sequence marker belongs to the prompt, never to the
@@ -495,6 +510,62 @@ package body Model_Runner.Generation is
                   exit Decode_Loop;
                end if;
 
+               --  What the grammar allows next, if there is one. Every token
+               --  whose text cannot continue it leaves the distribution
+               --  before anything is sampled, which is what makes this a
+               --  constraint rather than a request: the tokens that would
+               --  break the shape are not there to be chosen.
+               --
+               --  The end token goes with them until the grammar may end, so
+               --  a run cannot stop half way through what it was asked for.
+               if Rules /= null then
+                  S.Release_Step_Mask (Sampler);
+
+                  declare
+                     Allowed : Natural := 0;
+                  begin
+                     for Candidate in 0 .. Settings.Vocabulary - 1 loop
+                        declare
+                           Which : constant Token_Id := Token_Id (Candidate);
+                        begin
+                           if Which = Vocab.End_Token (Words.all) then
+                              if Model_Runner.Grammar.Is_Complete
+                                   (Rules.all, Shape)
+                              then
+                                 Allowed := Allowed + 1;
+                              else
+                                 S.Forbid_For_Step (Sampler, Which);
+                              end if;
+
+                           elsif Vocab.Decode_Token (Words.all, Which) = ""
+                           then
+                              --  A token that contributes no text cannot
+                              --  advance a grammar, and allowing it would
+                              --  let a run produce it forever while the
+                              --  grammar stayed where it was. The end token
+                              --  is the one exception and it is above.
+                              S.Forbid_For_Step (Sampler, Which);
+
+                           elsif Model_Runner.Grammar.Accepts
+                                   (Rules.all, Shape,
+                                    Vocab.Decode_Token (Words.all, Which))
+                           then
+                              Allowed := Allowed + 1;
+                           else
+                              S.Forbid_For_Step (Sampler, Which);
+                           end if;
+                        end;
+                     end loop;
+
+                     if Allowed = 0 then
+                        Conclude
+                          (Runtime_Error,
+                           E.Make (E.Grammar_Rejected_Every_Token));
+                        exit Decode_Loop;
+                     end if;
+                  end;
+               end if;
+
                --  Sample from the raw logits the last evaluation produced.
                S.Sample (Sampler, Logits.all, Token, Status);
                if E.Is_Error (Status) then
@@ -512,6 +583,18 @@ package body Model_Runner.Generation is
                if Model_Runner.Stops.Is_Stop_Token (Stop_Set, Token) then
                   Conclude (Stop_Token);
                   exit Decode_Loop;
+               end if;
+
+               --  And through the grammar, which now expects what follows
+               --  this token rather than what followed the one before it.
+               if Rules /= null then
+                  Model_Runner.Grammar.Advance
+                    (Rules.all, Shape,
+                     Vocab.Decode_Token (Words.all, Token), Status);
+                  if E.Is_Error (Status) then
+                     Conclude (Runtime_Error, Status);
+                     exit Decode_Loop;
+                  end if;
                end if;
 
                --  Commit the token to the session.

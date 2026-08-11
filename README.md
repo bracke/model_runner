@@ -69,6 +69,44 @@ Run `model_runner help run` for the full option list. Options are validated
 with the same typed path as environment variables, repeated options are a usage
 error, and `--` ends option processing.
 
+### Constrained output
+
+`--grammar` holds the generated text to a grammar. At each step every token
+whose text cannot continue the grammar is removed from the distribution
+before anything is sampled, so what comes out is text the grammar accepts --
+not text the model was asked nicely to produce.
+
+```
+model_runner run MODEL --raw --prompt "list three colours" \
+  --grammar 'root ::= "[" item ("," item){0,4} "]"
+             item ::= "\"" [a-z]+ "\""'
+```
+
+`--grammar-file` reads it from a file instead; naming both is a usage error.
+The notation is GBNF: rules with `::=`, alternatives with `|`, sequences,
+`"literals"` with the usual escapes, `[a-z]` and `[^a-z]` sets, `( )`
+grouping, `?` `*` `+` and `{n}` `{n,}` `{n,m}` repetition, and `#` comments.
+One rule must be called `root`. Sets and literals match code points, not
+bytes, so `[a-ø]` means what it says whatever the tokenizer does underneath.
+
+Anything outside that notation is refused where it is met, with the position
+in the grammar: there is no construct the parser recognizes and then
+declines, so there is no separate diagnostic for one. Every bound -- rules,
+elements, ranges, nesting, and how many ways the grammar may be in the middle
+of at once -- is a refusal rather than an allocation, because a grammar comes
+from a command line or a file and is therefore untrusted.
+
+The end-of-sequence token is masked until the grammar may end, so a run
+cannot stop half way through what it was told to produce. A token that
+contributes no text at all is masked throughout: it cannot advance a grammar,
+and allowing it would let a run produce it forever while the grammar stayed
+where it was. If a step leaves nothing at all -- a grammar this model's
+vocabulary cannot spell -- the run stops and says so, rather than leaving the
+sampler with an empty distribution and reporting that instead.
+
+In a conversation the grammar applies to each reply, and starts again for
+each: what a grammar describes is an answer, not a whole conversation.
+
 ### Embedding
 
 `embed` prints what the model made of a text rather than what it would say
@@ -156,7 +194,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback |
 | CLI | `run`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]`, the last removing the system message when no text follows it, blank-line submission, no history written to disk. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 149 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 156 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Two, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long — see below for the measurement — for asking a suspicious result again by different code |

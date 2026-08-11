@@ -11,6 +11,7 @@ with Model_Runner.Llama;
 with Model_Runner.Output;
 with Model_Runner.Progress;
 with Model_Runner.Sampling;
+with Model_Runner.Grammar;
 with Model_Runner.Stops;
 
 --  Generation coordination.
@@ -151,6 +152,13 @@ package Model_Runner.Generation is
      (Item   : Request;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  A grammar the generation must obey, or null for none.
+   --
+   --  A reference rather than a copy: a compiled grammar is immutable and
+   --  one belongs to the command that read it, which outlives the runs it
+   --  constrains.
+   type Grammar_Reference is access constant Model_Runner.Grammar.Compiled;
+
    --  Run one generation request to completion.
    --
    --  The prompt is text that has already been rendered: raw mode passes the
@@ -167,6 +175,11 @@ package Model_Runner.Generation is
    --  @param Observer Progress observer, or null.
    --  @param Time Monotonic clock used for the reported durations, or null.
    --  @param Seeds Entropy source used when the request has no explicit seed.
+   --  @param Rules Grammar the generated text must obey, or null. Every
+   --    token whose text cannot continue it is removed from the distribution
+   --    before anything is sampled, and the end-of-sequence token is removed
+   --    until the grammar may end, so a run cannot stop half way through
+   --    what it was told to produce.
    --  @param Cancel Cancellation token, or null.
    --  @param Bounds Session limits applied to retention and batching.
    --  @param Outcome Completion reason, counts, timings and any diagnostic.
@@ -176,6 +189,7 @@ package Model_Runner.Generation is
       Prompt   : String;
       Item     : Request;
       Stop_Set : Model_Runner.Stops.Set;
+      Rules    : Grammar_Reference := null;
       Sink     : Model_Runner.Output.Sink_Reference;
       Observer : Model_Runner.Progress.Observer_Reference;
       Time     : Model_Runner.Clocks.Clock_Reference;

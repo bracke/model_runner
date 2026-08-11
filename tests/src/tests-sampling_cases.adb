@@ -1467,9 +1467,63 @@ package body Tests.Sampling_Cases is
    -- Register_Tests --
    --------------------
 
+   --  A mask that belongs to one step does not outlive it.
+   --
+   --  Two kinds of mask share one sampler. A permanent one -- the
+   --  beginning-of-sequence marker -- is set once and meant to stay; a
+   --  grammar sets and clears its own at every step, because what may
+   --  follow here is not what may follow next. Clearing the second kind
+   --  must leave the first, and a step mask must not survive its step.
+   procedure Step_Mask_Does_Not_Outlive_Its_Step
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Words  : constant := 4;
+      Logits : constant N.Real_Array (0 .. Words - 1) :=
+        [0.0, 10.0, 5.0, 1.0];
+
+      Item   : S.Sampler;
+      Token  : Vocab.Token_Id;
+      Status : E.Error_Info;
+   begin
+      S.Open (Item, S.Greedy_Configuration, Words, 1, Status);
+      Assert (E.Is_Ok (Status), "the sampler did not open");
+
+      --  Greedy, so the largest logit wins unless something masks it.
+      S.Sample (Item, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 1,
+              "the largest logit was not chosen");
+
+      --  Permanently out, and out it stays.
+      S.Forbid (Item, 1);
+      S.Sample (Item, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 2,
+              "a forbidden token was chosen");
+
+      --  Out for this step only.
+      S.Forbid_For_Step (Item, 2);
+      S.Sample (Item, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 3,
+              "a token masked for the step was chosen");
+
+      --  Released: the step mask is gone and the permanent one is not.
+      S.Release_Step_Mask (Item);
+      S.Sample (Item, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 2,
+              "releasing the step mask did not restore what it masked, or "
+              & "released the permanent mask with it: chose"
+              & Vocab.Token_Id'Image (Token));
+
+      S.Close (Item);
+   end Step_Mask_Does_Not_Outlive_Its_Step;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Step_Mask_Does_Not_Outlive_Its_Step'Access,
+         "a mask that belongs to one step does not outlive it");
       Register_Routine
         (T, Sampler_Refuses_What_It_Cannot_Sample'Access,
          "the sampler refuses what it cannot sample from");

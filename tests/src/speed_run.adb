@@ -208,7 +208,7 @@ package body Speed_Run is
 
                   Started := Ada.Real_Time.Clock;
                   Gen.Generate
-                    (Engine, Session, Prompt, Request, Stop,
+                    (Engine, Session, Prompt, Request, Stop, null,
                      Sink'Unchecked_Access, null, Timer'Unchecked_Access,
                      null, null, Outcome => Outcome);
                   Walls (Pass) :=

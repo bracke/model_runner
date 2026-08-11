@@ -124,6 +124,18 @@ ordinal is never reused, not because they might appear.
 | `MR-TMPL-0012` | `error.template.variables_too_large` | recovery_resource_limited | 3 | raised |
 | `MR-TMPL-0013` | `error.template.unknown_format` | recovery_none | 2 | raised |
 
+## GRAM
+
+| Code | Message key | Recovery | Exit | State |
+| --- | --- | --- | --- | --- |
+| `MR-GRAM-0001` | `error.grammar.syntax_error` | recovery_none | 2 | raised |
+| `MR-GRAM-0002` | `error.grammar.unknown_rule` | recovery_none | 2 | raised |
+| `MR-GRAM-0003` | `error.grammar.missing_root` | recovery_none | 2 | raised |
+| `MR-GRAM-0004` | `error.grammar.too_large` | recovery_none | 2 | raised |
+| `MR-GRAM-0005` | `error.grammar.nesting_too_deep` | recovery_none | 2 | raised |
+| `MR-GRAM-0006` | `error.grammar.too_ambiguous` | recovery_none | 2 | raised |
+| `MR-GRAM-0007` | `error.grammar.rejected_every_token` | recovery_none | 2 | raised |
+
 ## ARCH
 
 | Code | Message key | Recovery | Exit | State |

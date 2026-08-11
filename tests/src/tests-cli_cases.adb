@@ -331,6 +331,111 @@ package body Tests.CLI_Cases is
       return Result;
    end Parsed;
 
+   --  A grammar constrains what a run may produce.
+   --
+   --  The engine tests say the matcher accepts the right texts. This says
+   --  the run is actually held to it: every byte that reaches the output
+   --  came from a token the grammar allowed, and a grammar this vocabulary
+   --  cannot satisfy is reported as that rather than as a sampler with
+   --  nothing left to choose from.
+   procedure Grammar_Constrains_The_Run
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Model : constant String := "obj/grammar-model.gguf";
+
+      function Under (Rules : String; Status : out Natural) return String is
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "a");
+         Add (Source, "--max-tokens");
+         Add (Source, "6");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Add (Source, "--grammar");
+         Add (Source, Rules);
+
+         Ran (Source, Status);
+         return Last_Output;
+      end Under;
+
+      Status : Natural;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      --  Only three letters are allowed, so only those may appear.
+      declare
+         Text : constant String := Under ("root ::= [abc]+", Status);
+      begin
+         Assert (Status = 0,
+                 "a constrained run failed with status"
+                 & Natural'Image (Status));
+         Assert (Text'Length > 0, "a constrained run produced nothing");
+
+         for Letter of Text loop
+            Assert (Letter in 'a' .. 'c',
+                    "the run produced a character the grammar forbids: "
+                    & Letter & " in <" & Text & ">");
+         end loop;
+      end;
+
+      --  A different set gives different text, so the constraint is being
+      --  read rather than the model happening to answer in letters.
+      declare
+         Text : constant String := Under ("root ::= [c]+", Status);
+      begin
+         Assert (Status = 0,
+                 "a single-letter grammar failed with status"
+                 & Natural'Image (Status));
+         for Letter of Text loop
+            Assert (Letter = 'c',
+                    "a grammar of one letter produced another: <"
+                    & Text & ">");
+         end loop;
+      end;
+
+      --  And a grammar whose first character no token of this vocabulary
+      --  spells is refused by name, rather than leaving the sampler with
+      --  nothing and reporting that instead.
+      declare
+         Said   : constant String := "obj/grammar-errors.txt";
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Said);
+         Ada.Text_IO.Set_Error (Handle);
+         begin
+            declare
+               Ignored : constant String :=
+                 Under ("root ::= ""{""", Status);
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+         exception
+            when others =>
+               Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+               Ada.Text_IO.Close (Handle);
+               raise;
+         end;
+         Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+         Ada.Text_IO.Close (Handle);
+
+         Assert (Status /= 0,
+                 "a grammar no token can satisfy reported success");
+         Assert (Project_Tools.Text.Contains
+                   (Text_Of (Said), "MR-GRAM-0007"),
+                 "a grammar no token of this vocabulary can satisfy was "
+                 & "refused without naming "
+                 & E.Error_Code'Image (E.Grammar_Rejected_Every_Token)
+                 & ": " & Text_Of (Said));
+      end;
+   end Grammar_Constrains_The_Run;
+
    --  Embedding a text reports the state, not the distribution.
    --
    --  What `run` prints is what the model would say next; what this prints
@@ -1784,7 +1889,7 @@ package body Tests.CLI_Cases is
             Request.Max_Tokens := 2;
             Request.Batch_Size := 4;
             Gen.Generate
-              (Under.Ready, Session, "hello there", Request, Stop,
+              (Under.Ready, Session, "hello there", Request, Stop, null,
                Sink'Unchecked_Access, Seen'Unchecked_Access, null, null, null,
                Outcome => Outcome);
 
@@ -2219,7 +2324,7 @@ package body Tests.CLI_Cases is
                Sink.Used := 0;
                Request.Batch_Size := (if Batch = 1 then 1 else Batch * 4);
                Gen.Generate
-                 (Under.Ready, Session, "hello there you", Request, Stop,
+                 (Under.Ready, Session, "hello there you", Request, Stop, null,
                   Sink'Unchecked_Access, null, null, null, null,
                   Outcome => Outcome);
                Assert (E.Is_Ok (Outcome.Error),
@@ -4083,7 +4188,7 @@ package body Tests.CLI_Cases is
             Captured_Output.Open ("obj/commands-out.txt");
             begin
                Model_Runner.CLI.Interactive.Run
-                 (Options, Screen, Rig.Ready, Session, Status);
+                 (Options, Screen, Rig.Ready, Session, null, Status);
             exception
                when others =>
                   declare
@@ -4425,7 +4530,7 @@ package body Tests.CLI_Cases is
             Captured_Output.Open ("obj/clamp-answers.txt");
             begin
                Model_Runner.CLI.Interactive.Run
-                 (Options, Screen, Rig.Ready, Session, Status);
+                 (Options, Screen, Rig.Ready, Session, null, Status);
             exception
                when others =>
                   declare
@@ -4537,7 +4642,7 @@ package body Tests.CLI_Cases is
                Request.Add_Beginning := True;
 
                Gen.Generate
-                 (Under.Ready, Session, "abab", Request, Stop,
+                 (Under.Ready, Session, "abab", Request, Stop, null,
                   Sink'Unchecked_Access, null, null, null, null,
                   Outcome => Outcome);
 
@@ -4636,7 +4741,7 @@ package body Tests.CLI_Cases is
                Request.Add_Beginning := True;
 
                Gen.Generate
-                 (Under.Ready, Session, "ababab", Request, Stop,
+                 (Under.Ready, Session, "ababab", Request, Stop, null,
                   Sink'Unchecked_Access, null, null, null, null,
                   Outcome => Outcome);
 
@@ -4720,7 +4825,7 @@ package body Tests.CLI_Cases is
             Request.Add_Beginning := True;
 
             Gen.Generate
-              (Under.Ready, Session, "ab", Request, Stop,
+              (Under.Ready, Session, "ab", Request, Stop, null,
                Sink'Unchecked_Access, null, null, null, null,
                Outcome => Outcome);
 
@@ -4780,7 +4885,7 @@ package body Tests.CLI_Cases is
 
          --  First without a stop string, to learn what the model produces.
          Gen.Generate
-           (Under.Ready, Session, "ab", Request, Stop,
+           (Under.Ready, Session, "ab", Request, Stop, null,
             Plain'Unchecked_Access, null, null, null, null, Outcome => Outcome);
          Assert (Outcome.Reason = Gen.Maximum_Tokens, "baseline run failed");
          Gen.Release (Outcome);
@@ -4805,7 +4910,7 @@ package body Tests.CLI_Cases is
 
             L.Reset (Session);
             Gen.Generate
-              (Under.Ready, Session, "ab", Request, Stop,
+              (Under.Ready, Session, "ab", Request, Stop, null,
                Sink'Unchecked_Access, null, null, null, null,
                Outcome => Outcome);
 
@@ -4825,7 +4930,7 @@ package body Tests.CLI_Cases is
          --  would extend, and continuing into it would be generating from
          --  whatever the released memory now holds.
          Gen.Generate
-           (Under.Ready, Session, "ab", Request, Stop,
+           (Under.Ready, Session, "ab", Request, Stop, null,
             Sink'Unchecked_Access, null, null, null, null, Outcome => Outcome);
          Assert (Outcome.Reason = Gen.Runtime_Error,
                  "a closed session generated text: "
@@ -4877,7 +4982,7 @@ package body Tests.CLI_Cases is
          Request.Add_Beginning := True;
 
          Gen.Generate
-           (Under.Ready, Session, "ab", Request, Stop,
+           (Under.Ready, Session, "ab", Request, Stop, null,
             Sink'Unchecked_Access, null, null, null, null, Outcome => Outcome);
 
          Assert (Outcome.Reason = Gen.Stop_Token,
@@ -4926,7 +5031,7 @@ package body Tests.CLI_Cases is
          Request.Add_Beginning := True;
 
          Gen.Generate
-           (Under.Ready, Session, "ab", Request, Stop,
+           (Under.Ready, Session, "ab", Request, Stop, null,
             Sink'Unchecked_Access, null, null, null, null, Outcome => Outcome);
 
          Assert (Outcome.Reason = Gen.Output_Closed,
@@ -4972,7 +5077,7 @@ package body Tests.CLI_Cases is
          Request.Add_Beginning := True;
 
          Gen.Generate
-           (Under.Ready, Session, "abc", Request, Stop,
+           (Under.Ready, Session, "abc", Request, Stop, null,
             Sink'Unchecked_Access, null, null, null, null, Outcome => Outcome);
 
          Assert (Outcome.Reason = Gen.Runtime_Error,
@@ -5020,7 +5125,7 @@ package body Tests.CLI_Cases is
          Request.Retain_Text := True;
 
          Gen.Generate
-           (Under.Ready, Session, "ab", Request, Stop,
+           (Under.Ready, Session, "ab", Request, Stop, null,
             Sink'Unchecked_Access, null, null, null, null, Outcome => Outcome);
 
          Assert (Gen.Generated_Text (Outcome) = Captured (Sink),
@@ -5718,7 +5823,7 @@ package body Tests.CLI_Cases is
 
             Captured_Output.Open ("obj/loop-answers.txt");
             begin
-               I.Run (Options, Screen, Rig.Ready, Session, Status);
+               I.Run (Options, Screen, Rig.Ready, Session, null, Status);
             exception
                when others =>
                   declare
@@ -6061,7 +6166,7 @@ package body Tests.CLI_Cases is
          function Refusal (Prompt : String) return E.Error_Code is
          begin
             Gen.Generate
-              (Under.Ready, Session, Prompt, Request, Stop,
+              (Under.Ready, Session, Prompt, Request, Stop, null,
                Sink'Unchecked_Access, null, null, null, null,
                Outcome => Outcome);
             declare
@@ -6237,7 +6342,7 @@ package body Tests.CLI_Cases is
          Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
 
          Gen.Generate
-           (Unprepared, Session, "ab", Request, Stop,
+           (Unprepared, Session, "ab", Request, Stop, null,
             null, null, null, null, null, Outcome => Outcome);
 
          Assert (Outcome.Error.Code = E.Lifecycle_Model_Not_Ready,
@@ -6613,7 +6718,7 @@ package body Tests.CLI_Cases is
          Flag.Request;
 
          Gen.Generate
-           (Under.Ready, Session, "ab", Request, Stop,
+           (Under.Ready, Session, "ab", Request, Stop, null,
             Sink'Unchecked_Access, null, null, null,
             Flag'Unchecked_Access, Outcome => Outcome);
 
@@ -6658,7 +6763,7 @@ package body Tests.CLI_Cases is
          Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
 
          Gen.Generate
-           (Under.Ready, Session, "ab", Request, Stop,
+           (Under.Ready, Session, "ab", Request, Stop, null,
             Sink'Unchecked_Access, Asking'Unchecked_Access, null, null,
             Flag'Unchecked_Access, Outcome => Outcome);
 
@@ -6721,7 +6826,7 @@ package body Tests.CLI_Cases is
                Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
 
                Gen.Generate
-                 (Under.Ready, Session, "ab", Request, Stop,
+                 (Under.Ready, Session, "ab", Request, Stop, null,
                   Sink'Unchecked_Access, null, null, null, null,
                   Outcome => Outcome);
 
@@ -7179,7 +7284,7 @@ package body Tests.CLI_Cases is
             Captured_Output.Open ("obj/privacy-answers.txt");
             begin
                Model_Runner.CLI.Interactive.Run
-                 (Options, Screen, Rig.Ready, Session, Status);
+                 (Options, Screen, Rig.Ready, Session, null, Status);
             exception
                when others =>
                   declare
@@ -8449,6 +8554,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Conversation_Survives_Interactive_Edits'Access,
          "the conversation keeps its shape under the edits interactive makes");
+      Register_Routine
+        (T, Grammar_Constrains_The_Run'Access,
+         "a grammar constrains what a run may produce");
       Register_Routine
         (T, Embedding_Reports_The_State'Access,
          "embedding a text reports the state, not the distribution");
