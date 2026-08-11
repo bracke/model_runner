@@ -57,6 +57,7 @@ package body Model_Runner.CLI.Execute is
    package Opt renames Model_Runner.CLI.Options;
 
    use type Opt.Command_Kind;
+   use type L.Repack_Mode;
    use type Opt.Pooling_Kind;
    use type N.Element_Count;
    use type N.Real;
@@ -402,9 +403,19 @@ package body Model_Runner.CLI.Execute is
       end if;
 
       if Full then
+         --  An adapter is merged into the weights, and only binary32 ones
+         --  can be added to, so naming one selects that repacking where the
+         --  caller named none. The help says so where the option is
+         --  documented: it costs four bytes a weight, which is the same
+         --  bargain --repack f32 already publishes.
          L.Prepare
            (Prepared, Container, Source, Bounds, Cancel, Observer,
-            Item.Backend, Item.Repack, Selected_Workers (Item), Status);
+            Item.Backend,
+            (if Item.Repack = L.No_Repack
+               and then not T.Is_Empty (Item.Adapter_Path)
+             then L.To_F32
+             else Item.Repack),
+            Selected_Workers (Item), Status);
 
          --  A chat format named on the command line replaces the model's
          --  own. Models whose template this build will not compile are
@@ -1119,12 +1130,60 @@ package body Model_Runner.CLI.Execute is
          --  run. Loading and generation both observe it at bounded intervals.
          Model_Runner.Platform.Signals.Install (Cancel'Unchecked_Access, Attached);
 
+         --  Brain floats and an adapter are refused together rather than
+         --  merged and rounded: what a merge adds is a small difference to
+         --  every weight it touches, and eight mantissa bits is where a
+         --  small difference goes.
+         if not T.Is_Empty (Item.Adapter_Path)
+           and then Item.Repack = L.To_BF16
+         then
+            Fail (E.Make (E.CLI_Conflicting_Prompt_Sources));
+            return;
+         end if;
+
          Load
            (Item, Screen, Source, Container, Prepared, True,
             Reporter'Unchecked_Access, Cancel'Unchecked_Access, Condition);
          if E.Is_Error (Condition) then
             Fail (Condition);
             return;
+         end if;
+
+         --  The adapter, merged into the weights before anything is
+         --  generated. A merge is not a second set of weights carried
+         --  alongside: what it costs is the load, and evaluation costs what
+         --  it cost before.
+         if not T.Is_Empty (Item.Adapter_Path) then
+            declare
+               From   : Files.File_Source;
+               Second : Containers.Container;
+            begin
+               Files.Open
+                 (From, T.To_String (Item.Adapter_Path),
+                  Status => Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               Containers.Reader.Parse (Second, From, Status => Condition);
+               if E.Is_Error (Condition) then
+                  Files.Close (From);
+                  Fail (Condition);
+                  return;
+               end if;
+
+               L.Merge_Adapter
+                 (Prepared, Second, From, Item.Adapter_Scale, Condition);
+
+               Containers.Close (Second);
+               Files.Close (From);
+
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+            end;
          end if;
 
          L.Open

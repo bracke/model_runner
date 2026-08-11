@@ -273,6 +273,41 @@ package Model_Runner.Llama is
       Threads  : Positive := 1;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Merge a low-rank adapter into a prepared model's weights.
+   --
+   --  An adapter says what a fine-tune changed, as two small matrices per
+   --  weight it touches: the product of the pair is the difference, and
+   --  adding it makes the model the fine-tune produced. It is a merge and
+   --  not a second set of weights carried alongside, so evaluation costs
+   --  what it cost before and the adapter's own storage is released with the
+   --  file it came from.
+   --
+   --  The model has to have been prepared with To_F32. A quantized weight is
+   --  a block of packed bits with a scale, and adding an arbitrary
+   --  difference to one means requantizing it, which is a different and
+   --  lossier operation than this; refusing is honest where re-rounding
+   --  every weight would be silent. To_BF16 is refused for the same reason,
+   --  with eight mantissa bits rather than a block scale as the cause.
+   --
+   --  Refused while a session is open: what a session has already committed
+   --  to its cache came from the weights as they were.
+   --
+   --  @param Item Prepared model, which the merge modifies.
+   --  @param Source Parsed adapter container.
+   --  @param Bytes Byte source the adapter's tensors live in.
+   --  @param Scale What to multiply the difference by, over and above the
+   --    adapter's own alpha and rank. One is the adapter as trained.
+   --  @param Status Success, Lifecycle_Model_Not_Ready,
+   --    Lifecycle_Session_Active, Arch_Unsupported_Feature when the model was
+   --    not prepared as binary32, Arch_Missing_Tensor when a pair is
+   --    incomplete, or Arch_Invalid_Tensor_Shape.
+   procedure Merge_Adapter
+     (Item   : in out Model;
+      Source : Model_Runner.GGUF.Containers.Container;
+      Bytes  : in out Model_Runner.Byte_Sources.Source'Class;
+      Scale  : Real := 1.0;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  What the backend this model was prepared for can do.
    --
    --  A caller building a request asks this rather than assuming: a backend
@@ -694,6 +729,10 @@ private
       --  backend cannot take is refused with the model rather than found by
       --  a matrix product part way through the first token.
       Able        : Model_Runner.Backend.Capabilities;
+
+      --  How the weights were written into Repacked, when they were. A
+      --  merge needs to know, because it may only add to binary32.
+      Packing     : Repack_Mode := No_Repack;
    end record;
 
    overriding procedure Finalize (Item : in out Model);

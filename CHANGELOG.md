@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Low-rank adapters: `--lora` and `--lora-scale`.** An adapter says what a
+  fine-tune changed, as a pair of small matrices per weight whose product is
+  the difference. Merging adds that difference into the weights before
+  anything is generated, so evaluation afterwards costs exactly what it cost
+  before and the adapter's storage goes with the file it came from.
+
+  Only binary32 weights can be added to. A quantized weight is packed bits
+  and a block scale, and adding an arbitrary difference to one means
+  requantizing it, which is a different and lossier operation; naming an
+  adapter therefore selects `--repack f32` where the caller named nothing,
+  and `--repack bf16` beside an adapter is refused rather than rounding every
+  merged weight to eight mantissa bits without saying so.
+
+  The scale multiplies the difference over and above the adapter's own alpha,
+  which is read from the file: leaving alpha out would scale every fine-tune
+  by its rank.
+
+  Half a pair is refused, because half a difference is not a smaller
+  difference, and an adapter naming no weight this profile adapts is refused
+  rather than reported as a merge that changed nothing.
+
+  The test compares a merged model against a model file written with the same
+  difference already in its weights, both built by the fixture from the same
+  two vectors. A test that asked the engine what the difference was and then
+  compared the engine against itself would have passed whatever the merge
+  did.
+
 - **Constrained output: `--grammar` and `--grammar-file`.** The generated
   text can be held to a grammar. At each step every token whose text cannot
   continue it is removed from the distribution before anything is sampled, so

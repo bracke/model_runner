@@ -100,6 +100,28 @@ package Tiny_Model is
    --  nothing, which rotates as it was trained.
    type Rope_Stretch is (Plain, Linear, Yarn);
 
+   --  The rank-one difference an adapter fixture carries.
+   --
+   --  Rank one is enough to say everything a merge has to get right -- the
+   --  two matrices are a column and a row, and their product is the outer
+   --  product of the two -- and it is small enough that the same numbers
+   --  can be written into a model directly, which is what makes the two
+   --  files comparable.
+   Adapter_Alpha : constant := 2.0;
+
+   --  Write an adapter for the tiny model: one rank-one pair, on the query
+   --  projection of layer zero.
+   --
+   --  @param Path Destination path; overwritten if it exists.
+   --  @param Half Leave the second matrix of the pair out, so that a file
+   --    describing half a difference is refused rather than half applied.
+   --  @param Foreign Name the pair after a weight this profile does not
+   --    adapt, so that an adapter for another model is refused.
+   procedure Write_Adapter
+     (Path    : String;
+      Half    : Boolean := False;
+      Foreign : Boolean := False);
+
    --  Build the fixture in memory.
    --
    --  @param Result Newly allocated file bytes; the caller frees them.
@@ -143,6 +165,11 @@ package Tiny_Model is
    --    divisors. A file states a schedule that is not one number this way,
    --    and a model carrying one that is not applied rotates its long-range
    --    dimensions wrongly while looking healthy on a short prompt.
+   --  @param Merged Write the query projection of layer zero with the
+   --    adapter fixture's difference already in it. A model built this way
+   --    is what a model built plainly and then merged with that adapter has
+   --    to become, and comparing the two is what says the merge is the
+   --    arithmetic it claims rather than some other arithmetic.
    --  @param Apart_Widths State the key and value head widths in the file,
    --    as different numbers from each other and from the embedding divided
    --    by the head count. Three assumptions at once: that a head is as wide
@@ -167,6 +194,7 @@ package Tiny_Model is
       Window         : Natural := 0;
       Experts        : Natural := 0;
       Experts_Used   : Natural := 0;
+      Merged         : Boolean := False;
       Stretch        : Rope_Stretch := Plain;
       Rope_Table     : Boolean := False;
       Apart_Widths   : Boolean := False);

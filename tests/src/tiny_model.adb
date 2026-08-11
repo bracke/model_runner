@@ -23,6 +23,15 @@ package body Tiny_Model is
    -- Build --
    -----------
 
+   --  The rank-one pair the adapter fixture carries, as the two vectors
+   --  whose outer product is the difference. Written out here so that the
+   --  adapter file and the merged model are built from the same numbers.
+   function Adapter_Row (Index : Natural) return N.Real
+   is (0.05 * N.Real (Index mod 5) - 0.1);
+
+   function Adapter_Column (Index : Natural) return N.Real
+   is (0.02 * N.Real (Index mod 7) - 0.05);
+
    procedure Build
      (Result    : out Model_Runner.Bytes.Byte_Array_Access;
       Format    : Weight_Format := F32;
@@ -35,6 +44,7 @@ package body Tiny_Model is
       Window    : Natural := 0;
       Experts      : Natural := 0;
       Experts_Used : Natural := 0;
+      Merged       : Boolean := False;
       Stretch      : Rope_Stretch := Plain;
       Rope_Table   : Boolean := False;
       Apart_Widths : Boolean := False)
@@ -471,8 +481,36 @@ package body Tiny_Model is
 
       for Index in 0 .. Layers - 1 loop
          Norm (Layer_Name (Index, "attn_norm.weight"));
-         Weight (Layer_Name (Index, "attn_q.weight"),
-                 [G.U64 (Embedding), G.U64 (Heads * Key_Size)]);
+         if Merged and then Index = 0 then
+            --  The same weights, plus the difference the adapter fixture
+            --  describes: alpha times the outer product of its two
+            --  vectors, which is what merging that adapter has to produce.
+            declare
+               Rows  : constant N.Element_Count :=
+                 N.Element_Count (Heads * Key_Size);
+               Cols  : constant N.Element_Count :=
+                 N.Element_Count (Embedding);
+               Values : N.Real_Array := Next (Rows * Cols);
+            begin
+               for Row in 0 .. Rows - 1 loop
+                  for Column in 0 .. Cols - 1 loop
+                     Values (Row * Cols + Column) :=
+                       Values (Row * Cols + Column)
+                       + N.Real (Adapter_Alpha)
+                         * Adapter_Column (Natural (Row))
+                         * Adapter_Row (Natural (Column));
+                  end loop;
+               end loop;
+
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "attn_q.weight"),
+                  [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
+                  G.Type_F32, Fixtures.Encode_F32 (Values));
+            end;
+         else
+            Weight (Layer_Name (Index, "attn_q.weight"),
+                    [G.U64 (Embedding), G.U64 (Heads * Key_Size)]);
+         end if;
          Weight (Layer_Name (Index, "attn_k.weight"),
                  [G.U64 (Embedding), G.U64 (KV_Heads * Key_Size)]);
          Weight (Layer_Name (Index, "attn_v.weight"),
@@ -544,6 +582,76 @@ package body Tiny_Model is
 
       Write (Suite_Fixture);
    end Write_Suite_Fixture;
+
+   --------------------
+   -- Write_Adapter --
+   --------------------
+
+   procedure Write_Adapter
+     (Path    : String;
+      Half    : Boolean := False;
+      Foreign : Boolean := False)
+   is
+      use Ada.Streams;
+
+      Builder : Fixtures.Builder;
+      Image   : Model_Runner.Bytes.Byte_Array_Access;
+      Handle  : Stream_IO.File_Type;
+
+      Stem : constant String :=
+        (if Foreign
+         then "blk.0.attn_norm.weight"
+         else "blk.0.attn_q.weight");
+   begin
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_String (Builder, "general.type", "adapter");
+      Fixtures.Add_String (Builder, "adapter.type", "lora");
+      Fixtures.Add_F32 (Builder, "adapter.lora.alpha", Adapter_Alpha);
+
+      --  The first of the pair is the rank by the input width; the second
+      --  is the output width by the rank. GGUF writes the contiguous
+      --  dimension first, so each is written the way it is read.
+      declare
+         Down : N.Real_Array (0 .. N.Element_Count (Embedding) - 1);
+         Up   : N.Real_Array
+           (0 .. N.Element_Count (Heads * Head_Size) - 1);
+      begin
+         for Index in Down'Range loop
+            Down (Index) := Adapter_Row (Natural (Index));
+         end loop;
+         for Index in Up'Range loop
+            Up (Index) := Adapter_Column (Natural (Index));
+         end loop;
+
+         Fixtures.Add_Tensor
+           (Builder, Stem & ".lora_a", [G.U64 (Embedding), 1],
+            G.Type_F32, Fixtures.Encode_F32 (Down));
+
+         if not Half then
+            Fixtures.Add_Tensor
+              (Builder, Stem & ".lora_b", [1, G.U64 (Heads * Head_Size)],
+               G.Type_F32, Fixtures.Encode_F32 (Up));
+         end if;
+      end;
+
+      Fixtures.Build (Builder, Image);
+
+      Stream_IO.Create (Handle, Stream_IO.Out_File, Path);
+      declare
+         Block : Stream_Element_Array
+           (1 .. Stream_Element_Offset (Image.all'Length));
+         Target : Stream_Element_Offset := 0;
+      begin
+         for Value of Image.all loop
+            Target := Target + 1;
+            Block (Target) := Stream_Element (Value);
+         end loop;
+         Stream_IO.Write (Handle, Block);
+      end;
+      Stream_IO.Close (Handle);
+
+      Model_Runner.Bytes.Free (Image);
+   end Write_Adapter;
 
    procedure Write
      (Path : String;

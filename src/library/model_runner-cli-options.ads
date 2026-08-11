@@ -2,6 +2,7 @@ with Interfaces;
 
 with Model_Runner.Backend;
 with Model_Runner.Llama;
+with Model_Runner.Numerics;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Errors;
 with Model_Runner.Sampling;
@@ -270,6 +271,14 @@ package Model_Runner.CLI.Options is
       --  A grammar the generated text must obey, as text or as a path to a
       --  file holding it. Empty for neither, and naming both is a usage
       --  error rather than a precedence rule nobody would remember.
+      --  A low-rank adapter to merge into the weights before generating,
+      --  and what to scale its difference by. An adapter needs the weights
+      --  as binary32, so naming one selects that repacking when the caller
+      --  named none, and naming brain floats beside it is a usage error
+      --  rather than a quiet rounding of every merged weight.
+      Adapter_Path  : Model_Runner.Text.Bounded;
+      Adapter_Scale : Model_Runner.Numerics.Real := 1.0;
+
       Grammar_Text : Text_Access := null;
       Grammar_Path : Model_Runner.Text.Bounded;
 

@@ -1,7 +1,6 @@
 with Ada.Command_Line;
 with Ada.Unchecked_Deallocation;
 
-with Model_Runner.Numerics;
 with Model_Runner.Templates;
 
 package body Model_Runner.CLI.Options is
@@ -29,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 43) of Registry_Row :=
+   Registry : constant array (1 .. 45) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -45,6 +44,10 @@ package body Model_Runner.CLI.Options is
        Text ("kv_cache")),
       (Text ("--pooling"), [Command_Embed => True, others => False],
        Text ("pooling")),
+      (Text ("--lora"), [Command_Run => True, others => False],
+       Text ("lora")),
+      (Text ("--lora-scale"), [Command_Run => True, others => False],
+       Text ("lora_scale")),
       (Text ("--grammar"), [Command_Run => True, others => False],
        Text ("grammar")),
       (Text ("--grammar-file"), [Command_Run => True, others => False],
@@ -667,6 +670,8 @@ package body Model_Runner.CLI.Options is
          Flag_Repack,
          Flag_Cache,
          Flag_Pooling,
+         Flag_Adapter,
+         Flag_Adapter_Scale,
          Flag_Grammar,
          Flag_Grammar_File,
          Flag_Threads, Flag_Backend);
@@ -910,6 +915,19 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Prompt_Kind := Prompt_Inline;
+
+                  elsif Name = "--lora" then
+                     Bounded_Value (Flag_Adapter, Result.Adapter_Path, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--lora-scale" then
+                     Real_Value (Flag_Adapter_Scale, Result.Adapter_Scale,
+                                 Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--grammar" then
                      Mark (Flag_Grammar, Name, Good);

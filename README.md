@@ -69,6 +69,29 @@ Run `model_runner help run` for the full option list. Options are validated
 with the same typed path as environment variables, repeated options are a usage
 error, and `--` ends option processing.
 
+### Adapters
+
+`--lora PATH` merges a low-rank adapter into the weights before anything is
+generated. An adapter says what a fine-tune changed, as a pair of small
+matrices per weight it touches whose product is the difference; merging adds
+that difference, so evaluation afterwards costs exactly what it cost before
+and the adapter's own storage goes when its file is closed.
+
+```
+model_runner run MODEL --lora adapter.gguf --lora-scale 0.8 --prompt "..."
+```
+
+Only binary32 weights can be added to, so naming an adapter selects
+`--repack f32` where none was named -- four bytes a weight, the same bargain
+that flag already publishes. `--repack bf16` beside an adapter is a usage
+error rather than a quiet rounding of every merged weight.
+
+The scale multiplies the difference over and above the adapter's own alpha,
+so `1.0` is the fine-tune as trained and `0` is the model without it.
+Adapters for `attn_q`, `attn_k`, `attn_v`, `attn_output`, `ffn_gate`,
+`ffn_up` and `ffn_down` are merged; a pair naming anything else is refused,
+as is half a pair, because half a difference is not a smaller difference.
+
 ### Constrained output
 
 `--grammar` holds the generated text to a grammar. At each step every token

@@ -1,6 +1,7 @@
 with AUnit.Assertions;
 
 with Model_Runner.Bytes;
+with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Byte_Sources.Memory;
 
 with Model_Runner.Cancellation;
@@ -1871,6 +1872,157 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  Merging an adapter is the arithmetic it claims.
+   --
+   --  An adapter says what a fine-tune changed, as a pair of small
+   --  matrices whose product is the difference. Nothing about that is
+   --  visible from outside except the answer, so the check is against a
+   --  model file written with the same difference already in its weights:
+   --  merge the pair into the plain model and it has to become the other
+   --  one, logit for logit.
+   --
+   --  Built by the fixture from the same two vectors, which is the point.
+   --  A test that asked the engine what the difference was and then
+   --  compared the engine against itself would pass whatever the merge
+   --  did.
+   procedure Adapter_Merges_What_It_Describes
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7];
+
+      Adapter : constant String := "obj/tiny-adapter.gguf";
+
+      --  The logits a model produces, optionally after merging the
+      --  adapter above into it.
+      procedure Answer
+        (Merged : Boolean;
+         Apply  : Boolean;
+         Half   : Boolean;
+         Alien  : Boolean;
+         Result : out Logit_Vector;
+         Merge  : out E.Error_Info)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Merge := E.Success;
+         Tiny_Model.Build (Image, Merged => Merged);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Ready  : L.Model;
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            L.Prepare
+              (Ready, Parsed, Source, Repack => L.To_F32, Status => Status);
+            Assert (E.Is_Ok (Status), "the model did not prepare");
+
+            if Apply then
+               Tiny_Model.Write_Adapter
+                 (Adapter, Half => Half, Foreign => Alien);
+
+               declare
+                  From   : Model_Runner.Byte_Sources.Files.File_Source;
+                  Second : Containers.Container;
+                  Local  : E.Error_Info;
+               begin
+                  Model_Runner.Byte_Sources.Files.Open
+                    (From, Adapter, Status => Local);
+                  Assert (E.Is_Ok (Local), "the adapter did not open");
+
+                  Containers.Reader.Parse (Second, From, Status => Local);
+                  Assert (E.Is_Ok (Local), "the adapter did not parse");
+
+                  L.Merge_Adapter (Ready, Second, From, Status => Merge);
+
+                  Containers.Close (Second);
+                  Model_Runner.Byte_Sources.Files.Close (From);
+               end;
+            end if;
+
+            if E.Is_Ok (Merge) then
+               L.Open (Live, Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the session did not open");
+
+               for Token of Prompt loop
+                  L.Evaluate (Live, Ready, Token, Result, Status => Status);
+                  Assert (E.Is_Ok (Status), "evaluation failed");
+               end loop;
+
+               L.Close (Live);
+            else
+               Result := [others => 0.0];
+            end if;
+
+            L.Close (Ready, Status);
+            Containers.Close (Parsed);
+         end;
+
+         B.Free (Image);
+      end Answer;
+
+      Plain, Adapted, Baked : Logit_Vector;
+      Merge : E.Error_Info;
+      Worst : Model_Runner.Numerics.Real := 0.0;
+   begin
+      Answer (Merged => False, Apply => False, Half => False,
+              Alien => False, Result => Plain, Merge => Merge);
+      Answer (Merged => False, Apply => True, Half => False,
+              Alien => False, Result => Adapted, Merge => Merge);
+      Assert (E.Is_Ok (Merge),
+              "the adapter did not merge: "
+              & E.Error_Code'Image (Merge.Code));
+      Answer (Merged => True, Apply => False, Half => False,
+              Alien => False, Result => Baked, Merge => Merge);
+
+      --  The merge changed something.
+      declare
+         Moved : Model_Runner.Numerics.Real := 0.0;
+      begin
+         for Index in Plain'Range loop
+            Moved := Model_Runner.Numerics.Real'Max
+              (Moved, abs (Plain (Index) - Adapted (Index)));
+         end loop;
+         Assert (Moved > 0.0,
+                 "merging an adapter left every logit where it was");
+      end;
+
+      --  And what it changed them to is the model with the difference
+      --  already in it.
+      for Index in Baked'Range loop
+         Worst := Model_Runner.Numerics.Real'Max
+           (Worst, abs (Baked (Index) - Adapted (Index)));
+      end loop;
+
+      Assert (Worst < 1.0E-4,
+              "a merged adapter and a model written with the same "
+              & "difference disagree by"
+              & Model_Runner.Numerics.Real'Image (Worst));
+
+      --  Half a pair describes half a difference, which is nothing.
+      Answer (Merged => False, Apply => True, Half => True,
+              Alien => False, Result => Adapted, Merge => Merge);
+      Assert (Merge.Code = E.Arch_Missing_Tensor,
+              "half an adapter pair was accepted: "
+              & E.Error_Code'Image (Merge.Code));
+
+      --  An adapter for a weight this profile does not adapt touches
+      --  nothing, and says so rather than reporting a merge.
+      Answer (Merged => False, Apply => True, Half => False,
+              Alien => True, Result => Adapted, Merge => Merge);
+      Assert (Merge.Code = E.Arch_Missing_Tensor,
+              "an adapter naming no weight this profile adapts was "
+              & "accepted: " & E.Error_Code'Image (Merge.Code));
+   end Adapter_Merges_What_It_Describes;
+
    --  The hidden state is reported, and refused when there is none.
    --
    --  What the embedding command prints comes from here. Through the command
@@ -2749,6 +2901,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, Adapter_Merges_What_It_Describes'Access,
+         "merging an adapter is the arithmetic it claims");
       Register_Routine
         (T, Hidden_State_Is_Reported'Access,
          "the hidden state is reported, and refused when there is none");
