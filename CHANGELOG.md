@@ -7,6 +7,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A third registry says what is deliberately not exercised.
+  `Reserved_Codes` names the diagnostics nothing raises and `Unreached_Codes`
+  the ones raised where no test walks; `Untested_Surface` names the public
+  operations no test writes down. Sixty-two of three hundred and eighty-two
+  were in that position with nothing recording it, so an operation exercised
+  through a caller, one that answers differently on every machine, and one
+  simply untested read alike. Held in both directions, with the same caveat
+  as the other two: naming is the proxy for exercising, and it errs towards
+  saying an operation is tested.
+
+- Every typed byte reader decodes what the bytes say, at every edge. Six of
+  them -- `Get_I8`, `Get_I16`, `Get_I64`, `Get_F32`, `Get_F64`, `Get_Bool` --
+  read metadata out of an untrusted file and were named by no test: the
+  tensor encoders had a round-trip test and the scalar readers none. Checked
+  against bit patterns rather than through an encoder, so a pair of mistakes
+  cannot agree, and at the edges where a sign or a width is wrong if it is
+  wrong at all -- including that each refuses to read past the end.
+
+- The statistics report the run they describe. What was held was that the
+  block has fields; the figures are its whole point and none was compared
+  with anything, so a build reporting a constant would have passed. The seed
+  has to be the one asked for -- it is what a reader writes down to reproduce
+  a run -- the generated count has to respect its bound and move when the
+  bound moves, and the context position has to be the prompt plus what was
+  generated.
+
 - Memory mapping is asked for rather than allowed. The default policy maps
   when it can and reads when it cannot, so a host on which mapping quietly
   stopped working would behave correctly and slowly with nothing failing.

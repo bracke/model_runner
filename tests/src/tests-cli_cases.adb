@@ -2449,6 +2449,144 @@ package body Tests.CLI_Cases is
       end;
    end Backends_Agree;
 
+   --  The statistics report the run they describe.
+   --
+   --  What was held was that the block has fields: the labels appear, more
+   --  than five line up, no placeholder is left unsubstituted. The figures
+   --  are the whole point of the block and none of them was compared with
+   --  anything. A build reporting a constant, or the prompt count where the
+   --  generated count belongs, would have passed.
+   --
+   --  The seed matters most: it is what a reader writes down to reproduce a
+   --  run, so a seed that is reported as anything other than the one used is
+   --  worse than no seed at all.
+   procedure Statistics_Report_The_Run_They_Describe
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model : constant String := "obj/stats-model.gguf";
+      Log   : constant String := "obj/stats-errors.txt";
+
+      --  The number on the line carrying a label, or -1.
+      function Figure (Text, Label : String) return Integer is
+      begin
+         for Index in Text'First .. Text'Last - Label'Length + 1 loop
+            if Text (Index .. Index + Label'Length - 1) = Label then
+               declare
+                  Stop  : Natural := Index + Label'Length;
+                  Value : Integer := -1;
+               begin
+                  while Stop <= Text'Last
+                    and then Text (Stop) /= Character'Val (10)
+                  loop
+                     if Text (Stop) in '0' .. '9' then
+                        if Value < 0 then
+                           Value := 0;
+                        end if;
+                        Value := Value * 10
+                          + (Character'Pos (Text (Stop))
+                             - Character'Pos ('0'));
+                     elsif Value >= 0 then
+                        exit;
+                     end if;
+                     Stop := Stop + 1;
+                  end loop;
+
+                  return Value;
+               end;
+            end if;
+         end loop;
+
+         return -1;
+      end Figure;
+
+      --  Run with statistics and return what reached standard error.
+      function Reported (Tokens, Seed : String) return String is
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, Tokens);
+         Add (Source, "--seed");
+         Add (Source, Seed);
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Add (Source, "--show-stats");
+
+         Create (Handle, Out_File, Log);
+         Set_Error (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Assert (Status = 0,
+                 "a run reporting statistics failed with status"
+                 & Natural'Image (Status));
+         return Text_Of (Log);
+      end Reported;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      declare
+         Said : constant String := Reported ("4", "12345");
+
+         Prompt    : constant Integer := Figure (Said, "prompt tokens");
+         Generated : constant Integer := Figure (Said, "generated tokens");
+         Position  : constant Integer := Figure (Said, "context position");
+         Seed      : constant Integer := Figure (Said, "seed");
+      begin
+         Assert (Seed = 12345,
+                 "the statistics reported seed" & Integer'Image (Seed)
+                 & " where 12345 was asked for, so a reader writing it down "
+                 & "cannot reproduce the run");
+
+         Assert (Generated in 1 .. 4,
+                 "the statistics reported" & Integer'Image (Generated)
+                 & " generated tokens for a run bounded at four");
+
+         Assert (Prompt > 0,
+                 "the statistics reported" & Integer'Image (Prompt)
+                 & " prompt tokens for a prompt that has some");
+
+         Assert (Position = Prompt + Generated,
+                 "the context position" & Integer'Image (Position)
+                 & " is not the prompt" & Integer'Image (Prompt)
+                 & " plus what was generated" & Integer'Image (Generated));
+      end;
+
+      --  A second run, bounded lower, has to report the lower bound: the
+      --  figures move with the run rather than being a constant that
+      --  happened to match.
+      declare
+         Said : constant String := Reported ("1", "999");
+
+         Generated : constant Integer := Figure (Said, "generated tokens");
+         Seed      : constant Integer := Figure (Said, "seed");
+      begin
+         Assert (Seed = 999,
+                 "the seed did not follow what was asked for the second "
+                 & "time:" & Integer'Image (Seed));
+         Assert (Generated = 1,
+                 "a run bounded at one token reported"
+                 & Integer'Image (Generated));
+      end;
+   end Statistics_Report_The_Run_They_Describe;
+
    --  The exit statuses the help promises, produced.
    --
    --  The last line of `model_runner help` names eight, and they are a
@@ -8160,6 +8298,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Architectures_Are_Read_By_Name'Access,
          "each architecture is read with its own keys and its own rotation");
+      Register_Routine
+        (T, Statistics_Report_The_Run_They_Describe'Access,
+         "the statistics report the run they describe");
       Register_Routine
         (T, Promised_Exit_Statuses_Are_Produced'Access,
          "the exit statuses the help promises are produced");

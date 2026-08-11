@@ -2819,6 +2819,124 @@ package body Tests.GGUF_Cases is
       B.Free (Image);
    end Byte_Pair_Decoding_Undoes_Encoding;
 
+   --  Every typed reader decodes what the bytes say, at every edge.
+   --
+   --  These read metadata out of a file this program treats as untrusted,
+   --  and six of them -- Get_I8, Get_I16, Get_I64, Get_F32, Get_F64 and
+   --  Get_Bool -- were named by no test. The tensor encoders have a
+   --  round-trip test and the scalar readers had none, so a byte-order slip
+   --  in Get_I64 or a sign mistake in Get_I16 would have misread a model's
+   --  configuration and produced a plausible number.
+   --
+   --  Written as bytes here rather than through an encoder, so that what is
+   --  checked is the decoding and not a pair of mistakes agreeing. The
+   --  values are the edges: the extremes a type can hold, zero, and minus
+   --  one, which is where a sign or a width is wrong if it is wrong at all.
+   procedure Typed_Readers_Decode_What_The_Bytes_Say
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Integer_8;
+      use type Interfaces.Integer_16;
+      use type Interfaces.Integer_64;
+
+      Ok : Boolean;
+   begin
+      --  Signed eight, sixteen and sixty-four, little-endian.
+      declare
+         Data : constant B.Byte_Array (0 .. 7) :=
+           [16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#];
+      begin
+         Assert (B.Get_I8 (Data, 0, Ok) = -1 and then Ok,
+                 "all ones is not minus one at eight bits");
+         Assert (B.Get_I16 (Data, 0, Ok) = -1 and then Ok,
+                 "all ones is not minus one at sixteen bits");
+         Assert (B.Get_I64 (Data, 0, Ok) = -1 and then Ok,
+                 "all ones is not minus one at sixty-four bits");
+      end;
+
+      declare
+         --  The most negative each type holds, which is the value a wrong
+         --  sign or a wrong width turns into something positive.
+         Eight : constant B.Byte_Array (0 .. 0) := [16#80#];
+         Sixteen : constant B.Byte_Array (0 .. 1) := [16#00#, 16#80#];
+         Sixty_Four : constant B.Byte_Array (0 .. 7) :=
+           [16#00#, 16#00#, 16#00#, 16#00#, 16#00#, 16#00#, 16#00#, 16#80#];
+      begin
+         Assert (B.Get_I8 (Eight, 0, Ok) = Interfaces.Integer_8'First
+                 and then Ok,
+                 "the smallest eight-bit value did not decode");
+         Assert (B.Get_I16 (Sixteen, 0, Ok) = Interfaces.Integer_16'First
+                 and then Ok,
+                 "the smallest sixteen-bit value did not decode");
+         Assert (B.Get_I64 (Sixty_Four, 0, Ok)
+                 = Interfaces.Integer_64'First and then Ok,
+                 "the smallest sixty-four-bit value did not decode");
+      end;
+
+      declare
+         --  Order, not just magnitude: a value whose bytes differ tells a
+         --  little-endian reader from a big-endian one, which all ones and
+         --  the extremes do not.
+         Ordered : constant B.Byte_Array (0 .. 7) :=
+           [16#01#, 16#02#, 16#03#, 16#04#, 16#05#, 16#06#, 16#07#, 16#08#];
+      begin
+         Assert (B.Get_I16 (Ordered, 0, Ok) = 16#0201# and then Ok,
+                 "sixteen bits were not read little-endian");
+         Assert (B.Get_I64 (Ordered, 0, Ok) = 16#0807_0605_0403_0201#
+                 and then Ok,
+                 "sixty-four bits were not read little-endian");
+      end;
+
+      --  Binary32 and binary64, by their bit patterns rather than by
+      --  arithmetic that might agree with a wrong reader.
+      declare
+         One_F32 : constant B.Byte_Array (0 .. 3) :=
+           [16#00#, 16#00#, 16#80#, 16#3F#];
+         One_F64 : constant B.Byte_Array (0 .. 7) :=
+           [16#00#, 16#00#, 16#00#, 16#00#, 16#00#, 16#00#, 16#F0#, 16#3F#];
+         Half_F32 : constant B.Byte_Array (0 .. 3) :=
+           [16#00#, 16#00#, 16#00#, 16#BF#];
+      begin
+         Assert (B.Get_F32 (One_F32, 0, Ok) = 1.0 and then Ok,
+                 "the binary32 pattern for one did not decode as one");
+         Assert (B.Get_F64 (One_F64, 0, Ok) = 1.0 and then Ok,
+                 "the binary64 pattern for one did not decode as one");
+         Assert (B.Get_F32 (Half_F32, 0, Ok) = -0.5 and then Ok,
+                 "the binary32 pattern for minus a half did not decode");
+      end;
+
+      --  A boolean is a byte, and the format writes one or zero.
+      declare
+         Values : constant B.Byte_Array (0 .. 2) := [0, 1, 2];
+      begin
+         Assert (not B.Get_Bool (Values, 0, Ok) and then Ok,
+                 "zero did not decode as false");
+         Assert (B.Get_Bool (Values, 1, Ok) and then Ok,
+                 "one did not decode as true");
+      end;
+
+      --  And every one of them refuses to read past the end rather than
+      --  returning whatever is there, which is the property that makes a
+      --  hostile file a refusal instead of a disclosure.
+      declare
+         Short : constant B.Byte_Array (0 .. 0) := [16#FF#];
+      begin
+         Assert (B.Get_I16 (Short, 0, Ok) = 0 and then not Ok,
+                 "sixteen bits were read out of a one-byte buffer");
+         Assert (B.Get_I64 (Short, 0, Ok) = 0 and then not Ok,
+                 "sixty-four bits were read out of a one-byte buffer");
+         Assert (B.Get_F32 (Short, 0, Ok) = 0.0 and then not Ok,
+                 "a binary32 was read out of a one-byte buffer");
+         Assert (B.Get_F64 (Short, 0, Ok) = 0.0 and then not Ok,
+                 "a binary64 was read out of a one-byte buffer");
+         Assert (not B.Get_Bool (Short, 1, Ok) and then not Ok,
+                 "a boolean was read past the end of a buffer");
+         Assert (B.Get_I8 (Short, 1, Ok) = 0 and then not Ok,
+                 "a byte was read past the end of a buffer");
+      end;
+   end Typed_Readers_Decode_What_The_Bytes_Say;
+
    --  Every refusal the tokenizer can give, reported by name.
    --
    --  The vocabulary is the largest attacker-controlled structure in a model
@@ -5071,6 +5189,9 @@ package body Tests.GGUF_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Typed_Readers_Decode_What_The_Bytes_Say'Access,
+         "every typed reader decodes what the bytes say, at every edge");
       Register_Routine
         (T, Byte_Pair_Decoding_Undoes_Encoding'Access,
          "byte-pair decoding undoes byte-pair encoding");

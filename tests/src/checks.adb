@@ -16,6 +16,7 @@ with Docs_Generation;
 with Library_Surface;
 with Reserved_Codes;
 with Unreached_Codes;
+with Untested_Surface;
 with Template_Registry;
 with Tiny_Model;
 with Tool_Commands;
@@ -4461,6 +4462,123 @@ package body Checks is
                         & "change it describes");
                end if;
             end;
+         end if;
+      end;
+
+      --  Every public operation a test names, or a reason it names none.
+      --
+      --  Sixty-three of three hundred and eighty-two were named by no test
+      --  and nothing recorded it, so an operation exercised through a
+      --  caller, one that answers differently on every machine, and one
+      --  that is simply untested read alike. Untested_Surface holds the
+      --  ones that remain, and this holds it in both directions: an
+      --  operation a test starts naming fails until it comes off, and one
+      --  that stops being named fails until it goes on.
+      --
+      --  The names are not qualified, so this errs towards saying an
+      --  operation is tested -- the same proxy the code registry uses, and
+      --  said there too.
+      declare
+         Named : Natural := 0;
+         Total : Natural := 0;
+
+         --  Every test source in one string, so that asking whether a name
+         --  appears is one search rather than a walk per operation.
+         Tests : Ada.Strings.Unbounded.Unbounded_String;
+
+         procedure Gather_Test (Relative : String) is
+         begin
+            --  Not the registry itself, which names every operation on it
+            --  by construction and would report all of them as tested --
+            --  which is what it did.
+            if Relative = "tests/src/untested_surface.adb"
+              or else Relative = "tests/src/untested_surface.ads"
+            then
+               return;
+            end if;
+
+            Ada.Strings.Unbounded.Append (Tests, Contents (Relative));
+         end Gather_Test;
+
+         procedure Gather_Tests is new For_Each_Source (Gather_Test);
+
+         procedure Visit_Surface (Relative : String) is
+            Text : constant String := Contents (Relative);
+         begin
+            if Relative'Length < 4
+              or else Relative (Relative'Last - 3 .. Relative'Last) /= ".ads"
+            then
+               return;
+            end if;
+
+            for Index in Text'First .. Text'Last - 12 loop
+               if (Index = Text'First
+                   or else Text (Index - 1) = Character'Val (10))
+                 and then Index + 12 <= Text'Last
+                 and then (Text (Index .. Index + 12) = "   function  "
+                           or else Text (Index .. Index + 12)
+                                   = "   procedure ")
+               then
+                  declare
+                     From : Natural := Index + 12;
+                     Stop : Natural;
+                  begin
+                     while From <= Text'Last and then Text (From) = ' ' loop
+                        From := From + 1;
+                     end loop;
+
+                     Stop := From;
+                     while Stop <= Text'Last
+                       and then (Text (Stop) in 'A' .. 'Z'
+                                 or else Text (Stop) in 'a' .. 'z'
+                                 or else Text (Stop) in '0' .. '9'
+                                 or else Text (Stop) = '_')
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+
+                     if Stop > From then
+                        declare
+                           Name : constant String := Text (From .. Stop - 1);
+                           Here : constant Boolean :=
+                             Project_Tools.Text.Contains
+                               (Ada.Strings.Unbounded.To_String (Tests),
+                                Name);
+                        begin
+                           Total := Total + 1;
+                           if Here then
+                              Named := Named + 1;
+                           end if;
+
+                           Result.Performed := Result.Performed + 1;
+
+                           if Here and then Untested_Surface.Is_Untested (Name)
+                           then
+                              Fail (Name & " is named by a test now; take it "
+                                    & "off the untested list");
+                           elsif not Here
+                             and then not Untested_Surface.Is_Untested (Name)
+                           then
+                              Fail (Name & " in " & Relative & " is named by "
+                                    & "no test; exercise it or put it on the "
+                                    & "untested list with a reason");
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end loop;
+         end Visit_Surface;
+
+         procedure Scan_Surface is new For_Each_Source (Visit_Surface);
+      begin
+         Gather_Tests ("tests/src");
+         Scan_Surface ("src/library");
+
+         Result.Performed := Result.Performed + 1;
+         if Total = 0 then
+            Fail ("no public operations were found, so the check that each "
+                  & "is named by a test matched nothing");
          end if;
       end;
 
