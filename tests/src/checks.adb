@@ -364,10 +364,15 @@ package body Checks is
       --  erodes -- one intrinsic in one hot loop, for a good reason, and the
       --  sentence in the README is quietly false.
       --
-      --  Binding to a host call is not writing in another language: the
-      --  platform bodies reach mmap and isatty through Interfaces.C and stay
-      --  ordinary Ada. What is refused is code in another language living
-      --  here, and instructions written by hand.
+      --  Binding to something outside this project is not writing in
+      --  another language: the platform bodies reach mmap and isatty through
+      --  Interfaces.C and stay ordinary Ada, and a library that cannot be
+      --  avoided is reached the same way. What is refused is code in another
+      --  language living here, and instructions written by hand.
+      --
+      --  So this check is narrower than it once read as. It says what may be
+      --  written in this repository. It says nothing about what the program
+      --  may link against, and the README used to imply otherwise.
       --
       --  The token sweep is project_tools': it walks the tree itself and
       --  counts what it finds into the same total as everything else here,

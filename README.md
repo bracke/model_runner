@@ -693,16 +693,25 @@ Named in the specification, absent here:
 
 - **A backend that is not the processor.** There are two, and both run on
   the CPU: one for speed and one for being obviously right. Nothing here
-  reaches a GPU or any other device, and nothing will without a foreign
-  library, which the rules above do not allow.
+  reaches a GPU or any other device. That is because nobody has written one,
+  not because it is disallowed: this project is written in Ada, and where a
+  library outside it cannot be avoided the way to reach that library is an
+  Ada binding, as `mmap` and `isatty` are reached today. A device backend
+  would arrive the same way.
+
+  This paragraph used to say a GPU backend was ruled out because it would
+  need a foreign library "which the rules above do not allow". No rule above
+  said that and no check enforced it; it was a sentence that read like a
+  constraint and was an assumption.
 
 - **Hand-written vector code or intrinsics.** The kernels are ordinary Ada and
-  the compiler vectorizes them; nothing is written in assembly, in intrinsics,
-  or in a foreign language. The release checklist holds this: a source in
-  another language anywhere in the repository fails it, and so does any use of
-  machine code. Binding to a host call through `Interfaces.C` is not writing in
-  another language and is allowed, which is how `mmap` and `isatty` are
-  reached. See below for what that does and does not buy.
+  the compiler vectorizes them; nothing here is written in assembly, in
+  intrinsics, or in another language. The release checklist holds exactly
+  that and no more: a source in another language anywhere in the repository
+  fails it, and so does any use of machine code. It says nothing about what
+  this program may link against, which is a separate question with a separate
+  answer -- bind to it in Ada when it cannot be avoided. See below for what
+  the compiler's vectorization does and does not buy.
 ## Speed
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
