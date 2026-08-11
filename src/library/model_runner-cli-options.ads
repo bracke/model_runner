@@ -59,9 +59,33 @@ package Model_Runner.CLI.Options is
    type Command_Kind is
      (Command_None,
       Command_Run,
+      Command_Embed,
       Command_Inspect,
       Command_Help,
       Command_Version);
+
+   --  How the positions of a text are reduced to one vector.
+   --
+   --  Mean averages every position's hidden state, which is what a text's
+   --  embedding usually means: every word contributes. Last takes the final
+   --  position alone, which is what a model trained to summarize into its
+   --  last token wants. Neither is right for every model, so neither is
+   --  chosen on a model's behalf.
+   type Pooling_Kind is (Pool_Mean, Pool_Last);
+
+   --  The word a caller types for a pooling.
+   --
+   --  @param Item Pooling to name.
+   --  @return Lower-case identifier.
+   function Pooling_Word (Item : Pooling_Kind) return String
+   is (case Item is
+         when Pool_Mean => "mean",
+         when Pool_Last => "last");
+
+   --  The poolings a caller may name, in one line.
+   --
+   --  @return Comma-separated identifiers, in declaration order.
+   function Pooling_Names return String;
 
    --  Which commands an option belongs to.
    type Command_Set is array (Command_Kind) of Boolean;
@@ -237,6 +261,14 @@ package Model_Runner.CLI.Options is
       --  figure was measured against.
       Cache      : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Exact;
+
+      --  How an embedding reduces the positions of its text, and whether
+      --  the result is scaled to unit length. Unit length is the default
+      --  because the usual thing to do with two embeddings is compare their
+      --  directions, and a comparison of directions is a dot product only
+      --  when both have length one.
+      Pooling    : Pooling_Kind := Pool_Mean;
+      Normalize  : Boolean := True;
       Locale     : Model_Runner.Text.Bounded;
 
       --  Inspect modes.

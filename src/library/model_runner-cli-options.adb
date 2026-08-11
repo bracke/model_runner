@@ -29,25 +29,36 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 39) of Registry_Row :=
+   Registry : constant array (1 .. 41) of Registry_Row :=
      [
-      (Text ("--prompt"), [Command_Run => True, others => False], Text ("prompt")),
-      (Text ("--prompt-file"), [Command_Run => True, others => False], Text ("prompt_file")),
+      (Text ("--prompt"),
+       [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
+      (Text ("--prompt-file"),
+       [Command_Run | Command_Embed => True, others => False], Text ("prompt_file")),
       (Text ("--interactive"), [Command_Run => True, others => False], Text ("interactive")),
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
-      (Text ("--repack"), [Command_Run => True, others => False],
+      (Text ("--repack"),
+       [Command_Run | Command_Embed => True, others => False],
        Text ("repack")),
-      (Text ("--kv-cache"), [Command_Run => True, others => False],
+      (Text ("--kv-cache"),
+       [Command_Run | Command_Embed => True, others => False],
        Text ("kv_cache")),
+      (Text ("--pooling"), [Command_Embed => True, others => False],
+       Text ("pooling")),
+      (Text ("--no-normalize"), [Command_Embed => True, others => False],
+       Text ("no_normalize")),
       (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
       (Text ("--system-file"), [Command_Run => True, others => False], Text ("system_file")),
       (Text ("--max-tokens"), [Command_Run => True, others => False], Text ("max_tokens")),
-      (Text ("--context-size"), [Command_Run => True, others => False], Text ("context_size")),
+      (Text ("--context-size"),
+       [Command_Run | Command_Embed => True, others => False], Text ("context_size")),
       (Text ("--threads"),
-       [Command_Run | Command_Inspect => True, others => False],
+       [Command_Run | Command_Embed | Command_Inspect => True,
+        others => False],
        Text ("threads")),
       (Text ("--backend"),
-       [Command_Run | Command_Inspect => True, others => False],
+       [Command_Run | Command_Embed | Command_Inspect => True,
+        others => False],
        Text ("backend")),
       (Text ("--batch-size"), [Command_Run => True, others => False], Text ("batch_size")),
       (Text ("--temperature"), [Command_Run => True, others => False], Text ("temperature")),
@@ -62,8 +73,10 @@ package body Model_Runner.CLI.Options is
       (Text ("--seed"), [Command_Run => True, others => False], Text ("seed")),
       (Text ("--stop"), [Command_Run => True, others => False], Text ("stop")),
       (Text ("--stop-token"), [Command_Run => True, others => False], Text ("stop_token")),
-      (Text ("--memory-limit"), [Command_Run => True, others => False], Text ("memory_limit")),
-      (Text ("--mmap"), [Command_Run => True, others => False], Text ("mmap")),
+      (Text ("--memory-limit"),
+       [Command_Run | Command_Embed => True, others => False], Text ("memory_limit")),
+      (Text ("--mmap"),
+       [Command_Run | Command_Embed => True, others => False], Text ("mmap")),
       (Text ("--no-mmap"), [Command_Run => True, others => False], Text ("no_mmap")),
       (Text ("--show-stats"), [Command_Run => True, others => False], Text ("show_stats")),
       (Text ("--no-stats"), [Command_Run => True, others => False], Text ("no_stats")),
@@ -112,6 +125,7 @@ package body Model_Runner.CLI.Options is
    is (case Kind is
          when Command_None    => "",
          when Command_Run     => "run",
+         when Command_Embed   => "embed",
          when Command_Inspect => "inspect",
          when Command_Help    => "help",
          when Command_Version => "version");
@@ -163,6 +177,30 @@ package body Model_Runner.CLI.Options is
       end loop;
       return Room (1 .. Used);
    end Cache_Names;
+
+   -------------------
+   -- Pooling_Names --
+   -------------------
+
+   function Pooling_Names return String is
+      Room : String (1 .. 64) := [others => ' '];
+      Used : Natural := 0;
+
+      procedure Add (Value : String) is
+      begin
+         if Used > 0 then
+            Room (Used + 1 .. Used + 2) := ", ";
+            Used := Used + 2;
+         end if;
+         Room (Used + 1 .. Used + Value'Length) := Value;
+         Used := Used + Value'Length;
+      end Add;
+   begin
+      for Kind in Pooling_Kind loop
+         Add (Pooling_Word (Kind));
+      end loop;
+      return Room (1 .. Used);
+   end Pooling_Names;
 
    ----------------
    -- Command_Of --
@@ -624,6 +662,7 @@ package body Model_Runner.CLI.Options is
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Repack,
          Flag_Cache,
+         Flag_Pooling,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
@@ -944,6 +983,38 @@ package body Model_Runner.CLI.Options is
                            return;
                         end if;
                      end;
+
+                  elsif Name = "--pooling" then
+                     declare
+                        Asked : T.Bounded;
+                        Found : Boolean := False;
+                     begin
+                        Bounded_Value (Flag_Pooling, Asked, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        for Kind in Pooling_Kind loop
+                           if Pooling_Word (Kind) = T.To_String (Asked) then
+                              Result.Pooling := Kind;
+                              Found := True;
+                           end if;
+                        end loop;
+
+                        if not Found then
+                           Fail (E.CLI_Invalid_Option_Value, Name,
+                                 T.To_String (Asked));
+                           return;
+                        end if;
+                     end;
+
+                  elsif Name = "--no-normalize" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Normalize := False;
 
                   elsif Name = "--raw" then
                      No_Value (Name, Value_Present,
@@ -1371,6 +1442,8 @@ package body Model_Runner.CLI.Options is
                if Operands = 1 and then Result.Kind = Command_None then
                   if Argument = "run" then
                      Result.Kind := Command_Run;
+                  elsif Argument = "embed" then
+                     Result.Kind := Command_Embed;
                   elsif Argument = "inspect" then
                      Result.Kind := Command_Inspect;
                   elsif Argument = "help" then
@@ -1384,7 +1457,7 @@ package body Model_Runner.CLI.Options is
 
                elsif Operands = 2 then
                   case Result.Kind is
-                     when Command_Run | Command_Inspect =>
+                     when Command_Run | Command_Embed | Command_Inspect =>
                         Result.Model_Path := T.To_Bounded (Argument);
                      when Command_Help =>
                         --  A topic is a command name. `help inspekt` used

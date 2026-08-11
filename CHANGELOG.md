@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **An `embed` command.** It prints what the model made of a text rather than
+  what it would say next: the hidden state after the final normalization,
+  before the projection that turns a state into a distribution over tokens.
+  That projection is where the resemblance between two texts goes -- it keeps
+  only how much each token is favoured -- so the state is what an embedding
+  has to be pooled from, and until now there was no way to get one out of
+  this program at all.
+
+  `--pooling mean` averages every position and `--pooling last` takes the
+  final one. Neither is chosen on a model's behalf, because which is right
+  depends on how the model was trained. The vector is at unit length unless
+  `--no-normalize`, since comparing two of them is a dot product only when
+  both have length one. One component a line, so the usual tools can read it.
+
+  The prompt is read as written and no chat template is applied. A template
+  turns a text into a turn of a conversation, and an embedding is of the
+  text.
+
+  The text is evaluated a token at a time rather than as a batch, because
+  every position's state is wanted and only that path leaves one behind for
+  each. For a prompt that is the same arithmetic either way.
+
+  `Hidden_State` refuses a session with nothing evaluated rather than
+  reporting the buffer as it stands, which would be reporting zeros as
+  though the model had made that of something.
+
+- **The catalog check covers every command.** It named `run` and `inspect`
+  where it meant "each command that takes options", so the first command
+  added after it was written had every one of its help lines reported as
+  read by nobody. That was the check being wrong rather than the catalog.
+
 - **`--kv-cache f16`.** A session can store what it has committed as
   binary16 instead of binary32: half the memory for the context, which is the
   one part of a session that grows with how much has been said. The default

@@ -455,6 +455,28 @@ package Model_Runner.Llama is
       Cache          : Cache_Precision := Exact;
       Status         : out Model_Runner.Errors.Error_Info);
 
+   --  The hidden state the last evaluated position left behind.
+   --
+   --  This is what the model has made of everything it has read, after the
+   --  final normalization and before the output projection turns it into a
+   --  distribution over tokens. It is the vector an embedding is pooled
+   --  from: two texts that mean the same thing leave similar ones, which the
+   --  logits do not show, because the projection throws away everything
+   --  except how much each token is favoured.
+   --
+   --  Refused before anything has been evaluated: there is no state to
+   --  report then, and reporting the buffer as it happens to stand would be
+   --  reporting zeros as though they meant something.
+   --
+   --  @param Item Session that has evaluated at least one token.
+   --  @param Target Receives the state; must be Embedding elements long.
+   --  @param Status Success, Lifecycle_Invalid_State when nothing has been
+   --    evaluated, or Tensor_Shape_Mismatch.
+   procedure Hidden_State
+     (Item   : Session;
+      Target : out Real_Array;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  How this session stores its keys and values.
    --
    --  @param Item Session to inspect.

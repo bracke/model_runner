@@ -280,11 +280,15 @@ kernels 659A79D4E78E7815 src/library/model_runner-quantization.adb src/library/m
 # call per position per layer, which is a call against a head's worth of
 # multiply-accumulates. The default is unchanged and the model these figures
 # need is still not on this machine.
-engine AB936DE2D8CE28C3 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# 2026-08-11, the embedding command. llama.adb gained an accessor that copies
+# the final hidden state out of a session; nothing on the evaluation path
+# calls it and nothing else in the file changed. Not re-measured, and the
+# model those figures need is not on this machine.
+engine A6597C57DAC57EF2 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
-reference CEFF102D9976FC0D src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+reference 0D48ED0A286D6598 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling B5443E99EAAA8126 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

@@ -663,14 +663,20 @@ package body Checks is
          --  A fourth family: a help line per option per command that takes
          --  it, built where the help screen is written rather than named
          --  there. The registry says which those are.
+         --  Over every command rather than the two that had options when
+         --  this was written: a third arrived and each of its option lines
+         --  was reported as read by nobody, which is the check being wrong
+         --  rather than the catalog.
          for Index in 1 .. Opt.Option_Count loop
             if Opt.Option_Help (Index) /= "" then
-               if Opt.Option_Commands (Index) (Opt.Command_Run) then
-                  Reached ("help.run." & Opt.Option_Help (Index));
-               end if;
-               if Opt.Option_Commands (Index) (Opt.Command_Inspect) then
-                  Reached ("help.inspect." & Opt.Option_Help (Index));
-               end if;
+               for Kind in Opt.Command_Kind loop
+                  if Kind /= Opt.Command_None
+                    and then Opt.Option_Commands (Index) (Kind)
+                  then
+                     Reached ("help." & Opt.Command_Word (Kind) & "."
+                              & Opt.Option_Help (Index));
+                  end if;
+               end loop;
             end if;
          end loop;
 

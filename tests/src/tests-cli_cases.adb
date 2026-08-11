@@ -295,6 +295,162 @@ package body Tests.CLI_Cases is
    --  the guard that says so -- which is how this came to exist.
    function Last_Output return String is (Said (1 .. Said_Used));
 
+   --  A vector as the embed command prints it: one component a line.
+   type Real_List is array (1 .. 512) of Long_Float;
+
+   type Reals is record
+      Count  : Natural := 0;
+      Values : Real_List := [others => 0.0];
+   end record;
+
+   --  Read the components out of what a command printed.
+   function Parsed (Text : String) return Reals is
+      Result : Reals;
+      From   : Positive := Text'First;
+   begin
+      while From <= Text'Last loop
+         declare
+            Upto : Natural := From;
+         begin
+            while Upto <= Text'Last
+              and then Text (Upto) /= Character'Val (10)
+            loop
+               Upto := Upto + 1;
+            end loop;
+
+            if Upto > From and then Result.Count < Result.Values'Last then
+               Result.Count := Result.Count + 1;
+               Result.Values (Result.Count) :=
+                 Long_Float'Value (Text (From .. Upto - 1));
+            end if;
+
+            From := Upto + 1;
+         end;
+      end loop;
+
+      return Result;
+   end Parsed;
+
+   --  Embedding a text reports the state, not the distribution.
+   --
+   --  What `run` prints is what the model would say next; what this prints
+   --  is what it made of what it read. The two come from the same forward
+   --  pass and the second is the input to the first, so the way to be sure
+   --  this reports the state is to check the things only the state has: as
+   --  many components as the model is wide, unit length unless the caller
+   --  says otherwise, and a value that depends on which positions were
+   --  pooled.
+   procedure Embedding_Reports_The_State
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Model : constant String := "obj/embed-model.gguf";
+
+      --  Run one embedding and return its components.
+      function Vector (Extra, Value : String) return Reals is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "embed");
+         Add (Source, Model);
+         Add (Source, "--prompt");
+         Add (Source, "abc");
+         if Extra /= "" then
+            Add (Source, Extra);
+            if Value /= "" then
+               Add (Source, Value);
+            end if;
+         end if;
+
+         Ran (Source, Status);
+         Assert (Status = 0,
+                 "embedding failed with status" & Natural'Image (Status));
+
+         return Parsed (Last_Output);
+      end Vector;
+
+      Mean, Last, Plain : Reals;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      Mean := Vector ("", "");
+      Assert (Mean.Count = Tiny_Model.Embedding,
+              "an embedding had" & Natural'Image (Mean.Count)
+              & " components where the model is"
+              & Natural'Image (Tiny_Model.Embedding) & " wide");
+
+      --  Unit length, which is what makes two of these comparable by a dot
+      --  product and is the reason it is the default.
+      declare
+         Total : Long_Float := 0.0;
+      begin
+         for Index in 1 .. Mean.Count loop
+            Total := Total + Mean.Values (Index) * Mean.Values (Index);
+         end loop;
+         Assert (abs (Total - 1.0) < 1.0E-4,
+                 "an embedding was not at unit length:"
+                 & Long_Float'Image (Total));
+      end;
+
+      --  The same text twice is the same vector. Nothing here samples, so a
+      --  difference would mean the state depends on something it should not.
+      declare
+         Again : constant Reals := Vector ("", "");
+      begin
+         Assert (Again.Count = Mean.Count, "the width changed between runs");
+         for Index in 1 .. Mean.Count loop
+            Assert (Again.Values (Index) = Mean.Values (Index),
+                    "the same text embedded differently the second time");
+         end loop;
+      end;
+
+      --  Pooling the last position alone is not pooling all of them, on a
+      --  text of more than one position.
+      Last := Vector ("--pooling", "last");
+      declare
+         Apart : Long_Float := 0.0;
+      begin
+         for Index in 1 .. Mean.Count loop
+            Apart := Long_Float'Max
+              (Apart, abs (Mean.Values (Index) - Last.Values (Index)));
+         end loop;
+         Assert (Apart > 0.0,
+                 "pooling the last position gave what pooling every "
+                 & "position gives, so the pooling was not applied");
+      end;
+
+      --  And without normalization the vector is longer than one -- these
+      --  states are not unit vectors to begin with -- while pointing the
+      --  same way.
+      Plain := Vector ("--no-normalize", "");
+      declare
+         Total : Long_Float := 0.0;
+      begin
+         for Index in 1 .. Plain.Count loop
+            Total := Total + Plain.Values (Index) * Plain.Values (Index);
+         end loop;
+         Assert (abs (Total - 1.0) > 1.0E-3,
+                 "the vector was at unit length despite --no-normalize:"
+                 & Long_Float'Image (Total));
+
+         --  Same direction: each component in the same ratio to the whole.
+         declare
+            Length : constant Long_Float :=
+              Long_Float (Model_Runner.Numerics.Sqrt
+                            (Model_Runner.Numerics.Wide_Real (Total)));
+         begin
+            for Index in 1 .. Plain.Count loop
+               Assert
+                 (abs (Plain.Values (Index) / Length - Mean.Values (Index))
+                  < 1.0E-4,
+                  "normalizing changed the direction at component"
+                  & Natural'Image (Index));
+            end loop;
+         end;
+      end;
+   end Embedding_Reports_The_State;
+
    procedure Every_Backend_Can_Be_Named
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -8293,6 +8449,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Conversation_Survives_Interactive_Edits'Access,
          "the conversation keeps its shape under the edits interactive makes");
+      Register_Routine
+        (T, Embedding_Reports_The_State'Access,
+         "embedding a text reports the state, not the distribution");
       Register_Routine
         (T, Every_Backend_Can_Be_Named'Access,
          "every backend this build has can be named on the command line");

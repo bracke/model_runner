@@ -14,6 +14,7 @@ en.cli.label.standard_input = standard input
 en.cli.general.usage = Usage: model_runner COMMAND [options]
 en.cli.general.commands = Commands:
 en.cli.general.command.run =   run MODEL       generate text from a model file
+en.cli.general.command.embed =   embed MODEL     reduce a text to one vector
 en.cli.general.command.inspect =   inspect MODEL   report what a model file contains
 en.cli.general.command.help =   help [COMMAND]  show help for a command
 en.cli.general.command.version =   version         show version information
@@ -72,6 +73,26 @@ en.help.inspect.quiet =   --quiet                 suppress progress, notes and w
 en.help.inspect.verbose =   --verbose               report progress and detail on standard error
 en.help.inspect.locale =   --locale NAME           locale for program messages
 en.help.inspect.color =   --color=MODE            colour output: {value}
+
+en.help.embed.usage = Usage: model_runner embed MODEL [options]
+en.help.embed.summary = Reduce a text to one vector: what the model made of it, before the projection that turns a state into a distribution over tokens. The prompt is read as written; no chat template is applied.
+en.help.embed.options = Options:
+en.help.embed.prompt =   --prompt TEXT           text to embed
+en.help.embed.prompt_file =   --prompt-file PATH      read the text from a file
+en.help.embed.pooling =   --pooling KIND          how positions are reduced: {value}
+en.help.embed.no_normalize =   --no-normalize          report the vector as computed, not at unit length
+en.help.embed.threads =   --threads N             worker tasks; 0 chooses
+en.help.embed.backend =   --backend NAME          backend to run on: {value}
+en.help.embed.repack =   --repack MODE           decode the weights once at load: {value}
+en.help.embed.kv_cache =   --kv-cache MODE         how the context is stored: {value}
+en.help.embed.context_size =   --context-size N        context capacity in tokens; 0 uses the model's
+en.help.embed.memory_limit =   --memory-limit BYTES    refuse a model that would need more
+en.help.embed.mmap =   --mmap=MODE             map the file instead of reading it
+en.help.embed.quiet =   --quiet                 suppress progress, notes and warnings
+en.help.embed.verbose =   --verbose               report progress and detail on standard error
+en.help.embed.locale =   --locale NAME           locale for program messages
+en.help.embed.color =   --color=MODE            colour output: {value}
+en.help.embed.streams = The vector goes to standard output, one component a line. Diagnostics go to standard error.
 
 en.help.help.usage = Usage: model_runner help [COMMAND]
 en.help.help.summary = Show help for the program or for one command.
@@ -379,6 +400,7 @@ da.cli.label.standard_input = standardinddata
 da.cli.general.usage = Brug: model_runner KOMMANDO [tilvalg]
 da.cli.general.commands = Kommandoer:
 da.cli.general.command.run = run MODEL       generér tekst ud fra en modelfil
+da.cli.general.command.embed =   embed MODEL     reducér en tekst til én vektor
 da.cli.general.command.inspect = inspect MODEL   vis hvad en modelfil indeholder
 da.cli.general.command.help = help [KOMMANDO] vis hjælp til en kommando
 da.cli.general.command.version = version         vis versionsoplysninger
@@ -435,6 +457,26 @@ da.help.inspect.quiet = --quiet                 undertryk status, noter og advar
 da.help.inspect.verbose = --verbose               vis status og detaljer på standardfejl
 da.help.inspect.locale = --locale NAVN           sprog for programmets beskeder
 da.help.inspect.color = --color=TILSTAND        farvet output: {value}
+da.help.embed.usage = Brug: model_runner embed MODEL [tilvalg]
+da.help.embed.summary = Reducér en tekst til én vektor: det modellen gjorde ud af den, før fremskrivningen der gør en tilstand til en fordeling over tegn. Prompten læses som skrevet; ingen samtaleskabelon anvendes.
+da.help.embed.options = Tilvalg:
+da.help.embed.prompt = --prompt TEKST          tekst der skal indlejres
+da.help.embed.prompt_file = --prompt-file STI       læs teksten fra en fil
+da.help.embed.pooling = --pooling ART           hvordan positioner reduceres: {value}
+da.help.embed.no_normalize = --no-normalize          rapportér vektoren som beregnet, ikke med længde én
+da.help.embed.threads = --threads N             arbejdsopgaver; 0 vælger selv
+da.help.embed.backend = --backend NAVN          motor der skal køre: {value}
+da.help.embed.repack = --repack TILSTAND       afkod vægtene én gang ved indlæsning: {value}
+da.help.embed.kv_cache = --kv-cache TILSTAND     hvordan konteksten gemmes: {value}
+da.help.embed.context_size = --context-size N        kontekstens størrelse i tegn; 0 bruger modellens
+da.help.embed.memory_limit = --memory-limit BYTES    afvis en model der ville kræve mere
+da.help.embed.mmap = --mmap=TILSTAND         kortlæg filen i stedet for at læse den
+da.help.embed.quiet = --quiet                 undertryk fremdrift, noter og advarsler
+da.help.embed.verbose = --verbose               rapportér fremdrift og detaljer på standard fejl
+da.help.embed.locale = --locale NAVN           sprog for programmets meddelelser
+da.help.embed.color = --color=TILSTAND        farvelæg output: {value}
+da.help.embed.streams = Vektoren går til standard ud, én komponent pr. linje. Diagnostik går til standard fejl.
+
 da.help.help.usage = Brug: model_runner help [KOMMANDO]
 da.help.help.summary = Vis hjælp til programmet eller til en enkelt kommando.
 da.help.version.usage = Brug: model_runner version
@@ -616,6 +658,7 @@ qps.cli.label.standard_input = ⟦ßŧáñðáŕð íñpúŧ⟧
 qps.cli.general.usage = ⟦Úßágé: model_runner ÇÓMMÁÑÐ [ópŧíóñß]⟧
 qps.cli.general.commands = ⟦Çómmáñðß:⟧
 qps.cli.general.command.run = ⟦  ŕúñ MÓÐÉĹ       géñéŕáŧé ŧéxŧ fŕóm á móðéĺ fíĺé⟧
+qps.cli.general.command.embed = ⟦  embed MODEL     réðúçé á ŧéxŧ ŧó óñé véçŧór⟧
 qps.cli.general.command.inspect = ⟦  íñßpéçŧ MÓÐÉĹ   ŕépóŕŧ wháŧ á móðéĺ fíĺé çóñŧáíñß⟧
 qps.cli.general.command.help = ⟦  héĺp [ÇÓMMÁÑÐ]  ßhów héĺp fóŕ á çómmáñð⟧
 qps.cli.general.command.version = ⟦  véŕßíóñ         ßhów véŕßíóñ íñfóŕmáŧíóñ⟧
@@ -672,6 +715,26 @@ qps.help.inspect.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕé�
 qps.help.inspect.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
 qps.help.inspect.locale = ⟦  --locale ÑÁMÉ           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
 qps.help.inspect.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
+qps.help.embed.usage = ⟦Ußágé: model_runner embed MODEL [óþŧíóñß]⟧
+qps.help.embed.summary = ⟦Réðúçé á ŧéxŧ ŧó óñé véçŧór: wháŧ ŧhé móðéĺ máðé óf íŧ, béfóré ŧhé þrójéçŧíóñ ŧháŧ ŧúrñß á ßŧáŧé íñŧó á ðíßŧríbúŧíóñ óvér ŧókéñß.⟧
+qps.help.embed.options = ⟦Óþŧíóñß:⟧
+qps.help.embed.prompt = ⟦  --prompt TEXT           ŧéxŧ ŧó émbéð⟧
+qps.help.embed.prompt_file = ⟦  --prompt-file PATH      réáð ŧhé ŧéxŧ fróm á fíĺé⟧
+qps.help.embed.pooling = ⟦  --pooling KIND          hów þóßíŧíóñß áré réðúçéð: {value}⟧
+qps.help.embed.no_normalize = ⟦  --no-normalize          réþórŧ ŧhé véçŧór áß çómþúŧéð⟧
+qps.help.embed.threads = ⟦  --threads N             wórkér ŧáßkß; 0 çhóóßéß⟧
+qps.help.embed.backend = ⟦  --backend NAME          báçkéñð ŧó rúñ óñ: {value}⟧
+qps.help.embed.repack = ⟦  --repack MODE           ðéçóðé ŧhé wéíghŧß óñçé áŧ ĺóáð: {value}⟧
+qps.help.embed.kv_cache = ⟦  --kv-cache MODE         hów ŧhé çóñŧéxŧ íß ßŧóréð: {value}⟧
+qps.help.embed.context_size = ⟦  --context-size N        çóñŧéxŧ çáþáçíŧý íñ ŧókéñß⟧
+qps.help.embed.memory_limit = ⟦  --memory-limit BYTES    réfúßé á móðéĺ ŧháŧ wóúĺð ñééð móré⟧
+qps.help.embed.mmap = ⟦  --mmap=MODE             máþ ŧhé fíĺé íñßŧéáð óf réáðíñg íŧ⟧
+qps.help.embed.quiet = ⟦  --quiet                 ßúþþréßß þrógréßß, ñóŧéß áñð wárñíñgß⟧
+qps.help.embed.verbose = ⟦  --verbose               réþórŧ þrógréßß áñð ðéŧáíĺ⟧
+qps.help.embed.locale = ⟦  --locale NAME           ĺóçáĺé fór þrógrám méßßágéß⟧
+qps.help.embed.color = ⟦  --color=MODE            çóĺóúr óúŧþúŧ: {value}⟧
+qps.help.embed.streams = ⟦Ŧhé véçŧór góéß ŧó ßŧáñðárð óúŧþúŧ, óñé çómþóñéñŧ á ĺíñé.⟧
+
 qps.help.help.usage = ⟦Úßágé: model_runner héĺp [ÇÓMMÁÑÐ]⟧
 qps.help.help.summary = ⟦Šhów héĺp fóŕ ŧhé pŕógŕám óŕ fóŕ óñé çómmáñð.⟧
 qps.help.version.usage = ⟦Úßágé: model_runner véŕßíóñ⟧

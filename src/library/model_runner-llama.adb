@@ -2307,6 +2307,38 @@ package body Model_Runner.Llama is
 
    function Precision (Item : Session) return Cache_Precision is (Item.Held);
 
+   -------------------
+   -- Hidden_State --
+   -------------------
+
+   procedure Hidden_State
+     (Item   : Session;
+      Target : out Real_Array;
+      Status : out E.Error_Info) is
+   begin
+      Target := [others => 0.0];
+
+      if Item.Current not in Ready | Evaluating_Prompt | Generating
+        or else Item.Committed = 0
+        or else Item.Normalized = null
+      then
+         Status := E.Make (E.Lifecycle_Invalid_State);
+         return;
+      end if;
+
+      if Target'Length /= Item.Normalized.all'Length then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Integer (Status, "output", Long_Long_Integer (Target'Length));
+         E.Add_Integer
+           (Status, "expected",
+            Long_Long_Integer (Item.Normalized.all'Length));
+         return;
+      end if;
+
+      Target := Item.Normalized.all;
+      Status := E.Success;
+   end Hidden_State;
+
    --------------
    -- Position --
    --------------

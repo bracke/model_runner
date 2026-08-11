@@ -56,6 +56,7 @@ $ model_runner run tiny-model.gguf --raw --prompt "ab" --seed 42 --temperature 0
 
 ```
 model_runner run MODEL       generate text from a model file
+model_runner embed MODEL     reduce a text to one vector
 model_runner inspect MODEL   report what a model file contains
 model_runner help [COMMAND]  show help for a command
 model_runner version         show version information
@@ -67,6 +68,32 @@ resolved.
 Run `model_runner help run` for the full option list. Options are validated
 with the same typed path as environment variables, repeated options are a usage
 error, and `--` ends option processing.
+
+### Embedding
+
+`embed` prints what the model made of a text rather than what it would say
+next: the hidden state after the final normalization, before the projection
+that turns a state into a distribution over tokens. That projection is where
+the resemblance between two texts is thrown away -- it keeps only how much
+each token is favoured -- which is why the state is what an embedding is
+pooled from.
+
+```
+model_runner embed MODEL --prompt "the text" --pooling mean
+```
+
+One component a line, so the usual tools can read it. `--pooling mean`
+averages every position and `--pooling last` takes the final one; neither is
+chosen on a model's behalf, because which is right depends on how the model
+was trained. The vector is scaled to unit length unless `--no-normalize`,
+since the usual thing to do with two of them is compare their directions and
+that is a dot product only when both have length one.
+
+The prompt is read as written and no chat template is applied. A template
+turns a text into a turn of a conversation, and an embedding is of the text.
+
+The text is evaluated a token at a time rather than as a batch, because every
+position's state is wanted and only that path leaves one behind for each.
 
 ### Streams
 

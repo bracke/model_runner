@@ -1871,6 +1871,76 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  The hidden state is reported, and refused when there is none.
+   --
+   --  What the embedding command prints comes from here. Through the command
+   --  only the successful path is reached, and the two refusals matter more
+   --  than the success does: a session with nothing evaluated would
+   --  otherwise report a buffer of zeros as though the model had made that
+   --  of something, and a caller passing the wrong width would be told
+   --  nothing at all.
+   procedure Hidden_State_Is_Reported
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Image  : B.Byte_Array_Access;
+      Logits : Logit_Vector;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+
+         State : Model_Runner.Numerics.Real_Array
+           (0 .. Model_Runner.Numerics.Element_Count (Tiny_Model.Embedding) - 1);
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         --  Nothing has been evaluated, so there is no state to report.
+         L.Hidden_State (Live, State, Status);
+         Assert (Status.Code = E.Lifecycle_Invalid_State,
+                 "a session with nothing evaluated reported a state: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert ((for all Value of State => Value = 0.0),
+                 "a refused state left something in the target");
+
+         L.Evaluate (Live, Under.Ready, 4, Logits, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed");
+
+         L.Hidden_State (Live, State, Status);
+         Assert (E.Is_Ok (Status),
+                 "the state was refused after a token: "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  It is a state and not a distribution: the vector is as wide as
+         --  the model, not as wide as its vocabulary, and something in it is
+         --  not zero.
+         Assert ((for some Value of State => Value /= 0.0),
+                 "the state was all zeros after a token was evaluated");
+
+         --  And a target of the wrong width is refused rather than filled
+         --  as far as it goes.
+         declare
+            Narrow : Model_Runner.Numerics.Real_Array (0 .. 1);
+         begin
+            L.Hidden_State (Live, Narrow, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a target of the wrong width was accepted: "
+                    & E.Error_Code'Image (Status.Code));
+         end;
+
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end Hidden_State_Is_Reported;
+
    --  A half-precision cache holds half the bytes and answers the same.
    --
    --  Two claims, and the sweep makes only the second. That the engine and
@@ -2679,6 +2749,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, Hidden_State_Is_Reported'Access,
+         "the hidden state is reported, and refused when there is none");
       Register_Routine
         (T, Halved_Cache_Holds_Half'Access,
          "a half-precision cache holds half the bytes and answers the same");

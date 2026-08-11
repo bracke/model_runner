@@ -20,6 +20,7 @@ with Model_Runner.Generation;
 with Model_Runner.Limits;
 with Model_Runner.Llama;
 with Model_Runner.Memory;
+with Model_Runner.Numerics;
 with Model_Runner.Cancellation;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Signals;
@@ -51,9 +52,14 @@ package body Model_Runner.CLI.Execute is
    package Containers renames Model_Runner.GGUF.Containers;
    package L renames Model_Runner.Llama;
    package Loc renames Model_Runner.Localization;
+   package N renames Model_Runner.Numerics;
    package Opt renames Model_Runner.CLI.Options;
 
    use type Opt.Command_Kind;
+   use type Opt.Pooling_Kind;
+   use type N.Element_Count;
+   use type N.Real;
+   use type N.Wide_Real;
    package Pres renames Model_Runner.Presentation;
    package Workers_CPU renames Model_Runner.Backend.CPU;
    package T renames Model_Runner.Text;
@@ -575,6 +581,8 @@ package body Model_Runner.CLI.Execute is
                      then Opt.Repack_Names
                      elsif Opt.Option_Name (Index) = "--kv-cache"
                      then Opt.Cache_Names
+                     elsif Opt.Option_Name (Index) = "--pooling"
+                     then Opt.Pooling_Names
                      elsif Opt.Option_Name (Index) = "--color"
                      then Opt.Color_Names
                      elsif Opt.Option_Name (Index) = "--backend"
@@ -596,7 +604,7 @@ package body Model_Runner.CLI.Execute is
       --  already named exactly those four, so a fifth command would have
       --  compiled, dispatched, taken options -- and had no help.
       case Opt.Command_Of (Topic) is
-         when Opt.Command_Run | Opt.Command_Inspect =>
+         when Opt.Command_Run | Opt.Command_Embed | Opt.Command_Inspect =>
             declare
                Kind : constant Opt.Command_Kind := Opt.Command_Of (Topic);
                Word : constant String := Opt.Command_Word (Kind);
@@ -615,6 +623,9 @@ package body Model_Runner.CLI.Execute is
                   Screen.Put_Line ("");
                   Screen.Put_Message ("help.run.streams");
                   Screen.Put_Message ("help.run.privacy");
+               elsif Kind = Opt.Command_Embed then
+                  Screen.Put_Line ("");
+                  Screen.Put_Message ("help.embed.streams");
                end if;
             end;
 
@@ -1435,6 +1446,232 @@ package body Model_Runner.CLI.Execute is
       end case;
    end Do_Run;
 
+   ---------------
+   -- Do_Embed --
+   ---------------
+
+   --  Reduce a text to one vector.
+   --
+   --  What a model has made of everything it has read lives in the hidden
+   --  state, and the output projection throws most of it away: two texts
+   --  that mean the same thing leave similar states and quite different
+   --  logits, because the logits say only how much each token is favoured
+   --  next. This prints the state, pooled over the text's positions.
+   --
+   --  The prompt is read as written. No chat template is applied and none
+   --  would be right: a template turns a text into a turn of a conversation,
+   --  and an embedding is of the text.
+   --
+   --  Evaluated a token at a time rather than as a batch, because the state
+   --  of every position is wanted and only the single-token path leaves one
+   --  behind for each. For a prompt this is the same arithmetic either way.
+   procedure Do_Embed
+     (Item   : Opt.Command;
+      Screen : in out Pres.Console;
+      Status : out Natural)
+   is
+      Source    : Files.File_Source;
+      Container : Containers.Container;
+      Prepared  : L.Model;
+      Session   : L.Session;
+      Prompt    : Opt.Text_Access := null;
+      Condition : E.Error_Info;
+      Ignored   : E.Error_Info;
+
+      procedure Cleanup is
+      begin
+         L.Close (Session);
+         L.Close (Prepared, Ignored);
+         Containers.Close (Container);
+         Files.Close (Source);
+         Free_Text (Prompt);
+      end Cleanup;
+
+      procedure Fail (Reason : E.Error_Info) is
+      begin
+         Pres.Report (Screen, Reason);
+         Status := E.Exit_Status (Reason);
+         Cleanup;
+      end Fail;
+
+      procedure Embed_With (Team : Workers_CPU.Pool_Reference) is
+      begin
+         Status := E.Exit_Success;
+
+         Load (Item, Screen, Source, Container, Prepared, True, null, null,
+               Condition);
+         if E.Is_Error (Condition) then
+            Fail (Condition);
+            return;
+         end if;
+
+         L.Open
+           (Session, Prepared, Item.Context_Size,
+            Session_Bounds => Session_Bounds (Item),
+            Workers => Team, Cache => Item.Cache, Status => Condition);
+         if E.Is_Error (Condition) then
+            Fail (Condition);
+            return;
+         end if;
+
+         case Item.Prompt_Kind is
+            when Opt.Prompt_Inline =>
+               Prompt := new String'(Item.Prompt_Text.all);
+
+            when Opt.Prompt_File =>
+               Read_File
+                 (T.To_String (Item.Prompt_Path),
+                  Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes,
+                  Prompt, Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+            when others =>
+               Read_Standard_Input
+                 (Pres.Message_Value (Screen, "cli.label.standard_input"),
+                  Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes,
+                  Prompt, Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+         end case;
+
+         if Prompt = null or else Prompt.all'Length = 0 then
+            Fail (E.Make (E.CLI_No_Prompt_Available));
+            return;
+         end if;
+
+         if not Model_Runner.UTF8.Is_Valid (Prompt.all) then
+            Fail (E.Make (E.IO_Invalid_UTF8));
+            return;
+         end if;
+
+         declare
+            Settings : constant L.Configuration := L.Config (Prepared);
+            Width    : constant N.Element_Count :=
+              N.Element_Count (Settings.Embedding);
+            Words    : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Prepared);
+
+            Tokens : Vocab.Token_Array
+              (1 .. Model_Runner.Limits.Default_Session_Limits.Max_Batch);
+            Count  : Natural;
+
+            Logits : N.Real_Array (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+            State  : N.Real_Array (0 .. Width - 1);
+            Pooled : N.Real_Array (0 .. Width - 1) := [others => 0.0];
+         begin
+            Vocab.Encode
+              (Words.all, Prompt.all, Vocab.Adds_Beginning (Words.all), False,
+               Tokens, Count, Condition);
+            if E.Is_Error (Condition) then
+               Fail (Condition);
+               return;
+            end if;
+
+            if Count = 0 then
+               Fail (E.Make (E.CLI_No_Prompt_Available));
+               return;
+            end if;
+
+            for Index in 1 .. Count loop
+               L.Evaluate
+                 (Session, Prepared, Tokens (Index), Logits,
+                  Status => Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               L.Hidden_State (Session, State, Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               case Item.Pooling is
+                  when Opt.Pool_Mean =>
+                     for Element in Pooled'Range loop
+                        Pooled (Element) := Pooled (Element) + State (Element);
+                     end loop;
+
+                  when Opt.Pool_Last =>
+                     Pooled := State;
+               end case;
+            end loop;
+
+            if Item.Pooling = Opt.Pool_Mean then
+               for Element in Pooled'Range loop
+                  Pooled (Element) := Pooled (Element) / N.Real (Count);
+               end loop;
+            end if;
+
+            --  To unit length, unless the caller asked for the vector as it
+            --  is. A vector of length zero stays as it is: there is no
+            --  direction to scale it to, and dividing would produce
+            --  not-a-number where the honest answer is what was computed.
+            if Item.Normalize then
+               declare
+                  Total : N.Wide_Real := 0.0;
+               begin
+                  for Element of Pooled loop
+                     Total := Total + N.Wide_Real (Element)
+                       * N.Wide_Real (Element);
+                  end loop;
+
+                  if Total > 0.0 then
+                     declare
+                        Scale : constant N.Real :=
+                          N.Real (1.0 / N.Sqrt (Total));
+                     begin
+                        for Element of Pooled loop
+                           Element := Element * Scale;
+                        end loop;
+                     end;
+                  end if;
+               end;
+            end if;
+
+            --  One component a line, so that the usual tools can read it.
+            --  Through the plain line writer rather than the generated-text
+            --  path, and that is safe here for the reason that path exists:
+            --  what it guards against is a model's own bytes reaching a
+            --  terminal, and these are digits, a sign and a point produced
+            --  by this program from a number.
+            for Element of Pooled loop
+               Pres.Put_Line (Screen, T.Image (Long_Float (Element), 6));
+            end loop;
+         end;
+
+         Cleanup;
+      end Embed_With;
+   begin
+      declare
+         Wanted : constant Positive := Selected_Workers (Item);
+      begin
+         if Wanted = 1 then
+            Embed_With (null);
+         else
+            declare
+               --  Declared here so that leaving the block waits for the
+               --  workers, as the run command's pool is.
+               Team : aliased Workers_CPU.Pool
+                 (Workers_CPU.Worker_Count (Wanted));
+            begin
+               Embed_With (Team'Unchecked_Access);
+               Workers_CPU.Close (Team);
+            exception
+               when others =>
+                  Workers_CPU.Close (Team);
+                  raise;
+            end;
+         end if;
+      end;
+   end Do_Embed;
+
    --------------
    -- Dispatch --
    --------------
@@ -1459,6 +1696,9 @@ package body Model_Runner.CLI.Execute is
 
          when Opt.Command_Run =>
             Do_Run (Item, Screen, Catalog, Status);
+
+         when Opt.Command_Embed =>
+            Do_Embed (Item, Screen, Status);
 
          when Opt.Command_None =>
             Pres.Report (Screen, E.Make (E.CLI_Missing_Command));
