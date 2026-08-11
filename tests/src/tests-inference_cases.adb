@@ -1871,6 +1871,108 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  A mixture under the qwen3moe keys is read as one.
+   --
+   --  The sweep crosses llama, qwen2 and qwen3 with every format and path,
+   --  and leaves this one out on purpose: it is qwen3 with its metadata
+   --  under another prefix, so crossing it would buy one string comparison
+   --  for a third of the run time. What it is worth checking on its own is
+   --  exactly that the prefix is followed -- the expert count, the used
+   --  count and the expert width are read under the architecture's own name,
+   --  and a profile that looked for them under another would find a dense
+   --  model and quietly evaluate one.
+   procedure Mixture_Under_Its_Own_Keys
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      Image  : B.Byte_Array_Access;
+      Result : Logit_Vector;
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen3_MoE,
+         Experts => 4, Experts_Used => 2);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         declare
+            Read : constant L.Configuration := L.Config (Under.Ready);
+         begin
+            Assert (L."=" (Read.Kind, L.Qwen3_MoE),
+                    "the architecture was not read from the file");
+            Assert (Read.Experts = 4 and then Read.Experts_Used = 2,
+                    "the expert counts were not read under the "
+                    & "architecture's own keys:"
+                    & Natural'Image (Read.Experts)
+                    & Natural'Image (Read.Experts_Used));
+         end;
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "evaluation failed: " & E.Error_Code'Image (Status.Code));
+         end loop;
+
+         L.Close (Live);
+      end;
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Status : E.Error_Info;
+         Second : Reference_Transformer.Model;
+         Loaded, Made : Boolean;
+
+         Tokens   : Reference_Transformer.Token_Vector (Prompt'Range);
+         Expected : Reference_Transformer.Real_Vector
+           (0 .. Tiny_Model.Vocabulary - 1);
+         Worst : Long_Float := 0.0;
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+         Assert (Loaded, "the reference did not read the model");
+
+         for Index in Prompt'Range loop
+            Tokens (Index) := Integer (Prompt (Index));
+         end loop;
+
+         Reference_Transformer.Run (Second, Tokens, Expected, Made);
+         Assert (Made, "the reference produced no logits");
+
+         for Index in Expected'Range loop
+            Worst := Long_Float'Max
+              (Worst,
+               abs (Long_Float (Result
+                      (Model_Runner.Numerics.Element_Count (Index)))
+                    - Expected (Index)));
+         end loop;
+
+         Assert (Worst < 1.0E-3,
+                 "the engine and the independent implementation disagree "
+                 & "about a qwen3moe model by" & Long_Float'Image (Worst));
+
+         Reference_Transformer.Close (Second);
+         Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end Mixture_Under_Its_Own_Keys;
+
    --  Key and value heads may be different widths, and neither need be the
    --  embedding divided by the head count.
    --
@@ -2479,6 +2581,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, Mixture_Under_Its_Own_Keys'Access,
+         "a mixture under the qwen3moe keys is read as one");
       Register_Routine
         (T, Head_Widths_May_Differ'Access,
          "key and value heads may be different widths, and neither the "

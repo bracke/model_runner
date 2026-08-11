@@ -38,11 +38,62 @@ package body Conformance is
       --  attention reads several past positions.
       type Sequence is array (Positive range <>) of Natural;
 
+      --  The four of them, named rather than written at each call, so that
+      --  what a comparison asks for is an index the cache below can key on.
+      Alone : constant Sequence := [1 => 4];
+      Pair  : constant Sequence := [4, 5];
+      Short : constant Sequence := [1, 4, 5, 6, 7];
+      Long  : constant Sequence := [4, 4, 4, 5, 5, 6, 7, 8];
+
+      subtype Sequence_Index is Positive range 1 .. 4;
+
+      function Chosen (Which : Sequence_Index) return Sequence
+      is (case Which is
+            when 1 => Alone,
+            when 2 => Pair,
+            when 3 => Short,
+            when 4 => Long);
+
+      --  What the independent implementation makes of the current fixture,
+      --  computed once for each sequence and kept.
+      --
+      --  It used to be computed inside every comparison, which is once per
+      --  backend, per repacking mode, per evaluation path and per pool
+      --  choice -- eight times over for each answer it can only give one of.
+      --  The reference reads the file and the tokens and nothing else: it
+      --  does not know which backend it is being compared against, and it
+      --  cannot, because it has none. So the sweep ran the slowest thing in
+      --  it eight times for a result it already had, and took nine minutes
+      --  where two will do.
+      Words : constant Natural := Tiny_Model.Vocabulary;
+
+      type Expectation is array (Sequence_Index) of
+        R.Real_Vector (0 .. Words - 1);
+
+      Expected : Expectation := [others => [others => 0.0]];
+      Known    : array (Sequence_Index) of Boolean := [others => False];
+
+      --  Forget them. Called wherever a new fixture is built, because the
+      --  expectations belong to the fixture and to nothing else.
+      procedure Forget is
+      begin
+         Known := [others => False];
+      end Forget;
+
       --  The shapes a supported model comes in. Not flags, because they are
       --  not independent of each other in what they are worth crossing: each
       --  is a different route through the evaluator and each is worth every
       --  format, backend and repack mode on its own.
       type Model_Shape is (Plain, Windowed, Mixed, Stretched, Apart);
+
+      --  The architectures the sweep crosses with everything else. Qwen3_MoE
+      --  is not among them and that is deliberate: it is Qwen3 with its
+      --  metadata under another prefix, so crossing it with every format and
+      --  path would buy one string comparison for a third of the run time.
+      --  It is compared against the reference on its own, where the mixture
+      --  it carries is the point rather than the prefix.
+      Crossed : constant array (1 .. 3) of Tiny_Model.Fixture_Architecture :=
+        [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -55,8 +106,53 @@ package body Conformance is
               (4,
                Positive'Max (1, Model_Runner.Platform.Core_Count - 1))));
 
+      --  Fill in what the reference makes of one sequence, if it is not
+      --  already known. Loading the reference decodes every matrix of the
+      --  model into Long_Float, which is most of what this costs, so it too
+      --  happens once for a fixture rather than once for a comparison.
+      procedure Learn (Which : Sequence_Index) is
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Second : R.Model;
+         Status : E.Error_Info;
+         Loaded, Produced : Boolean;
+
+         Tokens : constant Sequence := Chosen (Which);
+      begin
+         if Known (Which) then
+            return;
+         end if;
+
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         R.Load (Second, Parsed, Held, Loaded);
+         if not Loaded then
+            Containers.Close (Parsed);
+            return;
+         end if;
+
+         declare
+            Tokens_R : R.Token_Vector (Tokens'Range);
+         begin
+            for Index in Tokens'Range loop
+               Tokens_R (Index) := Tokens (Index);
+            end loop;
+
+            R.Run (Second, Tokens_R, Expected (Which), Produced);
+            Known (Which) := Produced;
+         end;
+
+         R.Close (Second);
+         Containers.Close (Parsed);
+      end Learn;
+
       procedure Compare
-        (Tokens  : Sequence;
+        (Which   : Sequence_Index;
          Backend : Model_Runner.Backend.Backend_Kind :=
            Model_Runner.Backend.Backend_CPU;
          Repack  : L.Repack_Mode := L.No_Repack;
@@ -77,10 +173,15 @@ package body Conformance is
          Parsed    : Containers.Container;
          Engine    : L.Model;
          Session   : L.Session;
-         Reference : R.Model;
          Status    : E.Error_Info;
-         Loaded    : Boolean;
+
+         Tokens    : constant Sequence := Chosen (Which);
       begin
+         Learn (Which);
+         if not Known (Which) then
+            return;
+         end if;
+
          Containers.Reader.Parse (Parsed, Source, Status => Status);
          if E.Is_Error (Status) then
             return;
@@ -94,32 +195,11 @@ package body Conformance is
             return;
          end if;
 
-         R.Load (Reference, Parsed, Held, Loaded);
-         if not Loaded then
-            L.Close (Engine, Status);
-            Containers.Close (Parsed);
-            return;
-         end if;
-
          declare
-            Words  : constant Natural := R.Vocabulary (Reference);
-            Expected : R.Real_Vector (0 .. Words - 1) := [others => 0.0];
-            Actual   : N.Real_Array (0 .. N.Element_Count (Words) - 1) :=
+            Answer : R.Real_Vector renames Expected (Which);
+            Actual : N.Real_Array (0 .. N.Element_Count (Words) - 1) :=
               [others => 0.0];
-            Produced : Boolean;
-            Tokens_R : R.Token_Vector (Tokens'Range);
          begin
-            for Index in Tokens'Range loop
-               Tokens_R (Index) := Tokens (Index);
-            end loop;
-
-            R.Run (Reference, Tokens_R, Expected, Produced);
-            if not Produced then
-               R.Close (Reference);
-               L.Close (Engine, Status);
-               Containers.Close (Parsed);
-               return;
-            end if;
 
             --  Serial, or across the pool. The partitioned path is what a
             --  real run uses and it was compared only against the engine's
@@ -131,7 +211,6 @@ package body Conformance is
                Workers => (if Shared then Team'Unchecked_Access else null),
                Status => Status);
             if E.Is_Error (Status) then
-               R.Close (Reference);
                L.Close (Engine, Status);
                Containers.Close (Parsed);
                return;
@@ -188,7 +267,7 @@ package body Conformance is
 
                for Token in 0 .. Words - 1 loop
                   declare
-                     Left  : constant Long_Float := Expected (Token);
+                     Left  : constant Long_Float := Answer (Token);
                      Right : constant Long_Float :=
                        Long_Float (Actual (N.Element_Count (Token)));
                      Gap   : constant Long_Float := abs (Left - Right);
@@ -235,7 +314,6 @@ package body Conformance is
             L.Close (Session);
          end;
 
-         R.Close (Reference);
          L.Close (Engine, Status);
          Containers.Close (Parsed);
       end Compare;
@@ -293,7 +371,7 @@ package body Conformance is
          Sharing  : Natural := 0;
       begin
          for Backend in Model_Runner.Backend.Backend_Kind loop
-            for Qwen in Boolean loop
+            for Which_Arch in Crossed'Range loop
                for Format in Tiny_Model.Weight_Format loop
                   for Shape in Model_Shape loop
                      --  The shapes a supported model comes in. The window is
@@ -313,7 +391,7 @@ package body Conformance is
                      --  that linear does too, is asserted where a fixture can
                      --  hold one thing still -- in the inference tests.
                      Tiny_Model.Build
-                       (Image, Format, Qwen => Qwen,
+                       (Image, Format, Kind => Crossed (Which_Arch),
                         Window =>
                           (case Shape is
                              when Windowed => 3,
@@ -333,6 +411,10 @@ package body Conformance is
                                Tiny_Model.Plain),
                         Rope_Table => Shape = Stretched,
                         Apart_Widths => Shape = Apart);
+
+                     --  A new fixture, so the expectations belonging to the
+                     --  last one are gone.
+                     Forget;
 
                      for Repack in L.Repack_Mode loop
                         --  Brain floats and a narrow window are not compared,
@@ -413,11 +495,10 @@ package body Conformance is
                            goto Next_Repack;
                         end if;
 
-                        Compare (Sequence'(1 => 4), Backend, Repack);
-                        Compare (Sequence'(4, 5), Backend, Repack);
-                        Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack);
-                        Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
-                                 Repack);
+                        Compare (1, Backend, Repack);
+                        Compare (2, Backend, Repack);
+                        Compare (3, Backend, Repack);
+                        Compare (4, Backend, Repack);
 
                         --  And the same sequences through the batched path, which
                         --  is how a prompt is read. A sequence of one is the same
@@ -429,34 +510,27 @@ package body Conformance is
                         --  is what it exists to be: asking anyway would compare a
                         --  refusal against a forward pass.
                         if Batches (Backend) then
-                           Compare (Sequence'(4, 5), Backend, Repack,
-                                    Batched => True);
-                           Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack,
-                                    Batched => True);
-                           Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
-                                    Repack, Batched => True);
+                           Compare (2, Backend, Repack, Batched => True);
+                           Compare (3, Backend, Repack, Batched => True);
+                           Compare (4, Backend, Repack, Batched => True);
                         end if;
 
                         --  And again across a pool, where the rows of every
                         --  product are partitioned. The reference backend has
                         --  no pool to share, which it says of itself.
                         if Shares (Backend) then
-                           Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack,
-                                    Shared => True);
-                           Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
-                                    Repack, Shared => True);
+                           Compare (3, Backend, Repack, Shared => True);
+                           Compare (4, Backend, Repack, Shared => True);
 
                            if Batches (Backend) then
-                              Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8),
-                                       Backend, Repack,
+                              Compare (4, Backend, Repack,
                                        Batched => True, Shared => True);
                            end if;
 
                            --  And the same eight tokens three at a time, which
                            --  is two seams: 3, 3, 2.
                            if Batches (Backend) then
-                              Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8),
-                                       Backend, Repack, Batched => True,
+                              Compare (4, Backend, Repack, Batched => True,
                                        Shared => True, Chunk => 3);
                            end if;
                         end if;
@@ -499,7 +573,10 @@ package body Conformance is
             Shapes : constant Natural :=
               Model_Shape'Pos (Model_Shape'Last) + 1;
 
-            --  Two architectures, each in every shape a model comes in.
+            Arches : constant Natural := Crossed'Length;
+
+            --  Every crossed architecture, each in every shape a model comes
+            --  in.
             --  Four sequences a token at a time on every backend; three of
             --  them again in one pass on the backends that batch; two across
             --  a pool on the backends that partition, and one of those in
@@ -517,7 +594,7 @@ package body Conformance is
             --  describes a dense model with full attention and heads the
             --  width its embedding implies, and nothing else.
             Expected : constant Natural :=
-              Formats * 2 * (Shapes * Repacks - 4) * Per_Model;
+              Formats * Arches * (Shapes * Repacks - 4) * Per_Model;
 
          begin
             Result.Ran := Result.Sequences = Expected;

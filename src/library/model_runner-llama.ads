@@ -81,18 +81,27 @@ package Model_Runner.Llama is
    --  Architecture identifier this package implements. Never localized.
    --  The architectures this profile reads.
    --
-   --  Both are the same shape: RMS normalization, rotary encoding, grouped
-   --  query attention and a SwiGLU feed-forward. Qwen2 adds a bias to each
-   --  of the three attention projections and changes nothing else, which is
-   --  why it belongs here rather than in a profile of its own.
-   type Architecture is (Llama, Qwen2);
+   --  All of them are the same shape: RMS normalization, rotary encoding,
+   --  grouped query attention and a SwiGLU feed-forward. Qwen2 adds a bias
+   --  to each of the three attention projections; Qwen3 drops the biases
+   --  again and normalizes each query and key head before the rotation;
+   --  Qwen3_MoE is Qwen3 with its feed-forward block behind a router, which
+   --  is a metadata prefix here and nothing else, because the mixture is
+   --  read from the keys rather than from the name. Each belongs here rather
+   --  than in a profile of its own because each is this shape with a
+   --  difference.
+   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE);
 
    --  The identifier a file carries for an architecture.
    --
    --  @param Item Architecture to name.
    --  @return Lower-case identifier, as general.architecture spells it.
    function Architecture_Name (Item : Architecture) return String
-   is (case Item is when Llama => "llama", when Qwen2 => "qwen2");
+   is (case Item is
+         when Llama     => "llama",
+         when Qwen2     => "qwen2",
+         when Qwen3     => "qwen3",
+         when Qwen3_MoE => "qwen3moe");
 
    --  Validated architecture configuration.
    --
@@ -573,6 +582,11 @@ private
       Query_Bias     : Model_Runner.Tensors.Real_Array_Access;
       Key_Bias       : Model_Runner.Tensors.Real_Array_Access;
       Value_Bias     : Model_Runner.Tensors.Real_Array_Access;
+      --  A gain for each element of a head, applied to every query head and
+      --  every key head before the rotation. Null for an architecture that
+      --  does not normalize its heads, which is what Llama and Qwen2 are.
+      Query_Norm     : Model_Runner.Tensors.Real_Array_Access;
+      Key_Norm       : Model_Runner.Tensors.Real_Array_Access;
       Attention_Out : aliased Model_Runner.Tensors.View;
       Feed_Norm      : Model_Runner.Tensors.Real_Array_Access;
       Gate : aliased Model_Runner.Tensors.View;
@@ -650,6 +664,10 @@ private
       Key_Row    : Model_Runner.Tensors.Real_Array_Access := null;
       Value_Row  : Model_Runner.Tensors.Real_Array_Access := null;
       Attention  : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  Room for one head, for an architecture that normalizes each of them
+      --  before the rotation. Null for one that does not.
+      Head_Row   : Model_Runner.Tensors.Real_Array_Access := null;
       Scores     : Model_Runner.Tensors.Real_Array_Access := null;
       Gate       : Model_Runner.Tensors.Real_Array_Access := null;
       Up         : Model_Runner.Tensors.Real_Array_Access := null;

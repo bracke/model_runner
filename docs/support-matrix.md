@@ -41,8 +41,13 @@ container validation and is rejected by `Model_Runner.Tensors.Make` with
 | Architecture | State |
 | --- | --- |
 | `llama` | Implemented |
-| `qwen2` | Implemented: the same shape with a bias on each attention projection and the split rotary pairing. The biases are required, not optional. Both architectures are compared against an independent implementation by `tests conformance` |
-| Everything else | Rejected: `MR-ARCH-0002` |
+| `qwen2` | Implemented: the same shape with a bias on each attention projection and the split rotary pairing. The biases are required, not optional |
+| `qwen3` | Implemented: the same shape again, with no biases and a root-mean-square normalization of every query head and every key head before the rotation -- one gain per element of a head, shared across the heads, required rather than taken if present. Its head widths come from `attention.key_length` and `attention.value_length`, which need not be the embedding divided by the head count |
+| `qwen3moe` | Implemented: `qwen3` with its feed-forward block behind a router, which is a metadata prefix and nothing else -- the mixture is read from the expert keys under that prefix. Compared against the independent implementation on its own rather than in the sweep, because crossing a prefix with every format and path buys one string comparison |
+| Everything else | Rejected: `MR-ARCH-0002`, which names every architecture this build does read |
+
+`llama`, `qwen2` and `qwen3` are compared against an independent
+implementation by `tests conformance`, in every shape a model comes in.
 
 | Sliding-window attention | Implemented: a model naming `<arch>.attention.sliding_window` has each position attend to that many positions ending at itself, uniformly across layers, on every evaluation path and both backends. The cache still holds the whole context -- the window narrows what may be read, not what is kept -- so this buys the model's answer and not the model's memory. An architecture that alternates windowed and full layers needs a per-layer pattern this does not have and is not claimed |
 

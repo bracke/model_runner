@@ -144,17 +144,40 @@ package body Model_Runner.Llama is
                Settings.Pairing :=
                  (case Kind is
                     when Llama => K.Interleaved,
-                    when Qwen2 => K.Split);
+                    when Qwen2 | Qwen3 | Qwen3_MoE => K.Split);
                Found := True;
             end if;
          end loop;
 
          if not Found then
-            Status := E.Make (E.Arch_Unsupported);
-            E.Add_Text (Status, "architecture", Name, E.Param_Identifier);
-            E.Add_Text
-              (Status, "supported", Architecture_Name (Llama),
-               E.Param_Identifier);
+            --  What this build does read, listed from the enumeration rather
+            --  than written out. It named one architecture while reading
+            --  four, which is the kind of message that sends somebody
+            --  looking for a build that does not exist.
+            declare
+               Known : String (1 .. 128) := [others => ' '];
+               Last  : Natural := 0;
+
+               procedure Append (Text : String) is
+               begin
+                  if Last + Text'Length <= Known'Last then
+                     Known (Last + 1 .. Last + Text'Length) := Text;
+                     Last := Last + Text'Length;
+                  end if;
+               end Append;
+            begin
+               for Kind in Architecture loop
+                  if Last > 0 then
+                     Append (" ");
+                  end if;
+                  Append (Architecture_Name (Kind));
+               end loop;
+
+               Status := E.Make (E.Arch_Unsupported);
+               E.Add_Text (Status, "architecture", Name, E.Param_Identifier);
+               E.Add_Text
+                 (Status, "supported", Known (1 .. Last), E.Param_Text);
+            end;
             return;
          end if;
       end;
@@ -1074,12 +1097,12 @@ package body Model_Runner.Llama is
                   KV_Out, Width, Current.Value, Status);
                exit when E.Is_Error (Status);
 
-               --  Qwen2 adds a bias to each projection and Llama has none.
-               --  Required when the architecture says so rather than taken
-               --  if present: a qwen2 file without them is a file this
-               --  cannot evaluate, and reading it as though the biases were
-               --  zero would produce plausible text that is not what the
-               --  model says.
+               --  Qwen2 adds a bias to each projection; Llama and Qwen3
+               --  have none. Required when the architecture says so rather
+               --  than taken if present: a qwen2 file without them is a file
+               --  this cannot evaluate, and reading it as though the biases
+               --  were zero would produce plausible text that is not what
+               --  the model says.
                if Item.Settings.Kind = Qwen2 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_q.bias"),
@@ -1094,6 +1117,24 @@ package body Model_Runner.Llama is
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_v.bias"),
                      KV_Out, Current.Value_Bias, Status);
+                  exit when E.Is_Error (Status);
+               end if;
+
+               --  Qwen3 normalizes each query head and each key head before
+               --  the rotation, with one gain per element of a head shared
+               --  across the heads. Required for the architectures that have
+               --  it, for the same reason the biases are.
+               if Item.Settings.Kind in Qwen3 | Qwen3_MoE then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
+                     Element_Count (Item.Settings.Head_Size),
+                     Current.Query_Norm, Status);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_k_norm.weight"),
+                     Element_Count (Item.Settings.Head_Size),
+                     Current.Key_Norm, Status);
                   exit when E.Is_Error (Status);
                end if;
 
@@ -1514,6 +1555,32 @@ package body Model_Runner.Llama is
        then K.No_Factors
        else Item.Rope_Factors.all);
 
+   --  Normalize each head of a projection in place.
+   --
+   --  The gain is one element per element of a head, shared across the
+   --  heads: a head is normalized against itself and scaled by the same
+   --  vector every other head is. Room for one head is passed in rather
+   --  than taken, because this runs inside the evaluator and the evaluator
+   --  does not allocate.
+   procedure Normalize_Heads
+     (Vector  : in out Real_Array;
+      Heads   : Element_Count;
+      Width   : Element_Count;
+      Gain    : Real_Array;
+      Epsilon : Real;
+      Room    : in out Real_Array) is
+   begin
+      for Head in 0 .. Heads - 1 loop
+         declare
+            Origin : constant Element_Count := Vector'First + Head * Width;
+         begin
+            K.RMS_Norm
+              (Vector (Origin .. Origin + Width - 1), Gain, Epsilon, Room);
+            Vector (Origin .. Origin + Width - 1) := Room;
+         end;
+      end loop;
+   end Normalize_Heads;
+
    --  The feed-forward block of one position, through the experts its router
    --  chose for it.
    --
@@ -1662,6 +1729,8 @@ package body Model_Runner.Llama is
             --  held three vectors a layer past its own closing, and only
             --  that architecture has them, which is why closing a llama
             --  model looked clean.
+            T.Free (Item.Layers.all (Index).Query_Norm);
+            T.Free (Item.Layers.all (Index).Key_Norm);
             T.Free (Item.Layers.all (Index).Query_Bias);
             T.Free (Item.Layers.all (Index).Key_Bias);
             T.Free (Item.Layers.all (Index).Value_Bias);
@@ -1940,6 +2009,20 @@ package body Model_Runner.Llama is
          T.Allocate (Element_Count (Settings.Vocabulary), Item.Logit_Row);
          Item.History := new Token_History (0 .. Capacity - 1);
 
+         --  An architecture that normalizes its heads needs room for one.
+         if Settings.Head_Size > 0
+           and then Source.Layers /= null
+           and then Source.Layers.all (Source.Layers.all'First).Query_Norm
+                    /= null
+         then
+            T.Allocate (Element_Count (Settings.Head_Size), Item.Head_Row);
+            if Item.Head_Row = null then
+               Close (Item);
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+         end if;
+
          --  A mixture of experts needs three more, and a dense model needs
          --  none of them: allocating them anyway would charge every model
          --  for a feature almost none of them have.
@@ -2005,6 +2088,7 @@ package body Model_Runner.Llama is
       T.Free (Item.Scores);
       T.Free (Item.Gate);
       T.Free (Item.Up);
+      T.Free (Item.Head_Row);
       T.Free (Item.Routing);
       T.Free (Item.Mixture);
       T.Free (Item.Expert_Row);
@@ -2228,6 +2312,19 @@ package body Model_Runner.Llama is
                K.Add (Item.Query.all, Current.Query_Bias.all);
                K.Add (Item.Key_Row.all, Current.Key_Bias.all);
                K.Add (Item.Value_Row.all, Current.Value_Bias.all);
+            end if;
+
+            --  And the per-head normalization, where the architecture has
+            --  one. Before the rotation, as the projection's bias is: both
+            --  act on what the projection produced.
+            if Current.Query_Norm /= null then
+               Normalize_Heads
+                 (Item.Query.all, Heads, Head_Size,
+                  Current.Query_Norm.all, Settings.Epsilon,
+                  Item.Head_Row.all);
+               Normalize_Heads
+                 (Item.Key_Row.all, KV_Heads, Head_Size,
+                  Current.Key_Norm.all, Settings.Epsilon, Item.Head_Row.all);
             end if;
 
             K.Apply_Rotary
@@ -2604,6 +2701,17 @@ package body Model_Runner.Llama is
                             Current.Key_Bias.all);
                      K.Add (Values.all (V_At .. V_At + V_Width - 1),
                             Current.Value_Bias.all);
+                  end if;
+
+                  if Current.Query_Norm /= null then
+                     Normalize_Heads
+                       (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
+                        Current.Query_Norm.all, Settings.Epsilon,
+                        Item.Head_Row.all);
+                     Normalize_Heads
+                       (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                        KV_Heads, Head_Size, Current.Key_Norm.all,
+                        Settings.Epsilon, Item.Head_Row.all);
                   end if;
 
                   K.Apply_Rotary

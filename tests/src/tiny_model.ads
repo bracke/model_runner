@@ -90,6 +90,12 @@ package Tiny_Model is
    Deep_Feed_Forward : constant := 256;
    Deep_Head_Size    : constant := 128;
 
+   --  Which architecture the file declares. Each is the same shape with a
+   --  difference: Qwen2 a bias on each attention projection, Qwen3 a
+   --  normalization of every query and key head instead, Qwen3_MoE the same
+   --  under its own metadata prefix.
+   type Fixture_Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE);
+
    --  How the fixture stretches the rotation. Plain is a model that says
    --  nothing, which rotates as it was trained.
    type Rope_Stretch is (Plain, Linear, Yarn);
@@ -105,13 +111,17 @@ package Tiny_Model is
    --  @param Adds_Beginning Whether the vocabulary asks for a
    --    beginning-of-text marker.
    --  @param Room Context length the model declares.
-   --  @param Qwen Write the file as a qwen2 model: its metadata under the
-   --    qwen2 keys, and a bias beside each attention projection. The two
-   --    architectures differ in that and in which elements the rotation
-   --    pairs, and nothing but a file could tell the two apart.
-   --  @param Omit_Biases Leave the attention biases out of a qwen2 file, so
-   --    that a model claiming an architecture it does not carry the weights
-   --    for is refused rather than read.
+   --  @param Kind Which architecture the file declares: its metadata under
+   --    that architecture's keys, and whatever that architecture carries --
+   --    a bias beside each attention projection for qwen2, a normalization
+   --    of every query and key head for qwen3 and qwen3moe. The
+   --    architectures also differ in which elements the rotation pairs, and
+   --    nothing but a file could tell them apart.
+   --  @param Omit_Biases Leave out whatever the declared architecture
+   --    carries beside its attention projections -- the biases of a qwen2
+   --    file, the head normalizations of a qwen3 one -- so that a model
+   --    claiming an architecture it does not carry the weights for is
+   --    refused rather than read.
    --  @param Window Sliding-window width the model declares, in positions.
    --    Zero writes no key at all, which is a model that attends to
    --    everything committed. A model with a window is not a model with a
@@ -151,7 +161,7 @@ package Tiny_Model is
       End_Token      : Natural := 2;
       Adds_Beginning : Boolean := True;
       Room           : Positive := Context;
-      Qwen           : Boolean := False;
+      Kind           : Fixture_Architecture := Llama;
       Omit_Biases    : Boolean := False;
       Byte_Pair      : Boolean := False;
       Window         : Natural := 0;

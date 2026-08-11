@@ -712,7 +712,11 @@ package body Reference_Transformer is
 
    --  The prefix a model's metadata keys carry.
    function Prefix (Item : Model) return String
-   is (case Item.Kind is when Llama => "llama.", when Qwen2 => "qwen2.");
+   is (case Item.Kind is
+         when Llama     => "llama.",
+         when Qwen2     => "qwen2.",
+         when Qwen3     => "qwen3.",
+         when Qwen3_MoE => "qwen3moe.");
 
    procedure Load
      (Item   : in out Model;
@@ -956,6 +960,10 @@ package body Reference_Transformer is
             Item.Kind := Llama;
          elsif Named = "qwen2" then
             Item.Kind := Qwen2;
+         elsif Named = "qwen3" then
+            Item.Kind := Qwen3;
+         elsif Named = "qwen3moe" then
+            Item.Kind := Qwen3_MoE;
          else
             return;
          end if;
@@ -970,7 +978,6 @@ package body Reference_Transformer is
       Item.Context := Metadata (Source, Prefix (Item) & "context_length", 0);
 
       if Item.Embedding = 0 or else Item.Layers = 0 or else Item.Heads = 0
-        or else Item.Embedding mod Item.Heads /= 0
         or else Item.KV_Heads = 0
         or else Item.Heads mod Item.KV_Heads /= 0
       then
@@ -1158,6 +1165,22 @@ package body Reference_Transformer is
                end if;
             end if;
 
+            if Item.Kind in Qwen3 | Qwen3_MoE then
+               Current.Query_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_q_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Key_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_k_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+            end if;
+
             Current.Attention_Out :=
               Read_Matrix (Layer_Name (Index, "attn_output.weight"), Present);
             if not Present then
@@ -1237,6 +1260,8 @@ package body Reference_Transformer is
             Free_Matrix (Item.Blocks (Index).Query);
             Free_Matrix (Item.Blocks (Index).Key);
             Free_Matrix (Item.Blocks (Index).Value);
+            Free_Vector (Item.Blocks (Index).Query_Norm);
+            Free_Vector (Item.Blocks (Index).Key_Norm);
             Free_Matrix (Item.Blocks (Index).Attention_Out);
             Free_Vector (Item.Blocks (Index).Feed_Norm);
             Free_Matrix (Item.Blocks (Index).Router);
@@ -1363,6 +1388,39 @@ package body Reference_Transformer is
       end Project_Rows;
 
       --  Rotary encoding over the leading Rotary elements of each head.
+      --  Root-mean-square normalization of each head of a projection,
+      --  against itself, with one gain per element of a head.
+      procedure Normalize_Heads
+        (Vector : in out Real_Vector;
+         Heads  : Natural;
+         Width  : Natural;
+         Gain   : Real_Vector)
+      is
+      begin
+         for Head in 0 .. Heads - 1 loop
+            declare
+               Origin : constant Natural := Vector'First + Head * Width;
+               Total  : Long_Float := 0.0;
+               Factor : Long_Float;
+            begin
+               for Index in 0 .. Width - 1 loop
+                  Total := Total
+                    + Vector (Origin + Index) * Vector (Origin + Index);
+               end loop;
+
+               Factor :=
+                 1.0 / Functions.Sqrt (Total / Long_Float (Width)
+                                       + Item.Epsilon);
+
+               for Index in 0 .. Width - 1 loop
+                  Vector (Origin + Index) :=
+                    Vector (Origin + Index) * Factor
+                    * Gain (Gain'First + Index);
+               end loop;
+            end;
+         end loop;
+      end Normalize_Heads;
+
       --  Where a pair sits in the band Yarn mixes across: one where the
       --  angle is kept as trained, zero where it is fully stretched.
       function Ramp (Pair : Long_Float) return Long_Float is
@@ -1523,6 +1581,19 @@ package body Reference_Transformer is
                      Val_Row (Index) :=
                        Val_Row (Index) + Current.Value_Bias.all (Index);
                   end loop;
+               end if;
+
+               --  Qwen3 normalizes each head against itself before the
+               --  rotation, with a gain shared across the heads. Written out
+               --  here rather than shared with the engine, as the rotation
+               --  is.
+               if Current.Query_Norm /= null then
+                  Normalize_Heads
+                    (Query, Item.Heads, Item.Head_Size,
+                     Current.Query_Norm.all);
+                  Normalize_Heads
+                    (Key_Row, Item.KV_Heads, Item.Head_Size,
+                     Current.Key_Norm.all);
                end if;
 
                Rotate (Query, Item.Heads, Step);

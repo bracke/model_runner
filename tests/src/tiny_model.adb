@@ -29,7 +29,7 @@ package body Tiny_Model is
       End_Token : Natural := 2;
       Adds_Beginning : Boolean := True;
       Room      : Positive := Context;
-      Qwen      : Boolean := False;
+      Kind      : Fixture_Architecture := Llama;
       Omit_Biases : Boolean := False;
       Byte_Pair : Boolean := False;
       Window    : Natural := 0;
@@ -175,6 +175,22 @@ package body Tiny_Model is
             Fixtures.Encode_F32 (Values));
       end Norm;
 
+      --  A normalization gain of a given width, kept near one for the same
+      --  reason the embedding-wide one is: a gain near zero would make what
+      --  it scales vanish, and a comparison against nearly nothing says
+      --  nearly nothing.
+      procedure Gain_Of (Name : String; Width : Positive) is
+         Values : N.Real_Array (0 .. N.Element_Count (Width) - 1);
+         Drawn  : constant N.Real_Array := Next (N.Element_Count (Width));
+      begin
+         for Index in Values'Range loop
+            Values (Index) := 1.0 + Drawn (Index) * 0.25;
+         end loop;
+         Fixtures.Add_Tensor
+           (Builder, Name, [G.U64 (Width)], G.Type_F32,
+            Fixtures.Encode_F32 (Values));
+      end Gain_Of;
+
       --  A one-dimensional tensor of a given width, for the biases.
       procedure Norm_Of (Name : String; Width : Positive) is
          Values : N.Real_Array (0 .. N.Element_Count (Width) - 1);
@@ -188,7 +204,12 @@ package body Tiny_Model is
             Fixtures.Encode_F32 (Values));
       end Norm_Of;
 
-      Prefix : constant String := (if Qwen then "qwen2" else "llama");
+      Prefix : constant String :=
+        (case Kind is
+           when Llama     => "llama",
+           when Qwen2     => "qwen2",
+           when Qwen3     => "qwen3",
+           when Qwen3_MoE => "qwen3moe");
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
@@ -200,7 +221,7 @@ package body Tiny_Model is
       Fixtures.Reset (Builder);
 
       Fixtures.Add_String
-        (Builder, "general.architecture", (if Qwen then "qwen2" else "llama"));
+        (Builder, "general.architecture", Prefix);
       Fixtures.Add_String (Builder, "general.name", "tiny");
       Fixtures.Add_U32
         (Builder, Prefix & ".context_length", Interfaces.Unsigned_32 (Room));
@@ -448,10 +469,18 @@ package body Tiny_Model is
          Weight (Layer_Name (Index, "attn_v.weight"),
                  [G.U64 (Embedding), G.U64 (KV_Heads * Value_Size)]);
          --  Qwen2 carries a bias beside each projection; Llama has none.
-         if Qwen and then not Omit_Biases then
+         if Kind = Qwen2 and then not Omit_Biases then
             Norm_Of (Layer_Name (Index, "attn_q.bias"), Heads * Key_Size);
             Norm_Of (Layer_Name (Index, "attn_k.bias"), KV_Heads * Key_Size);
             Norm_Of (Layer_Name (Index, "attn_v.bias"), KV_Heads * Value_Size);
+         end if;
+
+         --  Qwen3 normalizes each query head and each key head instead of
+         --  biasing the projections. One gain per element of a head, shared
+         --  across the heads.
+         if Kind in Qwen3 | Qwen3_MoE and then not Omit_Biases then
+            Gain_Of (Layer_Name (Index, "attn_q_norm.weight"), Key_Size);
+            Gain_Of (Layer_Name (Index, "attn_k_norm.weight"), Key_Size);
          end if;
 
          Weight (Layer_Name (Index, "attn_output.weight"),

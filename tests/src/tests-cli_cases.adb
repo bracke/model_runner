@@ -2035,7 +2035,7 @@ package body Tests.CLI_Cases is
       declare
          Image : B.Byte_Array_Access;
       begin
-         Tiny_Model.Build (Image, Room => 64, Qwen => True);
+         Tiny_Model.Build (Image, Room => 64, Kind => Tiny_Model.Qwen2);
 
          declare
             Held    : aliased constant B.Byte_Array := Image.all;
@@ -2097,7 +2097,8 @@ package body Tests.CLI_Cases is
          Image  : B.Byte_Array_Access;
       begin
          Tiny_Model.Build
-           (Image, Room => 64, Qwen => True, Omit_Biases => True);
+           (Image, Room => 64, Kind => Tiny_Model.Qwen2,
+            Omit_Biases => True);
 
          declare
             Held   : aliased constant B.Byte_Array := Image.all;
@@ -2118,6 +2119,40 @@ package body Tests.CLI_Cases is
             L.Close (Ready, Local);
             Containers.Close (Parsed);
          end;
+      end;
+
+      --  And a qwen3 file without the head normalizations, for the same
+      --  reason. What each architecture carries beside its projections
+      --  differs -- qwen2 a bias, qwen3 a normalization -- and in both cases
+      --  it is required by the name the file gives itself.
+      declare
+         Image  : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build
+           (Image, Room => 64, Kind => Tiny_Model.Qwen3,
+            Omit_Biases => True);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Ready  : L.Model;
+            Local  : E.Error_Info;
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Local);
+            Assert (E.Is_Ok (Local), "the unnormalized fixture did not parse");
+
+            L.Prepare (Ready, Parsed, Source, Status => Local);
+            Assert (Local.Code = E.Arch_Missing_Tensor,
+                    "a qwen3 file with no head normalizations was prepared: "
+                    & E.Error_Code'Image (Local.Code));
+
+            L.Close (Ready, Local);
+            Containers.Close (Parsed);
+         end;
+
+         B.Free (Image);
       end;
    end Architectures_Are_Read_By_Name;
 

@@ -228,11 +228,21 @@ kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/m
 # machine. A model whose value heads are wider would hold a larger cache and
 # do more work per position; these figures would not describe it, and it
 # would need its own.
-engine 7932441DE3B70161 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# 2026-08-11, qwen3 and qwen3moe. Two architectures added to an enumeration
+# and one new thing computed: a normalization of each query head and each key
+# head before the rotation. That runs only for a model whose architecture
+# has it -- the gain is null for llama and qwen2, and the call is behind a
+# test of that -- so a llama model, which is what these figures were taken
+# on, does one null pointer comparison more per layer per token.
+#
+# The figures were NOT re-measured; the model they need is not on this
+# machine. A qwen3 model would need its own: normalizing every head is a pass
+# over the query and key projections that a llama model does not make.
+engine AF4F0F52E177ABD4 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
-reference 2E40EAEF48DA616B src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+reference AB8A0B13EF4BACD6 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`qwen3` and `qwen3moe`.** Two more architectures, each read under its own
+  metadata keys and refused by name otherwise. Qwen3 is the shape this
+  profile already had with the biases dropped and a root-mean-square
+  normalization of every query head and every key head before the rotation:
+  one gain per element of a head, shared across the heads, required rather
+  than taken if present -- a file claiming the name and not carrying them is
+  refused, as a qwen2 file without its biases is. Qwen3moe is qwen3 with its
+  feed-forward block behind a router, which is a metadata prefix and nothing
+  else, since the mixture is read from the expert keys under that prefix.
+
+  Qwen3 also states its head widths rather than implying them, which is what
+  the previous entry made readable.
+
+  The refusal for an architecture this build does not read now names every
+  one it does. It named `llama` alone while reading four, which is the kind
+  of message that sends somebody looking for a build that does not exist.
+
+  The sweep crosses `llama`, `qwen2` and `qwen3` with every format, shape,
+  backend, repack mode and path -- 6435 sequences. `qwen3moe` is compared on
+  its own instead: crossing a metadata prefix with everything would buy one
+  string comparison for a third of the run time.
+
 - **Key and value heads may be different widths.** `attention.key_length` and
   `attention.value_length` are read when the file states them. Neither has to
   be the embedding width divided by the head count, and they do not have to
@@ -589,6 +611,21 @@ Keep a Changelog and the project uses semantic versioning.
   produce the same logits and differ by about twelve times in wall clock, so
   which one ran is the first thing a timing needs to say, and it was
   knowable only by remembering what was typed.
+
+### Changed
+
+- **The conformance sweep runs the reference once per fixture and sequence
+  instead of once per comparison.** It reads the file and the tokens and
+  nothing else -- it does not know which backend it is being compared
+  against, and cannot, because it has none -- so the comparisons that differ
+  only in backend, repacking, batching or pooling were each paying for a
+  forward pass whose answer was already in hand. 780 reference passes where
+  there were 6435.
+
+  The sweep went from nine minutes to two and a half while covering three
+  times what it covered this morning, and every published figure is what the
+  eight-fold version reported to the last digit. The suite runs the same
+  sweep, so it is the same saving twice.
 
 ### Fixed
 

@@ -120,7 +120,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Kernels | Scalar reference add, multiply, scale, dot, RMS normalization, softmax, SiLU, rotary encoding, with `Wide_Real` accumulation for length-dependent reductions |
 | Tokenizer | SentencePiece (`llama`) vocabulary: scores, token types, special tokens, byte fallback, greedy highest-score merge encoding. Byte-pair (`gpt2`) vocabulary: merge tables by rank, byte-level stand-in alphabet, and six cutting rules named by `tokenizer.ggml.pre`, a vocabulary naming any other being refused by name rather than cut by the wrong one. Both with UTF-8-boundary-safe incremental decoding. A special-token identifier that is absent leaves the token unset; one that names no token refuses the model rather than being ignored |
 | Chat templates | Bounded allowlisted engine: `for`, `if`/`elif`/`else`, `set`, comments, `+`-joined output, `==`/`!=`/`and`/`or`/`not` with parentheses, `is defined`/`is none`/`in`, `trim` and `length`, message indexing, front slicing such as `messages[1:]`, `loop.first`/`last`/`index`, whitespace control. Enough that the template a current Llama-3 file ships with renders. Compiled and validated at load time; `macro`, `include` and `import` are rejected there, while a value the engine cannot compute -- a function call, `tojson`, arithmetic -- is refused if the render reaches it, which the tool-calling branches of a plain conversation never do |
-| Architecture profile | `llama` and `qwen2`, each read under its own metadata keys and refused by name otherwise. Qwen2 is the same shape with a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, uniformly across layers. A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
+| Architecture profile | `llama`, `qwen2`, `qwen3` and `qwen3moe`, each read under its own metadata keys and refused by name otherwise, with the refusal naming every one this build reads. All are the same shape with a difference: qwen2 a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour; qwen3 no biases and a root-mean-square normalization of every query and key head before the rotation, equally required; qwen3moe that again with the feed-forward block behind a router. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, uniformly across layers. A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
 | Execution | Embedding lookup, per-layer RMS norm, Q/K/V projection, rotary encoding, grouped-query causal attention without duplicating key or value heads, output projection, SiLU-gated feed-forward, residuals, raw logits |
 | KV cache and session | Explicit cache sized with checked arithmetic, transactional commit, state machine, reset preserving allocations, committed-prefix reuse |
 | Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, repetition penalty, frequency and presence penalties, temperature, top-k, top-p, min-p, renormalize, select. Greedy is tie-broken to the lowest token and consumes no random state; xoshiro256++ seeded per session |
@@ -477,19 +477,19 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 4290, logits compared 62400,
+conformance: sequences 6435, logits compared 93600,
              worst absolute 2.14340155850756E-05,
-             worst relative 8.94395650089654E-04,
-             rounded logits compared 6240,
+             worst relative 1.90905622023861E-03,
+             rounded logits compared 9360,
              rounded worst absolute 1.36861269753309E-01,
-             rounded worst relative 1.15330975240755E+00,
+             rounded worst relative 1.83560177726357E+00,
              outside tolerance 0
 ```
 
-Both architectures, in each of the five shapes a supported model comes in --
-dense, sliding-window, a mixture of experts, a stretched rotation, and heads
-wider than the embedding implies with keys and values different widths again
--- both backends, every evaluation path -- a token at a
+Three architectures -- `llama`, `qwen2` and `qwen3` -- in each of the five
+shapes a supported model comes in: dense, sliding-window, a mixture of
+experts, a stretched rotation, and heads wider than the embedding implies with
+keys and values different widths again. Both backends, every evaluation path -- a token at a
 time, a whole prompt in one pass, and a prompt handed over in several --
 serial and across a worker pool, every repacking mode, and every one of the
 thirteen weight formats the engine decodes: binary32, F16, BF16, Q4_0, Q4_1,
@@ -498,6 +498,15 @@ them and the reference reads each of them, both worked out from the layouts
 rather than by calling the engine, so a packing mistake cannot be common to
 the two sides. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
 outside it.
+
+The reference runs once for each fixture and sequence rather than once for
+each comparison. It reads the file and the tokens and nothing else -- it does
+not know which backend it is being compared against, and cannot, because it
+has none -- so the eight comparisons that differ only in backend, repacking,
+batching or pooling all check against one answer. That is 780 forward passes
+where there were 6435, and it took the sweep from nine minutes to two and a
+half without dropping a comparison: every figure above is what the eight-fold
+version reported, to the last digit.
 
 Two combinations are left out of that sweep, and the reason for both is a
 measurement. Repacking to brain floats halves the mantissa, and both a sliding

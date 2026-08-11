@@ -87,7 +87,7 @@ private
    --  The architectures this reference implements. It has to be the same
    --  set the engine implements, or a conformance run compares two
    --  different functions and blames the engine for the difference.
-   type Architecture is (Llama, Qwen2);
+   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -102,6 +102,10 @@ private
       Query_Bias     : Vector_Access := null;
       Key_Bias       : Vector_Access := null;
       Value_Bias     : Vector_Access := null;
+      --  Qwen3 normalizes every query head and every key head against
+      --  itself before the rotation, with one gain per element of a head.
+      Query_Norm     : Vector_Access := null;
+      Key_Norm       : Vector_Access := null;
       Attention_Out  : Matrix_Access := null;
       Feed_Norm      : Vector_Access := null;
       Gate           : Matrix_Access := null;
