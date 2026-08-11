@@ -91,10 +91,33 @@ package body Checks is
       is (Hostkit.Fs.Join (Root, Parts));
 
       --  Read a file, or an empty string when it is not there.
+      --
+      --  Carriage returns come off. A checkout on a host whose line ending
+      --  is two characters gives them back that way, and every check here
+      --  measures or matches what it reads: the 120-character budget would
+      --  count the extra character and fail every source that reaches
+      --  exactly 120, and a comparison against a literal would miss. The
+      --  command-line tests lost four to this on Windows before it was
+      --  found; these run on one host today and would have lost more the
+      --  moment they ran on another.
       function Contents (Relative : String) return String is
       begin
          if Files.File_Exists (Path (Relative)) then
-            return Files.Read_Raw_File (Path (Relative));
+            declare
+               Whole : constant String :=
+                 Files.Read_Raw_File (Path (Relative));
+               Room  : String (1 .. Whole'Length);
+               Used  : Natural := 0;
+            begin
+               for Character_Value of Whole loop
+                  if Character_Value /= Character'Val (13) then
+                     Used := Used + 1;
+                     Room (Used) := Character_Value;
+                  end if;
+               end loop;
+
+               return Room (1 .. Used);
+            end;
          else
             return "";
          end if;
@@ -4420,6 +4443,107 @@ package body Checks is
 
       --  No host call is bound straight from the tests crate.
       --
+      --  Nothing reads a text file raw and then measures or matches it, and
+      --  nothing names a built executable by one host's spelling.
+      --
+      --  These are the two shapes that took eight continuous-integration
+      --  runs to find, and neither could have failed here: the checklist
+      --  runs on one host, so a carriage return never arrives and .exe is
+      --  never the name. Five of the eight were one of these two.
+      --
+      --  Read_Raw_File is the right call for bytes -- a model file, an
+      --  archive -- and the wrong one for text that is about to be compared
+      --  against something the program wrote, because a checkout gives back
+      --  the host's line ending and the program writes its own. So the rule
+      --  is not that the call is forbidden; it is that a file whose name
+      --  says text goes through a reader that takes the returns off.
+      declare
+         procedure Visit_Reading (Relative : String) is
+            Text : constant String := Contents (Relative);
+
+            --  Whether a call reads something whose name says text.
+            function Reads_Text (At_Index : Positive) return Boolean is
+               Stop : Natural := At_Index;
+            begin
+               while Stop < Text'Last
+                 and then Text (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               declare
+                  Line : constant String := Text (At_Index .. Stop);
+               begin
+                  return Project_Tools.Text.Contains (Line, ".txt")
+                    or else Project_Tools.Text.Contains (Line, ".md")
+                    or else Project_Tools.Text.Contains (Line, "README");
+               end;
+            end Reads_Text;
+
+            Marker : constant String := "Read_Raw_File (";
+         begin
+            --  Not this file: it names the call in the string it compares
+            --  against, and reads through Contents itself.
+            if Relative = "tests/src/checks.adb" then
+               return;
+            end if;
+
+            for Index in Text'First .. Text'Last - Marker'Length loop
+               if Text (Index .. Index + Marker'Length - 1) = Marker
+                 and then Reads_Text (Index)
+               then
+                  Result.Performed := Result.Performed + 1;
+                  Fail (Relative & " reads a text file with Read_Raw_File "
+                        & "and compares what it gets; a checkout on a host "
+                        & "whose line ending is two characters gives them "
+                        & "back that way, so read it through a reader that "
+                        & "takes the returns off");
+               end if;
+            end loop;
+         end Visit_Reading;
+
+         procedure Scan_Reading is new For_Each_Source (Visit_Reading);
+
+         --  A file that names a built executable must account for the name
+         --  the other host gives it. Crude on purpose: what is asked is that
+         --  the file says .exe somewhere, which a file that has thought
+         --  about it does and a file that has not does not.
+         procedure Visit_Naming_Binary (Relative : String) is
+            Text : constant String := Contents (Relative);
+
+            function Holds (Word : String) return Boolean is
+            begin
+               for Index in Text'First .. Text'Last - Word'Length + 1 loop
+                  if Text (Index .. Index + Word'Length - 1) = Word then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            end Holds;
+         begin
+            if Relative = "tests/src/checks.adb" then
+               return;
+            end if;
+
+            if (Holds ("bin/tests") or else Holds ("bin/model_runner"))
+              and then not Holds (".exe")
+            then
+               Result.Performed := Result.Performed + 1;
+               Fail (Relative & " names a built executable and never names "
+                     & "the .exe form, so it looks for a file that is not "
+                     & "there on the host that writes one");
+            end if;
+         end Visit_Naming_Binary;
+
+         procedure Scan_Naming_Binary is new For_Each_Source
+           (Visit_Naming_Binary);
+      begin
+         Scan_Reading ("tests/src");
+         Scan_Reading ("tools/src");
+         Scan_Naming_Binary ("tests/src");
+         Scan_Naming_Binary ("tools/src");
+      end;
+
       --  A host call is reached from a directory the project file picks per
       --  host -- src/platform in the library, tests/src/platform here, which
       --  is how raise_interrupt has a body for each. Anywhere else in the

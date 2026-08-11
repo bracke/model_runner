@@ -6,7 +6,9 @@
 --  so unpacking it over a prefix gives a working installation:
 --
 --     model_runner-<version>/
---        bin/model_runner
+--        bin/model_runner            (bin/model_runner.exe where a host
+--                                    writes one; whichever was built is
+--                                    the one a reader has to run)
 --        share/model_runner/messages/catalog.txt
 --        LICENSE  README.md  CHANGELOG.md  SECURITY.md
 --

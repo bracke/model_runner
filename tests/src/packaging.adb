@@ -108,9 +108,20 @@ package body Packaging is
       --  writes them with a forward slash on every host, so these stay as
       --  they are: joining them the host's way would produce an archive that
       --  unpacks wrongly everywhere except where it was made.
-      Executable  : aliased constant String := "bin/" & Model_Runner.Program_Name;
+      --  The name the linker gives it, which differs by host: a host that
+      --  writes .exe leaves nothing at the other name, and this reported the
+      --  executable missing there. The archive keeps whichever name was
+      --  built, because that is the file a reader has to be able to run.
+      Suffix : constant String :=
+        (if Ada.Directories.Exists
+              (Hostkit.Fs.Join
+                 (Root, "bin/" & Model_Runner.Program_Name & ".exe"))
+         then ".exe" else "");
+
+      Executable  : aliased constant String :=
+        "bin/" & Model_Runner.Program_Name & Suffix;
       Executable_At : aliased constant String :=
-        Prefix & "/bin/" & Model_Runner.Program_Name;
+        Prefix & "/bin/" & Model_Runner.Program_Name & Suffix;
       Catalog     : aliased constant String :=
         "resources/messages/catalog.txt";
       Catalog_At  : aliased constant String :=

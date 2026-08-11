@@ -616,7 +616,8 @@ promise the program has not been asked to keep, and the check that every code
 is *produced somewhere* counts a raise nobody reaches exactly as it counts a
 raise everybody reaches. Ten of the seventeen are now reached; the rest are on
 the list with a reason. Both lists are held in both directions. The checks are
-negative-tested: injecting a violation makes them fail.
+negative-tested: injecting a violation makes them fail, and they run on every
+host the project supports rather than on the one they were written on.
 
 They also hold the changelog against git — no commit touching the library, the
 message catalog or the release gate may be newer than the newest commit

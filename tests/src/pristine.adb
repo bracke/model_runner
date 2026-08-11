@@ -55,6 +55,21 @@ package body Pristine is
       return Held;
    end Words;
 
+   --  A built executable, by whichever name this host gives it.
+   --
+   --  Naming the Unix one alone is how the repacking comparison came to
+   --  report that the command was not built, on the host that writes .exe.
+   --  Nothing here had run there yet, which is the only reason these two
+   --  had not done the same.
+   function Built (Path : String) return String is
+   begin
+      if Ada.Directories.Exists (Path & ".exe") then
+         return Path & ".exe";
+      else
+         return Path;
+      end if;
+   end Built;
+
    ---------
    -- Run --
    ---------
@@ -124,7 +139,8 @@ package body Pristine is
       end if;
 
       IO.Put_Line (IO.Standard_Error, "==> run the suite in the clone");
-      if not Ran_Well ("suite", Target & "/tests", Target & "/tests/bin/tests",
+      if not Ran_Well ("suite", Target & "/tests",
+                       Built (Target & "/tests/bin/tests"),
                        Words ("test"))
       then
          Say ("the suite fails on a tree holding only what git carries");
@@ -133,7 +149,8 @@ package body Pristine is
 
       IO.Put_Line (IO.Standard_Error, "==> run the repository checks there");
       if not Ran_Well ("checks", Target & "/tests",
-                       Target & "/tests/bin/tests", Words ("check", ".."))
+                       Built (Target & "/tests/bin/tests"),
+                       Words ("check", ".."))
       then
          Say ("the repository checks fail in the clone");
          return;

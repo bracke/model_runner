@@ -84,6 +84,15 @@ jobs:
         run: |
           alr --non-interactive build
           ./bin/tests test
+      # The repository checks ran on Linux alone, and they are the checks
+      # that exist to anticipate what differs between hosts: every host body
+      # compiled for every host, the rules about what may be written, the
+      # line budget measured on text a checkout gives back the host's way.
+      # Eight continuous-integration runs went red on host differences while
+      # these passed, because they were never asked here.
+      - name: Run the repository checks
+        working-directory: model_runner/tests
+        run: ./bin/tests check ..
 
   windows-build-check:
     name: Windows native build check
@@ -117,3 +126,7 @@ jobs:
         run: |
           alr --non-interactive build
           ./bin/tests.exe test
+      - name: Run the repository checks
+        working-directory: model_runner/tests
+        shell: bash
+        run: ./bin/tests.exe check ..

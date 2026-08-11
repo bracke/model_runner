@@ -27,6 +27,18 @@ procedure Check_All is
    end Project_Root;
 
    Root   : constant String := Project_Root;
+
+   --  A built executable, by whichever name this host gives it.
+   --
+   --  Two paths, because the name is run from the directory the step runs
+   --  in and looked for from here. Naming the Unix one alone is how a test
+   --  came to report that the command was not built, on the host that
+   --  writes .exe; this checklist runs on one host today and would say the
+   --  same there.
+   function Built (Run_As, Look_In : String) return String is
+     (if Ada.Directories.Exists (Look_In & ".exe")
+      then Run_As & ".exe" else Run_As);
+
    Alr    : constant String := Project_Tools.Processes.Locate_Command ("alr");
    Checks : constant Project_Tools.Release_Checks.Checker :=
      Project_Tools.Release_Checks.Create (Root);
@@ -98,7 +110,8 @@ begin
    --  exactly that arrangement everywhere else it appeared.
    Project_Tools.Release_Checks.Run
      ("suite, repository checks, conformance and fuzzing", Root & "/tests",
-      "./bin/tests", [1 => new String'("check")]);
+      Built ("./bin/tests", Root & "/tests/bin/tests"),
+      [1 => new String'("check")]);
 
    --  The long campaign, which is this checklist's own addition. The gate
    --  asks whether the parser still refuses what it should; two thousand
@@ -106,7 +119,7 @@ begin
    --  that is worth a release's time rather than a developer's.
    Project_Tools.Release_Checks.Run
      ("container fuzzing, long campaign", Root & "/tests",
-      "./bin/tests",
+      Built ("./bin/tests", Root & "/tests/bin/tests"),
       GNAT.OS_Lib.Argument_List'[new String'("fuzz"), new String'("--seed"), new String'("1"),
        new String'("--cases"), new String'("2000")]);
 

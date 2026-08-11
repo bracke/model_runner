@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The repository checks run on all three hosts. They ran on Linux alone --
+  the checks that exist to anticipate what differs between hosts, while eight
+  continuous-integration runs went red on host differences and every one of
+  them passed here. Two of those differences are rules now: a text file read
+  raw and then compared fails, because a checkout gives back the host's line
+  ending and the program writes its own; and a file naming a built executable
+  that never names the `.exe` form fails, because that file looks for
+  something that is not there on the host which writes one. Both were found
+  by the rules the moment they existed -- `tests package` was putting a name
+  in the archive that the Windows build does not produce.
+
 - `--validate` is tested, in both directions. Of the thirty-eight registered
   options it was one of three no test named, and the only one of those that
   does work: `inspect MODEL --validate` parses the file, says so and reports
