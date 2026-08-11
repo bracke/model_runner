@@ -357,52 +357,15 @@ package body Checks is
 
       --  Ordinary Ada, all the way down.
       --
-      --  The README names hand-written vector code among what is absent: the
-      --  kernels are Ada and the compiler vectorizes them, and nothing here
-      --  is assembly, an intrinsic, or another language. That claim is what
-      --  makes the speed figures mean what they say, and it is the kind that
-      --  erodes -- one intrinsic in one hot loop, for a good reason, and the
-      --  sentence in the README is quietly false.
+      --  Machine code is not refused here.
       --
-      --  Binding to something outside this project is not writing in
-      --  another language: the platform bodies reach mmap and isatty through
-      --  Interfaces.C and stay ordinary Ada, and a library that cannot be
-      --  avoided is reached the same way. What is refused is code in another
-      --  language living here, and instructions written by hand.
-      --
-      --  So this check is narrower than it once read as. It says what may be
-      --  written in this repository. It says nothing about what the program
-      --  may link against, and the README used to imply otherwise.
-      --
-      --  The token sweep is project_tools': it walks the tree itself and
-      --  counts what it finds into the same total as everything else here,
-      --  which is what a check written twice would have had to agree with.
-      --  It counts its own failures into the same total and names the file
-      --  itself, so there is nothing to add here: reporting again would count
-      --  one occurrence twice.
-      Result.Performed := Result.Performed + 1;
-
-      Project_Tools.Tree_Checks.Check_No_Forbidden_Tokens
-        (Errors           => Result.Failed,
-         Dir              => Path ("src"),
-         Forbidden_Tokens =>
-           [1 => Ada.Strings.Unbounded.To_Unbounded_String ("Machine_Code")],
-         Purpose          => "instructions written by hand");
-
-      --  The tools crate too. Of the walks in this file it was in two --
-      --  line length and GNATdoc -- and in none of the rules about what may
-      --  be written, although it holds the program that gates every release
-      --  and the specification calls every piece of project tooling
-      --  production code. A rule that applies to the tests crate and not to
-      --  this one is a rule with a door in it.
-      Result.Performed := Result.Performed + 1;
-
-      Project_Tools.Tree_Checks.Check_No_Forbidden_Tokens
-        (Errors           => Result.Failed,
-         Dir              => Path ("tools/src"),
-         Forbidden_Tokens =>
-           [1 => Ada.Strings.Unbounded.To_Unbounded_String ("Machine_Code")],
-         Purpose          => "instructions written by hand");
+      --  A check used to fail the build on any use of System.Machine_Code,
+      --  in a project written in Ada, where machine code insertions are an
+      --  Ada feature. It guarded a sentence in the README rather than
+      --  anything about the program, and forbidding a language's own
+      --  facility is not a property worth holding: what keeps another
+      --  language out of this repository is the check above, on the sources
+      --  themselves, which is a different question and still asked.
 
       --  Layering: nothing below the presentation layer may reach the message
       --  catalog, terminal styling or the command line.

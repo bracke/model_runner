@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The checks no longer refuse machine code. Failing the build on any use of
+  `System.Machine_Code`, in a project written in Ada where machine code
+  insertions are an Ada feature, guarded a sentence in the README rather than
+  anything about the program. There is still no assembly in the repository,
+  and that is now recorded as a fact about the code rather than as a rule.
+  What keeps another language out is the check on the sources themselves,
+  which is a different question and still asked.
+
 - A third registry says what is deliberately not exercised.
   `Reserved_Codes` names the diagnostics nothing raises and `Unreached_Codes`
   the ones raised where no test walks; `Untested_Surface` names the public

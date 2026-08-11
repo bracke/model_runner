@@ -705,13 +705,13 @@ Named in the specification, absent here:
   constraint and was an assumption.
 
 - **Hand-written vector code or intrinsics.** The kernels are ordinary Ada and
-  the compiler vectorizes them; nothing here is written in assembly, in
-  intrinsics, or in another language. The release checklist holds exactly
-  that and no more: a source in another language anywhere in the repository
-  fails it, and so does any use of machine code. It says nothing about what
-  this program may link against, which is a separate question with a separate
-  answer -- bind to it in Ada when it cannot be avoided. See below for what
-  the compiler's vectorization does and does not buy.
+  the compiler vectorizes them; there is no assembly in this repository. That
+  is a fact about the code and not a rule: machine code insertions are an Ada
+  feature and a check used to refuse them, which guarded this sentence rather
+  than anything about the program. What the release checklist does hold is
+  that no source in another language lives here, which is a different
+  question. See below for what the compiler's vectorization does and does not
+  buy.
 ## Speed
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
