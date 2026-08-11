@@ -43,6 +43,9 @@ package body Model_Runner.Tensors is
    procedure Deallocate is
      new Ada.Unchecked_Deallocation (Real_Array, Real_Array_Access);
 
+   procedure Deallocate_Halves is
+     new Ada.Unchecked_Deallocation (Half_Array, Half_Array_Access);
+
    --------------
    -- Allocate --
    --------------
@@ -64,6 +67,24 @@ package body Model_Runner.Tensors is
    begin
       if Item /= null then
          Deallocate (Item);
+      end if;
+      Item := null;
+   end Free;
+
+   procedure Allocate (Length : Element_Count; Result : out Half_Array_Access)
+   is
+   begin
+      Result := new Half_Array (0 .. Length - 1);
+      Result.all := [others => 0];
+   exception
+      when Storage_Error =>
+         Result := null;
+   end Allocate;
+
+   procedure Free (Item : in out Half_Array_Access) is
+   begin
+      if Item /= null then
+         Deallocate_Halves (Item);
       end if;
       Item := null;
    end Free;

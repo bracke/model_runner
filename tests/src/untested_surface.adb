@@ -57,7 +57,6 @@ package body Untested_Surface is
          | "Next_Seed"
          | "Ordinal"
          | "Plan_For"
-         | "Plan_Session"
          | "Power"
          | "Product_Batch"
          | "Put_Data_Field"

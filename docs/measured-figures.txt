@@ -180,7 +180,14 @@
 # 23450 published, while its own seven-share figure was 20023. It falls off
 # above four shares in every run taken here. The README now says that instead
 # of claiming the two formats are level everywhere.
-kernels 6847C049BEFF2EFE src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# 2026-08-11, the half-precision cache. tensors.adb gained an allocator and a
+# deallocator for a half-precision buffer and numerics.ads a type; no loop
+# either of these groups times was touched, and neither group's figures are
+# taken through a session at all -- the kernel benchmarks build their own
+# tensors and multiply them. Not re-measured: these two were taken again
+# three commits ago on this machine, and taking them again for a type
+# declaration would say what that run already says.
+kernels 659A79D4E78E7815 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure, the worker-count and share-count
 # comparisons, and the batch-size table under "Speed". Re-measure all four
@@ -266,14 +273,21 @@ kernels 6847C049BEFF2EFE src/library/model_runner-quantization.adb src/library/m
 # formats as two branches of a case that dispatches by format. A model in
 # any other format never enters them. Not re-measured, and the model those
 # figures need is still not on this machine.
-engine 265D6FC1AF4666A5 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# The engine and reference groups list llama.adb, where the attention of one
+# position moved out of both evaluation paths into a procedure of its own and
+# a second was written beside it for the halved cache. The exact path does
+# what it did -- same loops, same bounds, same arithmetic -- now behind one
+# call per position per layer, which is a call against a head's worth of
+# multiply-accumulates. The default is unchanged and the model these figures
+# need is still not on this machine.
+engine AB936DE2D8CE28C3 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
-reference D689BEF899404BC3 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+reference CEFF102D9976FC0D src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
-scaling 5164FC3668C08EA1 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
+scaling B5443E99EAAA8126 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker

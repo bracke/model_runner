@@ -113,6 +113,11 @@ package Model_Runner.CLI.Options is
    --  @return Comma-separated identifiers, in declaration order.
    function Repack_Names return String;
 
+   --  The cache precisions a caller may name, in one line.
+   --
+   --  @return Comma-separated identifiers, in declaration order.
+   function Cache_Names return String;
+
    --  Report whether a command takes an option.
    --
    --  Every option used to be accepted by every command: `inspect m.gguf
@@ -226,6 +231,12 @@ package Model_Runner.CLI.Options is
       --  What to decode the weight matrices into at load, if anything.
       Repack     : Model_Runner.Llama.Repack_Mode :=
         Model_Runner.Llama.No_Repack;
+
+      --  How the session stores what it has committed. The default is the
+      --  precision the engine computes in, which is what every published
+      --  figure was measured against.
+      Cache      : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
       Locale     : Model_Runner.Text.Bounded;
 
       --  Inspect modes.

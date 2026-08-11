@@ -208,6 +208,25 @@ package Model_Runner.Llama is
    --  the README carries it.
    type Repack_Mode is (No_Repack, To_F32, To_BF16);
 
+   --  How a session stores the keys and values it has committed.
+   --
+   --  Exact keeps them as the engine computes them, which is the correctness
+   --  baseline every published figure is taken against. Halved stores each
+   --  one as binary16: two bytes an element instead of four, at the cost of
+   --  eleven mantissa bits, which for a long context is the difference
+   --  between a session that fits and one that does not. It is lossy and it
+   --  is measured; the README says by how much.
+   type Cache_Precision is (Exact, Halved);
+
+   --  The identifier a caller names a cache precision by.
+   --
+   --  @param Item Precision to name.
+   --  @return Lower-case identifier such as "f16".
+   function Cache_Name (Item : Cache_Precision) return String
+   is (case Item is
+         when Exact  => "f32",
+         when Halved => "f16");
+
    --  The word a caller types for a repacking mode.
    --
    --  @param Item Mode to name.
@@ -388,11 +407,14 @@ package Model_Runner.Llama is
    --  @param Context Requested context capacity in tokens.
    --  @param Plan Estimate; Valid is False on overflow.
    --  @param Status Success or Memory_Plan_Overflow.
+   --  @param Cache Precision the session would store its context in, which
+   --    is half the bytes for Halved and the whole reason to ask.
    procedure Plan_Session
      (Item    : Model;
       Context : Natural;
       Plan    : out Model_Runner.Memory.Session_Plan;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Cache   : Cache_Precision := Exact);
 
    --  Estimate session memory from a configuration alone.
    --
@@ -400,11 +422,13 @@ package Model_Runner.Llama is
    --  @param Context Requested context capacity; 0 uses the model's own.
    --  @param Plan Estimate; Valid is False on overflow.
    --  @param Status Success or Memory_Plan_Overflow.
+   --  @param Cache Precision the session would store its context in.
    procedure Plan_For
      (Settings : Configuration;
       Context  : Natural;
       Plan     : out Model_Runner.Memory.Session_Plan;
-      Status   : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      Cache    : Cache_Precision := Exact);
 
    --  Open a session on a prepared model.
    --
@@ -415,6 +439,10 @@ package Model_Runner.Llama is
    --  @param Workers Worker pool used for matrix-vector products, or null to
    --    compute them on the calling task. The pool must outlive the session.
    --    Results do not depend on the worker count.
+   --  @param Cache How the session stores what it commits. Exact is the
+   --    precision the engine computes in and the correctness baseline;
+   --    Halved is binary16, which holds half the bytes and is lossy by a
+   --    measured amount.
    --  @param Status Success, Lifecycle_Model_Not_Ready, Arch_Context_Too_Large
    --    or a memory diagnostic.
    procedure Open
@@ -424,7 +452,14 @@ package Model_Runner.Llama is
       Session_Bounds : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Workers        : Model_Runner.Backend.CPU.Pool_Reference := null;
+      Cache          : Cache_Precision := Exact;
       Status         : out Model_Runner.Errors.Error_Info);
+
+   --  How this session stores its keys and values.
+   --
+   --  @param Item Session to inspect.
+   --  @return The precision it was opened with.
+   function Precision (Item : Session) return Cache_Precision;
 
    --  Worker pool the session was opened with.
    --
@@ -655,8 +690,14 @@ private
       Owner      : access Model'Class := null;
       Context    : Natural := 0;
       Committed  : Natural := 0;
+      --  The committed keys and values, in one precision or the other.
+      --  Exactly one pair is allocated; the other stays null, which is what
+      --  the reads below test rather than carrying a converted copy.
+      Held       : Cache_Precision := Exact;
       Keys       : Model_Runner.Tensors.Real_Array_Access := null;
       Values     : Model_Runner.Tensors.Real_Array_Access := null;
+      Half_Keys  : Model_Runner.Tensors.Half_Array_Access := null;
+      Half_Values : Model_Runner.Tensors.Half_Array_Access := null;
       History    : Token_History_Access := null;
       Activation : Model_Runner.Tensors.Real_Array_Access := null;
       Normalized : Model_Runner.Tensors.Real_Array_Access := null;

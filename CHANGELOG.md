@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--kv-cache f16`.** A session can store what it has committed as
+  binary16 instead of binary32: half the memory for the context, which is the
+  one part of a session that grows with how much has been said. The default
+  is unchanged and every published figure is still taken against it.
+
+  The engine still computes in binary32 -- nothing does arithmetic in half
+  precision. A key or a value is rounded on its way into the cache and
+  widened on its way back out, so what the rounding costs is one step of
+  precision on what attention reads, not on what it computes.
+
+  It is lossy and now it has a number. Over the conformance sweep the halved
+  cache moves a logit by at most **0.0218** where the exact cache moves it by
+  2.1e-05: three orders of magnitude worse than exact and six times better
+  than rounding the weights with `--repack bf16`, which is what one would
+  expect from where each rounding happens. A weight is rounded once and read
+  into every product; a key is rounded once and read back by every later
+  position.
+
+  The comment in the engine that said a half-precision cache "would need its
+  own conformance evidence before it could be advertised" has been answered
+  rather than deleted: the sweep runs both evaluation paths on both storages
+  and reports the difference as a bucket of its own, because rounding the
+  weights and rounding the context are different things to have measured.
+
+  The two storages are two procedures rather than one with a test in the
+  innermost loop, which would put a branch between every multiply and the
+  next on the path every published figure was measured on. Extracting them
+  also took the per-head attention out of both evaluation paths, which had
+  carried a copy each: what a position attends to is now written once.
+
 - **IQ4_NL and IQ4_XS.** Two more weight formats, decoded end to end:
   structural validation, a decoder, the fused dot product, golden vectors and
   the differential tests, which is what this project means by supported.

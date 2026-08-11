@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 30) of Text_Access :=
+   Held : constant array (1 .. 29) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Put_U64"),
       new String'("Tensor_Code"),
@@ -41,7 +41,6 @@ package body Library_Surface is
       new String'("Host_Name"),
       new String'("In_Range"),
       new String'("Is_NaN"),
-      new String'("To_Half"),
       new String'("To_Natural"),
       new String'("Wide_Bits")];
 

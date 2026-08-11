@@ -1871,6 +1871,104 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  A half-precision cache holds half the bytes and answers the same.
+   --
+   --  Two claims, and the sweep makes only the second. That the engine and
+   --  the independent implementation still agree within a measured bound is
+   --  what `tests conformance` reports; what it cannot report is that the
+   --  session actually holds less, because a session that quietly stored
+   --  binary32 under another name would agree perfectly.
+   --
+   --  So the memory is asserted where a caller reads it -- the plan, which
+   --  is what `inspect` prints and what a memory limit is judged against --
+   --  and the answer is asserted to be close but not identical, since a
+   --  halved cache that changed nothing at all would mean the rounding
+   --  never happened.
+   procedure Halved_Cache_Holds_Half
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      Image  : B.Byte_Array_Access;
+      Exact_Logits, Halved_Logits : Logit_Vector;
+      Apart : Model_Runner.Numerics.Real := 0.0;
+
+      procedure Answer
+        (Cache  : L.Cache_Precision;
+         Under  : in out Harness;
+         Result : out Logit_Vector)
+      is
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         L.Open (Live, Under.Ready, Cache => Cache, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+         Assert (L."=" (L.Precision (Live), Cache),
+                 "the session did not hold the precision it was opened with");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "evaluation failed: " & E.Error_Code'Image (Status.Code));
+         end loop;
+
+         L.Close (Live);
+      end Answer;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+      begin
+         Start (Under);
+
+         --  What the two would hold, before either is opened.
+         declare
+            use type Interfaces.Unsigned_64;
+
+            Wide, Narrow : Model_Runner.Memory.Session_Plan;
+            Status : E.Error_Info;
+         begin
+            L.Plan_Session (Under.Ready, 0, Wide, Status, L.Exact);
+            Assert (E.Is_Ok (Status), "the exact plan was refused");
+
+            L.Plan_Session (Under.Ready, 0, Narrow, Status, L.Halved);
+            Assert (E.Is_Ok (Status), "the halved plan was refused");
+
+            Assert (Wide.KV_Cache_Bytes = 2 * Narrow.KV_Cache_Bytes,
+                    "a halved cache did not plan for half the bytes:"
+                    & Interfaces.Unsigned_64'Image (Wide.KV_Cache_Bytes)
+                    & " against"
+                    & Interfaces.Unsigned_64'Image (Narrow.KV_Cache_Bytes));
+
+            Assert (Narrow.KV_Cache_Bytes > 0,
+                    "a halved cache planned for nothing at all");
+         end;
+
+         Answer (L.Exact, Under, Exact_Logits);
+         Answer (L.Halved, Under, Halved_Logits);
+      end;
+
+      for Index in Exact_Logits'Range loop
+         Apart := Model_Runner.Numerics.Real'Max
+           (Apart, abs (Exact_Logits (Index) - Halved_Logits (Index)));
+      end loop;
+
+      Assert (Apart > 0.0,
+              "a half-precision cache produced exactly the logits of a "
+              & "binary32 one, so nothing was rounded");
+
+      --  And close, by the bound the sweep measured this against.
+      Assert (Long_Float (Apart) < Conformance.Cached_Absolute_Tolerance,
+              "a half-precision cache moved a logit by"
+              & Model_Runner.Numerics.Real'Image (Apart));
+
+      B.Free (Image);
+   end Halved_Cache_Holds_Half;
+
    --  A mixture under the qwen3moe keys is read as one.
    --
    --  The sweep crosses llama, qwen2 and qwen3 with every format and path,
@@ -2581,6 +2679,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, Halved_Cache_Holds_Half'Access,
+         "a half-precision cache holds half the bytes and answers the same");
       Register_Routine
         (T, Mixture_Under_Its_Own_Keys'Access,
          "a mixture under the qwen3moe keys is read as one");

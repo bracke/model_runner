@@ -477,12 +477,15 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 7425, logits compared 108000,
+conformance: sequences 7650, logits compared 108000,
              worst absolute 2.14340155850756E-05,
              worst relative 1.90905622023861E-03,
              rounded logits compared 10800,
              rounded worst absolute 1.36861269753309E-01,
              rounded worst relative 1.83560177726357E+00,
+             cached logits compared 3600,
+             cached worst absolute 2.17623768740278E-02,
+             cached worst relative 1.45056971184375E-01,
              outside tolerance 0
 ```
 
@@ -544,6 +547,15 @@ that does anything else**. The last row needs no theory -- wider heads mean
 more terms in every dot product to accumulate eight mantissa bits of error
 over. Use `--repack
 f32`, which is exact and costs memory instead.
+
+The cached figures are `--kv-cache f16`, which stores what a session has
+committed as binary16 rather than binary32: half the memory for the context,
+and **0.0218** worst absolute on these fixtures against 2.1e-05 for the exact
+cache. That is three orders of magnitude worse than exact and six times better
+than rounding the weights, which is what one would expect from where each
+rounding happens -- a weight is rounded once and read into every product, a
+key is rounded once and read back by every later position. Both evaluation
+paths are compared, because the two storages are two procedures.
 
 The rounded figures are `--repack bf16`, counted apart because mixing them in
 would let the lossy path's error hide the exact path's. They are the number

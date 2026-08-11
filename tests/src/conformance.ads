@@ -40,6 +40,15 @@ package Conformance is
    Lossy_Relative_Tolerance : constant := 5.0E-2;
    Lossy_Absolute_Tolerance : constant := 3.0E-1;
 
+   --  What storing the context in half precision is allowed to move a logit
+   --  by. A binary16 keeps ten mantissa bits where binary32 keeps
+   --  twenty-three, and what is rounded is not a weight but a key or a value
+   --  that attention reads back, so the error enters once per position
+   --  rather than once per product. Measured over this sweep and rounded up,
+   --  as the repacking bound was.
+   Cached_Relative_Tolerance : constant := 5.0E-2;
+   Cached_Absolute_Tolerance : constant := 1.0E-1;
+
    --  What a comparison found.
    type Report is record
       Sequences  : Natural := 0;
@@ -53,6 +62,16 @@ package Conformance is
       Lossy_Compared  : Natural := 0;
       Lossy_Worst_Abs : Long_Float := 0.0;
       Lossy_Worst_Rel : Long_Float := 0.0;
+
+      --  And again for the comparisons where the session stored what it had
+      --  committed in half precision. A third bucket rather than a share of
+      --  the second, because rounding the weights and rounding the context
+      --  are different things to have measured: one is decided at load and
+      --  affects every product, the other is decided per session and affects
+      --  what attention reads back.
+      Cached_Compared  : Natural := 0;
+      Cached_Worst_Abs : Long_Float := 0.0;
+      Cached_Worst_Rel : Long_Float := 0.0;
 
       Failures   : Natural := 0;
       Ran        : Boolean := False;

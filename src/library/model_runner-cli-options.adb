@@ -29,7 +29,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 38) of Registry_Row :=
+   Registry : constant array (1 .. 39) of Registry_Row :=
      [
       (Text ("--prompt"), [Command_Run => True, others => False], Text ("prompt")),
       (Text ("--prompt-file"), [Command_Run => True, others => False], Text ("prompt_file")),
@@ -37,6 +37,8 @@ package body Model_Runner.CLI.Options is
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
       (Text ("--repack"), [Command_Run => True, others => False],
        Text ("repack")),
+      (Text ("--kv-cache"), [Command_Run => True, others => False],
+       Text ("kv_cache")),
       (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
       (Text ("--system-file"), [Command_Run => True, others => False], Text ("system_file")),
       (Text ("--max-tokens"), [Command_Run => True, others => False], Text ("max_tokens")),
@@ -137,6 +139,30 @@ package body Model_Runner.CLI.Options is
       end loop;
       return Room (1 .. Used);
    end Repack_Names;
+
+   -----------------
+   -- Cache_Names --
+   -----------------
+
+   function Cache_Names return String is
+      Room : String (1 .. 64) := [others => ' '];
+      Used : Natural := 0;
+
+      procedure Add (Value : String) is
+      begin
+         if Used > 0 then
+            Room (Used + 1 .. Used + 2) := ", ";
+            Used := Used + 2;
+         end if;
+         Room (Used + 1 .. Used + Value'Length) := Value;
+         Used := Used + Value'Length;
+      end Add;
+   begin
+      for Mode in Model_Runner.Llama.Cache_Precision loop
+         Add (Model_Runner.Llama.Cache_Name (Mode));
+      end loop;
+      return Room (1 .. Used);
+   end Cache_Names;
 
    ----------------
    -- Command_Of --
@@ -597,6 +623,7 @@ package body Model_Runner.CLI.Options is
          Flag_Seed, Flag_Memory, Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Repack,
+         Flag_Cache,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
@@ -885,6 +912,32 @@ package body Model_Runner.CLI.Options is
                         --  Named against the modes this build has, and
                         --  refused by name otherwise, which is the answer
                         --  --backend and --chat-template already give.
+                        if not Found then
+                           Fail (E.CLI_Invalid_Option_Value, Name,
+                                 T.To_String (Asked));
+                           return;
+                        end if;
+                     end;
+
+                  elsif Name = "--kv-cache" then
+                     declare
+                        Asked : T.Bounded;
+                        Found : Boolean := False;
+                     begin
+                        Bounded_Value (Flag_Cache, Asked, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        for Mode in Model_Runner.Llama.Cache_Precision loop
+                           if Model_Runner.Llama.Cache_Name (Mode)
+                             = T.To_String (Asked)
+                           then
+                              Result.Cache := Mode;
+                              Found := True;
+                           end if;
+                        end loop;
+
                         if not Found then
                            Fail (E.CLI_Invalid_Option_Value, Name,
                                  T.To_String (Asked));

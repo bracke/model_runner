@@ -153,6 +153,7 @@ package body Conformance is
 
       procedure Compare
         (Which   : Sequence_Index;
+         Cache   : L.Cache_Precision := L.Exact;
          Backend : Model_Runner.Backend.Backend_Kind :=
            Model_Runner.Backend.Backend_CPU;
          Repack  : L.Repack_Mode := L.No_Repack;
@@ -209,7 +210,7 @@ package body Conformance is
             L.Open
               (Session, Engine,
                Workers => (if Shared then Team'Unchecked_Access else null),
-               Status => Status);
+               Cache => Cache, Status => Status);
             if E.Is_Error (Status) then
                L.Close (Engine, Status);
                Containers.Close (Parsed);
@@ -276,7 +277,13 @@ package body Conformance is
                      Relative : constant Long_Float :=
                        (if Scale > 0.0 then Gap / Scale else 0.0);
                   begin
-                     if Repack = L.To_BF16 then
+                     if L."=" (Cache, L.Halved) then
+                        Result.Cached_Compared := Result.Cached_Compared + 1;
+                        Result.Cached_Worst_Abs :=
+                          Long_Float'Max (Result.Cached_Worst_Abs, Gap);
+                        Result.Cached_Worst_Rel :=
+                          Long_Float'Max (Result.Cached_Worst_Rel, Relative);
+                     elsif Repack = L.To_BF16 then
                         Result.Lossy_Compared := Result.Lossy_Compared + 1;
                         Result.Lossy_Worst_Abs :=
                           Long_Float'Max (Result.Lossy_Worst_Abs, Gap);
@@ -296,7 +303,13 @@ package body Conformance is
                      --  rounded path is judged by its own pair, because
                      --  holding it to the exact one would say only what
                      --  rounding already says.
-                     if Repack = L.To_BF16 then
+                     if L."=" (Cache, L.Halved) then
+                        if Gap > Cached_Absolute_Tolerance
+                          and then Relative > Cached_Relative_Tolerance
+                        then
+                           Result.Failures := Result.Failures + 1;
+                        end if;
+                     elsif Repack = L.To_BF16 then
                         if Gap > Lossy_Absolute_Tolerance
                           and then Relative > Lossy_Relative_Tolerance
                         then
@@ -495,10 +508,10 @@ package body Conformance is
                            goto Next_Repack;
                         end if;
 
-                        Compare (1, Backend, Repack);
-                        Compare (2, Backend, Repack);
-                        Compare (3, Backend, Repack);
-                        Compare (4, Backend, Repack);
+                        Compare (1, L.Exact, Backend, Repack);
+                        Compare (2, L.Exact, Backend, Repack);
+                        Compare (3, L.Exact, Backend, Repack);
+                        Compare (4, L.Exact, Backend, Repack);
 
                         --  And the same sequences through the batched path, which
                         --  is how a prompt is read. A sequence of one is the same
@@ -510,28 +523,48 @@ package body Conformance is
                         --  is what it exists to be: asking anyway would compare a
                         --  refusal against a forward pass.
                         if Batches (Backend) then
-                           Compare (2, Backend, Repack, Batched => True);
-                           Compare (3, Backend, Repack, Batched => True);
-                           Compare (4, Backend, Repack, Batched => True);
+                           Compare (2, L.Exact, Backend, Repack, Batched => True);
+                           Compare (3, L.Exact, Backend, Repack, Batched => True);
+                           Compare (4, L.Exact, Backend, Repack, Batched => True);
                         end if;
 
                         --  And again across a pool, where the rows of every
                         --  product are partitioned. The reference backend has
                         --  no pool to share, which it says of itself.
                         if Shares (Backend) then
-                           Compare (3, Backend, Repack, Shared => True);
-                           Compare (4, Backend, Repack, Shared => True);
+                           Compare (3, L.Exact, Backend, Repack, Shared => True);
+                           Compare (4, L.Exact, Backend, Repack, Shared => True);
 
                            if Batches (Backend) then
-                              Compare (4, Backend, Repack,
+                              Compare (4, L.Exact, Backend, Repack,
                                        Batched => True, Shared => True);
                            end if;
 
                            --  And the same eight tokens three at a time, which
                            --  is two seams: 3, 3, 2.
                            if Batches (Backend) then
-                              Compare (4, Backend, Repack, Batched => True,
+                              Compare (4, L.Exact, Backend, Repack, Batched => True,
                                        Shared => True, Chunk => 3);
+                           end if;
+                        end if;
+
+                        --  And the same sequences again with the session
+                        --  storing what it commits in half precision. Only
+                        --  on the plain shape and only where the weights are
+                        --  not also rounded: what is being measured is what
+                        --  the cache costs, and measuring it through a
+                        --  rounded model would measure the two together.
+                        --
+                        --  Both evaluation paths, because the two storages
+                        --  are two procedures and a copy nothing runs is
+                        --  what this sweep exists to prevent.
+                        if Shape = Plain and then Repack = L.No_Repack then
+                           Compare (3, L.Halved, Backend, Repack);
+                           Compare (4, L.Halved, Backend, Repack);
+
+                           if Batches (Backend) then
+                              Compare (4, L.Halved, Backend, Repack,
+                                       Batched => True);
                            end if;
                         end if;
 
@@ -593,8 +626,15 @@ package body Conformance is
             --  is the finding rather than a gap: the published lossy figure
             --  describes a dense model with full attention and heads the
             --  width its embedding implies, and nothing else.
+            --  And the half-precision cache, which runs on the plain shape
+            --  with the weights unrounded: two sequences a backend, and one
+            --  of them again through the batched path where the backend
+            --  takes one.
+            Cached : constant Natural :=
+              Formats * Arches * (Backends * 2 + Batching);
+
             Expected : constant Natural :=
-              Formats * Arches * (Shapes * Repacks - 4) * Per_Model;
+              Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached;
 
          begin
             Result.Ran := Result.Sequences = Expected;

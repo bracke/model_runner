@@ -29,6 +29,7 @@ package body Model_Runner.Llama is
    use type Model_Runner.Numerics.Real;
    use type Model_Runner.Numerics.Wide_Real;
    use type Model_Runner.Tensors.Real_Array_Access;
+   use type Model_Runner.Tensors.Half_Array_Access;
 
    package A renames Model_Runner.Arithmetic;
    package B renames Model_Runner.Bytes;
@@ -42,10 +43,14 @@ package body Model_Runner.Llama is
    package T renames Model_Runner.Tensors;
    package Workers_CPU renames Model_Runner.Backend.CPU;
 
-   --  Bytes one cache element occupies. The V1 cache stores Real, which is the
-   --  correctness baseline; a half-precision cache would need its own
-   --  conformance evidence before it could be advertised.
-   Cache_Element_Bytes : constant := 4;
+   --  Bytes one cache element occupies, in each of the two storages a
+   --  session may ask for. Exact is the correctness baseline every published
+   --  figure is taken against; halved is what it says, and the conformance
+   --  evidence this used to say it would need before being advertised is in
+   --  the README.
+   Cache_Element_Bytes :
+     constant array (Cache_Precision) of Interfaces.Unsigned_64 :=
+       [Exact => 4, Halved => 2];
 
    --  Metadata keys are built once, here, so that no other package spells a
    --  tensor or metadata name.
@@ -1555,6 +1560,162 @@ package body Model_Runner.Llama is
        then K.No_Factors
        else Item.Rope_Factors.all);
 
+   --  Attention for one position, over every head.
+   --
+   --  Each head scores the positions it may read against its query, turns
+   --  those scores into a distribution, and sums the values in proportion.
+   --  Both evaluation paths call this -- a token at a time and a token of a
+   --  batch -- so the arithmetic that decides what a position attends to
+   --  exists once rather than twice.
+   --
+   --  There are two of these because the cache has two storages and the
+   --  difference is one conversion in the innermost loop. A single body with
+   --  a test in that loop would put a branch between every multiply and the
+   --  next on the exact path, which is the default and the one every
+   --  published figure was measured on. Both are reached by the conformance
+   --  sweep, so neither is a copy nothing runs.
+   procedure Blend_Exact
+     (Query      : Real_Array;
+      Keys       : Real_Array;
+      Values     : Real_Array;
+      K_Base     : Element_Count;
+      V_Base     : Element_Count;
+      KV_Width   : Element_Count;
+      V_Width    : Element_Count;
+      Heads      : Element_Count;
+      Head_Size  : Element_Count;
+      Value_Size : Element_Count;
+      Group_Size : Element_Count;
+      First      : Element_Count;
+      Last       : Element_Count;
+      Scale      : Real;
+      Scores     : in out Real_Array;
+      Target     : out Real_Array;
+      Ok         : out Boolean) is
+   begin
+      Ok := True;
+
+      for Head in 0 .. Heads - 1 loop
+         declare
+            Group    : constant Element_Count := Head / Group_Size;
+            Q_Origin : constant Element_Count := Query'First + Head * Head_Size;
+            Usable   : Boolean;
+         begin
+            for Step in First .. Last loop
+               declare
+                  Origin : constant Element_Count :=
+                    Keys'First + K_Base + Step * KV_Width + Group * Head_Size;
+                  Sum    : N.Wide_Real := 0.0;
+               begin
+                  for Component in 0 .. Head_Size - 1 loop
+                     Sum := Sum
+                       + N.Wide_Real (Query (Q_Origin + Component))
+                         * N.Wide_Real (Keys (Origin + Component));
+                  end loop;
+                  Scores (Scores'First + Step) := Real (Sum) * Scale;
+               end;
+            end loop;
+
+            K.Softmax
+              (Scores (Scores'First + First .. Scores'First + Last), Usable);
+            if not Usable then
+               Ok := False;
+               return;
+            end if;
+
+            for Component in 0 .. Value_Size - 1 loop
+               declare
+                  Sum : N.Wide_Real := 0.0;
+               begin
+                  for Step in First .. Last loop
+                     Sum := Sum
+                       + N.Wide_Real (Scores (Scores'First + Step))
+                         * N.Wide_Real
+                             (Values (Values'First + V_Base + Step * V_Width
+                                      + Group * Value_Size + Component));
+                  end loop;
+                  Target (Target'First + Head * Value_Size + Component) :=
+                    Real (Sum);
+               end;
+            end loop;
+         end;
+      end loop;
+   end Blend_Exact;
+
+   --  The same, over a cache held in half precision. Every element is
+   --  widened where the exact one reads it; nothing else differs, and
+   --  nothing here computes in half precision.
+   procedure Blend_Halved
+     (Query      : Real_Array;
+      Keys       : T.Half_Array;
+      Values     : T.Half_Array;
+      K_Base     : Element_Count;
+      V_Base     : Element_Count;
+      KV_Width   : Element_Count;
+      V_Width    : Element_Count;
+      Heads      : Element_Count;
+      Head_Size  : Element_Count;
+      Value_Size : Element_Count;
+      Group_Size : Element_Count;
+      First      : Element_Count;
+      Last       : Element_Count;
+      Scale      : Real;
+      Scores     : in out Real_Array;
+      Target     : out Real_Array;
+      Ok         : out Boolean) is
+   begin
+      Ok := True;
+
+      for Head in 0 .. Heads - 1 loop
+         declare
+            Group    : constant Element_Count := Head / Group_Size;
+            Q_Origin : constant Element_Count := Query'First + Head * Head_Size;
+            Usable   : Boolean;
+         begin
+            for Step in First .. Last loop
+               declare
+                  Origin : constant Element_Count :=
+                    Keys'First + K_Base + Step * KV_Width + Group * Head_Size;
+                  Sum    : N.Wide_Real := 0.0;
+               begin
+                  for Component in 0 .. Head_Size - 1 loop
+                     Sum := Sum
+                       + N.Wide_Real (Query (Q_Origin + Component))
+                         * N.Wide_Real
+                             (N.To_Real (Keys (Origin + Component)));
+                  end loop;
+                  Scores (Scores'First + Step) := Real (Sum) * Scale;
+               end;
+            end loop;
+
+            K.Softmax
+              (Scores (Scores'First + First .. Scores'First + Last), Usable);
+            if not Usable then
+               Ok := False;
+               return;
+            end if;
+
+            for Component in 0 .. Value_Size - 1 loop
+               declare
+                  Sum : N.Wide_Real := 0.0;
+               begin
+                  for Step in First .. Last loop
+                     Sum := Sum
+                       + N.Wide_Real (Scores (Scores'First + Step))
+                         * N.Wide_Real
+                             (N.To_Real
+                                (Values (Values'First + V_Base
+                                         + Step * V_Width
+                                         + Group * Value_Size + Component)));
+                  end loop;
+                  Target (Target'First + Head * Value_Size + Component) :=
+                    Real (Sum);
+               end;
+            end loop;
+         end;
+      end loop;
+   end Blend_Halved;
+
    --  Normalize each head of a projection in place.
    --
    --  The gain is one element per element of a head, shared across the
@@ -1838,9 +1999,10 @@ package body Model_Runner.Llama is
      (Item    : Model;
       Context : Natural;
       Plan    : out Mem.Session_Plan;
-      Status  : out E.Error_Info) is
+      Status  : out E.Error_Info;
+      Cache   : Cache_Precision := Exact) is
    begin
-      Plan_For (Item.Settings, Context, Plan, Status);
+      Plan_For (Item.Settings, Context, Plan, Status, Cache);
    end Plan_Session;
 
    ---------------
@@ -1851,7 +2013,8 @@ package body Model_Runner.Llama is
      (Settings : Configuration;
       Context  : Natural;
       Plan     : out Mem.Session_Plan;
-      Status   : out E.Error_Info)
+      Status   : out E.Error_Info;
+      Cache    : Cache_Precision := Exact)
    is
       Capacity : constant Natural :=
         (if Context = 0 then Settings.Context_Length else Context);
@@ -1859,22 +2022,22 @@ package body Model_Runner.Llama is
       --  layers * capacity * kv heads * head size * bytes * 2, entirely in
       --  checked arithmetic so that an implausible request is reported as an
       --  overflow rather than wrapping into a small allocation.
-      Cache : constant A.Checked :=
+      Room : constant A.Checked :=
         A.To_Checked (Interfaces.Unsigned_64 (Settings.Layers))
         * A.To_Checked (Interfaces.Unsigned_64 (Capacity))
         * A.To_Checked (Interfaces.Unsigned_64 (Settings.KV_Heads))
         * A.To_Checked
             (Interfaces.Unsigned_64 (Settings.Head_Size + Settings.Value_Size))
-        * A.To_Checked (Interfaces.Unsigned_64'(Cache_Element_Bytes));
+        * A.To_Checked (Cache_Element_Bytes (Cache));
    begin
       Plan := (others => <>);
 
-      if not A.Is_Valid (Cache) then
+      if not A.Is_Valid (Room) then
          Status := E.Make (E.Memory_Plan_Overflow);
          return;
       end if;
 
-      Plan.KV_Cache_Bytes := A.Value (Cache);
+      Plan.KV_Cache_Bytes := A.Value (Room);
       Plan.Activation_Bytes :=
         Interfaces.Unsigned_64 (Settings.Embedding) * 4 * 4;
       Plan.Batch_Bytes :=
@@ -1904,6 +2067,7 @@ package body Model_Runner.Llama is
       Session_Bounds : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Workers        : Workers_CPU.Pool_Reference := null;
+      Cache          : Cache_Precision := Exact;
       Status         : out E.Error_Info)
    is
       Settings : Configuration;
@@ -1995,8 +2159,16 @@ package body Model_Runner.Llama is
          Deep  : constant Element_Count :=
            Element_Count (Settings.Layers) * Element_Count (Capacity);
       begin
-         T.Allocate (Deep * KV, Item.Keys);
-         T.Allocate (Deep * KV_Out, Item.Values);
+         --  One storage or the other, never both.
+         Item.Held := Cache;
+
+         if Cache = Exact then
+            T.Allocate (Deep * KV, Item.Keys);
+            T.Allocate (Deep * KV_Out, Item.Values);
+         else
+            T.Allocate (Deep * KV, Item.Half_Keys);
+            T.Allocate (Deep * KV_Out, Item.Half_Values);
+         end if;
          T.Allocate (Width, Item.Activation);
          T.Allocate (Width, Item.Normalized);
          T.Allocate (Wide, Item.Query);
@@ -2040,7 +2212,11 @@ package body Model_Runner.Llama is
             end if;
          end if;
 
-         if Item.Keys = null or else Item.Values = null
+         if (Cache = Exact
+             and then (Item.Keys = null or else Item.Values = null))
+           or else (Cache = Halved
+                    and then (Item.Half_Keys = null
+                              or else Item.Half_Values = null))
            or else Item.Activation = null or else Item.Normalized = null
            or else Item.Query = null or else Item.Key_Row = null
            or else Item.Value_Row = null or else Item.Attention = null
@@ -2079,6 +2255,8 @@ package body Model_Runner.Llama is
 
       T.Free (Item.Keys);
       T.Free (Item.Values);
+      T.Free (Item.Half_Keys);
+      T.Free (Item.Half_Values);
       T.Free (Item.Activation);
       T.Free (Item.Normalized);
       T.Free (Item.Query);
@@ -2122,6 +2300,12 @@ package body Model_Runner.Llama is
    -----------
 
    function State (Item : Session) return Session_State is (Item.Current);
+
+   ----------------
+   -- Precision --
+   ----------------
+
+   function Precision (Item : Session) return Cache_Precision is (Item.Held);
 
    --------------
    -- Position --
@@ -2340,12 +2524,24 @@ package body Model_Runner.Llama is
 
             --  Write into the reserved slot. The slot is only readable as
             --  context once Committed is advanced, at the end of this call.
-            for Offset in 0 .. KV_Width - 1 loop
-               Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
-            end loop;
-            for Offset in 0 .. V_Width - 1 loop
-               Item.Values.all (V_Slot + Offset) := Item.Value_Row.all (Offset);
-            end loop;
+            if Item.Held = Exact then
+               for Offset in 0 .. KV_Width - 1 loop
+                  Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
+               end loop;
+               for Offset in 0 .. V_Width - 1 loop
+                  Item.Values.all (V_Slot + Offset) :=
+                    Item.Value_Row.all (Offset);
+               end loop;
+            else
+               for Offset in 0 .. KV_Width - 1 loop
+                  Item.Half_Keys.all (Slot + Offset) :=
+                    N.To_Half (Item.Key_Row.all (Offset));
+               end loop;
+               for Offset in 0 .. V_Width - 1 loop
+                  Item.Half_Values.all (V_Slot + Offset) :=
+                    N.To_Half (Item.Value_Row.all (Offset));
+               end loop;
+            end if;
 
             --  Causal attention over the committed positions and this one.
             --  Grouped-query attention maps each query head to its key-value
@@ -2358,58 +2554,30 @@ package body Model_Runner.Llama is
             --  same amount either way.
             declare
                First : constant Element_Count := Earliest (Settings, Reserved);
+               Usable : Boolean;
             begin
-            for Head in 0 .. Heads - 1 loop
-               declare
-                  Group    : constant Element_Count :=
-                    Head / Element_Count (Settings.Group_Size);
-                  Query    : Real_Array renames Item.Query.all;
-                  Q_Origin : constant Element_Count := Head * Head_Size;
-                  Scores   : Real_Array renames Item.Scores.all;
-                  Usable   : Boolean;
-               begin
-                  for Step in First .. Reserved loop
-                     declare
-                        Origin : constant Element_Count :=
-                          Base + Step * KV_Width + Group * Head_Size;
-                        Sum    : N.Wide_Real := 0.0;
-                     begin
-                        for Component in 0 .. Head_Size - 1 loop
-                           Sum := Sum
-                             + N.Wide_Real (Query (Q_Origin + Component))
-                               * N.Wide_Real
-                                   (Item.Keys.all (Origin + Component));
-                        end loop;
-                        Scores (Step) := Real (Sum) * Scale;
-                     end;
-                  end loop;
+               if Item.Held = Exact then
+                  Blend_Exact
+                    (Item.Query.all, Item.Keys.all, Item.Values.all,
+                     Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+                     Value_Size, Element_Count (Settings.Group_Size),
+                     First, Reserved, Scale, Item.Scores.all,
+                     Item.Attention.all, Usable);
+               else
+                  Blend_Halved
+                    (Item.Query.all, Item.Half_Keys.all, Item.Half_Values.all,
+                     Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+                     Value_Size, Element_Count (Settings.Group_Size),
+                     First, Reserved, Scale, Item.Scores.all,
+                     Item.Attention.all, Usable);
+               end if;
 
-                  K.Softmax (Scores (First .. Reserved), Usable);
-                  if not Usable then
-                     Item.Current := Failed;
-                     Status := E.Make (E.Tensor_Non_Finite_Value);
-                     E.Add_Integer (Status, "layer", Long_Long_Integer (Index));
-                     return;
-                  end if;
-
-                  for Component in 0 .. Value_Size - 1 loop
-                     declare
-                        Sum : N.Wide_Real := 0.0;
-                     begin
-                        for Step in First .. Reserved loop
-                           Sum := Sum
-                             + N.Wide_Real (Scores (Step))
-                               * N.Wide_Real
-                                   (Item.Values.all
-                                      (V_Base + Step * V_Width
-                                       + Group * Value_Size + Component));
-                        end loop;
-                        Item.Attention.all (Head * Value_Size + Component) :=
-                          Real (Sum);
-                     end;
-                  end loop;
-               end;
-            end loop;
+               if not Usable then
+                  Item.Current := Failed;
+                  Status := E.Make (E.Tensor_Non_Finite_Value);
+                  E.Add_Integer (Status, "layer", Long_Long_Integer (Index));
+                  return;
+               end if;
             end;
 
             Product
@@ -2727,14 +2895,25 @@ package body Model_Runner.Llama is
                      Settings.Rope_Base, Settings.Scaling, Turns (Source),
                      Settings.Pairing);
 
-                  for Offset in 0 .. KV_Width - 1 loop
-                     Item.Keys.all (Place + Offset) :=
-                       Keys.all (KV_At + Offset);
-                  end loop;
-                  for Offset in 0 .. V_Width - 1 loop
-                     Item.Values.all (V_Place + Offset) :=
-                       Values.all (V_At + Offset);
-                  end loop;
+                  if Item.Held = Exact then
+                     for Offset in 0 .. KV_Width - 1 loop
+                        Item.Keys.all (Place + Offset) :=
+                          Keys.all (KV_At + Offset);
+                     end loop;
+                     for Offset in 0 .. V_Width - 1 loop
+                        Item.Values.all (V_Place + Offset) :=
+                          Values.all (V_At + Offset);
+                     end loop;
+                  else
+                     for Offset in 0 .. KV_Width - 1 loop
+                        Item.Half_Keys.all (Place + Offset) :=
+                          N.To_Half (Keys.all (KV_At + Offset));
+                     end loop;
+                     for Offset in 0 .. V_Width - 1 loop
+                        Item.Half_Values.all (V_Place + Offset) :=
+                          N.To_Half (Values.all (V_At + Offset));
+                     end loop;
+                  end if;
                end;
             end loop;
 
@@ -2748,63 +2927,34 @@ package body Model_Runner.Llama is
                     Earliest (Settings, Last_Step);
                   Q_At      : constant Element_Count := Slot (Which, Wide);
                   B_At      : constant Element_Count := Slot (Which, Blend);
+                  Usable    : Boolean;
                begin
-                  for Head in 0 .. Heads - 1 loop
-                     declare
-                        Group    : constant Element_Count :=
-                          Head / Element_Count (Settings.Group_Size);
-                        Q_Origin : constant Element_Count :=
-                          Q_At + Head * Head_Size;
-                        Scores   : Real_Array renames Item.Scores.all;
-                        Usable   : Boolean;
-                     begin
-                        for Step in First_Step .. Last_Step loop
-                           declare
-                              Origin : constant Element_Count :=
-                                Base + Step * KV_Width + Group * Head_Size;
-                              Sum    : N.Wide_Real := 0.0;
-                           begin
-                              for Component in 0 .. Head_Size - 1 loop
-                                 Sum := Sum
-                                   + N.Wide_Real
-                                       (Query.all (Q_Origin + Component))
-                                     * N.Wide_Real
-                                         (Item.Keys.all (Origin + Component));
-                              end loop;
-                              Scores (Step) := Real (Sum) * Scale;
-                           end;
-                        end loop;
+                  if Item.Held = Exact then
+                     Blend_Exact
+                       (Query.all (Q_At .. Q_At + Wide - 1),
+                        Item.Keys.all, Item.Values.all,
+                        Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+                        Value_Size, Element_Count (Settings.Group_Size),
+                        First_Step, Last_Step, Scale, Item.Scores.all,
+                        Attend.all (B_At .. B_At + Blend - 1), Usable);
+                  else
+                     Blend_Halved
+                       (Query.all (Q_At .. Q_At + Wide - 1),
+                        Item.Half_Keys.all, Item.Half_Values.all,
+                        Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+                        Value_Size, Element_Count (Settings.Group_Size),
+                        First_Step, Last_Step, Scale, Item.Scores.all,
+                        Attend.all (B_At .. B_At + Blend - 1), Usable);
+                  end if;
 
-                        K.Softmax (Scores (First_Step .. Last_Step), Usable);
-                        if not Usable then
-                           Release;
-                           Item.Current := Failed;
-                           Status := E.Make (E.Tensor_Non_Finite_Value);
-                           E.Add_Integer
-                             (Status, "layer", Long_Long_Integer (Index));
-                           return;
-                        end if;
-
-                        for Component in 0 .. Value_Size - 1 loop
-                           declare
-                              Sum : N.Wide_Real := 0.0;
-                           begin
-                              for Step in First_Step .. Last_Step loop
-                                 Sum := Sum
-                                   + N.Wide_Real (Scores (Step))
-                                     * N.Wide_Real
-                                         (Item.Values.all
-                                            (V_Base + Step * V_Width
-                                             + Group * Value_Size
-                                             + Component));
-                              end loop;
-                              Attend.all
-                                (B_At + Head * Value_Size + Component) :=
-                                  Real (Sum);
-                           end;
-                        end loop;
-                     end;
-                  end loop;
+                  if not Usable then
+                     Release;
+                     Item.Current := Failed;
+                     Status := E.Make (E.Tensor_Non_Finite_Value);
+                     E.Add_Integer
+                       (Status, "layer", Long_Long_Integer (Index));
+                     return;
+                  end if;
                end;
             end loop;
 

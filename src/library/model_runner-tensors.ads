@@ -58,16 +58,33 @@ package Model_Runner.Tensors is
    --  package stays free of allocation.
    type Real_Array_Access is access Real_Array;
 
+   subtype Half_Array is Model_Runner.Numerics.Half_Array;
+   type Half_Array_Access is access Half_Array;
+
    --  Allocate a zero-filled vector.
    --
    --  @param Length Number of elements.
    --  @param Result Allocated vector indexed from 0, or null on failure.
    procedure Allocate (Length : Element_Count; Result : out Real_Array_Access);
 
+   --  Allocate a zero-filled half-precision vector.
+   --
+   --  Zero here is the bit pattern zero, which is what binary16 zero is, so
+   --  the buffer reads as zeros before anything writes to it.
+   --
+   --  @param Length Number of elements.
+   --  @param Result Allocated vector indexed from 0, or null on failure.
+   procedure Allocate (Length : Element_Count; Result : out Half_Array_Access);
+
    --  Release a vector and clear the reference. Idempotent.
    --
    --  @param Item Reference to release.
    procedure Free (Item : in out Real_Array_Access);
+
+   --  Release a half-precision vector and clear the reference. Idempotent.
+   --
+   --  @param Item Reference to release.
+   procedure Free (Item : in out Half_Array_Access);
 
    --  Build a view and validate that it fits inside its buffer.
    --

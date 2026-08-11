@@ -40,6 +40,11 @@ package Model_Runner.Numerics is
    subtype Element_Index is Element_Count;
 
    type Real_Array is array (Element_Index range <>) of Real;
+
+   --  A run of half-precision storage. Nothing computes in it: values are
+   --  converted to Real on the way in and on the way out, and what it buys
+   --  is two bytes an element where Real takes four.
+   type Half_Array is array (Element_Index range <>) of Half;
    type Wide_Real_Array is array (Element_Index range <>) of Wide_Real;
 
    --  Decode an IEEE binary16 value exactly.

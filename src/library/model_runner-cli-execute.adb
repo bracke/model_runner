@@ -573,6 +573,8 @@ package body Model_Runner.CLI.Execute is
                   Value : constant String :=
                     (if Opt.Option_Name (Index) = "--repack"
                      then Opt.Repack_Names
+                     elsif Opt.Option_Name (Index) = "--kv-cache"
+                     then Opt.Cache_Names
                      elsif Opt.Option_Name (Index) = "--color"
                      then Opt.Color_Names
                      elsif Opt.Option_Name (Index) = "--backend"
@@ -1108,7 +1110,7 @@ package body Model_Runner.CLI.Execute is
          L.Open
            (Session, Prepared, Item.Context_Size,
             Session_Bounds => Session_Bounds (Item),
-            Workers => Team, Status => Condition);
+            Workers => Team, Cache => Item.Cache, Status => Condition);
          if E.Is_Error (Condition) then
             Fail (Condition);
             return;
