@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- The repository checks see one path separator on every host. The walk joined
+  the host's way, so on Windows a check was handed `tests\src\checks.adb` and
+  compared it against `tests/src/checks.adb`; every comparison of that shape
+  stopped matching at once. The visible effect was that the two code
+  registries no longer excluded themselves from the scan that reads them, so
+  every code they name read as named by a test and nine were reported as
+  reached that nothing reaches. Found the first time the checks ran on that
+  host, which is the argument for running them there.
+
 - The repository checks run on all three hosts. They ran on Linux alone --
   the checks that exist to anticipate what differs between hosts, while eight
   continuous-integration runs went red on host differences and every one of

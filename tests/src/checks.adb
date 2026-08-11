@@ -179,6 +179,28 @@ package body Checks is
       --  none to get wrong.
       procedure For_Each_Source (Directory : String) is
 
+         --  The path a check sees, with one separator on every host.
+         --
+         --  Hostkit.Fs.Join joins the host's way, so on Windows a check was
+         --  handed "tests\src\checks.adb" and compared it against
+         --  "tests/src/checks.adb". Every comparison of that shape silently
+         --  stopped matching: the registries excluded themselves from the
+         --  scan that reads them, so every code they name read as named by a
+         --  test, and nine were reported as reached that nothing reaches.
+         --  Forward slashes are accepted for opening a file on both hosts,
+         --  so the normalized form is the one that travels.
+         function As_Written (Item : String) return String is
+            Room : String := Item;
+         begin
+            for Index in Room'Range loop
+               if Room (Index) = '\' then
+                  Room (Index) := '/';
+               end if;
+            end loop;
+
+            return Room;
+         end As_Written;
+
          procedure Walk (Where : String) is
             Search : Dirs.Search_Type;
             Item   : Dirs.Directory_Entry_Type;
@@ -193,7 +215,8 @@ package body Checks is
 
             while Dirs.More_Entries (Search) loop
                Dirs.Get_Next_Entry (Search, Item);
-               Visit (Hostkit.Fs.Join (Where, Dirs.Simple_Name (Item)));
+               Visit
+                 (As_Written (Hostkit.Fs.Join (Where, Dirs.Simple_Name (Item))));
             end loop;
 
             Dirs.End_Search (Search);
