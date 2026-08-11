@@ -978,6 +978,16 @@ package body Reference_Transformer is
       end if;
 
       Item.Head_Size := Item.Embedding / Item.Heads;
+
+      --  A window at least as wide as the context sees everything the
+      --  context holds, which is no window at all. The engine folds that
+      --  case away too; here it is folded for the same reason and not
+      --  because the engine does.
+      Item.Window :=
+        Metadata (Source, Prefix (Item) & "attention.sliding_window", 0);
+      if Item.Window >= Item.Context then
+         Item.Window := 0;
+      end if;
       Item.Rotary :=
         Metadata (Source, Prefix (Item) & "rope.dimension_count", Item.Head_Size);
 
@@ -1331,11 +1341,19 @@ package body Reference_Transformer is
                   for Head in 0 .. Item.Heads - 1 loop
                      declare
                         Source_Head : constant Natural := Head / Group;
-                        Scores : Real_Vector (0 .. Step) := [others => 0.0];
+                        --  The earliest position this one may look at. With
+                        --  a window of four, a query at position ten reads
+                        --  seven through ten.
+                        First : constant Natural :=
+                          (if Item.Window = 0 or else Step < Item.Window
+                           then 0 else Step - Item.Window + 1);
+
+                        Scores : Real_Vector (First .. Step) :=
+                          [others => 0.0];
                         Largest : Long_Float;
                         Total   : Long_Float := 0.0;
                      begin
-                        for Past in 0 .. Step loop
+                        for Past in First .. Step loop
                            declare
                               Where : constant Natural := Block * Steps + Past;
                               Total_Score : Long_Float := 0.0;
@@ -1351,7 +1369,7 @@ package body Reference_Transformer is
                            end;
                         end loop;
 
-                        Largest := Scores (0);
+                        Largest := Scores (First);
                         for Past in Scores'Range loop
                            if Scores (Past) > Largest then
                               Largest := Scores (Past);
@@ -1367,7 +1385,7 @@ package body Reference_Transformer is
                            declare
                               Sum : Long_Float := 0.0;
                            begin
-                              for Past in 0 .. Step loop
+                              for Past in First .. Step loop
                                  Sum := Sum + Scores (Past)
                                    * Values (Block * Steps + Past,
                                              Source_Head * Item.Head_Size

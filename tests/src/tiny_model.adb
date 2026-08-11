@@ -31,7 +31,8 @@ package body Tiny_Model is
       Room      : Positive := Context;
       Qwen      : Boolean := False;
       Omit_Biases : Boolean := False;
-      Byte_Pair : Boolean := False)
+      Byte_Pair : Boolean := False;
+      Window    : Natural := 0)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -191,6 +192,14 @@ package body Tiny_Model is
       Fixtures.Add_U32
         (Builder, Prefix & ".rope.dimension_count", Interfaces.Unsigned_32 (Head_Size));
       Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base", 10_000.0);
+
+      --  A sliding window, when one is asked for. Absent otherwise, which
+      --  is what a model that attends to everything looks like.
+      if Window > 0 then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.sliding_window",
+            Interfaces.Unsigned_32 (Window));
+      end if;
 
       Fixtures.Add_String
         (Builder, "tokenizer.ggml.model",

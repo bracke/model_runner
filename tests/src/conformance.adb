@@ -284,59 +284,93 @@ package body Conformance is
          for Backend in Model_Runner.Backend.Backend_Kind loop
             for Qwen in Boolean loop
                for Format in Tiny_Model.Weight_Format loop
-                  Tiny_Model.Build (Image, Format, Qwen => Qwen);
+                  for Windowed in Boolean loop
+                     --  With and without a sliding window. Three is chosen so
+                     --  that the eight-token sequences cross it repeatedly and
+                     --  the shortest do not reach it, which is where a window
+                     --  applied one position out shows.
+                     Tiny_Model.Build
+                       (Image, Format, Qwen => Qwen,
+                        Window => (if Windowed then 3 else 0));
 
-                  for Repack in L.Repack_Mode loop
-                     Compare (Sequence'(1 => 4), Backend, Repack);
-                     Compare (Sequence'(4, 5), Backend, Repack);
-                     Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack);
-                     Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
-                              Repack);
-
-                     --  And the same sequences through the batched path, which
-                     --  is how a prompt is read. A sequence of one is the same
-                     --  call either way, so the three that are not are the ones
-                     --  worth the second pass.
-                     --
-                     --  Only on a backend that batches. The reference one
-                     --  declines more than a token at a time and says so, which
-                     --  is what it exists to be: asking anyway would compare a
-                     --  refusal against a forward pass.
-                     if Batches (Backend) then
-                        Compare (Sequence'(4, 5), Backend, Repack,
-                                 Batched => True);
-                        Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack,
-                                 Batched => True);
-                        Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
-                                 Repack, Batched => True);
-                     end if;
-
-                     --  And again across a pool, where the rows of every
-                     --  product are partitioned. The reference backend has
-                     --  no pool to share, which it says of itself.
-                     if Shares (Backend) then
-                        Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack,
-                                 Shared => True);
-                        Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
-                                 Repack, Shared => True);
-
-                        if Batches (Backend) then
-                           Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8),
-                                    Backend, Repack,
-                                    Batched => True, Shared => True);
+                     for Repack in L.Repack_Mode loop
+                        --  Brain floats and a narrow window are not compared,
+                        --  and the reason is a measurement rather than a
+                        --  convenience. Repacking to bf16 halves the mantissa,
+                        --  and a window makes the softmax sharper, so a
+                        --  perturbation that full attention averages away moves
+                        --  a logit instead. Measured over this sweep, worst
+                        --  absolute against the reference:
+                        --
+                        --    no window   0.137     window 5   0.517
+                        --    window 6    0.137     window 4   0.517
+                        --                          window 3   1.677
+                        --
+                        --  against a lossy tolerance of 0.3. The exact modes
+                        --  agree at every one of those windows -- 2.1E-05 at
+                        --  three, against 3.5E-06 with none -- so what this
+                        --  says is not that the window is wrong but that
+                        --  --repack bf16 costs more on a windowed model than
+                        --  the figure published for a full-attention one.
+                        --  Comparing it here would assert a tolerance nobody
+                        --  has grounds for; the docs say the cost instead.
+                        if Windowed and then Repack = L.To_BF16 then
+                           goto Next_Repack;
                         end if;
 
-                        --  And the same eight tokens three at a time, which
-                        --  is two seams: 3, 3, 2.
+                        Compare (Sequence'(1 => 4), Backend, Repack);
+                        Compare (Sequence'(4, 5), Backend, Repack);
+                        Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack);
+                        Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
+                                 Repack);
+
+                        --  And the same sequences through the batched path, which
+                        --  is how a prompt is read. A sequence of one is the same
+                        --  call either way, so the three that are not are the ones
+                        --  worth the second pass.
+                        --
+                        --  Only on a backend that batches. The reference one
+                        --  declines more than a token at a time and says so, which
+                        --  is what it exists to be: asking anyway would compare a
+                        --  refusal against a forward pass.
                         if Batches (Backend) then
-                           Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8),
-                                    Backend, Repack, Batched => True,
-                                    Shared => True, Chunk => 3);
+                           Compare (Sequence'(4, 5), Backend, Repack,
+                                    Batched => True);
+                           Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack,
+                                    Batched => True);
+                           Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
+                                    Repack, Batched => True);
                         end if;
-                     end if;
+
+                        --  And again across a pool, where the rows of every
+                        --  product are partitioned. The reference backend has
+                        --  no pool to share, which it says of itself.
+                        if Shares (Backend) then
+                           Compare (Sequence'(1, 4, 5, 6, 7), Backend, Repack,
+                                    Shared => True);
+                           Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8), Backend,
+                                    Repack, Shared => True);
+
+                           if Batches (Backend) then
+                              Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8),
+                                       Backend, Repack,
+                                       Batched => True, Shared => True);
+                           end if;
+
+                           --  And the same eight tokens three at a time, which
+                           --  is two seams: 3, 3, 2.
+                           if Batches (Backend) then
+                              Compare (Sequence'(4, 4, 4, 5, 5, 6, 7, 8),
+                                       Backend, Repack, Batched => True,
+                                       Shared => True, Chunk => 3);
+                           end if;
+                        end if;
+
+                        <<Next_Repack>>
+                     end loop;
+
+                     B.Free (Image);
                   end loop;
-
-                  B.Free (Image);
                end loop;
             end loop;
          end loop;
@@ -367,14 +401,19 @@ package body Conformance is
             Repacks : constant Natural :=
               L.Repack_Mode'Pos (L.Repack_Mode'Last) + 1;
 
-            --  Two architectures. Four sequences a token at a time on every
-            --  backend; three of them again in one pass on the backends that
-            --  batch; two across a pool on the backends that partition, and
-            --  one of those in one pass as well.
+            --  Two architectures, each with and without a sliding window.
+            --  Four sequences a token at a time on every backend; three of
+            --  them again in one pass on the backends that batch; two across
+            --  a pool on the backends that partition, and one of those in
+            --  one pass as well.
+            --  The windowed half runs one repack mode fewer, for the
+            --  reason written where it is skipped.
+            Per_Model : constant Natural :=
+              Backends * 4 + Batching * 3 + Sharing * 2
+              + (if Batching > 0 and then Sharing > 0 then 2 else 0);
+
             Expected : constant Natural :=
-              Formats * 2 * Repacks
-              * (Backends * 4 + Batching * 3 + Sharing * 2
-                 + (if Batching > 0 and then Sharing > 0 then 2 else 0));
+              Formats * 2 * (Repacks + Repacks - 1) * Per_Model;
          begin
             Result.Ran := Result.Sequences = Expected;
          end;

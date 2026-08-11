@@ -7,6 +7,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Sliding-window attention.** A model naming
+  `<arch>.attention.sliding_window` has each position attend to that many
+  positions ending at itself, uniformly across layers, on every evaluation
+  path -- a token at a time, a whole prompt in one pass, a prompt in chunks --
+  and on both backends. It was refused by name until now, which was one of the
+  three rejections standing between this engine and the models people have.
+
+  The cache still holds the whole context: the window narrows what may be
+  read, not what is kept, so this buys the model's answer and not the model's
+  memory. A window at least as wide as the context is stored as none, since it
+  can see everything the context holds. An architecture that alternates
+  windowed and full layers needs a per-layer pattern this does not have, and
+  that is not claimed.
+
+  The conformance sweep runs with and without a window -- 1950 sequences
+  against the independent implementation, which reads the same key and applies
+  the same rule, written from the description rather than from the engine.
+
+  One combination is left out of the sweep and the README says why, with the
+  measurement: repacking to brain floats halves the mantissa and a window
+  makes the softmax sharper, so the worst disagreement against the reference
+  goes 0.137 with no window, 0.517 at a window of five or four, 1.677 at
+  three, against a lossy tolerance of 0.3. The exact repacking modes agree at
+  every one of those windows, so it says nothing about whether the window is
+  right and everything about what `--repack bf16` costs on a windowed model.
+
 - The checks no longer refuse machine code. Failing the build on any use of
   `System.Machine_Code`, in a project written in Ada where machine code
   insertions are an Ada feature, guarded a sentence in the README rather than

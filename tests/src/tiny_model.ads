@@ -108,6 +108,11 @@ package Tiny_Model is
    --  @param Omit_Biases Leave the attention biases out of a qwen2 file, so
    --    that a model claiming an architecture it does not carry the weights
    --    for is refused rather than read.
+   --  @param Window Sliding-window width the model declares, in positions.
+   --    Zero writes no key at all, which is a model that attends to
+   --    everything committed. A model with a window is not a model with a
+   --    shorter context: the context is what may be held and the window is
+   --    what each position may see.
    --  @param Byte_Pair Write the vocabulary as a byte-pair one -- a `gpt2`
    --    model with a merge table, pieces in the stand-in alphabet and the
    --    same three control tokens -- instead of a SentencePiece one. That
@@ -123,6 +128,7 @@ package Tiny_Model is
       Room           : Positive := Context;
       Qwen           : Boolean := False;
       Omit_Biases    : Boolean := False;
-      Byte_Pair      : Boolean := False);
+      Byte_Pair      : Boolean := False;
+      Window         : Natural := 0);
 
 end Tiny_Model;

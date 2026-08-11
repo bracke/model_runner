@@ -252,9 +252,35 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      if Containers.Has (Source, Model_Key (Settings.Kind, "attention.sliding_window")) then
-         Reject_Feature ("sliding_window_attention");
-         return;
+      --  A sliding window, when the model names one. Read rather than
+      --  refused: each position attends to the window's worth of positions
+      --  ending at itself, and the layers all use the same window.
+      --
+      --  The value is bounded by the context length. A window at least as
+      --  wide as the context can see everything the context holds, which is
+      --  what no window means, so it is stored as none -- the attention loops
+      --  then have no bound to test and a model that names a wide window
+      --  costs nothing to run.
+      if Containers.Has
+           (Source, Model_Key (Settings.Kind, "attention.sliding_window"))
+      then
+         declare
+            Value : Long_Long_Integer;
+            Local : E.Error_Info;
+         begin
+            Containers.Get_Integer
+              (Source, Model_Key (Settings.Kind, "attention.sliding_window"),
+               1, Long_Long_Integer (Bounds.Max_Context_Length), Value, Local);
+
+            if E.Is_Error (Local) then
+               Status := Local;
+               return;
+            end if;
+
+            if Natural (Value) < Settings.Context_Length then
+               Settings.Window := Natural (Value);
+            end if;
+         end;
       end if;
 
       if Containers.Has (Source, Model_Key (Settings.Kind, "attention.value_length"))
@@ -1599,6 +1625,26 @@ package body Model_Runner.Llama is
       end if;
    end Reset;
 
+   --  The earliest position a query at Position may attend to.
+   --
+   --  Without a window that is the beginning; with one it is the window's
+   --  worth of positions ending at Position, so a query at position ten
+   --  with a window of four sees seven, eight, nine and ten. Positions
+   --  before that are in the cache and are not read: the window narrows
+   --  what may be seen, not what is held.
+   function Earliest
+     (Settings : Configuration;
+      Position : Element_Count) return Element_Count
+   is
+      Width : constant Element_Count := Element_Count (Settings.Window);
+   begin
+      if Settings.Window = 0 or else Position < Width then
+         return 0;
+      else
+         return Position - Width + 1;
+      end if;
+   end Earliest;
+
    --------------
    -- Evaluate --
    --------------
@@ -1724,6 +1770,15 @@ package body Model_Runner.Llama is
             --  Causal attention over the committed positions and this one.
             --  Grouped-query attention maps each query head to its key-value
             --  head by division; no key or value head is ever duplicated.
+            --
+            --  A model with a sliding window sees the window's worth of
+            --  positions ending at this one and no more. The positions
+            --  before that are still in the cache -- narrowing what may be
+            --  read is not the same as holding less, and this holds the
+            --  same amount either way.
+            declare
+               First : constant Element_Count := Earliest (Settings, Reserved);
+            begin
             for Head in 0 .. Heads - 1 loop
                declare
                   Group    : constant Element_Count :=
@@ -1733,7 +1788,7 @@ package body Model_Runner.Llama is
                   Scores   : Real_Array renames Item.Scores.all;
                   Usable   : Boolean;
                begin
-                  for Step in 0 .. Reserved loop
+                  for Step in First .. Reserved loop
                      declare
                         Origin : constant Element_Count :=
                           Base + Step * KV_Width + Group * Head_Size;
@@ -1749,7 +1804,7 @@ package body Model_Runner.Llama is
                      end;
                   end loop;
 
-                  K.Softmax (Scores (0 .. Reserved), Usable);
+                  K.Softmax (Scores (First .. Reserved), Usable);
                   if not Usable then
                      Item.Current := Failed;
                      Status := E.Make (E.Tensor_Non_Finite_Value);
@@ -1761,7 +1816,7 @@ package body Model_Runner.Llama is
                      declare
                         Sum : N.Wide_Real := 0.0;
                      begin
-                        for Step in 0 .. Reserved loop
+                        for Step in First .. Reserved loop
                            Sum := Sum
                              + N.Wide_Real (Scores (Step))
                                * N.Wide_Real
@@ -1774,6 +1829,7 @@ package body Model_Runner.Llama is
                   end loop;
                end;
             end loop;
+            end;
 
             Product
               (Item, Current.Attention_Out, Item.Attention,
@@ -2070,8 +2126,11 @@ package body Model_Runner.Llama is
             for Which in 0 .. Count - 1 loop
                declare
                   --  Causal: this token sees the committed context and the
-                  --  batch tokens up to and including itself.
+                  --  batch tokens up to and including itself, and with a
+                  --  sliding window only the window's worth of those.
                   Last_Step : constant Element_Count := Reserved + Which;
+                  First_Step : constant Element_Count :=
+                    Earliest (Settings, Last_Step);
                   Q_At      : constant Element_Count := Slot (Which, Wide);
                begin
                   for Head in 0 .. Heads - 1 loop
@@ -2083,7 +2142,7 @@ package body Model_Runner.Llama is
                         Scores   : Real_Array renames Item.Scores.all;
                         Usable   : Boolean;
                      begin
-                        for Step in 0 .. Last_Step loop
+                        for Step in First_Step .. Last_Step loop
                            declare
                               Origin : constant Element_Count :=
                                 Base + Step * KV_Width + Group * Head_Size;
@@ -2100,7 +2159,7 @@ package body Model_Runner.Llama is
                            end;
                         end loop;
 
-                        K.Softmax (Scores (0 .. Last_Step), Usable);
+                        K.Softmax (Scores (First_Step .. Last_Step), Usable);
                         if not Usable then
                            Release;
                            Item.Current := Failed;
@@ -2114,7 +2173,7 @@ package body Model_Runner.Llama is
                            declare
                               Sum : N.Wide_Real := 0.0;
                            begin
-                              for Step in 0 .. Last_Step loop
+                              for Step in First_Step .. Last_Step loop
                                  Sum := Sum
                                    + N.Wide_Real (Scores (Step))
                                      * N.Wide_Real

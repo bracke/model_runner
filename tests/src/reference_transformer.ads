@@ -121,6 +121,13 @@ private
       Words        : Natural := 0;
       Epsilon      : Long_Float := 1.0E-5;
       Rope_Base    : Long_Float := 10_000.0;
+
+      --  How far back a position may attend, counting itself. Zero is no
+      --  window: everything before it is visible. Read from the model's own
+      --  metadata here, as everything else is, so that the two
+      --  implementations agree because they read the same file rather than
+      --  because one was told what the other found.
+      Window       : Natural := 0;
       Embeddings   : Matrix_Access := null;
       Output       : Matrix_Access := null;
       Output_Norm  : Vector_Access := null;

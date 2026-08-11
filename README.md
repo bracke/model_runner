@@ -120,7 +120,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Kernels | Scalar reference add, multiply, scale, dot, RMS normalization, softmax, SiLU, rotary encoding, with `Wide_Real` accumulation for length-dependent reductions |
 | Tokenizer | SentencePiece (`llama`) vocabulary: scores, token types, special tokens, byte fallback, greedy highest-score merge encoding. Byte-pair (`gpt2`) vocabulary: merge tables by rank, byte-level stand-in alphabet, and six cutting rules named by `tokenizer.ggml.pre`, a vocabulary naming any other being refused by name rather than cut by the wrong one. Both with UTF-8-boundary-safe incremental decoding. A special-token identifier that is absent leaves the token unset; one that names no token refuses the model rather than being ignored |
 | Chat templates | Bounded allowlisted engine: `for`, `if`/`elif`/`else`, `set`, comments, `+`-joined output, `==`/`!=`/`and`/`or`/`not` with parentheses, `is defined`/`is none`/`in`, `trim` and `length`, message indexing, front slicing such as `messages[1:]`, `loop.first`/`last`/`index`, whitespace control. Enough that the template a current Llama-3 file ships with renders. Compiled and validated at load time; `macro`, `include` and `import` are rejected there, while a value the engine cannot compute -- a function call, `tojson`, arithmetic -- is refused if the render reaches it, which the tool-calling branches of a plain conversation never do |
-| Architecture profile | `llama` and `qwen2`, each read under its own metadata keys and refused by name otherwise. Qwen2 is the same shape with a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, rejection of mixture-of-experts / sliding-window / asymmetric key-value widths / unsupported rotary scaling, tensor resolution and shape validation, tied-output aliasing |
+| Architecture profile | `llama` and `qwen2`, each read under its own metadata keys and refused by name otherwise. Qwen2 is the same shape with a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, rejection of mixture-of-experts / asymmetric key-value widths / unsupported rotary scaling, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, uniformly across layers |
 | Execution | Embedding lookup, per-layer RMS norm, Q/K/V projection, rotary encoding, grouped-query causal attention without duplicating key or value heads, output projection, SiLU-gated feed-forward, residuals, raw logits |
 | KV cache and session | Explicit cache sized with checked arithmetic, transactional commit, state machine, reset preserving allocations, committed-prefix reuse |
 | Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, repetition penalty, frequency and presence penalties, temperature, top-k, top-p, min-p, renormalize, select. Greedy is tie-broken to the lowest token and consumes no random state; xoshiro256++ seeded per session |
@@ -263,8 +263,9 @@ megabyte, which is what a committed model would. What the suite covers:
   engine does not implement, no token list, input that is not UTF-8, and a
   buffer too small for the tokens. The architecture profile likewise: a file
   naming no architecture or another one, widths that do not divide, an odd
-  rotary width, an unsupported rotary scaling, a mixture-of-experts or
-  sliding-window model, and an embedding tensor of the wrong shape. A prompt
+  rotary width, an unsupported rotary scaling, a mixture-of-experts model,
+  a sliding window of no positions, and an embedding tensor of the wrong
+  shape. A prompt
   file that is absent, a directory, past the size limit or not UTF-8 likewise,
   with a sound one read. A file that ends inside a field is truncated, a rank
   past the limit is an invalid rank, and an extent of zero is an invalid
@@ -475,8 +476,8 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 1170, logits compared 12480,
-             worst absolute 3.46898714553845E-06,
+conformance: sequences 1950, logits compared 24960,
+             worst absolute 2.14340155850756E-05,
              worst relative 8.94395650089654E-04,
              rounded logits compared 6240,
              rounded worst absolute 1.36861269753309E-01,
@@ -484,7 +485,8 @@ conformance: sequences 1170, logits compared 12480,
              outside tolerance 0
 ```
 
-Both architectures, both backends, every evaluation path -- a token at a
+Both architectures, with and without a sliding window, both backends, every
+evaluation path -- a token at a
 time, a whole prompt in one pass, and a prompt handed over in several --
 serial and across a worker pool, every repacking mode, and every one of the
 thirteen weight formats the engine decodes: binary32, F16, BF16, Q4_0, Q4_1,
@@ -493,6 +495,27 @@ them and the reference reads each of them, both worked out from the layouts
 rather than by calling the engine, so a packing mistake cannot be common to
 the two sides. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
 outside it.
+
+One combination is left out of that sweep, and the reason is a measurement.
+Repacking to brain floats halves the mantissa, and a sliding window makes the
+softmax sharper, so a perturbation that full attention averages away moves a
+logit instead. Against the reference, worst absolute over this sweep:
+
+| window | `--repack bf16` |
+|---|---|
+| none | 0.137 |
+| 6 | 0.137 |
+| 5 | 0.517 |
+| 4 | 0.517 |
+| 3 | 1.677 |
+
+against a lossy tolerance of 0.3. The exact repacking modes agree at every one
+of those windows -- 2.1e-05 at a window of three against 3.5e-06 with none --
+so this says nothing about whether the window is right and everything about
+what `--repack bf16` costs on a windowed model. Comparing it in the sweep
+would mean asserting a tolerance nobody has grounds for. **Do not use
+`--repack bf16` with a narrow sliding window**; `--repack f32` is exact and
+costs memory instead.
 
 The rounded figures are `--repack bf16`, counted apart because mixing them in
 would let the lossy path's error hide the exact path's. They are the number

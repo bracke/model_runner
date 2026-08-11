@@ -3417,10 +3417,24 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
               "a mixture-of-experts model was accepted");
 
+      --  A sliding window is read rather than refused: the configuration is
+      --  sound and preparation goes on to want the tensors, exactly as it
+      --  does without one. This asserted the refusal until the window was
+      --  implemented.
       Sound (Builder);
-      Fixtures.Add_U32 (Builder, "llama.attention.sliding_window", 4096);
-      Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
-              "a sliding-window model was accepted");
+      Fixtures.Add_U32 (Builder, "llama.attention.sliding_window", 4);
+      Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
+              "a sliding-window model was refused rather than read");
+
+      --  A window is a count of positions, so zero is not one. Read through
+      --  the same accessor that bounds every other count, which is what
+      --  turns a nonsense value into a diagnostic rather than a subtraction
+      --  that wraps.
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.attention.sliding_window", 0);
+      Assert (Outcome (Builder) = E.GGUF_Metadata_Out_Of_Range,
+              "a sliding window of no positions was accepted: "
+              & E.Error_Code'Image (Outcome (Builder)));
 
       --  A sound configuration reaches the tensors and stops for want of
       --  them, which is what makes every refusal above a configuration one.

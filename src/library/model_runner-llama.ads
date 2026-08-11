@@ -30,10 +30,18 @@ with Model_Runner.Tokenizer;
 --  that gets its own profile, because a profile that answers for everything
 --  answers for nothing.
 --
---  Rejected features. Mixture of experts, sliding-window attention, attention
---  sinks, cross-attention, multimodal projections, recurrent state,
---  unsupported rotary scaling, unsupported normalization and unsupported
---  activations are rejected during preparation, before any evaluation.
+--  Rejected features. Mixture of experts, attention sinks, cross-attention,
+--  multimodal projections, recurrent state, unsupported rotary scaling,
+--  unsupported normalization and unsupported activations are rejected during
+--  preparation, before any evaluation.
+--
+--  Sliding-window attention is implemented rather than rejected: a model that
+--  names a window has each position attend to the window's worth of
+--  positions ending at itself, and one that names none attends to everything
+--  committed. The window is uniform across layers, which is what the key
+--  means for a model that applies it to every layer; an architecture that
+--  alternates windowed and full layers needs more than this and is not
+--  claimed.
 --
 --  Staged ownership. Prepare acquires the tensor arena, the tokenizer and the
 --  layer table into the Model object and only marks it ready once every stage
@@ -89,6 +97,16 @@ package Model_Runner.Llama is
       Rope_Base       : Wide_Real := 10_000.0;
       Rope_Scale      : Wide_Real := 1.0;
       Tied_Output     : Boolean := False;
+
+      --  How far back attention may look, in positions, counting the
+      --  current one. Zero is no window at all: every committed position is
+      --  visible, which is what a model without the key means.
+      --
+      --  A model with a window is not a model with a shorter context. The
+      --  context is still the bound on how much may be held; the window is
+      --  the bound on how much each position may see. Both are needed and
+      --  they are not the same number.
+      Window          : Natural := 0;
    end record;
 
    --  A prepared, immutable model.

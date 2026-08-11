@@ -25,6 +25,7 @@ with Model_Runner.Tokenizer;
 with Conformance;
 with BPE_Vocabulary;
 with Reference_Tokenizer;
+with Reference_Transformer;
 with Tiny_Model;
 
 package body Tests.Inference_Cases is
@@ -1870,6 +1871,139 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  A sliding window narrows what a position may attend to.
+   --
+   --  Two claims, and the second is worthless without the first. The window
+   --  has to change the answer -- a model that declares one and computes the
+   --  same logits as a model that does not has not implemented anything --
+   --  and the answer it changes to has to be the one an implementation
+   --  written from the description arrives at independently.
+   --
+   --  The comparison is exact rather than within a tolerance: no repacking,
+   --  binary32 weights, so the two run the same arithmetic on the same
+   --  values and may differ only by summation order. The sweep in
+   --  Conformance covers the window across every format, backend and repack
+   --  mode; this is the sharp case, where the window is two and every
+   --  position past the second has something to forget.
+   procedure Sliding_Window_Narrows_Attention
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array :=
+        [1, 4, 5, 6, 7, 4, 5, 6];
+
+      --  The logits after the whole prompt, from the engine.
+      procedure Engine_Logits
+        (Window : Natural;
+         Result : out Logit_Vector)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Image, Window => Window);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "evaluation failed: "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+
+            L.Close (Live);
+         end;
+
+         B.Free (Image);
+      end Engine_Logits;
+
+      --  And from the implementation written from the description.
+      procedure Reference_Logits
+        (Window : Natural;
+         Result : out Reference_Transformer.Real_Vector;
+         Made   : out Boolean)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Image, Window => Window);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Second : Reference_Transformer.Model;
+            Loaded : Boolean;
+
+            Tokens : Reference_Transformer.Token_Vector (Prompt'Range);
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+            Assert (Loaded, "the reference did not read the model");
+
+            for Index in Prompt'Range loop
+               Tokens (Index) := Integer (Prompt (Index));
+            end loop;
+
+            Reference_Transformer.Run (Second, Tokens, Result, Made);
+            Assert (Made, "the reference produced no logits");
+
+            Reference_Transformer.Close (Second);
+            Containers.Close (Parsed);
+         end;
+
+         B.Free (Image);
+      end Reference_Logits;
+
+      Windowed, Whole : Logit_Vector;
+      Apart : Model_Runner.Numerics.Real := 0.0;
+   begin
+      Engine_Logits (0, Whole);
+      Engine_Logits (2, Windowed);
+
+      for Index in Whole'Range loop
+         Apart := Model_Runner.Numerics.Real'Max
+           (Apart, abs (Whole (Index) - Windowed (Index)));
+      end loop;
+
+      Assert (Apart > 0.0,
+              "a model declaring a window of two produced the logits of a "
+              & "model with no window, so the window narrowed nothing");
+
+      --  And the narrowed answer is the one the reference arrives at.
+      declare
+         Expected : Reference_Transformer.Real_Vector
+           (0 .. Tiny_Model.Vocabulary - 1);
+         Worst : Long_Float := 0.0;
+         Made  : Boolean;
+      begin
+         Reference_Logits (2, Expected, Made);
+
+         for Index in Expected'Range loop
+            Worst := Long_Float'Max
+              (Worst,
+               abs (Long_Float (Windowed
+                      (Model_Runner.Numerics.Element_Count (Index)))
+                    - Expected (Index)));
+         end loop;
+
+         Assert (Worst < 1.0E-3,
+                 "the engine and the independent implementation disagree "
+                 & "about a windowed model by" & Long_Float'Image (Worst));
+      end;
+   end Sliding_Window_Narrows_Attention;
+
    procedure Refused_Generation_Names_Its_Reason
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1944,6 +2078,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Byte_Pair_Model_Runs_End_To_End'Access,
          "a byte-pair model prepares, evaluates and reads back");
+      Register_Routine
+        (T, Sliding_Window_Narrows_Attention'Access,
+         "a sliding window narrows what a position may attend to");
       Register_Routine
         (T, One_Beginning_Token_However_It_Arrives'Access,
          "a prompt carries exactly one beginning token, however it arrives");

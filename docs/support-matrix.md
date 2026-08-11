@@ -44,9 +44,10 @@ container validation and is rejected by `Model_Runner.Tensors.Make` with
 | `qwen2` | Implemented: the same shape with a bias on each attention projection and the split rotary pairing. The biases are required, not optional. Both architectures are compared against an independent implementation by `tests conformance` |
 | Everything else | Rejected: `MR-ARCH-0002` |
 
-Explicitly rejected features: mixture of experts, sliding-window attention,
-asymmetric key and value widths, and rotary scaling other than `none` and
-`linear`.
+| Sliding-window attention | Implemented: a model naming `<arch>.attention.sliding_window` has each position attend to that many positions ending at itself, uniformly across layers, on every evaluation path and both backends. The cache still holds the whole context -- the window narrows what may be read, not what is kept -- so this buys the model's answer and not the model's memory. An architecture that alternates windowed and full layers needs a per-layer pattern this does not have and is not claimed |
+
+Explicitly rejected features: mixture of experts, asymmetric key and value
+widths, and rotary scaling other than `none` and `linear`.
 
 ## Tokenizer
 
