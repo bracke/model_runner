@@ -2449,6 +2449,161 @@ package body Tests.CLI_Cases is
       end;
    end Backends_Agree;
 
+   --  Memory mapping, asked for rather than allowed.
+   --
+   --  The default policy maps when it can and reads when it cannot, so a
+   --  host on which mapping quietly stopped working would behave correctly
+   --  and slowly, and nothing here would fail. What would have caught it was
+   --  incidental: one line of a README transcript the suite compares.
+   --
+   --  --mmap exists to turn that silent fallback into an error, and no test
+   --  had ever asked it to. The constants it goes through -- O_RDONLY,
+   --  PROT_READ, MAP_PRIVATE -- are numbers written into a directory named
+   --  posix that Linux and macOS both compile, which is where the same kind
+   --  of number was wrong for macOS in the tests crate.
+   --
+   --  The assertions hold on a host that maps and on one that cannot: what
+   --  is asked is that the three policies agree with each other, not that
+   --  this host has mapping. That is deliberate and it is also the limit of
+   --  this test: with the mapping constants wrong, the default would stop
+   --  mapping, --mmap would refuse, and these assertions would still hold,
+   --  because they would all agree.
+   --
+   --  What catches that is the published transcript, which contains the
+   --  line "memory mapped           yes" and is compared on every host --
+   --  breaking MAP_PRIVATE fails it, which was checked. So this test is
+   --  about the policies and that one is about the mapping; neither is the
+   --  other, and saying so is better than implying this covers both.
+   procedure Mapping_Is_Asked_For_Rather_Than_Allowed
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model : constant String := "obj/mapping-model.gguf";
+      Log   : constant String := "obj/mapping-errors.txt";
+
+      --  Inspect and hand back what reached standard output, with the
+      --  command's status.
+      function Inspected
+        (Extra  : String;
+         Status : out Natural) return String
+      is
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+      begin
+         Add (Source, "inspect");
+         Add (Source, Model);
+         if Extra /= "" then
+            Add (Source, Extra);
+         end if;
+
+         Create (Handle, Out_File, Log);
+         Set_Error (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         return Last_Output;
+      end Inspected;
+
+      --  Run with a mapping policy and report the status.
+      function Ran_With (Policy : String) return Natural is
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Add (Source, Policy);
+
+         Create (Handle, Out_File, Log);
+         Set_Error (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         return Status;
+      end Ran_With;
+
+      --  What the report says after "memory mapped".
+      function Mapped (Report : String) return Boolean is
+         Marker : constant String := "memory mapped";
+      begin
+         for Index in Report'First .. Report'Last - Marker'Length loop
+            if Report (Index .. Index + Marker'Length - 1) = Marker then
+               for Look in Index + Marker'Length .. Report'Last loop
+                  if Report (Look) = 'y' then
+                     return True;
+                  elsif Report (Look) = 'n'
+                    or else Report (Look) = Character'Val (10)
+                  then
+                     return False;
+                  end if;
+               end loop;
+            end if;
+         end loop;
+
+         return False;
+      end Mapped;
+
+      Status : Natural;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      declare
+         Default : constant String := Inspected ("", Status);
+         By_Hand : Boolean;
+      begin
+         Assert (Status = 0, "an ordinary inspection failed");
+
+         --  The two policies belong to run rather than to inspect, which
+         --  is the command that reports whether a file was mapped -- so the
+         --  question is asked of one and the answer of the other.
+         By_Hand := Mapped (Default);
+
+         Assert (Ran_With ("--no-mmap") = 0,
+                 "--no-mmap failed, and reading a file is always possible: "
+                 & Text_Of (Log));
+
+         if By_Hand then
+            Assert (Ran_With ("--mmap") = 0,
+                    "the default mapped the file and --mmap failed: "
+                    & Text_Of (Log));
+         else
+            Assert (Ran_With ("--mmap") /= 0,
+                    "the default could not map the file and --mmap "
+                    & "reported success");
+            Assert (Project_Tools.Text.Contains
+                      (Text_Of (Log),
+                       E.Diagnostic_Code (E.Lifecycle_Mapping_Required)),
+                    "--mmap failed without naming the code that says "
+                    & "mapping was required: " & Text_Of (Log));
+         end if;
+      end;
+   end Mapping_Is_Asked_For_Rather_Than_Allowed;
+
    --  Options with a consequence, observed through the command.
    --
    --  An option can be parsed into the right field and still do nothing:
@@ -7798,6 +7953,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Architectures_Are_Read_By_Name'Access,
          "each architecture is read with its own keys and its own rotation");
+      Register_Routine
+        (T, Mapping_Is_Asked_For_Rather_Than_Allowed'Access,
+         "memory mapping is asked for rather than allowed");
       Register_Routine
         (T, Options_With_A_Consequence_Have_It'Access,
          "options with a consequence have it, seen through the command");

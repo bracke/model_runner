@@ -4464,6 +4464,56 @@ package body Checks is
          end if;
       end;
 
+      --  A shared-host directory says which hosts it is shared by.
+      --
+      --  src/platform/posix and tests/src/platform/posix are compiled for
+      --  Linux and for macOS, and a number that is right for one is not
+      --  thereby right for the other. That is not a hypothetical: the
+      --  capture in the tests crate carried Linux's create-and-truncate
+      --  flags -- O_CREAT is 8#100# there and 16#200# on macOS -- so on
+      --  macOS it never truncated, and a short capture read back as the
+      --  longer one before it. Three tests failed on that host and nowhere
+      --  else, and the file's own name said posix, which reads as portable.
+      --
+      --  What is asked is that a source in one of those directories names
+      --  both hosts. It cannot check a number against a header; it can make
+      --  the author of the next one say which hosts they checked.
+      declare
+         procedure Visit_Shared (Relative : String) is
+            Text : constant String := Contents (Relative);
+
+            function Holds (Word : String) return Boolean is
+            begin
+               for Index in Text'First .. Text'Last - Word'Length + 1 loop
+                  if Text (Index .. Index + Word'Length - 1) = Word then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            end Holds;
+         begin
+            if Relative = "tests/src/checks.adb" then
+               return;
+            end if;
+
+            Result.Performed := Result.Performed + 1;
+
+            if not (Holds ("Linux") or else Holds ("linux")) then
+               Fail (Relative & " is compiled for Linux and for macOS and "
+                     & "names neither; say which hosts the values in it "
+                     & "were checked against");
+            elsif not (Holds ("macOS") or else Holds ("macos")) then
+               Fail (Relative & " is compiled for Linux and for macOS and "
+                     & "names only one of them");
+            end if;
+         end Visit_Shared;
+
+         procedure Scan_Shared is new For_Each_Source (Visit_Shared);
+      begin
+         Scan_Shared ("src/platform/posix");
+         Scan_Shared ("tests/src/platform/posix");
+      end;
+
       --  No host call is bound straight from the tests crate.
       --
       --  Nothing reads a text file raw and then measures or matches it, and

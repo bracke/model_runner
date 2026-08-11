@@ -16,6 +16,10 @@ package body Raise_Interrupt is
       Signal  : Interfaces.C.int) return Interfaces.C.int
    with Import, Convention => C, External_Name => "kill";
 
+   --  Two on Linux and on macOS alike, which this directory is compiled
+   --  for both of. A number right for one host is not thereby right for the
+   --  other: the capture in this crate had Linux's create-and-truncate
+   --  flags and stopped truncating on macOS.
    SIGINT : constant Interfaces.C.int := 2;
 
    -------------

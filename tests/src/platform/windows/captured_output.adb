@@ -63,16 +63,23 @@ package body Captured_Output is
    --  crate's own sources and not a dependency's, and a body that reaches
    --  outside cannot be compiled from a machine of the wrong kind.
    --  Empty the file, portably, before the descriptor is opened on it.
-   procedure Empty (Path : String) is
+   --
+   --  Reported rather than swallowed. This is the whole of the truncation:
+   --  if it does not happen, the descriptor opens on whatever was there
+   --  before and a short capture reads back as the longer one before it,
+   --  which is the defect this replaced. A procedure whose one job can fail
+   --  in silence is the same defect with a different spelling.
+   function Emptied (Path : String) return Boolean is
       Handle : Ada.Streams.Stream_IO.File_Type;
    begin
       Ada.Streams.Stream_IO.Create
         (Handle, Ada.Streams.Stream_IO.Out_File, Path);
       Ada.Streams.Stream_IO.Close (Handle);
+      return True;
    exception
       when others =>
-         null;
-   end Empty;
+         return False;
+   end Emptied;
 
    function Contents (Path : String) return String is
       use Ada.Streams;
@@ -141,7 +148,11 @@ package body Captured_Output is
       Where_L := Natural'Min (Path'Length, Where'Length);
       Where (1 .. Where_L) := Path (Path'First .. Path'First + Where_L - 1);
 
-      Empty (Path);
+      if not Emptied (Path) then
+         Interfaces.C.Strings.Free (Name);
+         return;
+      end if;
+
       Opened := C_Open (Name, Write_Only, 0);
       Interfaces.C.Strings.Free (Name);
 

@@ -13,6 +13,21 @@ package body Model_Runner.Platform.Mapping is
 
    --  POSIX constants. Declared here rather than imported so that the values
    --  used are visible in the source and testable against the host headers.
+   --
+   --  This directory is compiled for Linux and for macOS, and a number that
+   --  is right for one is not thereby right for the other: the tests crate
+   --  had 8#1101# here for create-and-truncate, which is Linux's spelling
+   --  and asks for something else on macOS, and a capture silently stopped
+   --  truncating there. These three agree on both -- O_RDONLY is 0,
+   --  PROT_READ 1 and MAP_PRIVATE 2 in <fcntl.h> and <sys/mman.h> on each --
+   --  and that is a fact somebody checked rather than a fact about POSIX.
+   --
+   --  What would catch it if one of them drifted is the published
+   --  transcript, which carries the line "memory mapped yes" and is
+   --  compared on every host: a wrong MAP_PRIVATE stops the mapping and
+   --  fails it. Nothing else would, because the mapping policy falls back
+   --  to reading and a program that reads instead of mapping is correct and
+   --  slow.
    O_RDONLY  : constant Interfaces.C.int := 0;
    PROT_READ : constant Interfaces.C.int := 1;
    MAP_PRIVATE : constant Interfaces.C.int := 2;

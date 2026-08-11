@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Memory mapping is asked for rather than allowed. The default policy maps
+  when it can and reads when it cannot, so a host on which mapping quietly
+  stopped working would behave correctly and slowly with nothing failing.
+  `--mmap` exists to turn that into an error and no test had asked it to: the
+  three policies now have to agree with each other, on a host that maps and
+  on one that cannot.
+
+- A directory compiled for more than one host says which. `src/platform/posix`
+  and `tests/src/platform/posix` are built for Linux and for macOS, and a
+  number right for one is not thereby right for the other -- the capture
+  carried Linux's create-and-truncate flags and silently stopped truncating on
+  macOS. A source in one of those directories must now name both hosts, which
+  cannot check a number against a header but can make the next author say
+  which hosts they checked.
+
 - Options with a consequence are made to have it, through the command.
   `--color` was checked as a parse and at the presentation layer with the mode
   handed over in Ada, and nothing ran the command and looked for escape

@@ -4,6 +4,14 @@ with Ada.Interrupts.Names;
 
 with Model_Runner.Text;
 
+--  Interrupt handling on Linux and on macOS, which this directory is
+--  compiled for both of.
+--
+--  Nothing here is a number: the interrupt is named through
+--  Ada.Interrupts.Names.SIGINT, so the runtime supplies whatever the host
+--  calls it and there is no value to be right about on one host and wrong on
+--  the other. That is worth saying in a directory where being wrong about
+--  exactly that stopped a capture truncating on macOS and nowhere else.
 package body Model_Runner.Platform.Signals is
 
    use type Model_Runner.Cancellation.Token_Reference;
