@@ -664,6 +664,10 @@ package body Model_Runner.CLI.Execute is
       Prepared  : L.Model;
       Condition : E.Error_Info;
       Ignored   : E.Error_Info;
+
+      --  The first refusal this inspection printed, if any. The report goes
+      --  on past it; the status does not pretend it did not happen.
+      Refused   : E.Error_Info;
    begin
       Load
         (Item, Screen, Source, Container, Prepared, False, null, null,
@@ -677,10 +681,29 @@ package body Model_Runner.CLI.Execute is
       end if;
 
       if Item.Validate_Only then
-         Screen.Put_Message ("cli.inspect.valid");
+         --  The container is sound; whether this build can use the model is
+         --  the other half of the question, and the verdict is the whole of
+         --  what this option prints. It used to answer only the first half:
+         --  a model whose architecture this build does not implement was
+         --  called valid and left with a success, while `run` on the same
+         --  file refuses it and leaves with four.
+         declare
+            Settings : L.Configuration;
+            Detail   : E.Error_Info;
+         begin
+            L.Read_Config (Container, Model_Bounds (Item), Settings, Detail);
+
+            if E.Is_Error (Detail) then
+               Pres.Report (Screen, Detail);
+               Status := E.Exit_Status (Detail);
+            else
+               Screen.Put_Message ("cli.inspect.valid");
+               Status := E.Exit_Success;
+            end if;
+         end;
+
          Containers.Close (Container);
          Files.Close (Source);
-         Status := E.Exit_Success;
          return;
       end if;
 
@@ -755,7 +778,13 @@ package body Model_Runner.CLI.Execute is
          L.Read_Config (Container, Model_Bounds (Item), Settings, Detail);
 
          if E.Is_Error (Detail) then
+            --  Reported and remembered. The rest of the report is still
+            --  worth printing -- a reader inspecting a file this build
+            --  cannot run wants to see what is in it -- but a command that
+            --  printed an error and left with a success told a script the
+            --  file was fine.
             Pres.Report (Screen, Detail);
+            Refused := Detail;
          else
             Pres.Put_Heading (Screen, "cli.inspect.heading.architecture", Pres.Answer);
             Pres.Put_Field
@@ -1001,7 +1030,9 @@ package body Model_Runner.CLI.Execute is
       L.Close (Prepared, Ignored);
       Containers.Close (Container);
       Files.Close (Source);
-      Status := E.Exit_Success;
+      Status :=
+        (if E.Is_Error (Refused) then E.Exit_Status (Refused)
+         else E.Exit_Success);
    end Do_Inspect;
 
    ---------------------------------------------------------------------------
@@ -1329,6 +1360,21 @@ package body Model_Runner.CLI.Execute is
 
          if Outcome.Reason = Gen.Runtime_Error then
             Fail (Outcome.Error);
+            return;
+         end if;
+
+         --  A run the reader interrupted did not succeed, and said so with
+         --  a zero. Cancelled is not Runtime_Error, so it fell through to
+         --  Exit_Success and a script around this program was told the
+         --  generation had finished normally -- while `help` promises "7
+         --  cancelled" and the error table maps MR-GEN-0006 to seven.
+         --
+         --  Reported through the same path as any other refusal, so the
+         --  status is the table's answer rather than a second one written
+         --  here. Cancellation during loading already came out this way;
+         --  only cancellation during generation did not.
+         if Outcome.Reason = Gen.Cancelled then
+            Fail (E.Make (E.Generation_Cancelled));
             return;
          end if;
 

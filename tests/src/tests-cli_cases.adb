@@ -2449,6 +2449,213 @@ package body Tests.CLI_Cases is
       end;
    end Backends_Agree;
 
+   --  The exit statuses the help promises, produced.
+   --
+   --  The last line of `model_runner help` names eight, and they are a
+   --  promise to whoever scripts around this program: a corrupt file and a
+   --  model this build cannot run are told apart by that number and by
+   --  nothing else. Counting what any test observed found five of the eight
+   --  -- 4, 7 and 8 were named nowhere in the suite.
+   --
+   --  Asking for 7 found that it was not produced at all. A run the reader
+   --  interrupts ends with Cancelled, which is not Runtime_Error, so the
+   --  command fell through to success and told a script the generation had
+   --  finished normally. That is fixed; what is checked here is the status
+   --  the fix goes through, because driving the signal itself through the
+   --  command cannot be made safe: the handler is installed for the run and
+   --  removed after it, and a signal that arrives in between kills this
+   --  process rather than failing a test.
+   --
+   --  8 is not produced on purpose by anything. It is what an invariant
+   --  violation comes out as, and a test that reached it would be a test
+   --  that had already found a defect; Unreached_Codes says the same of the
+   --  codes behind it.
+   procedure Promised_Exit_Statuses_Are_Produced
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Log : constant String := "obj/statuses-errors.txt";
+
+      --  Run a command line and report its status and diagnostics.
+      procedure Ran_Saying
+        (Words  : in out Fixed_Arguments;
+         Status : out Natural;
+         Said   : out Boolean)
+      is
+         Handle : File_Type;
+      begin
+         Create (Handle, Out_File, Log);
+         Set_Error (Handle);
+         begin
+            Ran (Words, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+         Said := Text_Of (Log)'Length > 0;
+      end Ran_Saying;
+
+      Status : Natural;
+      Spoke  : Boolean;
+   begin
+      --  Four: a model this build will not run, as opposed to one it cannot
+      --  read. A reader whose script sees three knows the file is broken;
+      --  one that sees four knows the file is sound and this program is not
+      --  the one to run it, and nothing else in the output distinguishes
+      --  them for a machine.
+      declare
+         Model   : constant String := "obj/statuses-unsupported.gguf";
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Handle  : Ada.Streams.Stream_IO.File_Type;
+         Source  : Fixed_Arguments;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "mamba");
+         Fixtures.Build (Builder, Image);
+
+         Ada.Streams.Stream_IO.Create
+           (Handle, Ada.Streams.Stream_IO.Out_File, Model);
+
+         declare
+            use Ada.Streams;
+
+            Block  : Stream_Element_Array
+              (1 .. Stream_Element_Offset (Image.all'Length));
+            Target : Stream_Element_Offset := 0;
+         begin
+            for Value of Image.all loop
+               Target := Target + 1;
+               Block (Target) := Stream_Element (Value);
+            end loop;
+            Stream_IO.Write (Handle, Block);
+         end;
+
+         Ada.Streams.Stream_IO.Close (Handle);
+         B.Free (Image);
+
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--prompt");
+         Add (Source, "hi");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+         Ran_Saying (Source, Status, Spoke);
+
+         Assert (Status = 4,
+                 "a model this build does not implement left with status"
+                 & Natural'Image (Status) & " rather than four: "
+                 & Text_Of (Log));
+         Assert (Spoke, "an unsupported model was refused in silence");
+
+         --  And an inspection of the same file, which used to print that
+         --  error and leave with a success -- telling a script the file was
+         --  fine. The report is still printed; the status no longer
+         --  pretends nothing was wrong.
+         declare
+            Looking : Fixed_Arguments;
+         begin
+            Add (Looking, "inspect");
+            Add (Looking, Model);
+            Ran_Saying (Looking, Status, Spoke);
+
+            Assert (Status = 4,
+                    "inspecting a model this build does not implement left "
+                    & "with status" & Natural'Image (Status));
+            Assert (Project_Tools.Text.Contains (Last_Output, "file size"),
+                    "the inspection stopped reporting at the first refusal");
+         end;
+
+         --  And --validate, whose whole output is a verdict, used to call
+         --  such a file valid.
+         declare
+            Judging : Fixed_Arguments;
+         begin
+            Add (Judging, "inspect");
+            Add (Judging, Model);
+            Add (Judging, "--validate");
+            Ran_Saying (Judging, Status, Spoke);
+
+            Assert (Status = 4,
+                    "--validate called a model this build cannot run valid,"
+                    & " leaving with status" & Natural'Image (Status));
+         end;
+
+         Ada.Directories.Delete_File (Model);
+      end;
+
+      --  Seven, through the path the command now takes for it. The status
+      --  is the error table's answer, which is what makes it the same
+      --  number the documentation prints.
+      Assert (E.Exit_Status (E.Make (E.Generation_Cancelled)) = 7,
+              "a cancelled generation does not map to seven, so the command "
+              & "that reports it cannot produce the status the help "
+              & "promises");
+   end Promised_Exit_Statuses_Are_Produced;
+
+   --  A locale this build does not carry is warned about and used anyway.
+   --
+   --  The program falls back to English and says so. Both halves matter: a
+   --  reader who asked for Danish and silently got English has been misled,
+   --  and one whose command failed because a locale was missing has been
+   --  stopped for no reason. The message existed, the catalog check asserted
+   --  it existed in every locale, and nothing had ever made the program say
+   --  it.
+   procedure Unavailable_Locale_Warns_And_Continues
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Log    : constant String := "obj/locale-errors.txt";
+      Source : Fixed_Arguments;
+      Handle : File_Type;
+      Status : Natural;
+   begin
+      Add (Source, "--locale");
+      Add (Source, "zz");
+      Add (Source, "version");
+
+      Create (Handle, Out_File, Log);
+      Set_Error (Handle);
+      begin
+         Ran (Source, Status);
+      exception
+         when others =>
+            Set_Error (Standard_Error);
+            Close (Handle);
+            raise;
+      end;
+      Set_Error (Standard_Error);
+      Close (Handle);
+
+      Assert (Status = 0,
+              "a locale this build does not carry stopped the command:"
+              & Natural'Image (Status));
+
+      declare
+         Said : constant String := Text_Of (Log);
+      begin
+         Assert (Project_Tools.Text.Contains (Said, "zz"),
+                 "the warning did not name the locale that was asked for: "
+                 & Said);
+         Assert (Project_Tools.Text.Contains (Said, "unavailable"),
+                 "the program did not say the locale was unavailable: "
+                 & Said);
+      end;
+
+      --  And the answer still came out, in the language it fell back to.
+      Assert (Project_Tools.Text.Contains (Last_Output, "model_runner"),
+              "the command warned about the locale and then said nothing: "
+              & Last_Output);
+   end Unavailable_Locale_Warns_And_Continues;
+
    --  Memory mapping, asked for rather than allowed.
    --
    --  The default policy maps when it can and reads when it cannot, so a
@@ -7953,6 +8160,13 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Architectures_Are_Read_By_Name'Access,
          "each architecture is read with its own keys and its own rotation");
+      Register_Routine
+        (T, Promised_Exit_Statuses_Are_Produced'Access,
+         "the exit statuses the help promises are produced");
+      Register_Routine
+        (T, Unavailable_Locale_Warns_And_Continues'Access,
+         "a locale this build does not carry is warned about and used "
+         & "anyway");
       Register_Routine
         (T, Mapping_Is_Asked_For_Rather_Than_Allowed'Access,
          "memory mapping is asked for rather than allowed");

@@ -429,6 +429,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- A run the reader interrupts leaves with the status the help promises.
+  `Cancelled` is not `Runtime_Error`, so the command fell through to success
+  and told a script the generation had finished normally, while `help` names
+  "7 cancelled" and the error table maps `MR-GEN-0006` to seven. Cancellation
+  during loading already came out that way; only cancellation during
+  generation did not.
+
+- An inspection that prints a refusal leaves with the status of that refusal.
+  A model whose architecture this build does not implement was reported --
+  correctly, and the rest of the report is worth having -- and the command
+  left with a success, telling a script the file was fine. And `--validate`,
+  whose whole output is a verdict, called such a file valid: it answered
+  whether the container was sound and not whether this build can use the
+  model, which is the question the option appears to answer and the one
+  `run` answers with four.
+
+  Found by asking which of the eight exit statuses the help promises any test
+  observes. Five of the eight; 4, 7 and 8 were named nowhere. Asking for
+  seven found it was produced by nothing at all, and asking for four found
+  two commands that printed an error and left with a zero.
+
 - A capture empties its file through the standard library before opening a
   descriptor on it, instead of asking for create-and-truncate with flag values
   that are not the same on every host. `O_CREAT` is 8#100# on Linux and
