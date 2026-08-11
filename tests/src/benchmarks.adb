@@ -88,7 +88,11 @@ package body Benchmarks is
                Data (Data'First + Block * Width + 1) := 16#3E#;
             end loop;
 
-         when G.Type_Q4_0 | G.Type_Q8_0 | G.Type_Q5_0 =>
+         when G.Type_Q4_0 | G.Type_Q8_0 | G.Type_Q5_0
+            | G.Type_IQ4_NL | G.Type_IQ4_XS =>
+            --  One half-precision scale at the head of the block. The
+            --  super-block form's sub-block scales are integers, so they
+            --  cannot be anything but finite whatever bytes they hold.
             for Block in 0 .. Blocks - 1 loop
                Data (Data'First + Block * Width + 1) := 16#30#;
             end loop;
@@ -847,6 +851,8 @@ package body Benchmarks is
       Measure ("q4_k Row_Dot", G.Type_Q4_K, True);
       Measure ("q5_k Row_Dot", G.Type_Q5_K, True);
       Measure ("q6_k Row_Dot", G.Type_Q6_K, True);
+      Measure ("iq4nl Row_Dot", G.Type_IQ4_NL, True);
+      Measure ("iq4xs Row_Dot", G.Type_IQ4_XS, True);
       Measure ("f16  Row_Dot", G.Type_F16, True);
       Measure ("bf16 Row_Dot", G.Type_BF16, True);
       Measure ("f32  Row_Dot", G.Type_F32, True);

@@ -1,3 +1,5 @@
+with Model_Runner.Quantization;
+
 package body Model_Runner.Backend.CPU is
 
    use type Model_Runner.Numerics.Element_Count;
@@ -14,21 +16,17 @@ package body Model_Runner.Backend.CPU is
       Result : Capabilities;
    begin
       Result.Kind := Backend_CPU;
-      Result.Formats :=
-        [Model_Runner.GGUF.Type_F32  => True,
-         Model_Runner.GGUF.Type_F16  => True,
-         Model_Runner.GGUF.Type_BF16 => True,
-         Model_Runner.GGUF.Type_Q4_0 => True,
-         Model_Runner.GGUF.Type_Q4_1 => True,
-         Model_Runner.GGUF.Type_Q5_0 => True,
-         Model_Runner.GGUF.Type_Q5_1 => True,
-         Model_Runner.GGUF.Type_Q8_0 => True,
-         Model_Runner.GGUF.Type_Q2_K => True,
-         Model_Runner.GGUF.Type_Q3_K => True,
-         Model_Runner.GGUF.Type_Q4_K => True,
-         Model_Runner.GGUF.Type_Q5_K => True,
-         Model_Runner.GGUF.Type_Q6_K => True,
-         others                      => False];
+      --  Whatever the decoder decodes. This was a list written out by hand
+      --  and it was wrong the moment two formats were added: the decoder
+      --  decoded them, the reference backend said so of itself, and this one
+      --  refused every model carrying them while nothing in the build had
+      --  changed to say why. A capability answered from the code that
+      --  provides it cannot drift from it.
+      for Format in Model_Runner.GGUF.Tensor_Type loop
+         Result.Formats (Format) :=
+           Model_Runner.Quantization.Is_Decodable (Format);
+      end loop;
+
       Result.Alignment := 4;
       Result.Supports_Matrix_Vector := True;
       --  Dispatch_Batch is how prefill evaluates several tokens against one

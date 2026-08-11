@@ -7,6 +7,44 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **IQ4_NL and IQ4_XS.** Two more weight formats, decoded end to end:
+  structural validation, a decoder, the fused dot product, golden vectors and
+  the differential tests, which is what this project means by supported.
+
+  They are the first formats here where a nibble is not a number. It indexes
+  a table of sixteen levels that belongs to the format rather than to any
+  file, spaced finely near zero and coarsely away from it, which is what
+  makes four bits go further than Q4_0's do. IQ4_NL is that over blocks of
+  32 with one scale; IQ4_XS is the same levels over a super-block of 256,
+  with a six-bit scale for each sub-block split between a nibble and a
+  two-bit field and signed by an offset of 32.
+
+  The table is written out three times -- in the decoder, in the fixture's
+  encoder and in the independent implementation -- rather than shared. A
+  fixture that asked the decoder what the levels were would agree with it by
+  construction, which is the one thing these tests exist to rule out.
+
+  Adding them found a second thing. The CPU backend's list of formats it can
+  read was written out by hand, so it refused both new formats while the
+  decoder decoded them and the reference backend said so of itself; the
+  conformance sweep caught it as a count, since every comparison on the CPU
+  backend silently did not happen. That list now answers from the decoder,
+  as the reference backend's already did.
+
+  Both are the slowest formats in the kernel table -- 1.37 and 0.92
+  nanoseconds an element against 0.27 for binary32 -- and the reason is the
+  table they buy their accuracy with: a load at an address each element
+  decides is a gather, and a gather does not vectorize. The README publishes
+  the figures and says so.
+
+  The kernel and share-scaling figures were re-measured rather than argued
+  about, since neither needs a model. The row-product table is republished
+  from one sitting with all fifteen formats in it, and the share figures from
+  one pinned sitting. One of them moved enough to say so: the four-bit format
+  at thirty-two vectors and eight shares reads 17820 Me/s against the 23450
+  published, and falls off above four shares in every run taken here, so the
+  README no longer claims the two formats are level everywhere.
+
 - **`qwen3` and `qwen3moe`.** Two more architectures, each read under its own
   metadata keys and refused by name otherwise. Qwen3 is the shape this
   profile already had with the biases dropped and a root-mean-square

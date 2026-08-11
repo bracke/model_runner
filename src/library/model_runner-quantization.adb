@@ -103,6 +103,17 @@ package body Model_Runner.Quantization is
    --  Decode exactly one block; defined below.
    --  Decodes into any slice of at least Block_Elements, so a caller with a
    --  destination already in hand need not copy through a scratch block.
+   --  The sixteen levels a non-linear four-bit quant may take.
+   --
+   --  Unlike every other format here, a nibble is not a number: it is an
+   --  index into this table, and the table is part of the format rather than
+   --  of any file. The spacing is fine near zero and coarse away from it,
+   --  which is what "non-linear" means and why four bits go further here
+   --  than they do in Q4_0.
+   Levels : constant array (0 .. 15) of Integer :=
+     [-127, -104, -83, -65, -49, -35, -22, -10,
+         1,   13,  25,  38,  53,  69,  89, 113];
+
    procedure Decode_One
      (Format : G.Tensor_Type;
       Data   : B.Byte_Array;
@@ -531,7 +542,8 @@ package body Model_Runner.Quantization is
    is (Format in G.Type_F32 | G.Type_F16 | G.Type_BF16 | G.Type_Q4_0
                 | G.Type_Q8_0 | G.Type_Q4_1 | G.Type_Q5_0 | G.Type_Q5_1
                 | G.Type_Q2_K | G.Type_Q3_K
-                | G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K);
+                | G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K
+                | G.Type_IQ4_NL | G.Type_IQ4_XS);
 
    -------------------
    -- Decode_Block --
@@ -597,6 +609,101 @@ package body Model_Runner.Quantization is
                      Target (Target'First + Element_Count (J) + 16) :=
                        D * Real (Integer (Interfaces.Shift_Right (Packed, 4)))
                        + Lowest;
+                  end;
+               end loop;
+               Ok := True;
+            end;
+
+         when G.Type_IQ4_NL =>
+            --  Thirty-two elements, a half-precision scale, then sixteen
+            --  bytes of nibbles laid out as Q4_0 lays them: the low nibble
+            --  of byte j is element j and the high nibble is element j + 16.
+            --  What differs is what a nibble means -- an index into the
+            --  level table rather than a number to centre on eight.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               D    : constant Real := Scale (Data, Offset);
+               Base : constant B.Byte_Index := Data'First + Offset + 2;
+            begin
+               for J in 0 .. 15 loop
+                  declare
+                     Packed : constant Interfaces.Unsigned_8 :=
+                       Data (Base + B.Byte_Count (J));
+                  begin
+                     Target (Target'First + Element_Count (J)) :=
+                       D * Real (Levels (Integer (Packed and 16#0F#)));
+                     Target (Target'First + Element_Count (J) + 16) :=
+                       D * Real
+                             (Levels
+                                (Integer
+                                   (Interfaces.Shift_Right (Packed, 4))));
+                  end;
+               end loop;
+               Ok := True;
+            end;
+
+         when G.Type_IQ4_XS =>
+            --  The same levels over a super-block: two hundred and fifty-six
+            --  elements in eight sub-blocks of thirty-two, one
+            --  half-precision scale for the whole block and a six-bit scale
+            --  for each sub-block. Those six bits are split -- four in a
+            --  nibble of scales_l and two in a field of scales_h -- and the
+            --  value they carry is signed by subtracting thirty-two.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               D : constant Real := Scale (Data, Offset);
+
+               High : constant Interfaces.Unsigned_16 :=
+                 Interfaces.Unsigned_16 (Data (Data'First + Offset + 2))
+                 or Interfaces.Shift_Left
+                      (Interfaces.Unsigned_16
+                         (Data (Data'First + Offset + 3)), 8);
+
+               Low  : constant B.Byte_Index := Data'First + Offset + 4;
+               Base : constant B.Byte_Index := Data'First + Offset + 8;
+            begin
+               for Sub in 0 .. 7 loop
+                  declare
+                     Nibble : constant Interfaces.Unsigned_8 :=
+                       (if Sub mod 2 = 0
+                        then Data (Low + B.Byte_Count (Sub / 2)) and 16#0F#
+                        else Interfaces.Shift_Right
+                               (Data (Low + B.Byte_Count (Sub / 2)), 4));
+
+                     Upper : constant Interfaces.Unsigned_16 :=
+                       Interfaces.Shift_Right (High, 2 * Sub) and 3;
+
+                     Level : constant Integer :=
+                       Integer (Nibble) + 16 * Integer (Upper);
+
+                     Step : constant Real := D * Real (Level - 32);
+
+                     At_Byte : constant B.Byte_Index :=
+                       Base + B.Byte_Count (Sub) * 16;
+                     Slot    : constant Element_Count :=
+                       Target'First + Element_Count (Sub) * 32;
+                  begin
+                     for J in 0 .. 15 loop
+                        declare
+                           Packed : constant Interfaces.Unsigned_8 :=
+                             Data (At_Byte + B.Byte_Count (J));
+                        begin
+                           Target (Slot + Element_Count (J)) :=
+                             Step * Real (Levels (Integer (Packed and 16#0F#)));
+                           Target (Slot + Element_Count (J) + 16) :=
+                             Step * Real
+                                      (Levels
+                                         (Integer
+                                            (Interfaces.Shift_Right
+                                               (Packed, 4))));
+                        end;
+                     end loop;
                   end;
                end loop;
                Ok := True;

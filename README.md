@@ -116,7 +116,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Untrusted-input defence | Checked arithmetic on every offset, count and size; explicit limits on every count a file controls; UTF-8 validation; tensor range, alignment and non-overlap checks; trailing-data policy |
 | Byte sources | Random-access interface; in-memory, file-backed, and POSIX read-only `mmap` with automatic / required / disabled policy and safe fallback |
 | Tensors | Read-only views with one documented dimension convention, block-boundary checks, row dot product, row dequantization, row-range matrix-vector |
-| Quantization | Reference decoders for F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K — decoded one block at a time, never a second full copy of the model. Q8_1 and Q8_K are refused: they are intermediates a reference implementation quantizes activations into, not formats weights are stored in |
+| Quantization | Reference decoders for F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS — decoded one block at a time, never a second full copy of the model. The two non-linear formats read a nibble as an index into a table of sixteen levels that belongs to the format rather than to any file. Q8_1 and Q8_K are refused: they are intermediates a reference implementation quantizes activations into, not formats weights are stored in |
 | Kernels | Scalar reference add, multiply, scale, dot, RMS normalization, softmax, SiLU, rotary encoding, with `Wide_Real` accumulation for length-dependent reductions |
 | Tokenizer | SentencePiece (`llama`) vocabulary: scores, token types, special tokens, byte fallback, greedy highest-score merge encoding. Byte-pair (`gpt2`) vocabulary: merge tables by rank, byte-level stand-in alphabet, and six cutting rules named by `tokenizer.ggml.pre`, a vocabulary naming any other being refused by name rather than cut by the wrong one. Both with UTF-8-boundary-safe incremental decoding. A special-token identifier that is absent leaves the token unset; one that names no token refuses the model rather than being ignored |
 | Chat templates | Bounded allowlisted engine: `for`, `if`/`elif`/`else`, `set`, comments, `+`-joined output, `==`/`!=`/`and`/`or`/`not` with parentheses, `is defined`/`is none`/`in`, `trim` and `length`, message indexing, front slicing such as `messages[1:]`, `loop.first`/`last`/`index`, whitespace control. Enough that the template a current Llama-3 file ships with renders. Compiled and validated at load time; `macro`, `include` and `import` are rejected there, while a value the engine cannot compute -- a function call, `tojson`, arithmetic -- is refused if the render reaches it, which the tool-calling branches of a plain conversation never do |
@@ -477,10 +477,10 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 6435, logits compared 93600,
+conformance: sequences 7425, logits compared 108000,
              worst absolute 2.14340155850756E-05,
              worst relative 1.90905622023861E-03,
-             rounded logits compared 9360,
+             rounded logits compared 10800,
              rounded worst absolute 1.36861269753309E-01,
              rounded worst relative 1.83560177726357E+00,
              outside tolerance 0
@@ -492,8 +492,8 @@ experts, a stretched rotation, and heads wider than the embedding implies with
 keys and values different widths again. Both backends, every evaluation path -- a token at a
 time, a whole prompt in one pass, and a prompt handed over in several --
 serial and across a worker pool, every repacking mode, and every one of the
-thirteen weight formats the engine decodes: binary32, F16, BF16, Q4_0, Q4_1,
-Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K and Q6_K. The fixture writes each of
+fifteen weight formats the engine decodes: binary32, F16, BF16, Q4_0, Q4_1,
+Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL and IQ4_XS. The fixture writes each of
 them and the reference reads each of them, both worked out from the layouts
 rather than by calling the engine, so a packing mistake cannot be common to
 the two sides. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
@@ -834,8 +834,8 @@ there were cores, the operating system took a core from a worker, and the
 whole job waited for that worker because a job is not done until its slowest
 share is. It now takes the last share itself instead of waiting. Pinned, eight
 shares went from 9326 Me/s to 14182. Taken again with the command above, and
-with the tool taking its own medians, eight shares reads 13134 Me/s against
-seven at 12532 -- the point being that eight no longer falls below seven,
+with the tool taking its own medians, eight shares reads 12420 Me/s against
+seven at 12007 -- the point being that eight no longer falls below seven,
 which is what the change was for. The 9326 is history: it needs the commit
 before the change, and it is quoted here as the reason rather than as
 something a reader can reproduce.
@@ -857,13 +857,13 @@ host that cannot answer says so rather than guessing. `--threads` overrides it
 everywhere and still accepts any number the backend allows.
 
 What is left over is not the memory. Measured on its own, away from the model,
-the matrix product reaches about 4.8x on eight shares against its own serial
-rate, and reaches it whether one vector is passed or thirty-two -- 2585 to
-12142 Me/s in the first case and 4753 to 22813 in the second, medians of three
-runs.
+the matrix product reaches about 5.0x on eight shares against its own serial
+rate, and reaches it whether one vector is passed or thirty-two -- 2465 to
+12420 Me/s in the first case and 4600 to 22977 in the second, medians of three
+runs, pinned.
 If memory were the wall those two would part company, because the second reads
 each weight byte once for thirty-two multiplies and the first reads it once
-for one. At eight shares the product moves 12.9 GB/s, which this machine is
+for one. At eight shares the product moves 13.2 GB/s, which this machine is
 not troubled by. What does change is the clock: 4927 MHz with one core busy
 and 3926 with eight, sampled from the host while running. That ratio alone
 caps eight cores at 6.4x, and the rest is cache and hand-off. It is a 15 W
@@ -880,9 +880,13 @@ ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
 end. That gap was the contention, not the bytes: with the contention gone the
 four-bit format is within a few per cent of the eight-bit one either way --
-11710 Me/s against 12142 at eight shares with one vector, 23450 against 22813
-with thirty-two, 2660 against 2585 serially -- and end to end the two are
-indistinguishable, 2.06 and 2.18 s against 2.06 and 2.26.
+12541 Me/s against 12420 at eight shares with one vector, 17820 against 22977
+with thirty-two, 2544 against 2465 serially -- and end to end the two are
+indistinguishable, 2.06 and 2.18 s against 2.06 and 2.26. The one gap left is
+the four-bit format at thirty-two vectors and eight shares, which fell from
+its own seven-share figure of 20023 in this sitting; it does the same at four
+shares and above in every run taken here, and it is the only place the two
+formats are not level.
 
 It is worth keeping as a lesson rather than a result. A measurement taken
 while something else is the bottleneck measures that other thing, and the way
@@ -1021,20 +1025,30 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.26 | Q4_1 | 0.43 |
-| Q4_0 | 0.31 | Q3_K | 0.47 |
-| BF16 | 0.32 | F16 | 0.55 |
-| Q4_K | 0.37 | Q2_K | 0.70 |
-| Q6_K | 0.37 | Q5_0 | 1.05 |
-| Q8_0 | 0.38 | Q5_1 | 1.08 |
-| Q5_K | 0.40 | | |
+| F32 | 0.27 | Q3_K | 0.50 |
+| Q4_0 | 0.32 | F16 | 0.59 |
+| BF16 | 0.32 | Q2_K | 0.74 |
+| Q4_K | 0.38 | IQ4_XS | 0.92 |
+| Q6_K | 0.38 | Q5_1 | 1.08 |
+| Q8_0 | 0.38 | Q5_0 | 1.08 |
+| Q5_K | 0.41 | IQ4_NL | 1.37 |
+| Q4_1 | 0.47 | | |
 
-The two five-bit legacy formats are the outliers, and the reason is where
-they keep the fifth bit: bit *j* of a thirty-two bit word rather than a fixed
-place in a byte already being read. The shift amount therefore varies with the
+The two five-bit legacy formats are outliers, and the reason is where they
+keep the fifth bit: bit *j* of a thirty-two bit word rather than a fixed place
+in a byte already being read. The shift amount therefore varies with the
 element, and an instruction set without a per-lane shift cannot vectorize that
 loop. Baseline x86-64 has none, and building for a host that does measured
 slower everywhere else.
+
+The two non-linear formats are the other outliers, and for a different
+reason: a nibble there is an index into a table of sixteen levels rather than
+a number, so every element costs a load from that table at an address the
+element decides. That is a gather, and it does not vectorize either. IQ4_XS
+comes out faster than IQ4_NL despite doing more per element -- a sub-block
+scale to form as well as the lookup -- because its block is 256 elements
+against 32, so the per-block work is spread eight times thinner. The table is
+what these formats buy their accuracy with, and this is what it costs.
 
 Medians of three rounds, which `tests benchmark` now takes itself: it reports
 the median of three half-second rounds per measurement, and `--rounds` and

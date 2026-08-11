@@ -248,6 +248,29 @@ package Fixtures is
    --  @return The encoded bytes.
    function Encode_Q6_K (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Encode values as IQ4_NL: blocks of 32 in 18 bytes, a half-precision
+   --  scale and sixteen bytes of nibbles, where a nibble indexes the
+   --  format's own table of sixteen levels rather than naming a number.
+   --
+   --  The scale is chosen so the block's largest magnitude lands on the
+   --  level furthest out in its own direction, and each element then takes
+   --  the nearest level. That is a legal encoding rather than the best one:
+   --  what the decoders are checked on is the bytes, and a search for a
+   --  better scale would only move which bytes they are checked on.
+   --
+   --  @param Values Values to encode; a whole number of 32-element blocks.
+   --  @return The encoded bytes.
+   function Encode_IQ4_NL (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as IQ4_XS: superblocks of 256 in 136 bytes -- one
+   --  half-precision scale, a six-bit scale for each of eight sub-blocks
+   --  split between a nibble and a two-bit field, then 128 bytes of the same
+   --  nibbles IQ4_NL uses.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_IQ4_XS (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode values as Q5_K: as Q4_K with a fifth bit for every element,
    --  kept in thirty-two bytes of their own, in 176 bytes.
    --

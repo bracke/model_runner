@@ -689,6 +689,122 @@ package body Reference_Transformer is
         - Minimum * Long_Float (Offset_Level);
    end Decode_Q4_K;
 
+   --  The sixteen levels a non-linear four-bit quant takes. Written out
+   --  again here: this implementation exists to be arrived at separately,
+   --  and a table it borrowed would agree with its source by construction.
+   IQ4_Levels : constant array (0 .. 15) of Integer :=
+     [-127, -104, -83, -65, -49, -35, -22, -10,
+         1,   13,  25,  38,  53,  69,  89, 113];
+
+   --  One element of an IQ4_NL block: thirty-two elements, a half-precision
+   --  scale, then sixteen bytes whose low nibbles are the first sixteen
+   --  elements and whose high nibbles are the last sixteen. A nibble is an
+   --  index into the levels, not a number.
+   function Decode_IQ4_NL
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 32);
+      Within : constant Natural := Index mod 32;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 18;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      function Half_At (Offset : Interfaces.Unsigned_64) return Long_Float is
+         Raw      : constant Natural :=
+           Byte_At (Offset) + 256 * Byte_At (Offset + 1);
+         Sign     : constant Long_Float :=
+           (if Raw >= 16#8000# then -1.0 else 1.0);
+         Exponent : constant Integer := (Raw / 1024) mod 32;
+         Mantissa : constant Integer := Raw mod 1024;
+      begin
+         if Exponent = 0 then
+            return Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+         elsif Exponent = 31 then
+            return 0.0;
+         else
+            return Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+              * (2.0 ** (Exponent - 15));
+         end if;
+      end Half_At;
+
+      Scale  : constant Long_Float := Half_At (At_Block);
+      Packed : constant Natural :=
+        Byte_At (At_Block + 2 + Interfaces.Unsigned_64 (Within mod 16));
+      Level  : constant Natural :=
+        (if Within < 16 then Packed mod 16 else Packed / 16);
+   begin
+      return Scale * Long_Float (IQ4_Levels (Level));
+   end Decode_IQ4_NL;
+
+   --  One element of an IQ4_XS super-block: two hundred and fifty-six
+   --  elements in eight sub-blocks of thirty-two, one half-precision scale
+   --  for the block and six bits of scale for each sub-block, four of them
+   --  in a nibble and two in a field of a sixteen-bit word, signed by an
+   --  offset of thirty-two.
+   function Decode_IQ4_XS
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 256);
+      Within : constant Natural := Index mod 256;
+      Sub    : constant Natural := Within / 32;
+      In_Sub : constant Natural := Within mod 32;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 136;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      function Half_At (Offset : Interfaces.Unsigned_64) return Long_Float is
+         Raw      : constant Natural :=
+           Byte_At (Offset) + 256 * Byte_At (Offset + 1);
+         Sign     : constant Long_Float :=
+           (if Raw >= 16#8000# then -1.0 else 1.0);
+         Exponent : constant Integer := (Raw / 1024) mod 32;
+         Mantissa : constant Integer := Raw mod 1024;
+      begin
+         if Exponent = 0 then
+            return Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+         elsif Exponent = 31 then
+            return 0.0;
+         else
+            return Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+              * (2.0 ** (Exponent - 15));
+         end if;
+      end Half_At;
+
+      Scale : constant Long_Float := Half_At (At_Block);
+
+      Upper : constant Natural :=
+        Byte_At (At_Block + 2) + 256 * Byte_At (At_Block + 3);
+
+      Nibble : constant Natural :=
+        (if Sub mod 2 = 0
+         then Byte_At (At_Block + 4 + Interfaces.Unsigned_64 (Sub / 2)) mod 16
+         else Byte_At (At_Block + 4 + Interfaces.Unsigned_64 (Sub / 2)) / 16);
+
+      Level : constant Integer :=
+        Nibble + 16 * ((Upper / (2 ** (2 * Sub))) mod 4);
+
+      Packed : constant Natural :=
+        Byte_At (At_Block + 8 + Interfaces.Unsigned_64 (Sub) * 16
+                 + Interfaces.Unsigned_64 (In_Sub mod 16));
+      Quant  : constant Natural :=
+        (if In_Sub < 16 then Packed mod 16 else Packed / 16);
+   begin
+      return Scale * Long_Float (Level - 32)
+        * Long_Float (IQ4_Levels (Quant));
+   end Decode_IQ4_XS;
+
    --  Read a metadata integer, or a default.
    function Metadata
      (Source  : Containers.Container;
@@ -750,6 +866,8 @@ package body Reference_Transformer is
                         | Model_Runner.GGUF.Type_Q6_K
                         | Model_Runner.GGUF.Type_Q5_K
                         | Model_Runner.GGUF.Type_Q3_K
+                        | Model_Runner.GGUF.Type_IQ4_NL
+                        | Model_Runner.GGUF.Type_IQ4_XS
          then
             return null;
          end if;
@@ -885,6 +1003,26 @@ package body Reference_Transformer is
                          (Image,
                           Offset
                           + Interfaces.Unsigned_64 (Row) * 144
+                            * Interfaces.Unsigned_64 (Columns / 256),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_IQ4_NL
+                  then
+                     Result (Row, Column) :=
+                       Decode_IQ4_NL
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 18
+                            * Interfaces.Unsigned_64 (Columns / 32),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_IQ4_XS
+                  then
+                     Result (Row, Column) :=
+                       Decode_IQ4_XS
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 136
                             * Interfaces.Unsigned_64 (Columns / 256),
                           Column);
                   else

@@ -22,8 +22,8 @@ with Model_Runner.Numerics;
 --  so a divergence fails the suite rather than quietly changing a model's
 --  output.
 --
---  Advertised formats. F32, F16, Q4_0, Q8_0, Q4_K, Q5_K and Q6_K are decoded
---  here. Model_Runner.GGUF.Is_Supported names the same set; a format that is
+--  Advertised formats. F32, F16, Q4_0, Q8_0, Q4_K, Q5_K, Q6_K, IQ4_NL and
+--  IQ4_XS are decoded here. Model_Runner.GGUF.Is_Supported names the same set; a format that is
 --  merely recognized by the parser is rejected before preparation.
 --
 --  Block layouts, in serialized byte order:
@@ -37,6 +37,20 @@ with Model_Runner.Numerics;
 --           bit of each quant.
 --     Q6_K 256 elements, 210 bytes: 128 low-nibble bytes, 64 bytes of the two
 --           high bits, 16 signed sub-block scales, then half d.
+--     IQ4_NL 32 elements, 18 bytes: half d, then 16 packed nibbles laid out
+--           as Q4_0 lays them. A nibble is not a number here: it indexes the
+--           table of sixteen levels below, which is part of the format.
+--     IQ4_XS 256 elements, 136 bytes: half d, a 16-bit word of two-bit
+--           scale extensions, four bytes of four-bit scale nibbles, then 128
+--           packed nibbles in eight sub-blocks of 32. A sub-block's scale is
+--           its six bits less 32, times d.
+--
+--  The levels, which belong to the format and not to any file:
+--
+--     -127 -104 -83 -65 -49 -35 -22 -10 1 13 25 38 53 69 89 113
+--
+--  They are spaced finely near zero and coarsely away from it, which is what
+--  makes four bits go further here than in Q4_0.
 --
 --  Task safety: all operations are pure functions of their arguments.
 package Model_Runner.Quantization is

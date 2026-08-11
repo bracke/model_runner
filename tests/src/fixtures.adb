@@ -1356,6 +1356,194 @@ package body Fixtures is
       return Result;
    end Encode_Q4_K;
 
+   --  The sixteen levels a non-linear four-bit quant takes. Written out here
+   --  as well as in the decoder, because a fixture that asked the decoder
+   --  what the levels were would agree with it by construction.
+   Levels : constant array (0 .. 15) of Integer :=
+     [-127, -104, -83, -65, -49, -35, -22, -10,
+         1,   13,  25,  38,  53,  69,  89, 113];
+
+   --  The level nearest a value, in units of the scale.
+   function Nearest (Value : N.Real) return Interfaces.Unsigned_8 is
+      Best : Integer := 0;
+      Gap  : N.Real := abs (Value - N.Real (Levels (0)));
+   begin
+      for Index in 1 .. 15 loop
+         declare
+            Here : constant N.Real := abs (Value - N.Real (Levels (Index)));
+         begin
+            if Here < Gap then
+               Gap := Here;
+               Best := Index;
+            end if;
+         end;
+      end loop;
+
+      return Interfaces.Unsigned_8 (Best);
+   end Nearest;
+
+   --  The scale one block of thirty-two wants: the element furthest from
+   --  zero lands on the level furthest out in its own direction.
+   function Step_Of (Values : N.Real_Array) return N.Real is
+      Extreme : N.Real := 0.0;
+   begin
+      for Value of Values loop
+         if abs Value > abs Extreme then
+            Extreme := Value;
+         end if;
+      end loop;
+
+      if Extreme = 0.0 then
+         return 0.0;
+      elsif Extreme < 0.0 then
+         return Extreme / N.Real (Levels (0));
+      else
+         return Extreme / N.Real (Levels (15));
+      end if;
+   end Step_Of;
+
+   --  Pack one block of thirty-two into sixteen bytes of nibbles, at the
+   --  given scale. Element j is the low nibble of byte j and element j + 16
+   --  the high one, which is the layout Q4_0 uses for its own nibbles.
+   procedure Pack_Levels
+     (Values : N.Real_Array;
+      Step   : N.Real;
+      Into   : out B.Byte_Array)
+   is
+      use type Interfaces.Unsigned_8;
+   begin
+      Into := [others => 0];
+
+      if Step = 0.0 then
+         return;
+      end if;
+
+      for J in 0 .. 15 loop
+         declare
+            Lower : constant Interfaces.Unsigned_8 :=
+              Nearest (Values (Values'First + N.Element_Count (J)) / Step);
+            Upper : constant Interfaces.Unsigned_8 :=
+              Nearest
+                (Values (Values'First + N.Element_Count (J) + 16) / Step);
+         begin
+            Into (Into'First + B.Byte_Count (J)) :=
+              Lower or Interfaces.Shift_Left (Upper, 4);
+         end;
+      end loop;
+   end Pack_Levels;
+
+   function Encode_IQ4_NL (Values : N.Real_Array) return B.Byte_Array is
+      Blocks : constant N.Element_Count := Values'Length / 32;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 18 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 32;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 18;
+
+            Span : constant N.Real_Array := Values (First .. First + 31);
+            Step : constant N.Real := Step_Of (Span);
+         begin
+            Result (At_Byte .. At_Byte + 1) :=
+              B.Put_U16 (Interfaces.Unsigned_16 (N.To_Half (Step)));
+            Pack_Levels
+              (Span, Step, Result (At_Byte + 2 .. At_Byte + 17));
+         end;
+      end loop;
+
+      return Result;
+   end Encode_IQ4_NL;
+
+   function Encode_IQ4_XS (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+      use type Interfaces.Unsigned_16;
+
+      Blocks : constant N.Element_Count := Values'Length / 256;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 136 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 256;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 136;
+
+            --  What each sub-block would want on its own, and the largest of
+            --  those, which is what the block's own scale has to reach.
+            Wants   : array (0 .. 7) of N.Real := [others => 0.0];
+            Largest : N.Real := 0.0;
+
+            Outer : N.Real;
+            High  : Interfaces.Unsigned_16 := 0;
+         begin
+            for Sub in 0 .. 7 loop
+               declare
+                  Where : constant N.Element_Count :=
+                    First + N.Element_Count (Sub) * 32;
+               begin
+                  Wants (Sub) := Step_Of (Values (Where .. Where + 31));
+                  Largest := N.Real'Max (Largest, abs Wants (Sub));
+               end;
+            end loop;
+
+            --  A sub-block scale is a whole number of the block's scale,
+            --  offset by thirty-two and held in six bits, so the block's
+            --  scale has to be large enough that the largest sub-block fits
+            --  in the thirty-one steps above the offset.
+            Outer := (if Largest = 0.0 then 0.0 else Largest / 31.0);
+
+            Result (At_Byte .. At_Byte + 1) :=
+              B.Put_U16 (Interfaces.Unsigned_16 (N.To_Half (Outer)));
+
+            for Sub in 0 .. 7 loop
+               declare
+                  Steps : constant Integer :=
+                    (if Outer = 0.0
+                     then 0
+                     else Integer (N.Real'Rounding (Wants (Sub) / Outer)));
+                  Level : constant Integer :=
+                    Integer'Max (0, Integer'Min (63, Steps + 32));
+
+                  Place : constant B.Byte_Count :=
+                    At_Byte + 4 + B.Byte_Count (Sub / 2);
+
+                  Where : constant N.Element_Count :=
+                    First + N.Element_Count (Sub) * 32;
+
+                  --  The scale that level actually names, which is what the
+                  --  elements have to be quantized against rather than what
+                  --  the sub-block asked for.
+                  Step : constant N.Real := Outer * N.Real (Level - 32);
+               begin
+                  if Sub mod 2 = 0 then
+                     Result (Place) := Result (Place)
+                       or Interfaces.Unsigned_8 (Level mod 16);
+                  else
+                     Result (Place) := Result (Place)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Unsigned_8 (Level mod 16), 4);
+                  end if;
+
+                  High := High
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_16 (Level / 16), 2 * Sub);
+
+                  Pack_Levels
+                    (Values (Where .. Where + 31), Step,
+                     Result (At_Byte + 8 + B.Byte_Count (Sub) * 16
+                             .. At_Byte + 23 + B.Byte_Count (Sub) * 16));
+               end;
+            end loop;
+
+            Result (At_Byte + 2 .. At_Byte + 3) := B.Put_U16 (High);
+         end;
+      end loop;
+
+      return Result;
+   end Encode_IQ4_XS;
+
    function Encode_Q8_0 (Values : N.Real_Array) return B.Byte_Array is
       Blocks : constant N.Element_Count := Values'Length / 32;
       Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 34 - 1) :=

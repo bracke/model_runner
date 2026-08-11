@@ -156,7 +156,31 @@
 # above allows a reason for instead.
 #
 # covers: the row-product table under "Kernels"
-kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# 2026-08-11, IQ4_NL and IQ4_XS. Re-measured rather than argued about, and
+# they could be, because these two groups need no model: `tests benchmark`
+# and `taskset -c 0-7 tests benchmark` are the whole of it.
+#
+# The row-product table is republished from one unpinned sitting, all fifteen
+# formats together, and it gained the two new rows -- 1.37 and 0.92 ns an
+# element, which makes them the slowest in the table. The existing formats
+# read a few per cent slower than the figures they replace, which is what
+# this README already says happens between sittings; nothing about them
+# changed and the table is now internally consistent instead of spanning two
+# sittings.
+#
+# The share figures are republished from one pinned sitting, taken with
+# nothing else running. Eight shares on q8_0 with one vector reads 12420
+# against the 13134 published before, and seven 12007 against 12532; the
+# claim those numbers are there to support -- that eight no longer falls
+# below seven -- still holds, and holds in this sitting rather than in the
+# last one.
+#
+# One figure moved enough to say so rather than swap quietly: the four-bit
+# format at thirty-two vectors and eight shares came out 17820 against the
+# 23450 published, while its own seven-share figure was 20023. It falls off
+# above four shares in every run taken here. The README now says that instead
+# of claiming the two formats are level everywhere.
+kernels 6847C049BEFF2EFE src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the twelve-token figure, the worker-count and share-count
 # comparisons, and the batch-size table under "Speed". Re-measure all four
@@ -238,14 +262,18 @@ kernels 34C1E11CC5ECA71B src/library/model_runner-quantization.adb src/library/m
 # The figures were NOT re-measured; the model they need is not on this
 # machine. A qwen3 model would need its own: normalizing every head is a pass
 # over the query and key projections that a llama model does not make.
-engine AF4F0F52E177ABD4 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# The engine and reference groups list quantization.adb, which gained two
+# formats as two branches of a case that dispatches by format. A model in
+# any other format never enters them. Not re-measured, and the model those
+# figures need is still not on this machine.
+engine 265D6FC1AF4666A5 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
-reference AB8A0B13EF4BACD6 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+reference D689BEF899404BC3 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
-scaling 2F1A64CA45124F68 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
+scaling 5164FC3668C08EA1 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker

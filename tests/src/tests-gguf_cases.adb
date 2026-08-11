@@ -885,7 +885,12 @@ package body Tests.GGUF_Cases is
                --  four-byte format gets, one byte lower.
                Data (Data'First + B.Byte_Count (Block) * Width + 1) := 16#3E#;
             when Model_Runner.GGUF.Type_Q4_0 | Model_Runner.GGUF.Type_Q8_0
-               | Model_Runner.GGUF.Type_Q5_0 =>
+               | Model_Runner.GGUF.Type_Q5_0
+               | Model_Runner.GGUF.Type_IQ4_NL
+               | Model_Runner.GGUF.Type_IQ4_XS =>
+               --  One half-precision scale at the head. The super-block
+               --  form's sub-block scales are integers and cannot be
+               --  anything but finite, so its head is all there is to tame.
                Tame_Half (Block, 0);
             when Model_Runner.GGUF.Type_Q4_1 | Model_Runner.GGUF.Type_Q5_1 =>
                --  A scale and a minimum, both at the head.
@@ -942,14 +947,15 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 13) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 15) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
          Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
          Model_Runner.GGUF.Type_Q3_K, Model_Runner.GGUF.Type_Q4_1,
          Model_Runner.GGUF.Type_Q5_0, Model_Runner.GGUF.Type_Q5_1,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
-         Model_Runner.GGUF.Type_Q6_K];
+         Model_Runner.GGUF.Type_Q6_K, Model_Runner.GGUF.Type_IQ4_NL,
+         Model_Runner.GGUF.Type_IQ4_XS];
 
       Checked : Natural := 0;
    begin
@@ -1116,14 +1122,15 @@ package body Tests.GGUF_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      Formats : constant array (1 .. 13) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 15) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
          Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
          Model_Runner.GGUF.Type_Q3_K, Model_Runner.GGUF.Type_Q4_1,
          Model_Runner.GGUF.Type_Q5_0, Model_Runner.GGUF.Type_Q5_1,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
-         Model_Runner.GGUF.Type_Q6_K];
+         Model_Runner.GGUF.Type_Q6_K, Model_Runner.GGUF.Type_IQ4_NL,
+         Model_Runner.GGUF.Type_IQ4_XS];
 
       Checked_Rows : Natural := 0;
    begin
@@ -1212,7 +1219,7 @@ package body Tests.GGUF_Cases is
          end;
       end loop;
 
-      Assert (Checked_Rows = 13, "not every format was checked");
+      Assert (Checked_Rows = 15, "not every format was checked");
    end Fused_Dot_Matches_Decoder;
 
    --  Decoded values, against expectations worked out from the layout.
@@ -1310,6 +1317,59 @@ package body Tests.GGUF_Cases is
          Block (2) := 16#F1#;   --  low 1, high 15
          Check (Model_Runner.GGUF.Type_Q4_0, Block, 0, 1.0 - 8.0);
          Check (Model_Runner.GGUF.Type_Q4_0, Block, 16, 15.0 - 8.0);
+      end;
+
+      --  IQ4_NL: the same nibble layout Q4_0 uses, but a nibble indexes the
+      --  format's table of sixteen levels instead of naming a number to
+      --  centre on eight. Index one is -104 and index fifteen is 113, so
+      --  with a scale of one those are what the two nibbles of the byte
+      --  below decode to. A decoder that treated the nibble as a number
+      --  would produce 1 and 15 here, and a table read the wrong way round
+      --  would swap them.
+      declare
+         Block : B.Byte_Array (0 .. 17) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;
+         Block (2) := 16#F1#;   --  low 1, high 15
+         Check (Model_Runner.GGUF.Type_IQ4_NL, Block, 0, -104.0);
+         Check (Model_Runner.GGUF.Type_IQ4_NL, Block, 16, 113.0);
+      end;
+
+      --  IQ4_XS: the same levels over a super-block. Each of the eight
+      --  sub-blocks has six bits of scale, four in a nibble of the four
+      --  bytes at offset four and two in the sixteen-bit word at offset
+      --  two, and what they name is signed by subtracting thirty-two. So a
+      --  nibble of 33 -- one above the offset -- and no high bits is a
+      --  sub-block scale of one, and a nibble of 32 is a scale of zero,
+      --  which is how the sign of the offset shows.
+      declare
+         Block : B.Byte_Array (0 .. 135) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;
+
+         --  Sub-block zero: low nibble 1, high bits 2, so 1 + 32 = 33.
+         Block (4) := 16#01#;
+         Block (2) := 16#02#;
+         Block (8) := 16#F1#;
+         Check (Model_Runner.GGUF.Type_IQ4_XS, Block, 0, -104.0);
+         Check (Model_Runner.GGUF.Type_IQ4_XS, Block, 16, 113.0);
+
+         --  Sub-block one takes the high nibble of the same byte, and its
+         --  two high bits are the next pair of the word. A high nibble of
+         --  zero with those two bits set is 32, which the offset turns into
+         --  a scale of zero -- and zero is worth checking because it is what
+         --  a decoder that forgot the offset would never produce.
+         Block (4) := 16#01#;
+         Block (2) := 16#0A#;   --  two for sub-block zero, two for one
+         Block (24) := 16#F1#;
+         Check (Model_Runner.GGUF.Type_IQ4_XS, Block, 32, 0.0);
+
+         --  And with its nibble set to two the same element is at scale two:
+         --  2 + 16 * 2 = 34, less the offset.
+         Block (4) := 16#21#;
+         Check (Model_Runner.GGUF.Type_IQ4_XS, Block, 32, -208.0);
       end;
 
       --  Q2_K: two bits an element, sixteen sub-blocks each with a four-bit
@@ -1610,14 +1670,15 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      Formats : constant array (1 .. 13) of Model_Runner.GGUF.Tensor_Type :=
+      Formats : constant array (1 .. 15) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_F32, Model_Runner.GGUF.Type_F16,
          Model_Runner.GGUF.Type_BF16, Model_Runner.GGUF.Type_Q2_K,
          Model_Runner.GGUF.Type_Q3_K, Model_Runner.GGUF.Type_Q4_1,
          Model_Runner.GGUF.Type_Q5_0, Model_Runner.GGUF.Type_Q5_1,
          Model_Runner.GGUF.Type_Q4_0, Model_Runner.GGUF.Type_Q8_0,
          Model_Runner.GGUF.Type_Q4_K, Model_Runner.GGUF.Type_Q5_K,
-         Model_Runner.GGUF.Type_Q6_K];
+         Model_Runner.GGUF.Type_Q6_K, Model_Runner.GGUF.Type_IQ4_NL,
+         Model_Runner.GGUF.Type_IQ4_XS];
 
       Vectors_Used : constant N.Element_Count := 5;
    begin
