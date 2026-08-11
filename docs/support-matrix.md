@@ -50,7 +50,11 @@ container validation and is rejected by `Model_Runner.Tensors.Make` with
 
 | Rotary scaling | Implemented for `none`, `linear` and `yarn`, named by `<arch>.rope.scaling.type` and refused by name otherwise. Linear divides every position by `<arch>.rope.scaling.factor`. Yarn divides only the frequencies slow enough that a long context needs them, ramping across the band between `beta_fast` and `beta_slow` turns over `original_context_length`, and scales the rotated vector by the method's own correction times `attn_factor`. A `rope_freqs.weight` table of per-dimension divisors is applied when the file carries one, which is how a file states a schedule that is not one number. `rope_factors_long.weight` and `rope_factors_short.weight` are refused, by the tensors as well as by the name: choosing between two tables by prompt length makes the rotation depend on the sequence rather than on the position |
 
-Explicitly rejected features: asymmetric key and value widths.
+| Head widths | Implemented: `<arch>.attention.key_length` and `<arch>.attention.value_length` are read when the file states them, and neither has to be the embedding width divided by the head count nor equal to the other. A file that states neither has both derived from the embedding width, which then has to divide exactly. The key cache and the value cache are sized separately, and the attention output projection reads the heads' worth of value width rather than the embedding width |
+
+Nothing in the architecture profile is rejected as a feature any more; what
+remains rejected is a file that describes a model this arithmetic cannot
+express, and an architecture identifier this build does not carry.
 
 ## Tokenizer
 

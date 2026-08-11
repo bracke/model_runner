@@ -131,6 +131,11 @@ private
       Heads        : Natural := 0;
       KV_Heads     : Natural := 0;
       Head_Size    : Natural := 0;
+
+      --  A value head need not be as wide as a key head: the keys decide
+      --  which positions are read and the values what is read from them.
+      --  Equal to Head_Size for a file that states neither width.
+      Value_Size   : Natural := 0;
       Rotary       : Natural := 0;
       Context      : Natural := 0;
       Words        : Natural := 0;

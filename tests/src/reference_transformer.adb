@@ -977,7 +977,15 @@ package body Reference_Transformer is
          return;
       end if;
 
-      Item.Head_Size := Item.Embedding / Item.Heads;
+      --  The key width the file states, or the embedding divided by the
+      --  head count when it states none; and the value width beside it.
+      Item.Head_Size :=
+        Metadata
+          (Source, Prefix (Item) & "attention.key_length",
+           Item.Embedding / Item.Heads);
+      Item.Value_Size :=
+        Metadata
+          (Source, Prefix (Item) & "attention.value_length", Item.Head_Size);
 
       --  A window at least as wide as the context sees everything the
       --  context holds, which is no window at all. The engine folds that
@@ -1272,6 +1280,9 @@ package body Reference_Transformer is
    is
       Width    : constant Natural := Item.Embedding;
       KV_Width : constant Natural := Item.KV_Heads * Item.Head_Size;
+      V_Width  : constant Natural := Item.KV_Heads * Item.Value_Size;
+      Q_Width  : constant Natural := Item.Heads * Item.Head_Size;
+      B_Width  : constant Natural := Item.Heads * Item.Value_Size;
       Steps    : constant Natural := Tokens'Length;
 
       --  The whole key and value history, rather than a cache with reserved
@@ -1471,7 +1482,7 @@ package body Reference_Transformer is
       end loop;
 
       Keys := new History (0 .. Item.Layers * Steps - 1, 0 .. KV_Width - 1);
-      Values := new History (0 .. Item.Layers * Steps - 1, 0 .. KV_Width - 1);
+      Values := new History (0 .. Item.Layers * Steps - 1, 0 .. V_Width - 1);
 
       for Step in 0 .. Steps - 1 loop
          --  Embedding lookup.
@@ -1483,10 +1494,10 @@ package body Reference_Transformer is
          for Block in 0 .. Item.Layers - 1 loop
             declare
                Current : Layer renames Item.Blocks (Block);
-               Query   : Real_Vector (0 .. Width - 1) := [others => 0.0];
+               Query   : Real_Vector (0 .. Q_Width - 1) := [others => 0.0];
                Key_Row : Real_Vector (0 .. KV_Width - 1) := [others => 0.0];
-               Val_Row : Real_Vector (0 .. KV_Width - 1) := [others => 0.0];
-               Blended : Real_Vector (0 .. Width - 1) := [others => 0.0];
+               Val_Row : Real_Vector (0 .. V_Width - 1) := [others => 0.0];
+               Blended : Real_Vector (0 .. B_Width - 1) := [others => 0.0];
                Slot    : constant Natural := Block * Steps + Step;
             begin
                Normalize (State, Current.Attention_Norm.all, Normed);
@@ -1507,6 +1518,8 @@ package body Reference_Transformer is
                   for Index in Key_Row'Range loop
                      Key_Row (Index) :=
                        Key_Row (Index) + Current.Key_Bias.all (Index);
+                  end loop;
+                  for Index in Val_Row'Range loop
                      Val_Row (Index) :=
                        Val_Row (Index) + Current.Value_Bias.all (Index);
                   end loop;
@@ -1517,6 +1530,8 @@ package body Reference_Transformer is
 
                for Index in 0 .. KV_Width - 1 loop
                   Keys (Slot, Index) := Key_Row (Index);
+               end loop;
+               for Index in 0 .. V_Width - 1 loop
                   Values (Slot, Index) := Val_Row (Index);
                end loop;
 
@@ -1571,17 +1586,17 @@ package body Reference_Transformer is
                            Total := Total + Scores (Past);
                         end loop;
 
-                        for Component in 0 .. Item.Head_Size - 1 loop
+                        for Component in 0 .. Item.Value_Size - 1 loop
                            declare
                               Sum : Long_Float := 0.0;
                            begin
                               for Past in First .. Step loop
                                  Sum := Sum + Scores (Past)
                                    * Values (Block * Steps + Past,
-                                             Source_Head * Item.Head_Size
+                                             Source_Head * Item.Value_Size
                                              + Component);
                               end loop;
-                              Blended (Head * Item.Head_Size + Component) :=
+                              Blended (Head * Item.Value_Size + Component) :=
                                 Sum / Total;
                            end;
                         end loop;

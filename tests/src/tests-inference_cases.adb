@@ -1871,6 +1871,112 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  Key and value heads may be different widths, and neither need be the
+   --  embedding divided by the head count.
+   --
+   --  Three assumptions were built into the shape of every buffer: that a
+   --  head is as wide as the embedding implies, that a key head and a value
+   --  head are the same width, and that what attention produces is as wide
+   --  as the embedding. A file may state otherwise, and this one does --
+   --  key heads twice that width, value heads three times it.
+   --
+   --  What the sweep cannot say is that the file was read rather than
+   --  ignored: a fixture whose widths never reached the engine would still
+   --  agree with a reference that read the same file the same wrong way, as
+   --  long as the tensors matched. So the widths are asserted where they
+   --  land -- the model reports them, and the session holds a cache sized by
+   --  them -- and then the answer is compared.
+   procedure Head_Widths_May_Differ
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      Image  : B.Byte_Array_Access;
+      Result : Logit_Vector;
+   begin
+      Tiny_Model.Build (Image, Apart_Widths => True);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         declare
+            Read : constant L.Configuration := L.Config (Under.Ready);
+         begin
+            Assert (Read.Head_Size = 2 * Tiny_Model.Head_Size,
+                    "the key width the file states was not read:"
+                    & Natural'Image (Read.Head_Size));
+            Assert (Read.Value_Size = 3 * Tiny_Model.Head_Size,
+                    "the value width the file states was not read:"
+                    & Natural'Image (Read.Value_Size));
+         end;
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "evaluation failed: " & E.Error_Code'Image (Status.Code));
+         end loop;
+
+         L.Close (Live);
+      end;
+
+      --  And the answer is the one the independent implementation reaches
+      --  from the same file.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Status : E.Error_Info;
+         Second : Reference_Transformer.Model;
+         Loaded, Made : Boolean;
+
+         Tokens   : Reference_Transformer.Token_Vector (Prompt'Range);
+         Expected : Reference_Transformer.Real_Vector
+           (0 .. Tiny_Model.Vocabulary - 1);
+         Worst : Long_Float := 0.0;
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+         Assert (Loaded, "the reference did not read the model");
+
+         for Index in Prompt'Range loop
+            Tokens (Index) := Integer (Prompt (Index));
+         end loop;
+
+         Reference_Transformer.Run (Second, Tokens, Expected, Made);
+         Assert (Made, "the reference produced no logits");
+
+         for Index in Expected'Range loop
+            Worst := Long_Float'Max
+              (Worst,
+               abs (Long_Float (Result
+                      (Model_Runner.Numerics.Element_Count (Index)))
+                    - Expected (Index)));
+         end loop;
+
+         Assert (Worst < 1.0E-3,
+                 "the engine and the independent implementation disagree "
+                 & "about separate head widths by" & Long_Float'Image (Worst));
+
+         Reference_Transformer.Close (Second);
+         Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end Head_Widths_May_Differ;
+
    --  Each way of stretching the rotation changes the answer, and to the
    --  answer written from the description.
    --
@@ -2373,6 +2479,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, Head_Widths_May_Differ'Access,
+         "key and value heads may be different widths, and neither the "
+         & "embedding divided by the head count");
       Register_Routine
         (T, Rotary_Scaling_Changes_The_Rotation'Access,
          "each way of stretching the rotation changes the answer, and to "

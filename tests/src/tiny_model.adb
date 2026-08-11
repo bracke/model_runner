@@ -36,7 +36,8 @@ package body Tiny_Model is
       Experts      : Natural := 0;
       Experts_Used : Natural := 0;
       Stretch      : Rope_Stretch := Plain;
-      Rope_Table   : Boolean := False)
+      Rope_Table   : Boolean := False;
+      Apart_Widths : Boolean := False)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -67,6 +68,16 @@ package body Tiny_Model is
         (if Deep then Deep_Feed_Forward
          elsif Quantized then 32
          else 8);
+      --  A key head twice the width the embedding implies and a value head
+      --  three times it. Both are stated in the file, and each is a
+      --  different number from the other and from the embedding divided by
+      --  the head count -- which is three separate assumptions this fixture
+      --  breaks at once.
+      Key_Size : constant Natural :=
+        (if Apart_Widths then 2 * Head_Size else Head_Size);
+      Value_Size : constant Natural :=
+        (if Apart_Widths then 3 * Head_Size else Head_Size);
+
       Builder : Fixtures.Builder;
       Seed    : Interfaces.Unsigned_64 := 12_345;
 
@@ -204,6 +215,16 @@ package body Tiny_Model is
         (Builder, Prefix & ".attention.layer_norm_rms_epsilon", 1.0E-5);
       Fixtures.Add_U32
         (Builder, Prefix & ".rope.dimension_count", Interfaces.Unsigned_32 (Head_Size));
+
+      --  The head widths, when the file states them apart.
+      if Apart_Widths then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.key_length",
+            Interfaces.Unsigned_32 (Key_Size));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.value_length",
+            Interfaces.Unsigned_32 (Value_Size));
+      end if;
       Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base", 10_000.0);
 
       --  How the rotation is stretched, when it is. A factor of four with
@@ -420,20 +441,21 @@ package body Tiny_Model is
 
       for Index in 0 .. Layers - 1 loop
          Norm (Layer_Name (Index, "attn_norm.weight"));
-         Weight (Layer_Name (Index, "attn_q.weight"), [G.U64 (Embedding), G.U64 (Embedding)]);
+         Weight (Layer_Name (Index, "attn_q.weight"),
+                 [G.U64 (Embedding), G.U64 (Heads * Key_Size)]);
          Weight (Layer_Name (Index, "attn_k.weight"),
-                 [G.U64 (Embedding), G.U64 (KV_Heads * Head_Size)]);
+                 [G.U64 (Embedding), G.U64 (KV_Heads * Key_Size)]);
          Weight (Layer_Name (Index, "attn_v.weight"),
-                 [G.U64 (Embedding), G.U64 (KV_Heads * Head_Size)]);
+                 [G.U64 (Embedding), G.U64 (KV_Heads * Value_Size)]);
          --  Qwen2 carries a bias beside each projection; Llama has none.
          if Qwen and then not Omit_Biases then
-            Norm_Of (Layer_Name (Index, "attn_q.bias"), Embedding);
-            Norm_Of (Layer_Name (Index, "attn_k.bias"), KV_Heads * Head_Size);
-            Norm_Of (Layer_Name (Index, "attn_v.bias"), KV_Heads * Head_Size);
+            Norm_Of (Layer_Name (Index, "attn_q.bias"), Heads * Key_Size);
+            Norm_Of (Layer_Name (Index, "attn_k.bias"), KV_Heads * Key_Size);
+            Norm_Of (Layer_Name (Index, "attn_v.bias"), KV_Heads * Value_Size);
          end if;
 
          Weight (Layer_Name (Index, "attn_output.weight"),
-                 [G.U64 (Embedding), G.U64 (Embedding)]);
+                 [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
          Norm (Layer_Name (Index, "ffn_norm.weight"));
 
          if Experts > 0 then

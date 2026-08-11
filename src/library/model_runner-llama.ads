@@ -109,7 +109,14 @@ package Model_Runner.Llama is
       Layers          : Natural := 0;
       Heads           : Natural := 0;
       KV_Heads        : Natural := 0;
+      --  Width of one query or key head, and of one value head. A file may
+      --  state the two separately and they are then different numbers: the
+      --  keys decide which positions a head reads and the values decide what
+      --  it reads from them, and nothing requires those to be the same size.
+      --  A file that states neither has both derived from the embedding
+      --  width, which is what a model without the keys means.
       Head_Size       : Natural := 0;
+      Value_Size      : Natural := 0;
       Group_Size      : Natural := 0;
       Rotary          : Natural := 0;
       Vocabulary      : Natural := 0;

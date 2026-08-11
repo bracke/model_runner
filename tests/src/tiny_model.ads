@@ -133,6 +133,11 @@ package Tiny_Model is
    --    divisors. A file states a schedule that is not one number this way,
    --    and a model carrying one that is not applied rotates its long-range
    --    dimensions wrongly while looking healthy on a short prompt.
+   --  @param Apart_Widths State the key and value head widths in the file,
+   --    as different numbers from each other and from the embedding divided
+   --    by the head count. Three assumptions at once: that a head is as wide
+   --    as the embedding implies, that keys and values are the same width,
+   --    and that the attention output is as wide as the embedding.
    --  @param Byte_Pair Write the vocabulary as a byte-pair one -- a `gpt2`
    --    model with a merge table, pieces in the stand-in alphabet and the
    --    same three control tokens -- instead of a SentencePiece one. That
@@ -153,6 +158,7 @@ package Tiny_Model is
       Experts        : Natural := 0;
       Experts_Used   : Natural := 0;
       Stretch        : Rope_Stretch := Plain;
-      Rope_Table     : Boolean := False);
+      Rope_Table     : Boolean := False;
+      Apart_Widths   : Boolean := False);
 
 end Tiny_Model;

@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Key and value heads may be different widths.** `attention.key_length` and
+  `attention.value_length` are read when the file states them. Neither has to
+  be the embedding width divided by the head count, and they do not have to
+  equal each other: the keys decide which positions a head reads and the
+  values decide what it reads from them, and nothing requires those to be the
+  same size. A file stating neither still derives both from the embedding
+  width, which then has to divide exactly.
+
+  Three assumptions came out of the evaluator to make that true: that a head
+  is as wide as the embedding implies, that a key head and a value head are
+  the same width, and that what attention produces is as wide as the
+  embedding. The key cache and the value cache are now sized and indexed
+  separately, and the output projection reads the heads' worth of value width.
+
+  This was the last of the architecture profile's explicitly rejected
+  features. What remains rejected there is a file describing a model this
+  arithmetic cannot express, and an architecture identifier this build does
+  not carry.
+
 - **Rotary scaling.** A model naming `<arch>.rope.scaling.type` as `yarn` now
   has its rotation stretched by that method rather than being refused: the
   frequencies fast enough to tell neighbouring positions apart are left as

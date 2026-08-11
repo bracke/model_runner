@@ -453,51 +453,6 @@ package body Model_Runner.Llama is
          end;
       end if;
 
-      if Containers.Has (Source, Model_Key (Settings.Kind, "attention.value_length"))
-        and then Containers.Has (Source, Model_Key (Settings.Kind, "attention.key_length"))
-      then
-         --  Separate key and value widths are legal GGUF but are not part of
-         --  this profile, whose head size is derived from the embedding width.
-         declare
-            Key_Length, Value_Length : Long_Long_Integer;
-            First, Second : E.Error_Info;
-         begin
-            Containers.Get_Integer
-              (Source, Model_Key (Settings.Kind, "attention.key_length"), 1, 1_000_000,
-               Key_Length, First);
-            Containers.Get_Integer
-              (Source, Model_Key (Settings.Kind, "attention.value_length"), 1, 1_000_000,
-               Value_Length, Second);
-            --  Both keys are known to be present here, so an unreadable one
-            --  is the file being wrong. Skipping the comparison would let a
-            --  mistyped width past the very check that exists to catch it.
-            if Present_And_Wrong (First) then
-               Status := First;
-               return;
-            end if;
-            if Present_And_Wrong (Second) then
-               Status := Second;
-               return;
-            end if;
-
-            if E.Is_Ok (First) and then E.Is_Ok (Second)
-              and then Key_Length /= Value_Length
-            then
-               Reject_Feature ("asymmetric_key_value_width");
-               return;
-            end if;
-         end;
-      end if;
-
-      --  Derived widths must divide exactly; a remainder would mean the file
-      --  describes a model this arithmetic cannot express.
-      if Settings.Embedding mod Settings.Heads /= 0 then
-         Status := E.Make (E.Arch_Invalid_Dimensions);
-         E.Add_Integer (Status, "embedding", Long_Long_Integer (Settings.Embedding));
-         E.Add_Integer (Status, "heads", Long_Long_Integer (Settings.Heads));
-         return;
-      end if;
-
       if Settings.Heads mod Settings.KV_Heads /= 0 then
          Status := E.Make (E.Arch_Invalid_Head_Counts);
          E.Add_Integer (Status, "heads", Long_Long_Integer (Settings.Heads));
@@ -506,8 +461,47 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Settings.Head_Size := Settings.Embedding / Settings.Heads;
       Settings.Group_Size := Settings.Heads / Settings.KV_Heads;
+
+      --  How wide a head is. A file may state the key width and the value
+      --  width, and they need not be each other nor the embedding divided by
+      --  the head count: a model is free to give its heads more room than
+      --  its embedding would imply, or to read values narrower than the keys
+      --  it selects them with.
+      --
+      --  A file that states neither has both derived from the embedding
+      --  width, which then has to divide exactly -- a remainder would mean
+      --  the file describes a model this arithmetic cannot express.
+      Containers.Get_Integer
+        (Source, Model_Key (Settings.Kind, "attention.key_length"),
+         1, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
+
+      if E.Is_Ok (Local) then
+         Settings.Head_Size := Natural (Number);
+      else
+         if Settings.Embedding mod Settings.Heads /= 0 then
+            Status := E.Make (E.Arch_Invalid_Dimensions);
+            E.Add_Integer
+              (Status, "embedding", Long_Long_Integer (Settings.Embedding));
+            E.Add_Integer (Status, "heads", Long_Long_Integer (Settings.Heads));
+            return;
+         end if;
+         Settings.Head_Size := Settings.Embedding / Settings.Heads;
+      end if;
+
+      Containers.Get_Integer
+        (Source, Model_Key (Settings.Kind, "attention.value_length"),
+         1, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
+      Settings.Value_Size :=
+        (if E.Is_Ok (Local) then Natural (Number) else Settings.Head_Size);
 
       Containers.Get_Integer
         (Source, Model_Key (Settings.Kind, "rope.dimension_count"), 1,
@@ -988,8 +982,19 @@ package body Model_Runner.Llama is
            Element_Count (Item.Settings.Vocabulary);
          Feed   : constant Element_Count :=
            Element_Count (Item.Settings.Feed_Forward);
+         --  What the attention tensors are shaped by. The queries are as
+         --  many heads of key width; the keys are the key-value heads of the
+         --  same; the values are those heads of value width; and what the
+         --  output projection reads is the heads' worth of value width,
+         --  which is the embedding width only when the two agree.
+         Wide   : constant Element_Count :=
+           Element_Count (Item.Settings.Heads * Item.Settings.Head_Size);
          KV     : constant Element_Count :=
            Element_Count (Item.Settings.KV_Heads * Item.Settings.Head_Size);
+         KV_Out : constant Element_Count :=
+           Element_Count (Item.Settings.KV_Heads * Item.Settings.Value_Size);
+         Blend  : constant Element_Count :=
+           Element_Count (Item.Settings.Heads * Item.Settings.Value_Size);
       begin
          Resolve
            (Item, Source, "token_embd.weight", Vocab, Width,
@@ -1056,7 +1061,7 @@ package body Model_Runner.Llama is
 
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_q.weight"),
-                  Width, Width, Current.Query, Status);
+                  Wide, Width, Current.Query, Status);
                exit when E.Is_Error (Status);
 
                Resolve
@@ -1066,7 +1071,7 @@ package body Model_Runner.Llama is
 
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_v.weight"),
-                  KV, Width, Current.Value, Status);
+                  KV_Out, Width, Current.Value, Status);
                exit when E.Is_Error (Status);
 
                --  Qwen2 adds a bias to each projection and Llama has none.
@@ -1078,7 +1083,7 @@ package body Model_Runner.Llama is
                if Item.Settings.Kind = Qwen2 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_q.bias"),
-                     Width, Current.Query_Bias, Status);
+                     Wide, Current.Query_Bias, Status);
                   exit when E.Is_Error (Status);
 
                   Resolve_Norm
@@ -1088,13 +1093,13 @@ package body Model_Runner.Llama is
 
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_v.bias"),
-                     KV, Current.Value_Bias, Status);
+                     KV_Out, Current.Value_Bias, Status);
                   exit when E.Is_Error (Status);
                end if;
 
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_output.weight"),
-                  Width, Width, Current.Attention_Out, Status);
+                  Width, Blend, Current.Attention_Out, Status);
                exit when E.Is_Error (Status);
 
                Resolve_Norm
@@ -1789,9 +1794,9 @@ package body Model_Runner.Llama is
         A.To_Checked (Interfaces.Unsigned_64 (Settings.Layers))
         * A.To_Checked (Interfaces.Unsigned_64 (Capacity))
         * A.To_Checked (Interfaces.Unsigned_64 (Settings.KV_Heads))
-        * A.To_Checked (Interfaces.Unsigned_64 (Settings.Head_Size))
-        * A.To_Checked (Interfaces.Unsigned_64'(Cache_Element_Bytes))
-        * A.To_Checked (Interfaces.Unsigned_64'(2));
+        * A.To_Checked
+            (Interfaces.Unsigned_64 (Settings.Head_Size + Settings.Value_Size))
+        * A.To_Checked (Interfaces.Unsigned_64'(Cache_Element_Bytes));
    begin
       Plan := (others => <>);
 
@@ -1910,19 +1915,25 @@ package body Model_Runner.Llama is
            Element_Count (Settings.Embedding);
          Feed  : constant Element_Count :=
            Element_Count (Feed_Width (Settings));
+         Wide  : constant Element_Count :=
+           Element_Count (Settings.Heads * Settings.Head_Size);
+         Blend : constant Element_Count :=
+           Element_Count (Settings.Heads * Settings.Value_Size);
          KV    : constant Element_Count :=
            Element_Count (Settings.KV_Heads * Settings.Head_Size);
-         Cache : constant Element_Count :=
-           Element_Count (Settings.Layers) * Element_Count (Capacity) * KV;
+         KV_Out : constant Element_Count :=
+           Element_Count (Settings.KV_Heads * Settings.Value_Size);
+         Deep  : constant Element_Count :=
+           Element_Count (Settings.Layers) * Element_Count (Capacity);
       begin
-         T.Allocate (Cache, Item.Keys);
-         T.Allocate (Cache, Item.Values);
+         T.Allocate (Deep * KV, Item.Keys);
+         T.Allocate (Deep * KV_Out, Item.Values);
          T.Allocate (Width, Item.Activation);
          T.Allocate (Width, Item.Normalized);
-         T.Allocate (Width, Item.Query);
+         T.Allocate (Wide, Item.Query);
          T.Allocate (KV, Item.Key_Row);
-         T.Allocate (KV, Item.Value_Row);
-         T.Allocate (Width, Item.Attention);
+         T.Allocate (KV_Out, Item.Value_Row);
+         T.Allocate (Blend, Item.Attention);
          T.Allocate (Element_Count (Capacity), Item.Scores);
          T.Allocate (Feed, Item.Gate);
          T.Allocate (Feed, Item.Up);
@@ -2118,9 +2129,15 @@ package body Model_Runner.Llama is
    is
       Settings  : constant Configuration := Source.Settings;
       Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
+      Value_Size : constant Element_Count :=
+        Element_Count (Settings.Value_Size);
       Heads     : constant Element_Count := Element_Count (Settings.Heads);
       KV_Heads  : constant Element_Count := Element_Count (Settings.KV_Heads);
       KV_Width  : constant Element_Count := KV_Heads * Head_Size;
+
+      --  The values are their own width, so they are their own cache. The
+      --  two were one number until a model stated them apart.
+      V_Width   : constant Element_Count := KV_Heads * Value_Size;
       Reserved  : constant Element_Count := Element_Count (Item.Committed);
       Scale     : constant Real :=
         Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
@@ -2184,6 +2201,9 @@ package body Model_Runner.Llama is
             Base    : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
             Slot    : constant Element_Count := Base + Reserved * KV_Width;
+            V_Base  : constant Element_Count :=
+              Element_Count (Index) * Element_Count (Item.Context) * V_Width;
+            V_Slot  : constant Element_Count := V_Base + Reserved * V_Width;
          begin
             --  Attention block.
             K.RMS_Norm
@@ -2225,7 +2245,9 @@ package body Model_Runner.Llama is
             --  context once Committed is advanced, at the end of this call.
             for Offset in 0 .. KV_Width - 1 loop
                Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
-               Item.Values.all (Slot + Offset) := Item.Value_Row.all (Offset);
+            end loop;
+            for Offset in 0 .. V_Width - 1 loop
+               Item.Values.all (V_Slot + Offset) := Item.Value_Row.all (Offset);
             end loop;
 
             --  Causal attention over the committed positions and this one.
@@ -2273,7 +2295,7 @@ package body Model_Runner.Llama is
                      return;
                   end if;
 
-                  for Component in 0 .. Head_Size - 1 loop
+                  for Component in 0 .. Value_Size - 1 loop
                      declare
                         Sum : N.Wide_Real := 0.0;
                      begin
@@ -2282,10 +2304,11 @@ package body Model_Runner.Llama is
                              + N.Wide_Real (Scores (Step))
                                * N.Wide_Real
                                    (Item.Values.all
-                                      (Base + Step * KV_Width
-                                       + Group * Head_Size + Component));
+                                      (V_Base + Step * V_Width
+                                       + Group * Value_Size + Component));
                         end loop;
-                        Item.Attention.all (Q_Origin + Component) := Real (Sum);
+                        Item.Attention.all (Head * Value_Size + Component) :=
+                          Real (Sum);
                      end;
                   end loop;
                end;
@@ -2382,10 +2405,14 @@ package body Model_Runner.Llama is
          then 0
          else Element_Count (Settings.Feed_Forward));
       Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
+      Value_Size : constant Element_Count :=
+        Element_Count (Settings.Value_Size);
       Heads     : constant Element_Count := Element_Count (Settings.Heads);
       KV_Heads  : constant Element_Count := Element_Count (Settings.KV_Heads);
       KV_Width  : constant Element_Count := KV_Heads * Head_Size;
+      V_Width   : constant Element_Count := KV_Heads * Value_Size;
       Wide      : constant Element_Count := Heads * Head_Size;
+      Blend     : constant Element_Count := Heads * Value_Size;
       Reserved  : constant Element_Count := Element_Count (Item.Committed);
       Count     : constant Element_Count := Element_Count (Tokens'Length);
       Scale     : constant Real :=
@@ -2483,8 +2510,8 @@ package body Model_Runner.Llama is
       T.Allocate (Count * Width, Norm);
       T.Allocate (Count * Wide, Query);
       T.Allocate (Count * KV_Width, Keys);
-      T.Allocate (Count * KV_Width, Values);
-      T.Allocate (Count * Wide, Attend);
+      T.Allocate (Count * V_Width, Values);
+      T.Allocate (Count * Blend, Attend);
       T.Allocate (Count * Feed, Gate);
       T.Allocate (Count * Feed, Up);
 
@@ -2528,6 +2555,8 @@ package body Model_Runner.Llama is
             Current : Layer renames Source.Layers.all (Index);
             Base    : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
+            V_Base  : constant Element_Count :=
+              Element_Count (Index) * Element_Count (Item.Context) * V_Width;
          begin
             for Which in 0 .. Count - 1 loop
                declare
@@ -2558,8 +2587,11 @@ package body Model_Runner.Llama is
                declare
                   Q_At : constant Element_Count := Slot (Which, Wide);
                   KV_At : constant Element_Count := Slot (Which, KV_Width);
+                  V_At  : constant Element_Count := Slot (Which, V_Width);
                   Place : constant Element_Count :=
                     Base + (Reserved + Which) * KV_Width;
+                  V_Place : constant Element_Count :=
+                    V_Base + (Reserved + Which) * V_Width;
                begin
                   --  The same bias as the single-token path adds, on each
                   --  token of the batch. A batch that skipped it would
@@ -2570,7 +2602,7 @@ package body Model_Runner.Llama is
                             Current.Query_Bias.all);
                      K.Add (Keys.all (KV_At .. KV_At + KV_Width - 1),
                             Current.Key_Bias.all);
-                     K.Add (Values.all (KV_At .. KV_At + KV_Width - 1),
+                     K.Add (Values.all (V_At .. V_At + V_Width - 1),
                             Current.Value_Bias.all);
                   end if;
 
@@ -2590,8 +2622,10 @@ package body Model_Runner.Llama is
                   for Offset in 0 .. KV_Width - 1 loop
                      Item.Keys.all (Place + Offset) :=
                        Keys.all (KV_At + Offset);
-                     Item.Values.all (Place + Offset) :=
-                       Values.all (KV_At + Offset);
+                  end loop;
+                  for Offset in 0 .. V_Width - 1 loop
+                     Item.Values.all (V_Place + Offset) :=
+                       Values.all (V_At + Offset);
                   end loop;
                end;
             end loop;
@@ -2605,6 +2639,7 @@ package body Model_Runner.Llama is
                   First_Step : constant Element_Count :=
                     Earliest (Settings, Last_Step);
                   Q_At      : constant Element_Count := Slot (Which, Wide);
+                  B_At      : constant Element_Count := Slot (Which, Blend);
                begin
                   for Head in 0 .. Heads - 1 loop
                      declare
@@ -2642,7 +2677,7 @@ package body Model_Runner.Llama is
                            return;
                         end if;
 
-                        for Component in 0 .. Head_Size - 1 loop
+                        for Component in 0 .. Value_Size - 1 loop
                            declare
                               Sum : N.Wide_Real := 0.0;
                            begin
@@ -2651,10 +2686,13 @@ package body Model_Runner.Llama is
                                    + N.Wide_Real (Scores (Step))
                                      * N.Wide_Real
                                          (Item.Values.all
-                                            (Base + Step * KV_Width
-                                             + Group * Head_Size + Component));
+                                            (V_Base + Step * V_Width
+                                             + Group * Value_Size
+                                             + Component));
                               end loop;
-                              Attend.all (Q_Origin + Component) := Real (Sum);
+                              Attend.all
+                                (B_At + Head * Value_Size + Component) :=
+                                  Real (Sum);
                            end;
                         end loop;
                      end;
