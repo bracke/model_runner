@@ -2698,7 +2698,28 @@ package body Tests.CLI_Cases is
    begin
       Tiny_Model.Write (Model, Room => 64);
 
+      --  Every byte, as a number, so that a failure on a machine this is not
+      --  running on can be read. The first attempt printed the two strings
+      --  and a macOS runner reported them as identical, which said that the
+      --  stop did nothing and nothing about why.
       declare
+         function Bytes (Text : String) return String is
+            Room : String (1 .. Text'Length * 4 + 2);
+            Used : Natural := 0;
+
+            procedure Add_Word (Word : String) is
+            begin
+               Room (Used + 1 .. Used + Word'Length) := Word;
+               Used := Used + Word'Length;
+            end Add_Word;
+         begin
+            for Character_Value of Text loop
+               Add_Word (Natural'Image (Character'Pos (Character_Value)));
+            end loop;
+
+            return Room (1 .. Used);
+         end Bytes;
+
          Whole : constant String := Text_Produced;
       begin
          Assert (Whole'Length > 2,
@@ -2717,7 +2738,8 @@ package body Tests.CLI_Cases is
          begin
             Assert (Stopped'Length < Whole'Length,
                     "a stop string on the command line did not shorten the "
-                    & "run: '" & Stopped & "' against '" & Whole & "'");
+                    & "run: stopped [" & Bytes (Stopped) & " ] against whole ["
+                    & Bytes (Whole) & " ], cutting at [" & Bytes (Cut) & " ]");
 
             Assert (Stopped
                     = Whole (Whole'First .. Whole'First + Stopped'Length - 1),
