@@ -2449,6 +2449,210 @@ package body Tests.CLI_Cases is
       end;
    end Backends_Agree;
 
+   --  Options with a consequence, observed through the command.
+   --
+   --  An option can be parsed into the right field and still do nothing:
+   --  the field has to be read at the far end. Three had a test of the
+   --  parse, a test of the layer underneath with the value handed over in
+   --  Ada, and nothing running the command and looking at what came out.
+   --
+   --  What cannot be observed from here is said rather than skipped:
+   --  --color auto colours a stream that is a terminal and this suite has
+   --  none, so auto is checked for not colouring and NO_COLOR -- which only
+   --  changes what auto does on a terminal -- is checked where the terminal
+   --  facts are handed over directly, in the styling test.
+   procedure Options_With_A_Consequence_Have_It
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model : constant String := "obj/behave-model.gguf";
+
+      --  Text with its trailing line endings removed.
+      function Without_Endings (Text : String) return String is
+         Stop : Natural := Text'Last;
+      begin
+         while Stop >= Text'First
+           and then Text (Stop) in Character'Val (10) | Character'Val (13)
+         loop
+            Stop := Stop - 1;
+         end loop;
+
+         return Text (Text'First .. Stop);
+      end Without_Endings;
+
+      --  Whether text carries an escape sequence.
+      function Coloured (Text : String) return Boolean is
+      begin
+         for Character_Value of Text loop
+            if Character_Value = ASCII.ESC then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Coloured;
+
+      --  Inspect the fixture and hand back what reached standard output.
+      function Inspected (First, Second : String := "") return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "inspect");
+         Add (Source, Model);
+         if First /= "" then
+            Add (Source, First);
+            if Second /= "" then
+               Add (Source, Second);
+            end if;
+         end if;
+
+         Ran (Source, Status);
+         Assert (Status = 0,
+                 "an inspection with '" & First & " " & Second
+                 & "' failed with status" & Natural'Image (Status));
+         return Last_Output;
+      end Inspected;
+
+      --  Run and hand back what reached standard error.
+      function Diagnostics (First, Second : String := "") return String is
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+         Status : Natural;
+         Log    : constant String := "obj/behave-errors.txt";
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         if First /= "" then
+            Add (Source, First);
+            if Second /= "" then
+               Add (Source, Second);
+            end if;
+         end if;
+
+         Create (Handle, Out_File, Log);
+         Set_Error (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         return Text_Of (Log);
+      end Diagnostics;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      --  Colour, asked for and refused. The report goes to standard output,
+      --  which is a file here, so "always" is the one that must colour it
+      --  anyway -- that is what always means -- and the other two must not.
+      declare
+         Always : constant String := Inspected ("--color", "always");
+         Never  : constant String := Inspected ("--color", "never");
+         Auto   : constant String := Inspected ("--color", "auto");
+      begin
+         Assert (Coloured (Always),
+                 "--color always did not colour a report going to a file, "
+                 & "which is the one thing always means");
+         Assert (not Coloured (Never),
+                 "--color never coloured the report");
+         Assert (not Coloured (Auto),
+                 "--color auto coloured a report going to a file, which is "
+                 & "not a terminal");
+      end;
+
+      --  The verbosity, which is one field with three settings, so what is
+      --  asked is that the field reaches the far end and changes what comes
+      --  out. A successful run writes nothing to standard error by default,
+      --  which is the point of the default and is why a quiet run cannot be
+      --  compared against it: there is nothing there to remove. Verbose
+      --  against quiet is the comparison that exists.
+      declare
+         Plain  : constant String := Diagnostics;
+         Loud   : constant String := Diagnostics ("--verbose");
+         Hushed : constant String := Diagnostics ("--quiet");
+      begin
+         Assert (Loud'Length > Plain'Length,
+                 "--verbose said no more than the default:"
+                 & Natural'Image (Loud'Length) & " against"
+                 & Natural'Image (Plain'Length));
+         Assert (Hushed'Length <= Plain'Length,
+                 "--quiet said more than the default:"
+                 & Natural'Image (Hushed'Length) & " against"
+                 & Natural'Image (Plain'Length));
+      end;
+
+      --  Statistics, asked for and refused. The block is the whole of what
+      --  the option controls, so its presence is the question, and a
+      --  successful run writes nothing else on that stream.
+      declare
+         Shown  : constant String := Diagnostics ("--show-stats");
+         Hidden : constant String := Diagnostics ("--no-stats");
+      begin
+         --  Trailing line endings come off: closing a redirected Text_IO
+         --  file leaves one behind, so an empty capture reads as one byte
+         --  rather than none and "reported nothing" has to mean nothing
+         --  once that is gone.
+         Assert (Without_Endings (Shown)'Length > 0,
+                 "--show-stats reported no statistics at all");
+         Assert (Without_Endings (Hidden)'Length = 0,
+                 "--no-stats reported something: " & Hidden);
+      end;
+
+      --  A context too small for the prompt. The option is accepted and the
+      --  value reaches the field, both of which were checked; what the
+      --  reader setting it cares about is that a prompt which does not fit
+      --  is refused and named.
+      declare
+         Said : constant String := "obj/behave-context.txt";
+
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "abababababab");
+         Add (Source, "--context-size");
+         Add (Source, "2");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+
+         Create (Handle, Out_File, Said);
+         Set_Error (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Assert (Status /= 0,
+                 "a prompt longer than the context asked for was accepted");
+         Assert (Project_Tools.Text.Contains (Text_Of (Said), "MR-GEN-0001"),
+                 "a prompt that does not fit was refused without naming the "
+                 & "code that says so: " & Text_Of (Said));
+      end;
+   end Options_With_A_Consequence_Have_It;
+
    --  A stop given on the command line stops the run.
    --
    --  Both halves were tested and the wire between them was not.
@@ -7527,6 +7731,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Architectures_Are_Read_By_Name'Access,
          "each architecture is read with its own keys and its own rotation");
+      Register_Routine
+        (T, Options_With_A_Consequence_Have_It'Access,
+         "options with a consequence have it, seen through the command");
       Register_Routine
         (T, Stops_From_The_Command_Line_Stop'Access,
          "a stop given on the command line stops the run");

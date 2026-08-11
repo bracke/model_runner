@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Options with a consequence are made to have it, through the command.
+  `--color` was checked as a parse and at the presentation layer with the mode
+  handed over in Ada, and nothing ran the command and looked for escape
+  sequences; `--quiet` and `--no-stats` reached their fields and suppressed
+  nothing any test observed; `--context-size` was checked for being accepted
+  and never for the refusal it exists to make. All four are observed through
+  the command now, and each was verified by breaking what it controls.
+
+  Two things the writing turned up. A successful run says nothing on standard
+  error by default, so a quiet run cannot be compared against an ordinary one
+  -- there is nothing there to remove -- and the comparison that exists is
+  verbose against quiet. And the colour mode the report uses is the one from
+  the *second* `Pres.Open`, after full parsing; breaking the first, which
+  exists so that an early usage error is renderable, changes nothing a reader
+  sees.
+
 - A stop given on the command line stops the run. The stop matcher had a
   test that built its set in Ada, and the parser test proves `--stop END`
   reaches the count -- between them was the loop in `CLI.Execute` that copies
