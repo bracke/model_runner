@@ -2735,7 +2735,18 @@ package body Tests.CLI_Cases is
               Whole (Whole'First + 1 .. Whole'First + 1);
 
             Stopped : constant String := Text_Produced ("--stop", Cut);
+
+            --  A control: a stop string the run cannot produce must leave
+            --  the text exactly as it was. It tells a machine where the
+            --  stop does nothing from one where it matches wrongly, which
+            --  the failure on a macOS runner could not be told apart from.
+            Absent : constant String :=
+              Text_Produced ("--stop", "zqxjvwk");
          begin
+            Assert (Absent = Whole,
+                    "a stop string the run cannot produce changed it: ["
+                    & Bytes (Absent) & " ] against [" & Bytes (Whole) & " ]");
+
             Assert (Stopped'Length < Whole'Length,
                     "a stop string on the command line did not shorten the "
                     & "run: stopped [" & Bytes (Stopped) & " ] against whole ["
