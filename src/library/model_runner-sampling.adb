@@ -28,6 +28,16 @@ package body Model_Runner.Sampling is
    is (Left.Logit > Right.Logit
        or else (Left.Logit = Right.Logit and then Left.Token < Right.Token));
 
+   --  The largest top-k selected rather than sorted.
+   --
+   --  Selection keeps the chosen few in order as it goes, so it costs about
+   --  one comparison per candidate plus a shift whenever one displaces
+   --  another. Sorting costs a logarithm per candidate whatever k is. Where
+   --  the two cross is a judgement, and this is where it is made; both
+   --  produce the same k in the same order, because the order below is
+   --  total, so nothing but the time depends on which runs.
+   Selection_Limit : constant := 512;
+
    procedure Sort is
      new Ada.Containers.Generic_Array_Sort
        (Index_Type   => Element_Count,
@@ -201,6 +211,19 @@ package body Model_Runner.Sampling is
       begin
          Item.Working :=
            new Candidate_Array (0 .. Element_Count (Vocabulary) - 1);
+
+         --  A top-k of a few dozen out of tens of thousands is worth
+         --  selecting rather than sorting, and selecting needs somewhere to
+         --  keep what it has chosen so far that is not the array it is
+         --  reading. A large top-k is not worth it -- keeping k in order
+         --  costs more per candidate than sorting does -- so only a small
+         --  one gets the room.
+         if Config.Top_K > 0
+           and then Element_Count (Config.Top_K) <= Selection_Limit
+         then
+            Item.Chosen :=
+              new Candidate_Array (0 .. Element_Count (Config.Top_K) - 1);
+         end if;
          Item.Masked := new Mask_Array (0 .. Vocabulary - 1);
          Item.Masked.all := [others => False];
          Item.Stepped := new Mask_Array (0 .. Vocabulary - 1);
@@ -235,6 +258,10 @@ package body Model_Runner.Sampling is
       if Item.History /= null then
          Free_History (Item.History);
       end if;
+      if Item.Chosen /= null then
+         Free_Candidates (Item.Chosen);
+      end if;
+
       if Item.Stepped /= null then
          Free_Mask (Item.Stepped);
       end if;
@@ -532,7 +559,54 @@ package body Model_Runner.Sampling is
          return;
       end if;
 
-      Sort (Item.Working.all (0 .. Count - 1));
+      --  5  order the candidates, or select the head of the order when
+      --      that is all the filters below will look at.
+      if Item.Chosen /= null
+        and then Element_Count (Item.Settings.Top_K) < Count
+      then
+         declare
+            Wanted : constant Element_Count :=
+              Element_Count (Item.Settings.Top_K);
+            Kept   : Element_Count := 0;
+         begin
+            for Index in 0 .. Count - 1 loop
+               declare
+                  Value : constant Candidate := Item.Working.all (Index);
+               begin
+                  if Kept < Wanted
+                    or else Ranks_Before (Value, Item.Chosen.all (Kept - 1))
+                  then
+                     --  Where it belongs among the ones kept so far.
+                     declare
+                        Place : Element_Count := Kept;
+                     begin
+                        if Kept = Wanted then
+                           Place := Kept - 1;
+                        else
+                           Kept := Kept + 1;
+                        end if;
+
+                        while Place > 0
+                          and then Ranks_Before
+                                     (Value, Item.Chosen.all (Place - 1))
+                        loop
+                           Item.Chosen.all (Place) :=
+                             Item.Chosen.all (Place - 1);
+                           Place := Place - 1;
+                        end loop;
+
+                        Item.Chosen.all (Place) := Value;
+                     end;
+                  end if;
+               end;
+            end loop;
+
+            Item.Working.all (0 .. Kept - 1) := Item.Chosen.all (0 .. Kept - 1);
+            Count := Kept;
+         end;
+      else
+         Sort (Item.Working.all (0 .. Count - 1));
+      end if;
 
       --  6  top-k
       Surviving := Count;

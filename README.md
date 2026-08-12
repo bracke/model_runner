@@ -130,6 +130,21 @@ sampler with an empty distribution and reporting that instead.
 In a conversation the grammar applies to each reply, and starts again for
 each: what a grammar describes is an answer, not a whole conversation.
 
+**What sampling costs.** It runs once per token and over as many candidates
+as the model has tokens, which every fixture here has sixteen of. Measured
+over 32,000: **0.062 ms** greedy, and **0.18 ms** with top-k 40, top-p 0.95,
+min-p 0.05 and a repetition penalty. Against about 85 ms for a token of
+TinyLlama-1.1B that is a fifth of a per cent.
+
+It was 2.86 ms -- fifteen times that -- because a top-k of forty was reached
+by sorting all thirty-two thousand candidates. A small top-k is now selected
+rather than sorted: the order candidates are ranked by is total, the logit
+and then the token, so any correct way of taking the first k of it takes the
+same k in the same places. A large top-k is still sorted, because keeping k
+in order as you go costs more per candidate than sorting does once k is big
+enough; where the two cross is a judgement and it is written where it is
+made. Both figures come from `tests benchmark`.
+
 **What it costs.** The filter runs over the whole vocabulary at every step,
 so it is worth a figure rather than an assurance. Measured on a stand-in
 vocabulary of 32,000 short pieces, one token filtered takes **10 ns** where

@@ -775,6 +775,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Sampling is fifteen times faster on a real vocabulary.** It runs once per
+  token over as many candidates as the model has tokens, and every fixture
+  here has sixteen, so nothing in the tests would have shown it: 2.86 ms a
+  token over 32,000 candidates, because a top-k of forty was reached by
+  sorting all of them.
+
+  A small top-k is now selected rather than sorted. The order candidates are
+  ranked by is total -- the logit and then the token, so equal logits still
+  have an order -- and any correct way of taking the first k of a total order
+  takes the same k in the same places, which is what makes the change
+  invisible in the output. A large top-k is still sorted: keeping k in order
+  as you go costs more per candidate than sorting does once k is big enough,
+  and where the two cross is a judgement written where it is made.
+
+  0.18 ms a token with top-k, top-p, min-p and a penalty; 0.062 ms greedy.
+  A test holds the two paths to each other over two dozen seeds on a
+  distribution with deliberate ties, since a tie is where two orders that
+  disagreed would disagree.
+
 - **`embed` evaluates in batches.** It read its text a token at a time,
   because that was the only path that left a hidden state behind for each
   position. The batched path now writes every position's state when a caller

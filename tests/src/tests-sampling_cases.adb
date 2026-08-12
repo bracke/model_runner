@@ -1518,9 +1518,89 @@ package body Tests.Sampling_Cases is
       S.Close (Item);
    end Step_Mask_Does_Not_Outlive_Its_Step;
 
+   --  Selecting the highest few and sorting all of them choose the same
+   --  token.
+   --
+   --  A small top-k out of a large vocabulary is selected rather than
+   --  sorted, because sorting thirty-two thousand candidates to look at
+   --  forty of them is most of what sampling used to cost. The two are
+   --  meant to be indistinguishable: the order candidates are ranked by is
+   --  total -- the logit, then the token, so that equal logits still have
+   --  an order -- and any correct way of taking the first k of a total
+   --  order takes the same k in the same places.
+   --
+   --  Held here by construction. The logits below give ten tokens a real
+   --  probability and the rest none worth keeping, so a top-k of twenty
+   --  and a top-k of seven hundred describe the same surviving set; what
+   --  differs between the two runs is only which of the two code paths
+   --  produced it. Ties are deliberate, because a tie is where two orders
+   --  that disagree would disagree.
+   procedure Selecting_And_Sorting_Agree
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Words  : constant := 1_000;
+      Logits : N.Real_Array (0 .. Words - 1) := [others => -1000.0];
+
+      --  What one sampler makes of them, at a given top-k.
+      function Drawn (Top_K : Natural; Seed : Natural) return Vocab.Token_Id
+      is
+         Item     : S.Sampler;
+         Settings : S.Configuration;
+         Token    : Vocab.Token_Id;
+         Status   : E.Error_Info;
+      begin
+         Settings.Temperature := 1.0;
+         Settings.Top_K := Top_K;
+         Settings.Top_P := 1.0;
+         Settings.Min_P := 0.05;
+         Settings.Repeat_Penalty := 1.0;
+
+         S.Open (Item, Settings, Words, S.Seed_Value (Seed), Status);
+         Assert (E.Is_Ok (Status), "the sampler did not open");
+
+         S.Sample (Item, Logits, Token, Status);
+         Assert (E.Is_Ok (Status),
+                 "sampling failed: " & E.Error_Code'Image (Status.Code));
+
+         S.Close (Item);
+         return Token;
+      end Drawn;
+   begin
+      --  Ten that matter, two pairs of which are exactly equal.
+      Logits (3) := 2.0;
+      Logits (17) := 2.0;
+      Logits (42) := 1.9;
+      Logits (99) := 1.9;
+      Logits (128) := 1.8;
+      Logits (255) := 1.7;
+      Logits (301) := 1.6;
+      Logits (512) := 1.5;
+      Logits (700) := 1.4;
+      Logits (999) := 1.3;
+
+      for Seed in 1 .. 24 loop
+         declare
+            --  Twenty is selected; seven hundred is sorted.
+            Picked : constant Vocab.Token_Id := Drawn (20, Seed);
+            Sorted : constant Vocab.Token_Id := Drawn (700, Seed);
+         begin
+            Assert (Picked = Sorted,
+                    "selecting the highest few and sorting all of them "
+                    & "chose differently at seed" & Natural'Image (Seed)
+                    & ":" & Vocab.Token_Id'Image (Picked)
+                    & " against" & Vocab.Token_Id'Image (Sorted));
+         end;
+      end loop;
+   end Selecting_And_Sorting_Agree;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Selecting_And_Sorting_Agree'Access,
+         "selecting the highest few and sorting all of them agree");
       Register_Routine
         (T, Step_Mask_Does_Not_Outlive_Its_Step'Access,
          "a mask that belongs to one step does not outlive it");

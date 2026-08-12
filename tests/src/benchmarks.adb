@@ -12,6 +12,8 @@ with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Grammar;
 with Model_Runner.Kernels;
+with Model_Runner.Sampling;
+with Model_Runner.Tokenizer;
 with Model_Runner.Platform;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization;
@@ -322,6 +324,79 @@ package body Benchmarks is
 
          B.Free (Data);
       end Measure;
+
+      --  What sampling costs a token.
+      --
+      --  It runs once per token produced and over as many candidates as
+      --  the model has tokens, and every fixture here has sixteen of them.
+      --  A real vocabulary is tens of thousands, which is the size at which
+      --  sorting all of them starts to be worth knowing about.
+      procedure Measure_Sampling (Name : String; Greedy : Boolean) is
+         Words : constant := 32_000;
+
+         Logits : N.Real_Array (0 .. Words - 1);
+
+         Item     : Model_Runner.Sampling.Sampler;
+         Settings : Model_Runner.Sampling.Configuration :=
+           Model_Runner.Sampling.Greedy_Configuration;
+         Token    : Model_Runner.Tokenizer.Token_Id;
+         Status   : E.Error_Info;
+
+         Started : Ada.Real_Time.Time;
+         Done    : N.Element_Count := 0;
+         Guard   : Natural := 0;
+         Rates   : Rate_Array (1 .. Rounds) := [others => 0.0];
+      begin
+         --  A distribution with a shape: a few large logits and a long
+         --  tail, which is what a model produces and what decides how much
+         --  work the truncation steps do.
+         for Index in Logits'Range loop
+            Logits (Index) :=
+               N.Real (Natural (Index) mod 977) * 0.01 - 5.0;
+         end loop;
+
+         if not Greedy then
+            Settings.Temperature := 0.8;
+            Settings.Top_K := 40;
+            Settings.Top_P := 0.95;
+            Settings.Min_P := 0.05;
+            Settings.Repeat_Penalty := 1.1;
+         end if;
+
+         Model_Runner.Sampling.Open (Item, Settings, Words, 1, Status);
+         if E.Is_Error (Status) then
+            IO.Put_Line ("  " & Name & ": the sampler did not open");
+            return;
+         end if;
+
+         for Pass in Rates'Range loop
+            Done := 0;
+            Started := Ada.Real_Time.Clock;
+            loop
+               Model_Runner.Sampling.Sample (Item, Logits, Token, Status);
+               if E.Is_Ok (Status) then
+                  Guard := Guard + 1;
+               end if;
+
+               Done := Done + 1;
+               exit when Ada.Real_Time.To_Duration
+                 (Ada.Real_Time.Clock - Started) >= Seconds;
+            end loop;
+
+            Rates (Pass) :=
+              Rate_Of (Long_Long_Integer (Done),
+                       Ada.Real_Time.To_Duration
+                         (Ada.Real_Time.Clock - Started));
+         end loop;
+
+         Report_Rate (Name, Middle (Rates));
+
+         if Guard = Natural'Last then
+            IO.Put_Line ("");
+         end if;
+
+         Model_Runner.Sampling.Close (Item);
+      end Measure_Sampling;
 
       --  What a grammar costs a step.
       --
@@ -991,6 +1066,11 @@ package body Benchmarks is
       Measure_Reference_Ratio ("q8_0");
       Measure_Reference_Ratio ("q4_k", G.Type_Q4_K);
       Measure_Reference_Ratio ("f32 ", G.Type_F32);
+      IO.New_Line;
+
+      IO.Put_Line ("sampling, one token chosen from 32000");
+      Measure_Sampling ("greedy", True);
+      Measure_Sampling ("top-k, top-p, min-p, penalties", False);
       IO.New_Line;
 
       IO.Put_Line ("output grammar, one token filtered");

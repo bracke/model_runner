@@ -241,6 +241,10 @@ private
       Seed       : Seed_Value := 0;
       State      : Generator_State := [others => 0];
       Working    : Candidate_Array_Access := null;
+
+      --  Room for the highest few, when a top-k small enough to be worth
+      --  selecting rather than sorting was asked for. Null otherwise.
+      Chosen     : Candidate_Array_Access := null;
       History    : History_Array_Access := null;
       Used       : Natural := 0;
       Next_Slot  : Natural := 0;
