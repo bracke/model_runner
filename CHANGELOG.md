@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The machine can be asked what compute devices it has.** `version`
+  reports them, found through the host's Vulkan loader.
+
+  The loader is opened by name at the moment it is first asked for rather
+  than linked, because linking it would make a binary that will not start on
+  a machine without one -- which is most machines this program is useful on.
+  A host with no loader, no driver or no device reports none and everything
+  else goes on unchanged: being told no is the point of asking.
+
+  Nothing computes on a device yet, and the documentation says so where a
+  reader will meet it. This is the first of four pieces -- discovery, then a
+  device and a queue, then buffers and a compute shader for the matrix
+  product, then the plumbing that makes it a third backend the existing
+  capability checks can refuse work to. Each of the remaining three can be
+  measured against the CPU backend when it lands.
+
+  Verified on this machine, which reports an AMD Radeon 780M and a software
+  rasterizer, both integrated. The test accepts either answer: it runs on
+  machines with a device and machines without, and demanding one would fail
+  on the other for a reason that has nothing to do with the program.
+
 - **Saved contexts: `--save-session` and `--load-session`.** Reading a prompt
   costs what it costs -- prefill runs at about 27 tokens a second here, so a
   thousand-token document is more than half a minute before the model says

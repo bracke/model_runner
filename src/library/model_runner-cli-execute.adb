@@ -25,6 +25,7 @@ with Model_Runner.Memory;
 with Model_Runner.Numerics;
 with Model_Runner.Cancellation;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Device;
 with Model_Runner.Platform.Signals;
 with Model_Runner.Progress;
 with Model_Runner.Stops;
@@ -599,6 +600,50 @@ package body Model_Runner.CLI.Execute is
         ("application.backends", [Loc.Named ("value", Backend_Names)]);
       Screen.Put_Message
         ("application.chat_formats", [Loc.Named ("value", Format_Names)]);
+
+      --  And what the machine has, which is a different question from what
+      --  the build can do. Nothing runs on a device yet; this reports what
+      --  one would run on, so that a reader can tell "this build cannot" from
+      --  "this machine has none" before either becomes a surprise.
+      declare
+         package Devices renames Model_Runner.Platform.Device;
+
+         Held  : Devices.Inventory;
+         Found : Boolean;
+
+         Room : String (1 .. 512) := [others => ' '];
+         Used : Natural := 0;
+
+         procedure Add (Text : String) is
+         begin
+            if Used + Text'Length <= Room'Last then
+               Room (Used + 1 .. Used + Text'Length) := Text;
+               Used := Used + Text'Length;
+            end if;
+         end Add;
+      begin
+         Devices.Open (Held, Found);
+
+         for Index in 1 .. Devices.Count (Held) loop
+            if Used > 0 then
+               Add (", ");
+            end if;
+            Add (Devices.Name (Held, Index));
+
+            --  Whether it has its own memory, because that is what decides
+            --  whether moving a model to it costs anything.
+            Add ((if Devices.Is_Discrete (Held, Index)
+                  then " (discrete)"
+                  else " (integrated)"));
+         end loop;
+
+         Screen.Put_Message
+           ("application.devices",
+            [Loc.Named ("value",
+                        (if Used = 0 then "none" else Room (1 .. Used)))]);
+
+         Devices.Close (Held);
+      end;
    end Show_Version;
 
    procedure Show_Help

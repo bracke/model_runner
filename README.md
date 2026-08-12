@@ -932,12 +932,20 @@ Prompt text given with `--prompt` may be visible to other local processes. Use
 Named in the specification, absent here:
 
 - **A backend that is not the processor.** There are two, and both run on
-  the CPU: one for speed and one for being obviously right. Nothing here
-  reaches a GPU or any other device. That is because nobody has written one,
-  not because it is disallowed: this project is written in Ada, and where a
-  library outside it cannot be avoided the way to reach that library is an
-  Ada binding, as `mmap` and `isatty` are reached today. A device backend
-  would arrive the same way.
+  the CPU: one for speed and one for being obviously right. Nothing computes
+  on a GPU yet.
+
+  The first piece of one is here: `version` reports what devices the machine
+  has, found through the host's Vulkan loader, which is opened by name at the
+  moment it is asked for rather than linked. A machine without a loader, a
+  driver or a device reports none and goes on exactly as before -- being told
+  no is the whole point of asking, and it is what most machines will say.
+
+  What is left is the rest of it: a device and a queue, buffers to hold the
+  weights, a compute shader for the matrix product, and the plumbing that
+  makes it a third backend the existing capability checks can refuse work to.
+  Those are the next three pieces, in that order, and each is a thing that
+  can be measured against the CPU backend when it lands rather than believed.
 
   This paragraph used to say a GPU backend was ruled out because it would
   need a foreign library "which the rules above do not allow". No rule above

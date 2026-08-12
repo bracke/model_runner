@@ -1,0 +1,43 @@
+--  Devices, on a host this build has no way to reach one from.
+--
+--  Reporting none is the honest answer rather than a stub that pretends:
+--  every caller of this asks whether there is a device and is expected to go
+--  on without one. A body for this host would open its own loader here.
+package body Model_Runner.Platform.Device is
+
+   function Is_Supported return Boolean is (False);
+
+   procedure Open (Item : in out Inventory; Found : out Boolean) is
+   begin
+      Close (Item);
+      Found := False;
+   end Open;
+
+   procedure Close (Item : in out Inventory) is
+   begin
+      Item.Used := 0;
+      Item.Discrete := [others => False];
+      Item.Handle := System.Null_Address;
+
+      for Index in Item.Names'Range loop
+         Item.Names (Index).Last := 0;
+      end loop;
+   end Close;
+
+   function Count (Item : Inventory) return Natural is (Item.Used);
+
+   function Name (Item : Inventory; Index : Positive) return String is
+   begin
+      if Index > Item.Used then
+         return "";
+      end if;
+
+      return Item.Names (Index).Text (1 .. Item.Names (Index).Last);
+   end Name;
+
+   function Is_Discrete (Item : Inventory; Index : Positive) return Boolean is
+   begin
+      return Index <= Item.Used and then Item.Discrete (Index);
+   end Is_Discrete;
+
+end Model_Runner.Platform.Device;

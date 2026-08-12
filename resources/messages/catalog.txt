@@ -8,6 +8,7 @@ en.application.architecture = architecture {name}
 en.application.formats = tensor formats {value}
 en.application.backends = backends {value}
 en.application.chat_formats = chat formats {value}
+en.application.devices = devices on this machine {value}
 
 en.cli.label.standard_input = standard input
 
@@ -410,6 +411,7 @@ da.application.license = licens {license}
 da.application.architecture = arkitektur {name}
 da.application.formats = tensorformater {value}
 da.application.backends = backends {value}
+da.application.devices = enheder på denne maskine {value}
 da.application.chat_formats = chatformater {value}
 da.cli.label.standard_input = standardinddata
 
@@ -675,6 +677,7 @@ qps.application.license = ⟦ĺíçéñßé {license}⟧
 qps.application.architecture = ⟦áŕçhíŧéçŧúŕé {name}⟧
 qps.application.formats = ⟦ŧéñßóŕ fóŕmáŧß {value}⟧
 qps.application.backends = ⟦báçkéñðß {value}⟧
+qps.application.devices = ⟦ðévíçéß óñ ŧhíß máçhíñé {value}⟧
 qps.application.chat_formats = ⟦çháŧ fóŕmáŧß {value}⟧
 qps.cli.label.standard_input = ⟦ßŧáñðáŕð íñpúŧ⟧
 

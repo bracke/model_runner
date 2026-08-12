@@ -22,6 +22,7 @@ with Model_Runner.Conversation;
 with Model_Runner.Errors;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Device;
 with Model_Runner.Presentation;
 with Model_Runner.Kernels;
 with Fixtures;
@@ -330,6 +331,72 @@ package body Tests.CLI_Cases is
 
       return Result;
    end Parsed;
+
+   --  Asking the machine what devices it has answers, either way.
+   --
+   --  Nothing computes on a device yet. What this holds is the part that
+   --  has to be true before anything can: asking is safe on a machine with
+   --  no loader, no driver and no device, and safe again on one that has
+   --  all three. A machine without them is the common case and must not be
+   --  a machine where the program fails to start, so the absence is an
+   --  answer rather than a diagnostic.
+   --
+   --  Both outcomes are accepted here on purpose. This runs on machines
+   --  with a device and on machines without, and a test that demanded one
+   --  would fail on the other for a reason that has nothing to do with the
+   --  program.
+   procedure Devices_Are_Reported_Either_Way
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package Devices renames Model_Runner.Platform.Device;
+
+      Held  : Devices.Inventory;
+      Found : Boolean;
+   begin
+      --  Twice, because opening one is what allocates whatever the host
+      --  hands back and closing it is what gives it up: a second open must
+      --  be as good as the first.
+      for Attempt in 1 .. 2 loop
+         Devices.Open (Held, Found);
+
+         Assert (Found or else Devices.Count (Held) = 0,
+                 "no device interface answered and yet devices were named");
+
+         Assert (Devices.Count (Held) <= Devices.Max_Devices,
+                 "more devices were named than the inventory holds:"
+                 & Natural'Image (Devices.Count (Held)));
+
+         for Index in 1 .. Devices.Count (Held) loop
+            Assert (Devices.Name (Held, Index)'Length > 0,
+                    "a device was named with an empty name at"
+                    & Natural'Image (Index));
+            Assert (Devices.Name (Held, Index)'Length
+                      <= Devices.Max_Name_Bytes,
+                    "a device name ran past the length the interface "
+                    & "states");
+         end loop;
+
+         --  Past the end is not a device, and asking is not an error.
+         Assert (Devices.Name (Held, Devices.Count (Held) + 1) = "",
+                 "a device past the last one had a name");
+         Assert (not Devices.Is_Discrete (Held, Devices.Count (Held) + 1),
+                 "a device past the last one had a memory");
+
+         Devices.Close (Held);
+         Assert (Devices.Count (Held) = 0,
+                 "closing an inventory left devices in it");
+      end loop;
+
+      --  And closing one that was never opened.
+      Devices.Close (Held);
+
+      --  Whether the interface is there at all is a separate question from
+      --  whether it named anything, and both answers are allowed.
+      Assert (Devices.Is_Supported or else not Found,
+              "the interface answered while reporting itself unsupported");
+   end Devices_Are_Reported_Either_Way;
 
    --  A saved context is the context, and a run that reuses one answers
    --  as it would have.
@@ -8663,6 +8730,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Conversation_Survives_Interactive_Edits'Access,
          "the conversation keeps its shape under the edits interactive makes");
+      Register_Routine
+        (T, Devices_Are_Reported_Either_Way'Access,
+         "asking the machine what devices it has answers, either way");
       Register_Routine
         (T, Saved_Context_Changes_Nothing'Access,
          "a saved context is the context, and reusing one changes nothing");
