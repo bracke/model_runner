@@ -417,8 +417,12 @@ package body Model_Runner.Presentation is
    ----------------------
 
    procedure Put_Statistics
-     (Item    : in out Console;
-      Outcome : Gen.Result)
+     (Item           : in out Console;
+      Outcome        : Gen.Result;
+      Device         : String := "";
+      Resident       : Natural := 0;
+      Resident_Bytes : Interfaces.Unsigned_64 := 0;
+      Given_Back     : Natural := 0)
    is
       function Seconds (Value : Model_Runner.Clocks.Nanoseconds) return String
       is (Message
@@ -457,6 +461,24 @@ package body Model_Runner.Presentation is
       Put_Field
         (Item, "statistics.workers",
          T.Image (Long_Long_Integer (Outcome.Workers)), Diagnostic);
+      --  What the device did with the model, for a run that used one. A
+      --  count of matrices given back is the one number here that says a
+      --  run was slower than it looked: everything above zero was uploaded
+      --  again, and a device being fed the same weights is a device that is
+      --  not helping.
+      if Device /= "" then
+         Put_Field (Item, "statistics.device", Device, Diagnostic);
+         Put_Field
+           (Item, "statistics.resident",
+            T.Image (Long_Long_Integer (Resident)), Diagnostic);
+         Put_Field
+           (Item, "statistics.resident_bytes",
+            T.Image (Long_Long_Integer (Resident_Bytes)), Diagnostic);
+         Put_Field
+           (Item, "statistics.given_back",
+            T.Image (Long_Long_Integer (Given_Back)), Diagnostic);
+      end if;
+
       Put_Field
         (Item, "statistics.completion_reason",
          Message (Item, "completion." & Gen.Reason_Name (Outcome.Reason)), Diagnostic);

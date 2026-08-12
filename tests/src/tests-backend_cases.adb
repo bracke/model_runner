@@ -1,4 +1,8 @@
+with Ada.Text_IO;
+
 with AUnit.Assertions;
+
+with Interfaces;
 
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
@@ -539,6 +543,127 @@ package body Tests.Backend_Cases is
       end if;
    end Device_Refuses_What_It_Must;
 
+   ------------------------------------------
+   -- Device_Gives_Back_What_It_Cannot_Hold --
+   ------------------------------------------
+
+   --  A device given less memory than the matrices need keeps computing.
+   --
+   --  What it does instead of failing is give back the matrix wanted longest
+   --  ago and upload the next in its place, which is slower and still right.
+   --  Before this it did neither: it kept matrices until an allocation
+   --  failed and then failed the product, so a model larger than the device
+   --  was a run that stopped in the middle of a token.
+   --
+   --  Driven by opening the device with a budget rather than by finding a
+   --  model too large for one, because the interesting case is the one no
+   --  machine here can produce on demand.
+   procedure Device_Gives_Back_What_It_Cannot_Hold
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Interfaces.Unsigned_64;
+
+      Ready : Boolean;
+
+      Shapes  : constant := 6;
+      Wide    : constant N.Element_Count := 64;
+      Tall    : constant N.Element_Count := 16;
+
+      --  Room for two of the six matrices, so every pass round the loop
+      --  wants one that is not there.
+      Each   : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Wide) * Interfaces.Unsigned_64 (Tall) * 4;
+      Budget : constant Interfaces.Unsigned_64 := Each * 2;
+
+      Held    : array (1 .. Shapes) of B.Byte_Array_Access;
+      Views   : array (1 .. Shapes) of T.View;
+      Wanted  : array (1 .. Shapes) of N.Real := [others => 0.0];
+
+      Vector  : T.Real_Array_Access;
+      Room    : T.Real_Array_Access;
+      Status  : E.Error_Info;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Budget);
+
+      if not Ready then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device gave anything back here");
+         return;
+      end if;
+
+      Assert (Model_Runner.Backend.Device.Given_Back = 0,
+              "a device that has computed nothing has given something back");
+
+      T.Allocate (Wide, Vector);
+      T.Allocate (Tall, Room);
+      Assert (Vector /= null and then Room /= null, "no room for the test");
+
+      for Index in Vector.all'Range loop
+         Vector.all (Index) := 1.0;
+      end loop;
+
+      --  Six matrices, each a different constant, so the answer says which
+      --  one was multiplied by. A matrix given back and uploaded again has
+      --  to come back the same or this says so.
+      for Which in Held'Range loop
+         declare
+            Values : N.Real_Array (0 .. Wide * Tall - 1) :=
+              [others => 0.0];
+            Each_Value : constant N.Real :=
+              N.Real (Which) * 0.25 - 0.125;
+         begin
+            Values := [others => Each_Value];
+            declare
+               Bytes : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+            begin
+               B.Allocate (Bytes'Length, Held (Which));
+               Held (Which).all := Bytes;
+            end;
+
+            T.Make (G.Type_F32, Tall, Wide, Held (Which), 0, Views (Which),
+                    Status);
+            Assert (E.Is_Ok (Status), "a weight view could not be built");
+
+            Wanted (Which) := Each_Value * N.Real (Wide);
+         end;
+      end loop;
+
+      --  Three passes over all six, so that everything is asked for again
+      --  after it has been given back.
+      for Pass in 1 .. 3 loop
+         for Which in Held'Range loop
+            Model_Runner.Backend.Device.Dispatch
+              (Views (Which), Vector, Room, Status);
+            Assert (E.Is_Ok (Status),
+                    "a product was refused for want of device memory: "
+                    & E.Error_Code'Image (Status.Code));
+
+            for Row in Room.all'Range loop
+               Assert (abs (Room.all (Row) - Wanted (Which)) < 1.0E-3,
+                       "a matrix came back different after being given back");
+            end loop;
+         end loop;
+      end loop;
+
+      --  It held what it could and gave back the rest, rather than holding
+      --  everything or holding nothing.
+      Assert (Model_Runner.Backend.Device.Resident > 0,
+              "a device with room for two matrices held none");
+      Assert (Model_Runner.Backend.Device.Given_Back > 0,
+              "a device with room for two of six matrices gave none back");
+
+      for Which in Held'Range loop
+         B.Free (Held (Which));
+      end loop;
+
+      T.Free (Vector);
+      T.Free (Room);
+      Model_Runner.Backend.Device.Close;
+   end Device_Gives_Back_What_It_Cannot_Hold;
+
    ----------
    -- Name --
    ----------
@@ -762,6 +887,10 @@ package body Tests.Backend_Cases is
         (T, Device_Reports_What_It_Reads'Access,
          "the device backend claims the formats its shader decodes and no "
          & "others");
+      Register_Routine
+        (T, Device_Gives_Back_What_It_Cannot_Hold'Access,
+         "a device with less memory than the matrices need gives back the "
+         & "one wanted longest ago and keeps computing");
       Register_Routine
         (T, Device_Refuses_What_It_Must'Access,
          "the device backend refuses no device, a format it cannot read, "

@@ -7,6 +7,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device's memory is asked about, and what does not fit is given
+  back.** Two faults with one cause: nothing knew how much memory the device
+  had. `Context.Heap` was read from the driver and used by nothing, and the
+  resident matrices were bounded by a count of 1024 with no eviction -- so a
+  model larger than the device was discovered one failed allocation at a
+  time, in the middle of a token, and a mixture of experts passed the count
+  bound in silence.
+
+  An engine now holds three quarters of the largest heap the device reports,
+  and releases the matrix multiplied by longest ago to make room for the one
+  wanted now. Least recently used rather than first or last, because a
+  forward pass reads every matrix once in the same order: releasing the most
+  recent releases the one wanted next.
+
+  A model whose matrices are larger than that share is refused as it loads,
+  with both numbers in the message -- it would otherwise run, slower than the
+  processor and silently, by uploading weights again for every token. The
+  question is asked through a new `Memory_Bytes` on the capability record, so
+  a backend that computes out of the memory the model is already in answers
+  zero and nothing is asked of it.
+
+  `--show-stats` now names the device, how many matrices are on it, how many
+  bytes those take, and how many have been given back. The last is the number
+  that says a run was slower than it looked.
+
+  `Open` takes a byte budget, which is how both behaviours are tested: the
+  case worth testing is a heap smaller than a model, and no machine here can
+  produce one on demand.
+
 - **`tests external-model --backend NAME` and `tests benchmark` on a device.**
   The two tools that measure and validate could only see the processor path,
   which is a poor arrangement once there is a backend whose behaviour differs

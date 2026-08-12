@@ -1,5 +1,7 @@
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
+with Interfaces;
+
 with Model_Runner.Generation;
 with Model_Runner.Localization;
 with Model_Runner.Output;
@@ -244,9 +246,23 @@ package Model_Runner.Presentation is
    --
    --  @param Item Console to write through.
    --  @param Outcome Generation result to summarize.
+   --  @param Device Name of the device the run used, or empty for a run that
+   --    used none. The three fields after it are reported only when it is
+   --    given, because they are answers to a question a run on the processor
+   --    is not asked.
+   --  @param Resident How many of the model's matrices the device holds.
+   --  @param Resident_Bytes How many bytes those take.
+   --  @param Given_Back How many matrices were released to make room for
+   --    others. Anything above zero says the model does not fit and is being
+   --    uploaded again as it is wanted, which is the difference between a
+   --    device that is computing and one that is being fed.
    procedure Put_Statistics
-     (Item    : in out Console;
-      Outcome : Model_Runner.Generation.Result);
+     (Item           : in out Console;
+      Outcome        : Model_Runner.Generation.Result;
+      Device         : String := "";
+      Resident       : Natural := 0;
+      Resident_Bytes : Interfaces.Unsigned_64 := 0;
+      Given_Back     : Natural := 0);
 
    --  A sink that writes generated text to standard output.
    --

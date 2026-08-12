@@ -1155,27 +1155,27 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 7-token prompt, 12 generated | 2.167 s | **1.214 s** |
-| -- evaluating the prompt | 0.536 s | 0.205 s |
-| -- generating | 1.631 s | 1.022 s |
-| 111-token prompt, 1 generated | 6.979 s | **3.979 s** |
-| -- evaluating the prompt | 6.813 s | 3.817 s |
+| 7-token prompt, 12 generated | 1.723 s | **1.287 s** |
+| -- evaluating the prompt | 0.383 s | 0.205 s |
+| -- generating | 1.299 s | 1.080 s |
+| 111-token prompt, 1 generated | 6.079 s | **3.981 s** |
+| -- evaluating the prompt | 5.961 s | 3.826 s |
 
 Both backends print the same digest of what they generated -- `7784f0` and
 `af63c7` for the two runs -- so this is the same text, not a faster answer to
 a different question.
 
 Read the left column with the caveat it deserves. This machine had other work
-on it when the pair was taken, and the two columns are not equally hurt by
-that: the processor column competes for the cores it is using and the device
-column does not. The same seven-token run measures 1.28 s on a quiet machine
--- that is the figure published at the top of this section -- against the
-2.167 s here, while the device figure moved from 1.345 s to 1.214 s across
-the same two occasions. So the honest reading is that the device is somewhat
-faster than the pool on the short run and comfortably faster on the long one,
-and that the exact ratio is a property of what else the machine is doing.
-Both columns were taken together, which is the part that makes them
-comparable at all.
+on it, and the two columns are not equally hurt by that: the processor column
+competes for the cores it is using and the device column does not. Taken
+three times over one afternoon, the seven-token run measured 1.727, 2.167 and
+1.723 s on the processor against 1.345, 1.214 and 1.287 on the device, and
+the quiet-machine figure for the processor -- published at the top of this
+section -- is 1.28 s. So the device's advantage on the short run is real but
+smaller than any one pair suggests, and on the long run it is comfortable at
+every measurement. Each pair was taken together, which is what makes the two
+columns comparable at all; none of them was taken on a quiet machine, which
+is what keeps the left column from being compared with the figure above.
 
 Two things make that possible and neither is the device being fast.
 
@@ -1195,8 +1195,22 @@ is the whole difference between this backend and the first version of it,
 which declined to batch and evaluated a five-token prompt as five passes over
 every matrix -- 1.5 tokens a second against the processor's 43.2.
 
-Each matrix is uploaded once and stays on the device. What crosses per
-product is the vectors out, the dispatch, and the results back.
+Each matrix is uploaded once and stays on the device, up to three quarters of
+the largest heap the device reports. Past that the matrix wanted longest ago
+goes back to make room for the one wanted now, which is correct and slower:
+what does not fit is uploaded again every time a token needs it. A run says
+which device it used, how many matrices are on it and how many have been
+given back, so a model that does not fit is a number rather than a mystery,
+and a model whose matrices are larger than that share is refused as it loads
+rather than discovered a token at a time.
+
+```
+  backend                 device
+  device                  AMD Radeon 780M Graphics (RADV PHOENIX)
+  matrices on the device  155
+  bytes on the device     1099071488
+  matrices given back     0
+```
 
 Under the model, one product at a time, `tests benchmark` measures where that
 leaves each format. A 512 by 2048 matrix, resident, against the serial
@@ -1205,11 +1219,11 @@ faster there:
 
 | Per pass | Device time / processor time |
 | --- | --- |
-| q8_0, one vector | 0.76 |
-| q4_0, one vector | 0.90 |
-| f32, one vector | 1.38 |
-| q8_0, eight vectors | 0.25 |
-| q8_0, thirty-two vectors | 0.099 |
+| q8_0, one vector | 0.81 |
+| q4_0, one vector | 0.98 |
+| f32, one vector | 1.34 |
+| q8_0, eight vectors | 0.27 |
+| q8_0, thirty-two vectors | 0.104 |
 
 Binary32 is the one format the device is slower at, and that is the finding
 rather than a disappointment: it is four bytes a weight where q8_0 is one, so

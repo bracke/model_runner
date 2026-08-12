@@ -599,9 +599,10 @@ package body Model_Runner.Platform.Device.Products is
    ---------------------------------------------------------------------------
 
    procedure Open
-     (Item  : in out Engine;
-      On    : Context;
-      Ready : out Boolean)
+     (Item   : in out Engine;
+      On     : Context;
+      Ready  : out Boolean;
+      Budget : Interfaces.Unsigned_64 := 0)
    is
       Made : aliased Address := Null_Handle;
    begin
@@ -614,6 +615,15 @@ package body Model_Runner.Platform.Device.Products is
 
       Item.Instance := On.Instance;
       Instance_Of := Item.Instance;
+
+      --  Through the accessor rather than the field. This package can see
+      --  the private part, being a child, and reading it directly would make
+      --  a public operation that answers exactly this question something
+      --  nothing calls.
+      Item.Heap := Memory_Bytes (On);
+      Item.Budget :=
+        (if Budget > 0 then Budget
+         else Item.Heap / Budget_Whole * Budget_Share);
 
       Item.Logical := On.Logical;
       Item.Queue := On.Queue;
@@ -878,6 +888,11 @@ package body Model_Runner.Platform.Device.Products is
          Item.Kept (Index).Bytes := 0;
       end loop;
       Item.Used := 0;
+      Item.Kept_Bytes := 0;
+      Item.Clock := 0;
+      Item.Released := 0;
+      Item.Heap := 0;
+      Item.Budget := 0;
 
       Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
       Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
@@ -915,11 +930,67 @@ package body Model_Runner.Platform.Device.Products is
    --  One product
    ---------------------------------------------------------------------------
 
+   ---------------------
+   -- Give_Back_Least --
+   ---------------------
+
+   --  Release the matrix least recently multiplied by, so that another can
+   --  take its place.
+   --
+   --  Least recently used rather than first or last. A forward pass reads
+   --  every matrix of the model once in the same order, so releasing the
+   --  most recent would release the one wanted next, and releasing the first
+   --  would release the one wanted after that. The one wanted longest ago is
+   --  the one whose turn comes last.
+   --
+   --  @param Item Engine holding them.
+   --  @param Gone True when one was released.
+   procedure Give_Back_Least (Item : in out Engine; Gone : out Boolean) is
+      Oldest : Natural := 0;
+   begin
+      Gone := False;
+
+      for Index in 1 .. Item.Used loop
+         if Oldest = 0
+           or else Item.Kept (Index).Used_At < Item.Kept (Oldest).Used_At
+         then
+            Oldest := Index;
+         end if;
+      end loop;
+
+      if Oldest = 0 then
+         return;
+      end if;
+
+      Give_Back_Buffer
+        (Item, Item.Kept (Oldest).Buffer, Item.Kept (Oldest).Memory);
+      Item.Kept_Bytes := Item.Kept_Bytes - Item.Kept (Oldest).Bytes;
+      Item.Released := Item.Released + 1;
+
+      --  The last one moves into the gap, because the order of this list is
+      --  nothing: what says which is oldest is the count each carries.
+      Item.Kept (Oldest) := Item.Kept (Item.Used);
+      Item.Kept (Item.Used) :=
+        (Key => Null_Handle, Buffer => Null_Handle, Memory => Null_Handle,
+         Bytes => 0, Used_At => 0);
+      Item.Used := Item.Used - 1;
+
+      Gone := True;
+   end Give_Back_Least;
+
    --------------
    -- Resident --
    --------------
 
    function Resident (Item : Engine) return Natural is (Item.Used);
+
+   function Resident_Bytes (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.Kept_Bytes);
+
+   function Capacity (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.Budget);
+
+   function Given_Back (Item : Engine) return Natural is (Item.Released);
 
    --------------
    -- Multiply --
@@ -1020,6 +1091,8 @@ package body Model_Runner.Platform.Device.Products is
       --  same address with a different length is a different matrix, and
       --  the length is checked so that a caller reusing storage cannot be
       --  handed somebody else's weights.
+      Item.Clock := Item.Clock + 1;
+
       if Key /= System.Null_Address then
          for Index in 1 .. Item.Used loop
             if Item.Kept (Index).Key = Key
@@ -1027,12 +1100,31 @@ package body Model_Runner.Platform.Device.Products is
             then
                Weight_Buffer := Item.Kept (Index).Buffer;
                Weight_Memory := Item.Kept (Index).Memory;
+               Item.Kept (Index).Used_At := Item.Clock;
                exit;
             end if;
          end loop;
       end if;
 
       if Weight_Buffer = Null_Handle then
+         --  Room for it first. A device with a heap smaller than the model
+         --  used to take matrices until an allocation failed and then fail
+         --  the product; now the matrix wanted longest ago goes back and
+         --  this one takes its place, which is slower than holding the whole
+         --  model and is not a failure.
+         if Key /= System.Null_Address and then Item.Budget > 0 then
+            declare
+               Gone : Boolean := True;
+            begin
+               while Gone
+                 and then Item.Used > 0
+                 and then Item.Kept_Bytes + Weight_Bytes > Item.Budget
+               loop
+                  Give_Back_Least (Item, Gone);
+               end loop;
+            end;
+         end if;
+
          Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good);
          if not Good then
             Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
@@ -1050,13 +1142,21 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         --  Kept if it was named and there is room; otherwise it belongs to
-         --  this call and goes back at the end of it.
-         if Key /= System.Null_Address and then Item.Used < Max_Resident then
+         --  Kept if it was named and it fits, by count and by bytes;
+         --  otherwise it belongs to this call and goes back at the end of
+         --  it. One matrix larger than the whole budget is the case that
+         --  reaches the second condition with nothing left to release, and
+         --  it is handled the same way: computed, given back, correct.
+         if Key /= System.Null_Address
+           and then Item.Used < Max_Resident
+           and then (Item.Budget = 0
+                     or else Item.Kept_Bytes + Weight_Bytes <= Item.Budget)
+         then
             Item.Used := Item.Used + 1;
             Item.Kept (Item.Used) :=
               (Key => Key, Buffer => Weight_Buffer, Memory => Weight_Memory,
-               Bytes => Weight_Bytes);
+               Bytes => Weight_Bytes, Used_At => Item.Clock);
+            Item.Kept_Bytes := Item.Kept_Bytes + Weight_Bytes;
          else
             Borrowed := True;
          end if;

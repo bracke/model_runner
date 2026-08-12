@@ -1,3 +1,5 @@
+with Interfaces;
+
 with Model_Runner.GGUF;
 
 --  Execution-backend capabilities.
@@ -70,6 +72,19 @@ package Model_Runner.Backend is
       --  Largest worker count the backend accepts. Asked when the worker
       --  count is chosen.
       Max_Workers : Positive := 1;
+
+      --  Bytes of the backend's own memory available for a model's matrices,
+      --  or zero for a backend that computes out of the memory the model is
+      --  already in. Asked once, when a model is prepared, against the bytes
+      --  that model's matrices take.
+      --
+      --  A device with a heap smaller than the model still runs it -- the
+      --  matrix wanted longest ago goes back to make room for the next --
+      --  but it runs it by uploading weights again for every token, which is
+      --  slower than the processor by enough that a caller should be told
+      --  rather than left to wonder. Zero means the question does not
+      --  arise.
+      Memory_Bytes : Interfaces.Unsigned_64 := 0;
    end record;
 
    --  Report whether a backend can read a tensor format.

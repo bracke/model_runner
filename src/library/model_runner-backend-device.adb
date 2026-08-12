@@ -1,5 +1,3 @@
-with Interfaces;
-
 with Model_Runner.Bytes;
 with Model_Runner.Platform.Device.Products;
 
@@ -62,6 +60,11 @@ package body Model_Runner.Backend.Device is
       Result.Supports_Parallel := False;
       Result.Max_Workers := 1;
 
+      --  What the open device will hold, which is nothing at all when none
+      --  is open: this is asked while a model prepares, and by then the
+      --  caller has opened one or has been told it could not.
+      Result.Memory_Bytes := Products.Capacity (Engine);
+
       return Result;
    end Describe;
 
@@ -69,7 +72,10 @@ package body Model_Runner.Backend.Device is
    -- Open --
    ----------
 
-   procedure Open (Ready : out Boolean) is
+   procedure Open
+     (Ready  : out Boolean;
+      Budget : Interfaces.Unsigned_64 := 0)
+   is
       Found : Boolean;
    begin
       if Ready_Now then
@@ -93,7 +99,7 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Products.Open (Engine, Opened, Found);
+      Products.Open (Engine, Opened, Found, Budget);
       if not Found then
          Devices.Close (Opened);
          return;
@@ -141,6 +147,19 @@ package body Model_Runner.Backend.Device is
    --------------
 
    function Resident return Natural is (Products.Resident (Engine));
+
+   ---------------------
+   -- Resident_Bytes --
+   ---------------------
+
+   function Resident_Bytes return Interfaces.Unsigned_64
+   is (Products.Resident_Bytes (Engine));
+
+   -----------------
+   -- Given_Back --
+   -----------------
+
+   function Given_Back return Natural is (Products.Given_Back (Engine));
 
    ---------------
    -- Packing_Of --

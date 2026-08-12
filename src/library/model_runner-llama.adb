@@ -571,6 +571,62 @@ package body Model_Runner.Llama is
    --  Tensor resolution
    ---------------------------------------------------------------------------
 
+   --  Every matrix a model holds, as references to the views that name
+   --  them. A norm is already a decoded vector and a bias is too, so neither
+   --  is here.
+   --
+   --  One list, because there are two questions about the same set -- what
+   --  to decode when repacking, and how many bytes a backend would have to
+   --  hold -- and a second copy of the walk is a second place for a tensor
+   --  to be forgotten. The mixture layers are where that would happen: three
+   --  matrices an expert, and a list written twice would have them in one.
+   type View_Access is access all T.View;
+   type View_List is array (Positive range <>) of View_Access;
+
+   function Matrices (Item : in out Model) return View_List is
+      --  Seven a dense layer, and a mixture layer instead carries a router
+      --  and three matrices an expert.
+      Per_Layer : constant Positive :=
+        (if Item.Settings.Experts = 0
+         then 7
+         else 4 + 1 + 3 * Item.Settings.Experts);
+
+      Room  : View_List (1 .. 2 + Per_Layer * Item.Settings.Layers);
+      Count : Natural := 0;
+
+      procedure Add (Where : View_Access) is
+      begin
+         if T.Is_Present (Where.all) then
+            Count := Count + 1;
+            Room (Count) := Where;
+         end if;
+      end Add;
+   begin
+      Add (Item.Embeddings'Unchecked_Access);
+      Add (Item.Output'Unchecked_Access);
+
+      for Index in Item.Layers'Range loop
+         Add (Item.Layers (Index).Query'Unchecked_Access);
+         Add (Item.Layers (Index).Key'Unchecked_Access);
+         Add (Item.Layers (Index).Value'Unchecked_Access);
+         Add (Item.Layers (Index).Attention_Out'Unchecked_Access);
+         Add (Item.Layers (Index).Gate'Unchecked_Access);
+         Add (Item.Layers (Index).Up'Unchecked_Access);
+         Add (Item.Layers (Index).Down'Unchecked_Access);
+         Add (Item.Layers (Index).Router'Unchecked_Access);
+
+         if Item.Layers (Index).Experts /= null then
+            for Which in Item.Layers (Index).Experts.all'Range loop
+               Add (Item.Layers (Index).Experts.all (Which).Gate'Unchecked_Access);
+               Add (Item.Layers (Index).Experts.all (Which).Up'Unchecked_Access);
+               Add (Item.Layers (Index).Experts.all (Which).Down'Unchecked_Access);
+            end loop;
+         end if;
+      end loop;
+
+      return Room (1 .. Count);
+   end Matrices;
+
    --  Resolve one tensor by name and check its shape against the role it
    --  plays. Every required tensor is resolved during preparation; no name
    --  lookup happens during evaluation.
@@ -1224,71 +1280,36 @@ package body Model_Runner.Llama is
 
             Needed : B.Byte_Count := 0;
 
-            --  Every matrix this model holds. A norm is already a decoded
-            --  vector and a bias is too, so neither is here.
-            type View_Access is access all T.View;
-            type View_List is array (Positive range <>) of View_Access;
-
+            --  The ones that need decoding, out of the matrices this
+            --  model holds. A matrix already in the target format is
+            --  nothing to decode: copying it would double the memory to buy
+            --  nothing, which is what the first version of this did to
+            --  every binary32 tensor in a file.
             Skipped : Natural := 0;
 
-            function Matrices return View_List is
-               --  Seven a dense layer, and a mixture layer instead carries a
-               --  router and three matrices an expert.
-               Per_Layer : constant Positive :=
-                 (if Item.Settings.Experts = 0
-                  then 7
-                  else 4 + 1 + 3 * Item.Settings.Experts);
-
-               Room  : View_List (1 .. 2 + Per_Layer * Item.Settings.Layers);
+            function To_Decode return View_List is
+               Whole : constant View_List := Matrices (Item);
+               Room  : View_List (Whole'Range);
                Count : Natural := 0;
 
                Target : constant Model_Runner.GGUF.Tensor_Type :=
                  (if Repack = To_BF16
                   then Model_Runner.GGUF.Type_BF16
                   else Model_Runner.GGUF.Type_F32);
-
-               procedure Add (Where : View_Access) is
-               begin
-                  --  A matrix already in the target format is nothing to
-                  --  decode: copying it would double the memory to buy
-                  --  nothing, which is what the first version of this did
-                  --  to every binary32 tensor in a file.
-                  if T.Is_Present (Where.all) then
-                     if Model_Runner.GGUF."=" (Where.all.Format, Target) then
-                        Skipped := Skipped + 1;
-                     else
-                        Count := Count + 1;
-                        Room (Count) := Where;
-                     end if;
-                  end if;
-               end Add;
             begin
-               Add (Item.Embeddings'Access);
-               Add (Item.Output'Access);
-
-               for Index in Item.Layers'Range loop
-                  Add (Item.Layers (Index).Query'Access);
-                  Add (Item.Layers (Index).Key'Access);
-                  Add (Item.Layers (Index).Value'Access);
-                  Add (Item.Layers (Index).Attention_Out'Access);
-                  Add (Item.Layers (Index).Gate'Access);
-                  Add (Item.Layers (Index).Up'Access);
-                  Add (Item.Layers (Index).Down'Access);
-                  Add (Item.Layers (Index).Router'Access);
-
-                  if Item.Layers (Index).Experts /= null then
-                     for Which in Item.Layers (Index).Experts.all'Range loop
-                        Add (Item.Layers (Index).Experts.all (Which).Gate'Access);
-                        Add (Item.Layers (Index).Experts.all (Which).Up'Access);
-                        Add (Item.Layers (Index).Experts.all (Which).Down'Access);
-                     end loop;
+               for Where of Whole loop
+                  if Model_Runner.GGUF."=" (Where.all.Format, Target) then
+                     Skipped := Skipped + 1;
+                  else
+                     Count := Count + 1;
+                     Room (Count) := Where;
                   end if;
                end loop;
 
                return Room (1 .. Count);
-            end Matrices;
+            end To_Decode;
 
-            Held : constant View_List := Matrices;
+            Held : constant View_List := To_Decode;
          begin
             for Where of Held loop
                Needed := Needed
@@ -1495,6 +1516,74 @@ package body Model_Runner.Llama is
                   Mem.Record_Release
                     (Item.Accounting, Mem.Model_Weights, Was);
                end;
+            end if;
+         end;
+      end if;
+
+      --  And whether the backend has room for what those matrices now are.
+      --
+      --  Asked after any repacking, because repacking is what changes the
+      --  answer: a model that fits a device as it is stored may not fit it
+      --  at four bytes a weight. Asked before the model is declared ready,
+      --  because being told after a minute of loading is being told a minute
+      --  late.
+      --
+      --  This is a warning in the shape of a refusal and it is a refusal on
+      --  purpose. A model larger than the device's share still runs -- what
+      --  does not fit is given back and uploaded again as it is wanted --
+      --  but it runs slower than the processor would, and quietly. A caller
+      --  who wants that can say --repack none, choose another backend, or
+      --  raise nothing at all and be told what the numbers were.
+      if Item.Able.Memory_Bytes > 0 then
+         declare
+            Held  : constant View_List := Matrices (Item);
+            Total : Interfaces.Unsigned_64 := 0;
+
+            --  Distinct storage, because a model with a tied output holds
+            --  one matrix under two names and a device asked to keep it
+            --  twice keeps it once: the address is the key.
+            function Counted_Before (Upto : Natural) return Boolean is
+            begin
+               for Earlier in Held'First .. Upto - 1 loop
+                  if Held (Earlier).all.Data = Held (Upto).all.Data
+                    and then Held (Earlier).all.Offset
+                             = Held (Upto).all.Offset
+                  then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            end Counted_Before;
+         begin
+            for Index in Held'Range loop
+               if not Counted_Before (Index) then
+                  Total := Total
+                    + Interfaces.Unsigned_64 (Held (Index).all.Rows)
+                      * Interfaces.Unsigned_64 (T.Row_Bytes (Held (Index).all));
+               end if;
+            end loop;
+
+            if Total > Item.Able.Memory_Bytes then
+               Status := E.Make (E.Memory_Limit_Exceeded);
+
+               --  Every parameter the message names, because a message
+               --  missing one renders as its own key and says nothing at
+               --  all. The category is the backend's memory rather than one
+               --  of the accounting's, which is what this limit is about.
+               E.Add_Text
+                 (Status, "category", "backend_memory", E.Param_Identifier);
+               E.Add_Integer
+                 (Status, "requested", Long_Long_Integer (Total),
+                  E.Param_Bytes);
+               E.Add_Integer
+                 (Status, "limit",
+                  Long_Long_Integer (Item.Able.Memory_Bytes), E.Param_Bytes);
+               E.Add_Text
+                 (Status, "backend",
+                  Model_Runner.Backend.Backend_Name (Item.Able.Kind),
+                  E.Param_Identifier);
+               Fail (Status);
+               return;
             end if;
          end;
       end if;

@@ -1,3 +1,5 @@
+with Interfaces;
+
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
 with Model_Runner.Tensors;
@@ -38,7 +40,14 @@ package Model_Runner.Backend.Device is
    --  Open the first device the host names.
    --
    --  @param Ready True when a device took the shader and is ready for work.
-   procedure Open (Ready : out Boolean);
+   --  @param Budget Bytes of device memory the model's matrices may take, or
+   --    zero for the share of the device's own heap the product engine
+   --    chooses. What does not fit is given back and uploaded again when it
+   --    is next wanted, so a budget is a speed decision rather than a limit
+   --    on what will run.
+   procedure Open
+     (Ready  : out Boolean;
+      Budget : Interfaces.Unsigned_64 := 0);
 
    --  Release the device and everything it holds. Idempotent.
    procedure Close;
@@ -61,6 +70,20 @@ package Model_Runner.Backend.Device is
    --
    --  @return Count of matrices resident.
    function Resident return Natural;
+
+   --  How many bytes of the model the device is holding.
+   --
+   --  @return Bytes resident.
+   function Resident_Bytes return Interfaces.Unsigned_64;
+
+   --  How many matrices have been given back to make room for others.
+   --
+   --  Zero for a model the device can hold. A number that rises with every
+   --  token means the model does not fit and is being uploaded again as it
+   --  is needed, which is correct and slow.
+   --
+   --  @return Count of matrices released to make room.
+   function Given_Back return Natural;
 
    --  One matrix-vector product, on the device.
    --

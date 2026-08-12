@@ -53,10 +53,16 @@ package Model_Runner.Platform.Device.Products is
    --  @param Item Engine to fill; released first.
    --  @param On Open device.
    --  @param Ready True when the device took the shader and the pipeline.
+   --  @param Budget Bytes of device memory the resident matrices may take,
+   --    or zero for the share of the device's own heap described below. A
+   --    caller that knows the device is doing something else can say so, and
+   --    a caller that wants to see what a model does when it does not fit
+   --    can make it not fit.
    procedure Open
-     (Item  : in out Engine;
-      On    : Context;
-      Ready : out Boolean);
+     (Item   : in out Engine;
+      On     : Context;
+      Ready  : out Boolean;
+      Budget : Interfaces.Unsigned_64 := 0);
 
    --  Release everything the device was holding. Idempotent.
    --
@@ -143,19 +149,64 @@ package Model_Runner.Platform.Device.Products is
    --  @return Count of matrices kept.
    function Resident (Item : Engine) return Natural;
 
+   --  How many bytes those matrices take on the device.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Bytes held.
+   function Resident_Bytes (Item : Engine) return Interfaces.Unsigned_64;
+
+   --  How many bytes this engine will hold before it starts giving matrices
+   --  back.
+   --
+   --  A fraction of the largest heap the device reports, because a device is
+   --  not the only thing using its memory -- on an integrated part it is the
+   --  host's memory and the model is already in it once. Zero when no device
+   --  is open, which is also what a caller gets for asking a closed engine
+   --  how much it can hold.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Byte budget for resident matrices.
+   function Capacity (Item : Engine) return Interfaces.Unsigned_64;
+
+   --  How many matrices have been given back to make room for others.
+   --
+   --  Zero for a model that fits, and a number that rises with every token
+   --  for one that does not: a matrix given back is a matrix uploaded again
+   --  the next time a token needs it. It is the difference between a device
+   --  that is computing and one that is being handed the same weights over
+   --  and over, and it was silent before it was counted.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Count of matrices released to make room.
+   function Given_Back (Item : Engine) return Natural;
+
 private
 
-   --  How many matrices one engine will keep. A model of a few dozen layers
-   --  has some hundreds of them; past this the oldest are not evicted but
-   --  the newest are simply not kept, which costs time and never
-   --  correctness.
-   Max_Resident : constant := 1024;
+   --  How many matrices one engine will keep, as a count. A dense model of a
+   --  few dozen layers has some hundreds of them and a mixture of experts has
+   --  three a layer for every expert, so this is high enough that the byte
+   --  budget is what actually decides. Both bounds are enforced and the
+   --  tighter one wins.
+   Max_Resident : constant := 4096;
+
+   --  What fraction of the device's largest heap the resident matrices may
+   --  take, as a numerator over a denominator. Three quarters: the rest is
+   --  for whatever else the device is doing, for the vector and result
+   --  buffers, and for the driver's own allocations, none of which this
+   --  measures.
+   Budget_Share : constant := 3;
+   Budget_Whole : constant := 4;
 
    type Held_Matrix is record
       Key    : System.Address := System.Null_Address;
       Buffer : System.Address := System.Null_Address;
       Memory : System.Address := System.Null_Address;
       Bytes  : Interfaces.Unsigned_64 := 0;
+
+      --  When this was last multiplied by, as a count of products. What
+      --  makes the one given back the one least recently wanted, rather
+      --  than whichever happens to be first.
+      Used_At : Interfaces.Unsigned_64 := 0;
    end record;
 
    type Held_Array is array (1 .. Max_Resident) of Held_Matrix;
@@ -184,10 +235,21 @@ private
       Buffer     : System.Address := System.Null_Address;
       Fence      : System.Address := System.Null_Address;
 
+      --  What the device says its largest heap is, and the share of it these
+      --  matrices may take.
+      Heap       : Interfaces.Unsigned_64 := 0;
+      Budget     : Interfaces.Unsigned_64 := 0;
+
       --  The matrices this device is holding, and the two buffers that
       --  change every call.
       Kept       : Held_Array;
       Used       : Natural := 0;
+      Kept_Bytes : Interfaces.Unsigned_64 := 0;
+
+      --  Products so far, which is the clock the eviction reads, and how
+      --  many matrices have been given back to make room.
+      Clock      : Interfaces.Unsigned_64 := 0;
+      Released   : Natural := 0;
 
       Vector_Buffer : System.Address := System.Null_Address;
       Vector_Memory : System.Address := System.Null_Address;

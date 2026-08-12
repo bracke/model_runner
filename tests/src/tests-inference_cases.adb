@@ -17,6 +17,7 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
 with Interfaces;
 with Model_Runner.Backend;
+with Model_Runner.Backend.Device;
 with Model_Runner.Llama;
 with Model_Runner.Localization;
 with Model_Runner.Memory;
@@ -1180,6 +1181,81 @@ package body Tests.Inference_Cases is
       Model_Runner.Localization.Close (Words);
       B.Free (Image);
    end Device_Refuses_A_Model_It_Cannot_Read;
+
+   ---------------------------------------------
+   -- Device_Says_When_A_Model_Will_Not_Fit --
+   ---------------------------------------------
+
+   --  A model whose matrices are larger than the device will hold is refused
+   --  while it loads, with both numbers in the message.
+   --
+   --  It could be run instead -- what does not fit is given back and
+   --  uploaded again as it is wanted, which is correct -- but it would run
+   --  slower than the processor and say nothing about why. So the refusal is
+   --  the diagnostic, and it names what was needed and what there was.
+   --
+   --  The device is opened with a budget rather than the model being made
+   --  enormous, because the case worth testing is the one this machine
+   --  cannot produce: a heap smaller than a model.
+   procedure Device_Says_When_A_Model_Will_Not_Fit
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+      Ready : Boolean;
+
+      Words : Model_Runner.Localization.Catalog;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Budget => 1024);
+
+      if not Ready then
+         return;
+      end if;
+
+      Model_Runner.Localization.Open
+        (Words, Model_Runner.Platform.Catalog_Path, "en");
+      Assert (Model_Runner.Localization.Is_Ready (Words),
+              "the catalog would not open");
+
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+         Model  : L.Model;
+         Status : E.Error_Info;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         L.Prepare
+           (Model, Item, Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (Status.Code = E.Memory_Limit_Exceeded,
+                 "a model larger than the device would hold was not refused: "
+                 & E.Error_Code'Image (Status.Code));
+
+         declare
+            Shown : constant String :=
+              Model_Runner.Localization.Describe (Words, Status);
+         begin
+            Assert (Shown'Length > 0 and then Shown (Shown'First) /= '<',
+                    "the refusal did not render: " & Shown);
+         end;
+
+         L.Close (Model, Status);
+         Containers.Close (Item);
+      end;
+
+      Model_Runner.Localization.Close (Words);
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end Device_Says_When_A_Model_Will_Not_Fit;
 
    ----------
    -- Name --
@@ -3683,6 +3759,10 @@ package body Tests.Inference_Cases is
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
+      Register_Routine
+        (T, Device_Says_When_A_Model_Will_Not_Fit'Access,
+         "a model whose matrices are larger than the device will hold is "
+         & "refused while it loads, with both numbers");
       Register_Routine
         (T, Device_Refuses_A_Model_It_Cannot_Read'Access,
          "a model in a format the device backend cannot read is refused "

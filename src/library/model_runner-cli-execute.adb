@@ -1677,7 +1677,20 @@ package body Model_Runner.CLI.Execute is
          if Item.Show_Stats
            or else (not Item.Stats_Set and then Item.Level = Opt.Verbose)
          then
-            Pres.Put_Statistics (Screen, Outcome);
+            --  With what the device did, when a device did it.
+            if Model_Runner.Backend."=" (Item.Backend,
+                                          Model_Runner.Backend.Backend_Device)
+            then
+               Pres.Put_Statistics
+                 (Screen, Outcome,
+                  Device         => Model_Runner.Backend.Device.Name,
+                  Resident       => Model_Runner.Backend.Device.Resident,
+                  Resident_Bytes =>
+                    Model_Runner.Backend.Device.Resident_Bytes,
+                  Given_Back     => Model_Runner.Backend.Device.Given_Back);
+            else
+               Pres.Put_Statistics (Screen, Outcome);
+            end if;
          end if;
 
          Status := E.Exit_Success;
