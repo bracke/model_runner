@@ -2013,6 +2013,9 @@ package body Model_Runner.Llama is
       --  rank.
       Alpha : N.Wide_Real := 0.0;
 
+      --  The same, as bits, for the digest below.
+      Alpha_Bits : Interfaces.Unsigned_32 := 0;
+
       procedure Release is
       begin
          B.Free (Arena);
@@ -2207,6 +2210,7 @@ package body Model_Runner.Llama is
          Containers.Get_Float
            (Source, "adapter.lora.alpha", 0.0, 1.0E6, Value, Local);
          Alpha := (if E.Is_Ok (Local) then Value else 1.0);
+         Alpha_Bits := N.Bits (Real (Alpha));
       end;
 
       --  The adapter's tensors, in an arena of their own.
@@ -2323,7 +2327,29 @@ package body Model_Runner.Llama is
       if Merged = 0 then
          Status := E.Make (E.Arch_Missing_Tensor);
          E.Add_Text (Status, "tensor", "lora_a", E.Param_Identifier);
+         return;
       end if;
+
+      --  And the model is no longer the model its file describes. What was
+      --  merged goes into what identifies it, so that a context saved
+      --  before this cannot be read after it: the weights that produced
+      --  that context are gone.
+      declare
+         procedure Mix (Value : Interfaces.Unsigned_64) is
+         begin
+            Item.Adapted :=
+              (Item.Adapted xor Value) * 16#0000_0100_0000_01B3#;
+         end Mix;
+      begin
+         if Item.Adapted = 0 then
+            Item.Adapted := 16#CBF2_9CE4_8422_2325#;
+         end if;
+
+         Mix (Interfaces.Unsigned_64 (Merged));
+         Mix (Interfaces.Unsigned_64 (N.Bits (Scale)));
+         Mix (Interfaces.Unsigned_64 (Containers.Tensor_Data_Bytes (Source)));
+         Mix (Interfaces.Unsigned_64 (Alpha_Bits));
+      end;
    end Merge_Adapter;
 
    ---------------------------------------------------------------------------
@@ -2377,6 +2403,10 @@ package body Model_Runner.Llama is
       Mix_Count (Item.Settings.Experts);
       Mix_Count (Item.Settings.Experts_Used);
       Mix_Count (Repack_Mode'Pos (Item.Packing));
+
+      --  And whatever has been merged into the weights since, because a
+      --  model with an adapter in it is not the model its file describes.
+      Mix (Item.Adapted);
 
       --  And the weights themselves, by their size and a sample. Reading
       --  all of them would be a second pass over a model at every load for

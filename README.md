@@ -93,9 +93,17 @@ nothing but a refusal to read the file when it does not.
 The file names the model it belongs to, the shape of the cache, the context
 capacity and the precision it is held in, and any mismatch is refused rather
 than read: one model's attention is not another's. The identifier is the
-model's validated shape together with the size of its tensor data and a
-sample of its bytes -- that identifies a model file and is not meant to
-verify one.
+model's validated shape together with the size of its tensor data, a sample
+of its bytes, and a digest of any adapter merged into it -- that identifies a
+model file and is not meant to verify one.
+
+The adapter belongs in that identifier because merging one replaces the
+weights: a context computed before a merge describes attention the merged
+model never had, and nothing about the text that came back would look
+wrong. The two were indistinguishable until a test asked, and the test only
+asked usefully once it was written against a quantized model -- with
+binary32 weights the merge writes into the file's own bytes, which the
+identifier already samples, so it appeared to be handled when it was not.
 
 A saved context is untrusted input, and every field of it is range checked.
 What cannot be checked is whether the contents mean anything: bytes that

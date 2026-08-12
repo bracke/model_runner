@@ -1874,6 +1874,241 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  A context saved before an adapter was merged is not a context after
+   --  it was.
+   --
+   --  A cache is what the model made of what it read, so it belongs to the
+   --  weights that made it. Merging an adapter replaces those weights, and
+   --  a cache from before the merge describes attention the merged model
+   --  never computed. Read into it, the model would continue a
+   --  conversation it did not have -- and nothing about the text would
+   --  look wrong.
+   --
+   --  So the model a snapshot names has to be the model as it will be
+   --  used, adapter and all.
+   procedure Adapter_Changes_Which_Model_A_Context_Belongs_To
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Adapter : constant String := "obj/context-adapter.gguf";
+      Prompt  : constant Vocab.Token_Array := [1, 4, 5, 6, 7];
+
+      Image : B.Byte_Array_Access;
+      Kept  : B.Byte_Array_Access;
+
+      --  Prepare the fixture, optionally with the adapter merged, and run
+      --  the given action against it.
+      procedure With_Model
+        (Adapted : Boolean;
+         Take    : Boolean;
+         Outcome : out E.Error_Info)
+      is
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Ready  : L.Model;
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Logits : Logit_Vector;
+      begin
+         Outcome := E.Success;
+
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         L.Prepare
+           (Ready, Parsed, Source, Repack => L.To_F32, Status => Status);
+         Assert (E.Is_Ok (Status), "the model did not prepare");
+
+         if Adapted then
+            declare
+               From   : Model_Runner.Byte_Sources.Files.File_Source;
+               Second : Containers.Container;
+               Local  : E.Error_Info;
+            begin
+               Model_Runner.Byte_Sources.Files.Open
+                 (From, Adapter, Status => Local);
+               Assert (E.Is_Ok (Local), "the adapter did not open");
+
+               Containers.Reader.Parse (Second, From, Status => Local);
+               Assert (E.Is_Ok (Local), "the adapter did not parse");
+
+               L.Merge_Adapter (Ready, Second, From, Status => Local);
+               Assert (E.Is_Ok (Local),
+                       "the adapter did not merge: "
+                       & E.Error_Code'Image (Local.Code));
+
+               Containers.Close (Second);
+               Model_Runner.Byte_Sources.Files.Close (From);
+            end;
+         end if;
+
+         L.Open (Live, Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         if Take then
+            for Token of Prompt loop
+               L.Evaluate (Live, Ready, Token, Logits, Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed");
+            end loop;
+
+            L.Snapshot (Live, Ready, Kept, Outcome);
+         else
+            L.Adopt (Live, Ready, Kept.all, Outcome);
+         end if;
+
+         L.Close (Live);
+         L.Close (Ready, Status);
+         Containers.Close (Parsed);
+      end With_Model;
+
+      Status : E.Error_Info;
+   begin
+      --  A quantized fixture on purpose. With binary32 weights the merge
+      --  writes into the file's own bytes -- nothing was repacked, so the
+      --  views still point there -- and the fingerprint samples those, so
+      --  the two models come out different for a reason that has nothing to
+      --  do with the merge being recorded. A quantized model is repacked
+      --  into a second buffer, the merge writes there, and the file's bytes
+      --  are untouched: which is every model anyone would use an adapter
+      --  with, and the case where this can actually go wrong.
+      Tiny_Model.Build (Image, Tiny_Model.Q4_K);
+      Tiny_Model.Write_Adapter (Adapter, Deep => True);
+
+      --  Taken from the model as it comes.
+      With_Model (Adapted => False, Take => True, Outcome => Status);
+      Assert (E.Is_Ok (Status), "the snapshot was refused");
+
+      --  Read back into the same model: fine.
+      With_Model (Adapted => False, Take => False, Outcome => Status);
+      Assert (E.Is_Ok (Status),
+              "a context was refused by the model it came from: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  And into the model with the adapter merged, which is a different
+      --  model however the file is spelled.
+      With_Model (Adapted => True, Take => False, Outcome => Status);
+      Assert (Status.Code = E.Lifecycle_Cache_Mismatched,
+              "a context from before an adapter was merged was read into "
+              & "the merged model: " & E.Error_Code'Image (Status.Code));
+
+      B.Free (Kept);
+      B.Free (Image);
+   end Adapter_Changes_Which_Model_A_Context_Belongs_To;
+
+   --  A snapshot of a halved cache is a halved cache.
+   --
+   --  Two features that arrived separately and meet here. The snapshot
+   --  writes four bytes an element whichever precision the session holds,
+   --  so a half-precision cache goes out with sixteen bits of every word
+   --  meaning nothing -- and comes back into a session that has to be
+   --  holding halves for those bytes to mean what they said.
+   --
+   --  The pairing that is refused matters as much as the one that works.
+   --  A snapshot of an exact cache read into a halved session would be
+   --  read as halves and produce a conversation the model never had, so
+   --  the precision is part of what a snapshot says about itself.
+   procedure Halved_Cache_Snapshots_As_Halved
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7];
+
+      Image : B.Byte_Array_Access;
+      Kept  : B.Byte_Array_Access;
+      Direct, Restored : Logit_Vector;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Cache => L.Halved, Status => Status);
+         Assert (E.Is_Ok (Status), "the halved session did not open");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Direct, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation failed");
+         end loop;
+
+         L.Snapshot (Live, Under.Ready, Kept, Status);
+         Assert (E.Is_Ok (Status),
+                 "a halved session did not snapshot: "
+                 & E.Error_Code'Image (Status.Code));
+
+         L.Evaluate (Live, Under.Ready, 4, Direct, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed after the snapshot");
+
+         L.Close (Live);
+      end;
+
+      --  Back into a halved session: the same answer, exactly.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Cache => L.Halved, Status => Status);
+         Assert (E.Is_Ok (Status), "the second halved session did not open");
+
+         L.Adopt (Live, Under.Ready, Kept.all, Status);
+         Assert (E.Is_Ok (Status),
+                 "a halved snapshot was not adopted: "
+                 & E.Error_Code'Image (Status.Code));
+
+         L.Evaluate (Live, Under.Ready, 4, Restored, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed after adopting");
+         L.Close (Live);
+      end;
+
+      declare
+         Worst : Model_Runner.Numerics.Real := 0.0;
+      begin
+         for Index in Direct'Range loop
+            Worst := Model_Runner.Numerics.Real'Max
+              (Worst, abs (Direct (Index) - Restored (Index)));
+         end loop;
+
+         Assert (Worst = 0.0,
+                 "a halved cache did not survive being written out and "
+                 & "read back; the logits moved by"
+                 & Model_Runner.Numerics.Real'Image (Worst));
+      end;
+
+      --  And into an exact one, which it is not.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the exact session did not open");
+
+         L.Adopt (Live, Under.Ready, Kept.all, Status);
+         Assert (Status.Code = E.Lifecycle_Cache_Mismatched,
+                 "a halved snapshot was read into an exact cache: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = 0,
+                 "a refused adoption left something behind");
+
+         L.Close (Live);
+      end;
+
+      B.Free (Kept);
+      B.Free (Image);
+   end Halved_Cache_Snapshots_As_Halved;
+
    --  A snapshot is the session it was taken from.
    --
    --  The point of taking one is not to re-read a prompt, so what has to
@@ -3038,6 +3273,13 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, Adapter_Changes_Which_Model_A_Context_Belongs_To'Access,
+         "a context saved before an adapter was merged is not a context "
+         & "after it was");
+      Register_Routine
+        (T, Halved_Cache_Snapshots_As_Halved'Access,
+         "a snapshot of a halved cache is a halved cache");
       Register_Routine
         (T, Snapshot_Is_The_Session'Access,
          "a snapshot is the session it was taken from");

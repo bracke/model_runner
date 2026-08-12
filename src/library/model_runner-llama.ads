@@ -806,6 +806,16 @@ private
       --  How the weights were written into Repacked, when they were. A
       --  merge needs to know, because it may only add to binary32.
       Packing     : Repack_Mode := No_Repack;
+
+      --  What has been merged into those weights, as a digest of every
+      --  adapter and the scale it was applied at. Zero for a model as its
+      --  file describes it.
+      --
+      --  It is part of what identifies the model because a merge replaces
+      --  the weights: a context computed before one describes attention the
+      --  merged model never had, and the two would otherwise be
+      --  indistinguishable to anything reading a saved context.
+      Adapted     : Interfaces.Unsigned_64 := 0;
    end record;
 
    overriding procedure Finalize (Item : in out Model);

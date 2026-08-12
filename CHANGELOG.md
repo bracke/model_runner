@@ -890,6 +890,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A context saved before an adapter was merged could be read after it
+  was.** A cache is what the model made of what it read, so it belongs to
+  the weights that made it; merging an adapter replaces those weights. The
+  two models were indistinguishable to anything reading a saved context, so
+  the cache would have been accepted and the model would have continued a
+  conversation it never had -- with nothing about the text to show for it.
+
+  What identifies a model now includes a digest of every adapter merged into
+  it and the scale it was applied at.
+
+  The test that found it passed before the fix, and that is the part worth
+  recording. Written against the binary32 fixture it appeared to prove the
+  case already handled: nothing is repacked for an all-binary32 model, so
+  the merge writes into the file's own bytes, which the identifier samples.
+  A quantized model is repacked into a second buffer, the merge writes
+  there, and the file is untouched -- which is every model anyone would use
+  an adapter with. Against that fixture the two fingerprints were equal to
+  the digit.
+
 - A run the reader interrupts leaves with the status the help promises.
   `Cancelled` is not `Runtime_Error`, so the command fell through to success
   and told a script the generation had finished normally, while `help` names
