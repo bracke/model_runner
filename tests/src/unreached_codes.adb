@@ -33,19 +33,25 @@ package body Unreached_Codes is
          --  not -- which is a fixture nobody has written.
             | E.Arch_Invalid_Tensor_Format
 
-         --  Two of the three backend refusals. Each guards a request the
-         --  command layer clamps before it arrives: a capability the backend
-         --  does not have, a worker that failed. The clamps are tested; what
-         --  is not is the backend refusing a caller that ignored them, and no
-         --  caller here can.
+         --  A worker that failed, which guards a request the command layer
+         --  clamps before it arrives. The clamps are tested; what is not is
+         --  the backend refusing a caller that ignored them, and no caller
+         --  here can.
          --
-         --  The third came off this list when a backend arrived that reads
+         --  Two others came off this list when a backend arrived that reads
          --  three formats out of fifteen. Until then no backend refused a
          --  format the program could decode, so nothing could ask one to --
          --  which is the shape of every entry here, and worth noticing when
          --  one stops holding.
-            | E.Backend_Capability_Missing
             | E.Backend_Worker_Failed
+
+         --  No compute device on the machine. Reachable only where there is
+         --  none, and this machine has one: a test that demanded the absence
+         --  would be a test that passes by being run somewhere else. What is
+         --  tested is the other half -- that the refusal renders as a
+         --  sentence -- because the reason this code exists at all is that
+         --  the borrowed one did not.
+            | E.Backend_No_Device
 
          --  A distribution that is not one. Sampling refuses non-finite
          --  logits before it normalizes, so the state this names is one the

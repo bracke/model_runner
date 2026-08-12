@@ -3,6 +3,7 @@ with AUnit.Assertions;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
+with Model_Runner.Localization;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
@@ -408,6 +409,23 @@ package body Tests.Backend_Cases is
    is
       pragma Unreferenced (T2);
 
+      --  Every refusal below is rendered as well as identified, because a
+      --  code is not a diagnostic until somebody can read it. Three of these
+      --  named a message whose text asks for a parameter the site never
+      --  attached, and a message that cannot be rendered comes out as its
+      --  own key in angle brackets: MR-LIFE-0001 reached a user as
+      --  <error.lifecycle.invalid_state> for as long as the backend existed.
+      Words : Model_Runner.Localization.Catalog;
+
+      procedure Reads (Status : E.Error_Info; Which : String) is
+         Shown : constant String :=
+           Model_Runner.Localization.Describe (Words, Status);
+      begin
+         Assert (Shown'Length > 0, Which & " rendered as nothing");
+         Assert (Shown (Shown'First) /= '<',
+                 Which & " did not render: " & Shown);
+      end Reads;
+
       Storage : B.Byte_Array_Access;
       Weight  : T.View;
       Status  : E.Error_Info;
@@ -417,6 +435,11 @@ package body Tests.Backend_Cases is
 
       Was_Open : constant Boolean := Model_Runner.Backend.Device.Is_Ready;
    begin
+      Model_Runner.Localization.Open
+        (Words, Model_Runner.Platform.Catalog_Path, "en");
+      Assert (Model_Runner.Localization.Is_Ready (Words),
+              "the catalog would not open");
+
       --  Closed, whatever the machine has. A test that only refuses on a
       --  machine without a device is a test that says nothing on the one
       --  machine that runs this backend.
@@ -431,13 +454,14 @@ package body Tests.Backend_Cases is
       T.Allocate (2, Room);
 
       Model_Runner.Backend.Device.Dispatch (Weight, Vector, Room, Status);
-      Assert (Status.Code = E.Lifecycle_Invalid_State,
-              "a product on no device was not refused as a state");
+      Assert (Status.Code = E.Backend_Closed,
+              "a product on no device was not refused as a closed backend");
+      Reads (Status, "a product on no device");
 
       Model_Runner.Backend.Device.Dispatch_Batch
         (Weight, Vector, 1, Room, Status);
-      Assert (Status.Code = E.Lifecycle_Invalid_State,
-              "a batch on no device was not refused as a state");
+      Assert (Status.Code = E.Backend_Closed,
+              "a batch on no device was not refused as a closed backend");
 
       --  And with a device, if there is one: the refusals that come after
       --  the state check.
@@ -462,9 +486,9 @@ package body Tests.Backend_Cases is
 
                Model_Runner.Backend.Device.Dispatch
                  (Other, Vector, Room, Status);
-               Assert (Status.Code = E.Backend_Unsupported_Format,
-                       "a format the shader cannot read was not refused as "
-                       & "a format");
+               Assert (Status.Code = E.Backend_Capability_Missing,
+                       "a format the shader cannot read was not refused");
+               Reads (Status, "a format the shader cannot read");
 
                B.Free (Packed);
             end;
@@ -473,6 +497,7 @@ package body Tests.Backend_Cases is
             Model_Runner.Backend.Device.Dispatch (Weight, null, Room, Status);
             Assert (Status.Code = E.Tensor_Shape_Mismatch,
                     "a product with no vector was not refused as a shape");
+            Reads (Status, "a product with no vector");
 
             Model_Runner.Backend.Device.Dispatch (Weight, Vector, null, Status);
             Assert (Status.Code = E.Tensor_Shape_Mismatch,
@@ -500,6 +525,8 @@ package body Tests.Backend_Cases is
                     & E.Error_Code'Image (Status.Code));
          end if;
       end;
+
+      Model_Runner.Localization.Close (Words);
 
       T.Free (Vector);
       T.Free (Room);

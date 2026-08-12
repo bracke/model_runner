@@ -181,6 +181,7 @@ ordinal is never reused, not because they might appear.
 | `MR-BACKEND-0005` | `error.backend.queue_full` | recovery_resource_limited | 8 | reserved |
 | `MR-BACKEND-0006` | `error.backend.closed` | recovery_none | 8 | raised |
 | `MR-BACKEND-0007` | `error.backend.invalid_worker_count` | recovery_none | 8 | reserved |
+| `MR-BACKEND-0008` | `error.backend.no_device` | recovery_none | 8 | raised |
 
 ## MEM
 

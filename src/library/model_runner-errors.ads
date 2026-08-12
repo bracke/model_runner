@@ -207,6 +207,7 @@ package Model_Runner.Errors is
       Backend_Queue_Full,
       Backend_Closed,
       Backend_Invalid_Worker_Count,
+      Backend_No_Device,
 
       --  Memory planning and allocation.
       Memory_Limit_Exceeded,

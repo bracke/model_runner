@@ -1709,7 +1709,13 @@ package body Model_Runner.CLI.Execute is
             Model_Runner.Backend.Device.Open (Ready);
 
             if not Ready then
-               Fail (E.Make (E.Backend_Capability_Missing));
+               --  A condition of its own rather than a borrowed one. This
+               --  used to report a missing capability with no capability
+               --  named, and a message whose text names a parameter that is
+               --  not there does not render at all: what a machine with no
+               --  device got was the message key in angle brackets, which is
+               --  the diagnostic for a diagnostic that failed.
+               Fail (E.Make (E.Backend_No_Device));
                return;
             end if;
 
@@ -1984,27 +1990,54 @@ package body Model_Runner.CLI.Execute is
          Cleanup;
       end Embed_With;
    begin
-      declare
-         Wanted : constant Positive := Selected_Workers (Item);
-      begin
-         if Wanted = 1 then
+      --  Which backend reduces this text, which is the same choice the run
+      --  command makes and was not made here at all: a device was selected,
+      --  prepared against, and then never opened, so every embedding on a
+      --  device was refused by the first product with a state error. One
+      --  copy of a choice is one place to make it; two copies is one place
+      --  to forget it, which is what happened.
+      case Item.Backend is
+      when Model_Runner.Backend.Backend_Device =>
+         declare
+            Ready : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Ready);
+
+            if not Ready then
+               Fail (E.Make (E.Backend_No_Device));
+               return;
+            end if;
+
             Embed_With (null);
-         else
-            declare
-               --  Declared here so that leaving the block waits for the
-               --  workers, as the run command's pool is.
-               Team : aliased Workers_CPU.Pool
-                 (Workers_CPU.Worker_Count (Wanted));
-            begin
-               Embed_With (Team'Unchecked_Access);
-               Workers_CPU.Close (Team);
-            exception
-               when others =>
+            Model_Runner.Backend.Device.Close;
+         end;
+
+      when Model_Runner.Backend.Backend_Reference =>
+         Embed_With (null);
+
+      when Model_Runner.Backend.Backend_CPU =>
+         declare
+            Wanted : constant Positive := Selected_Workers (Item);
+         begin
+            if Wanted = 1 then
+               Embed_With (null);
+            else
+               declare
+                  --  Declared here so that leaving the block waits for the
+                  --  workers, as the run command's pool is.
+                  Team : aliased Workers_CPU.Pool
+                    (Workers_CPU.Worker_Count (Wanted));
+               begin
+                  Embed_With (Team'Unchecked_Access);
                   Workers_CPU.Close (Team);
-                  raise;
-            end;
-         end if;
-      end;
+               exception
+                  when others =>
+                     Workers_CPU.Close (Team);
+                     raise;
+               end;
+            end if;
+         end;
+      end case;
    end Do_Embed;
 
    --------------

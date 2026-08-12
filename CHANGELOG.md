@@ -91,6 +91,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **`embed --backend device` refused every model.** The run command opens a
+  device before it loads; the embed command never did, so a device was
+  selected, prepared against, and then asked for a product it could not make.
+  Every embedding on a device came back as a lifecycle error. The choice of
+  backend is now made once in each command rather than in one of them, and
+  `embed` on a device produces the same vector as the processor to the six
+  digits it prints.
+
+- **Three diagnostics rendered as their own keys.** A message whose text
+  names a parameter the site never attached cannot be rendered at all, and
+  what comes out instead is the message key in angle brackets. Users got
+  `<error.lifecycle.invalid_state>` from the device backend for as long as it
+  existed, and a machine with no device got the same treatment from the run
+  command's refusal.
+
+  The device backend now reports a closed backend where it reported an
+  invalid session state -- the state message is about a session and this was
+  never about one -- and reports a missing capability, naming the format,
+  where it reported an unsupported format, whose message names the tensor
+  that carries it and no tensor name exists at that point. The tensor-naming
+  message keeps its one honest caller: the loader, which refuses a model in a
+  format the backend cannot read and knows which tensor it was.
+
+  A machine with no device gets `Backend_No_Device` -- new, 159 codes now --
+  which says that and needs no parameters.
+
+  Every one of these is now asserted to render as a sentence rather than as a
+  key, which is the check that was missing rather than any of the individual
+  fixes.
+
 - **The loader aborted the process when a second engine was opened.** Entry
   points were found through an instance held in a package variable, set when
   an engine opened and never cleared. Closing an engine and then the device
@@ -2226,7 +2256,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 158 diagnostic
+- Localization through `messages`, with a catalog entry for all 159 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

@@ -191,15 +191,25 @@ package body Model_Runner.Backend.Device is
       Status := E.Success;
 
       if not Ready_Now then
-         Status := E.Make (E.Lifecycle_Invalid_State);
+         --  Closed rather than invalid-state. The state message names the
+         --  session it is about and this is not about a session, so the
+         --  parameter it wanted was never attached and the whole diagnostic
+         --  came out as its own key in angle brackets.
+         Status := E.Make (E.Backend_Closed);
          return;
       end if;
 
       Packing_Of (Weight, Packing, Known);
       if not Known then
-         Status := E.Make (E.Backend_Unsupported_Format);
+         --  A missing capability rather than an unsupported format, and the
+         --  difference is which of them can be said. The format message
+         --  names the tensor that carries it, which is knowable while a
+         --  model loads and is what refuses a model there; a view arriving
+         --  here carries no name, so that message could not be rendered and
+         --  this one can.
+         Status := E.Make (E.Backend_Capability_Missing);
          E.Add_Text
-           (Status, "format",
+           (Status, "capability",
             Model_Runner.GGUF.Type_Name (Weight.Format), E.Param_Identifier);
          E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
                      E.Param_Identifier);

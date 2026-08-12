@@ -16,7 +16,9 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
 with Interfaces;
+with Model_Runner.Backend;
 with Model_Runner.Llama;
+with Model_Runner.Localization;
 with Model_Runner.Memory;
 with Model_Runner.Numerics;
 with Model_Runner.Generation;
@@ -1084,6 +1086,100 @@ package body Tests.Inference_Cases is
               & Long_Float'Image (Result.Worst_Abs)
               & ", worst relative" & Long_Float'Image (Result.Worst_Rel));
    end Matches_Independent_Reference;
+
+   -------------------------------------------
+   -- Device_Refuses_A_Model_It_Cannot_Read --
+   -------------------------------------------
+
+   --  A model in a format a backend cannot read is refused while it loads,
+   --  by name, and the refusal reads as a sentence.
+   --
+   --  This is the path a user takes to that refusal: the device shader
+   --  decodes three of the fifteen formats and the loader asks about every
+   --  tensor, so a Q4_1 model on --backend device stops here rather than in
+   --  the middle of a token. Nothing else in the suite reaches the code --
+   --  until a backend existed that reads some formats and not others, no
+   --  caller could ask one to refuse a format the program itself decodes.
+   procedure Device_Refuses_A_Model_It_Cannot_Read
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+
+      Words : Model_Runner.Localization.Catalog;
+
+      --  Whether one text holds another, which is all this needs of the
+      --  rendered sentence: that it names what it is about.
+      function Names (Whole, Part : String) return Boolean is
+      begin
+         if Part'Length > Whole'Length then
+            return False;
+         end if;
+
+         for Start in Whole'First .. Whole'Last - Part'Length + 1 loop
+            if Whole (Start .. Start + Part'Length - 1) = Part then
+               return True;
+            end if;
+         end loop;
+
+         return False;
+      end Names;
+   begin
+      Model_Runner.Localization.Open
+        (Words, Model_Runner.Platform.Catalog_Path, "en");
+      Assert (Model_Runner.Localization.Is_Ready (Words),
+              "the catalog would not open");
+
+      Tiny_Model.Build (Image, Tiny_Model.Q4_1);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+         Model  : L.Model;
+         Status : E.Error_Info;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         --  The processor reads it.
+         L.Prepare (Model, Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a q4_1 model was refused by the processor, which decodes "
+                 & "it");
+         L.Close (Model, Status);
+
+         --  The device does not, and says which tensor and which format.
+         L.Prepare
+           (Model, Item, Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (Status.Code = E.Backend_Unsupported_Format,
+                 "a q4_1 model on the device backend was not refused as an "
+                 & "unsupported format: "
+                 & E.Error_Code'Image (Status.Code));
+
+         declare
+            Shown : constant String :=
+              Model_Runner.Localization.Describe (Words, Status);
+         begin
+            Assert (Shown'Length > 0 and then Shown (Shown'First) /= '<',
+                    "the refusal did not render: " & Shown);
+            Assert (Names (Shown, "Q4_1"),
+                    "the refusal does not name the format: " & Shown);
+            Assert (Names (Shown, "device"),
+                    "the refusal does not name the backend: " & Shown);
+         end;
+
+         L.Close (Model, Status);
+         Containers.Close (Item);
+      end;
+
+      Model_Runner.Localization.Close (Words);
+      B.Free (Image);
+   end Device_Refuses_A_Model_It_Cannot_Read;
 
    ----------
    -- Name --
@@ -3587,6 +3683,10 @@ package body Tests.Inference_Cases is
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
+      Register_Routine
+        (T, Device_Refuses_A_Model_It_Cannot_Read'Access,
+         "a model in a format the device backend cannot read is refused "
+         & "while it loads, naming the tensor and the format");
    end Register_Tests;
 
 end Tests.Inference_Cases;
