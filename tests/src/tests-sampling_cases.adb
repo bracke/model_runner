@@ -523,7 +523,8 @@ package body Tests.Sampling_Cases is
       Say_Zero_Twice
         ((Temperature => 0.01, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
           Repeat_Penalty => 1.0, Repeat_Window => 8,
-          Frequency_Penalty => 5.0, Presence_Penalty => 5.0),
+          Frequency_Penalty => 5.0, Presence_Penalty => 5.0,
+          others => <>),
          1, "penalties that spare an unsaid token");
    end Frequency_And_Presence_Differ;
 
@@ -1081,6 +1082,459 @@ package body Tests.Sampling_Cases is
             "an absent source must yield the documented fallback seed");
       end;
    end Automatic_Seed_Works;
+
+   --  How often each token comes back, over many draws from one sampler.
+   procedure Tally
+     (Config : S.Configuration;
+      Logits : N.Real_Array;
+      Draws  : Positive;
+      Counts : out Model_Runner.Text.Number_List)
+   is
+      Sampler : S.Sampler;
+      Status  : E.Error_Info;
+      Token   : Vocab.Token_Id;
+   begin
+      Counts := [others => 0];
+
+      S.Open (Sampler, Config, Natural (Logits'Length), 4242, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+
+      for Draw in 1 .. Draws loop
+         S.Sample (Sampler, Logits, Token, Status);
+         Assert (E.Is_Ok (Status),
+                 "the sampler refused a draw: "
+                 & E.Error_Code'Image (Status.Code));
+         Counts (Counts'First + Natural (Token)) :=
+           Counts (Counts'First + Natural (Token)) + 1;
+      end loop;
+
+      S.Close (Sampler);
+   end Tally;
+
+   --------------------------------
+   -- Typical_Drops_The_Obvious --
+   --------------------------------
+
+   --  Typical sampling asks which candidates are least surprising, which is
+   --  not the same question as which are likeliest.
+   --
+   --  The fixture is three groups: one candidate at about a half, four at
+   --  about a tenth each, and a long tail. The entropy of that sits near the
+   --  surprise of the middle group, so the middle group is the typical one
+   --  -- and both the favourite and the tail are further from it than they
+   --  are from each other. Top-p would keep the favourite and drop the rest;
+   --  this drops the favourite and keeps the middle.
+   --
+   --  Written the other way round first, on a distribution with one
+   --  overwhelming favourite, on the assumption that an overwhelming
+   --  favourite must be the surprising one. It is not: when one candidate
+   --  holds nearly all the probability it also holds nearly all the
+   --  entropy, so its surprise is what the entropy is and it is the most
+   --  typical candidate there is. The fixture had to be built to make the
+   --  claim false before the test could tell anybody anything.
+   procedure Typical_Drops_The_Obvious
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 96;
+
+      --  Logits are log probabilities up to a constant, so writing the
+      --  logarithms directly is writing the distribution directly.
+      Logits : N.Real_Array (0 .. Vocabulary - 1) := [others => 0.0];
+
+      Config : S.Configuration := S.Greedy_Configuration;
+      Counts : Model_Runner.Text.Number_List (1 .. Vocabulary);
+   begin
+      Logits (0) := -0.69;                     --  about a half
+      for Index in 1 .. 4 loop
+         Logits (N.Element_Count (Index)) := -2.30;   --  about a tenth each
+      end loop;
+      for Index in 5 .. Logits'Last loop
+         Logits (Index) := -6.80;              --  the tail
+      end loop;
+
+      Config.Temperature := 1.0;
+      Config.Typical_P := 0.2;
+
+      Tally (Config, Logits, 200, Counts);
+
+      Assert (Counts (1) = 0,
+              "typical sampling kept the favourite, whose surprise is "
+              & "further from the entropy than the middle group's");
+
+      declare
+         Middle : Long_Long_Integer := 0;
+      begin
+         for Index in 2 .. 5 loop
+            Middle := Middle + Counts (Index);
+         end loop;
+         Assert (Middle = 200,
+                 "the draws did not come from the middle group:"
+                 & Long_Long_Integer'Image (Middle) & " of 200");
+      end;
+
+      --  And with the filter off, the favourite is what comes back most.
+      Config.Typical_P := 1.0;
+      Tally (Config, Logits, 200, Counts);
+      Assert (Counts (1) > 60,
+              "without the filter the favourite was chosen only"
+              & Long_Long_Integer'Image (Counts (1)) & " times in 200");
+   end Typical_Drops_The_Obvious;
+
+   ---------------------------------
+   -- Tail_Free_Cuts_At_The_Bend --
+   ---------------------------------
+
+   --  Tail-free sampling cuts where the sorted curve stops falling steeply.
+   --
+   --  The fixture is a step: four candidates of equal probability well above
+   --  a long flat tail that still carries about a third of the mass. Cutting
+   --  by cumulative probability would keep some of that tail; cutting by the
+   --  bend takes the step exactly, because the second differences are zero
+   --  everywhere except where the shape changes.
+   --
+   --  The head is exactly flat on purpose. Sloped, as this had it first, the
+   --  bend is spread over the head as well and the cut lands a candidate or
+   --  two late -- which is the filter working, but it makes a test that
+   --  reads as though it were failing.
+   procedure Tail_Free_Cuts_At_The_Bend
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 40;
+
+      Logits : N.Real_Array (0 .. Vocabulary - 1) := [others => 0.0];
+
+      Config : S.Configuration := S.Greedy_Configuration;
+      Counts : Model_Runner.Text.Number_List (1 .. Vocabulary);
+
+      Tail : Long_Long_Integer := 0;
+   begin
+      for Index in 0 .. 3 loop
+         Logits (N.Element_Count (Index)) := 4.0;
+      end loop;
+      for Index in 4 .. Logits'Last loop
+         Logits (Index) := 1.0;
+      end loop;
+
+      Config.Temperature := 1.0;
+      Config.Tail_Free := 0.5;
+
+      Tally (Config, Logits, 300, Counts);
+
+      for Index in 5 .. Counts'Last loop
+         Tail := Tail + Counts (Index);
+      end loop;
+      Assert (Tail = 0,
+              "tail-free sampling drew" & Long_Long_Integer'Image (Tail)
+              & " times from the flat tail");
+
+      --  And that the tail was worth cutting: without the filter it is a
+      --  third of the draws, so this is a fixture where the answer differs.
+      Config.Tail_Free := 1.0;
+      Tally (Config, Logits, 300, Counts);
+
+      Tail := 0;
+      for Index in 5 .. Counts'Last loop
+         Tail := Tail + Counts (Index);
+      end loop;
+      Assert (Tail > 50,
+              "without the filter the tail was drawn only"
+              & Long_Long_Integer'Image (Tail) & " times, so the fixture "
+              & "does not tell the two apart");
+   end Tail_Free_Cuts_At_The_Bend;
+
+   -------------------------------
+   -- XTC_Removes_The_Likeliest --
+   -------------------------------
+
+   --  Excluding top choices does the opposite of every other filter: with
+   --  two or more candidates above the threshold, all but the least of those
+   --  go and the draw comes from what is left.
+   procedure XTC_Removes_The_Likeliest
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 8;
+
+      Logits : N.Real_Array (0 .. Vocabulary - 1) := [others => 0.0];
+
+      Config : S.Configuration := S.Greedy_Configuration;
+      Counts : Model_Runner.Text.Number_List (1 .. Vocabulary);
+   begin
+      --  Three clearly above a threshold of a tenth, and a tail well below.
+      Logits (0) := 3.0;
+      Logits (1) := 2.8;
+      Logits (2) := 2.6;
+      for Index in 3 .. Logits'Last loop
+         Logits (Index) := -4.0;
+      end loop;
+
+      Config.Temperature := 1.0;
+      Config.XTC_Probability := 1.0;
+      Config.XTC_Threshold := 0.1;
+
+      Tally (Config, Logits, 200, Counts);
+
+      Assert (Counts (1) = 0 and then Counts (2) = 0,
+              "excluding top choices kept one of them");
+      Assert (Counts (3) > 0,
+              "excluding top choices removed the least of them too, which "
+              & "leaves the tail and not the third choice");
+
+      --  At probability zero it does nothing at all.
+      Config.XTC_Probability := 0.0;
+      Tally (Config, Logits, 200, Counts);
+      Assert (Counts (1) > 0,
+              "the exclusion happened with its probability at zero");
+   end XTC_Removes_The_Likeliest;
+
+   -------------------------------------
+   -- Sequence_Penalty_Breaks_A_Loop --
+   -------------------------------------
+
+   --  The sequence penalty falls on the token that would continue something
+   --  already said, and not on tokens that merely appeared.
+   --
+   --  History: a b c a b. Saying c again continues the repeat, so c is
+   --  penalized. a and b were both said as often and are not, because
+   --  nothing about the last two tokens leads to them. That distinction is
+   --  the whole of what this penalty is and what tells it apart from the
+   --  repetition penalty beside it.
+   --
+   --  At temperature zero, so the answer is a choice rather than a
+   --  distribution.
+   procedure Sequence_Penalty_Breaks_A_Loop
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 8;
+
+      Logits : N.Real_Array (0 .. Vocabulary - 1) := [others => 0.0];
+
+      Config : S.Configuration := S.Greedy_Configuration;
+
+      Sampler : S.Sampler;
+      Status  : E.Error_Info;
+      Token   : Vocab.Token_Id;
+   begin
+      --  c is the favourite, by enough that only a penalty moves it.
+      Logits (2) := 5.0;
+      Logits (3) := 4.0;
+
+      Config.Repeat_Window := 16;
+      Config.DRY_Multiplier := 4.0;
+      Config.DRY_Base := 2.0;
+      Config.DRY_Allowed_Length := 1;
+
+      S.Open (Sampler, Config, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+
+      for Token_Said of Vocab.Token_Array'(0, 1, 2, 0, 1) loop
+         S.Record_Token (Sampler, Token_Said);
+      end loop;
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status), "the sampler refused the logits");
+      Assert (Token = 3,
+              "the sequence penalty did not fall on the token that would "
+              & "continue the repetition; it chose"
+              & Vocab.Token_Id'Image (Token));
+
+      S.Close (Sampler);
+
+      --  Without it, the repetition continues.
+      Config.DRY_Multiplier := 0.0;
+      S.Open (Sampler, Config, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+
+      for Token_Said of Vocab.Token_Array'(0, 1, 2, 0, 1) loop
+         S.Record_Token (Sampler, Token_Said);
+      end loop;
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 2,
+              "without the penalty the favourite was not chosen");
+
+      S.Close (Sampler);
+   end Sequence_Penalty_Breaks_A_Loop;
+
+   ------------------------------------------
+   -- Mirostat_Steers_Towards_Its_Target --
+   ------------------------------------------
+
+   --  Mirostat moves its target by how surprising each choice turned out to
+   --  be, so a smaller target produces less surprising text.
+   --
+   --  Measured as the average surprise of what it drew, in the model's own
+   --  bits, at two targets. What is held is the ordering: a run asked for
+   --  two bits is measurably less surprising than one asked for eight.
+   --
+   --  Not the absolute figure, and the reason is worth writing down. The
+   --  algorithm measures the surprise of its choice against the distribution
+   --  it truncated, not against the model's -- those differ by however much
+   --  the truncation removed -- so a run steering to four bits of its own
+   --  measure sits above four bits of the model's. Asserting the absolute
+   --  value would be asserting the size of that gap, which is a property of
+   --  the fixture rather than of the algorithm.
+   procedure Mirostat_Steers_Towards_Its_Target
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 256;
+
+      Logits : N.Real_Array (0 .. Vocabulary - 1) := [others => 0.0];
+
+      Draws : constant := 400;
+
+      Largest : N.Real := 0.0;
+      Total   : N.Wide_Real := 0.0;
+
+      --  Average surprise, in bits of the model's own distribution, over a
+      --  run at one target.
+      function Surprise_At (Tau : N.Real) return N.Wide_Real is
+         Config  : S.Configuration := S.Greedy_Configuration;
+         Sampler : S.Sampler;
+         Status  : E.Error_Info;
+         Token   : Vocab.Token_Id;
+         Sum     : N.Wide_Real := 0.0;
+      begin
+         Config.Temperature := 1.0;
+         Config.Top_K := 0;
+         Config.Top_P := 1.0;
+         Config.Min_P := 0.0;
+         Config.Mirostat := 2;
+         Config.Mirostat_Tau := Tau;
+         Config.Mirostat_Eta := 0.2;
+
+         S.Validate (Config, Status);
+         Assert (E.Is_Ok (Status),
+                 "a mirostat configuration was refused: "
+                 & E.Error_Code'Image (Status.Code));
+
+         S.Open (Sampler, Config, Vocabulary, 99, Status);
+         Assert (E.Is_Ok (Status), "the sampler would not open");
+
+         for Draw in 1 .. Draws loop
+            S.Sample (Sampler, Logits, Token, Status);
+            Assert (E.Is_Ok (Status),
+                    "mirostat refused a draw: "
+                    & E.Error_Code'Image (Status.Code));
+
+            declare
+               P : constant N.Wide_Real :=
+                 N.Exp (N.Wide_Real (Logits (N.Element_Count (Token)))
+                        - N.Wide_Real (Largest)) / Total;
+            begin
+               Sum := Sum + (-N.Log (P) / N.Log (2.0));
+            end;
+         end loop;
+
+         S.Close (Sampler);
+         return Sum / N.Wide_Real (Draws);
+      end Surprise_At;
+   begin
+      for Index in Logits'Range loop
+         Logits (Index) := N.Real (Index mod 11) * 0.2;
+      end loop;
+
+      Largest := Logits (0);
+      for Index in Logits'Range loop
+         if Logits (Index) > Largest then
+            Largest := Logits (Index);
+         end if;
+      end loop;
+      for Index in Logits'Range loop
+         Total := Total
+           + N.Exp (N.Wide_Real (Logits (Index)) - N.Wide_Real (Largest));
+      end loop;
+
+      declare
+         Quiet : constant N.Wide_Real := Surprise_At (2.0);
+         Loud  : constant N.Wide_Real := Surprise_At (8.0);
+      begin
+         Assert (Quiet < Loud - 0.5,
+                 "mirostat produced" & N.Wide_Real'Image (Quiet)
+                 & " bits at a target of two and"
+                 & N.Wide_Real'Image (Loud) & " at eight, which is not a "
+                 & "target it is steering by");
+      end;
+   end Mirostat_Steers_Towards_Its_Target;
+
+   ----------------------------------------
+   -- Penalties_Reach_The_Greedy_Path --
+   ----------------------------------------
+
+   --  A penalty acts at temperature zero.
+   --
+   --  It did not: the penalties were applied where the candidate list is
+   --  built and the greedy path does not build one, so every penalty this
+   --  program has quietly did nothing at temperature zero. That is the one
+   --  temperature where a caller can check by hand what a penalty did, and
+   --  the combination -- greedy, plus a penalty to stop it looping -- is
+   --  exactly what a caller reaches for.
+   procedure Penalties_Reach_The_Greedy_Path
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 8;
+
+      Logits : N.Real_Array (0 .. Vocabulary - 1) := [others => 0.0];
+
+      Sampler : S.Sampler;
+      Token   : Vocab.Token_Id;
+
+      procedure Choose
+        (Config : S.Configuration;
+         Said   : Boolean;
+         Result : out Vocab.Token_Id)
+      is
+         Local : E.Error_Info;
+      begin
+         S.Open (Sampler, Config, Vocabulary, 1, Local);
+         Assert (E.Is_Ok (Local), "the sampler would not open");
+
+         if Said then
+            for Repeat in 1 .. 3 loop
+               S.Record_Token (Sampler, 5);
+            end loop;
+         end if;
+
+         S.Sample (Sampler, Logits, Result, Local);
+         Assert (E.Is_Ok (Local), "the sampler refused the logits");
+         S.Close (Sampler);
+      end Choose;
+
+      Config : S.Configuration := S.Greedy_Configuration;
+   begin
+      Logits (5) := 3.0;
+      Logits (6) := 2.0;
+
+      --  Nothing said: the favourite wins whatever the penalties are.
+      Config.Repeat_Window := 8;
+      Config.Presence_Penalty := 2.0;
+      Choose (Config, Said => False, Result => Token);
+      Assert (Token = 5, "the favourite was not chosen with nothing said");
+
+      --  Said three times: the presence penalty is enough to move it.
+      Choose (Config, Said => True, Result => Token);
+      Assert (Token = 6,
+              "a presence penalty did nothing at temperature zero");
+
+      --  And the same for the repetition penalty, which divides rather than
+      --  subtracts.
+      Config.Presence_Penalty := 0.0;
+      Config.Repeat_Penalty := 4.0;
+      Choose (Config, Said => True, Result => Token);
+      Assert (Token = 6,
+              "a repetition penalty did nothing at temperature zero");
+   end Penalties_Reach_The_Greedy_Path;
 
    -------------------------
    -- Bias_Moves_A_Token --
@@ -1901,6 +2355,30 @@ package body Tests.Sampling_Cases is
         (T, Penalty_Range_Rejected'Access,
          "a penalty large enough to make every logit infinite is refused, "
          & "and an ordinary negative one is not");
+      Register_Routine
+        (T, Typical_Drops_The_Obvious'Access,
+         "typical sampling drops a candidate whose surprise is far from the "
+         & "distribution's own, however likely it is");
+      Register_Routine
+        (T, Tail_Free_Cuts_At_The_Bend'Access,
+         "tail-free sampling cuts where the sorted curve stops falling and "
+         & "not where the probabilities happen to add up");
+      Register_Routine
+        (T, XTC_Removes_The_Likeliest'Access,
+         "excluding top choices removes the candidates above the threshold "
+         & "and keeps the one below them");
+      Register_Routine
+        (T, Sequence_Penalty_Breaks_A_Loop'Access,
+         "the sequence penalty falls on the token that would continue a "
+         & "repetition, not on tokens that were merely said");
+      Register_Routine
+        (T, Mirostat_Steers_Towards_Its_Target'Access,
+         "mirostat moves its target by how surprising each choice was, and "
+         & "settles near the surprise it was asked for");
+      Register_Routine
+        (T, Penalties_Reach_The_Greedy_Path'Access,
+         "the penalties act at temperature zero, which is where a caller "
+         & "reaches for them");
       Register_Routine
         (T, Bias_Moves_A_Token'Access,
          "a per-token bias moves that token and only that token, on both "

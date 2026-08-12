@@ -19,14 +19,23 @@ with Model_Runner.Tokenizer;
 --     2  reject non-finite logits
 --     3  apply forbidden-token masks
 --     3a apply the caller's per-token biases
+--     3b penalize tokens that would continue a repeated sequence
 --     4  apply the repetition penalty over the recent window
 --     5  apply temperature
 --     6  apply top-k filtering
+--     6a apply tail-free filtering
+--     6b apply locally typical filtering
 --     7  apply top-p filtering
 --     8  apply minimum-p filtering
+--     8a exclude the top choices, some of the time
 --     9  normalize the surviving probabilities
 --    10  select a token
 --    11  update the sampling history
+--
+--  Mirostat, when it is on, replaces steps 6 through 8a with one truncation
+--  of its own and adds a state update after step 10. It is an alternative to
+--  those filters and not an addition to them, which is why it is not a step
+--  in the list.
 --
 --  Determinism. Temperature zero is greedy selection: it breaks ties towards
 --  the lowest token identifier and does not consume random state, so a greedy
@@ -88,6 +97,78 @@ package Model_Runner.Sampling is
       --  second. Both act on the same window as Repeat_Penalty, and all three
       --  compose: they are applied in turn to the same logit.
       Presence_Penalty : Real := 0.0;
+
+      --  Keep the smallest set of candidates whose surprise is closest to
+      --  the distribution's own entropy, until their probabilities reach
+      --  this. One disables it.
+      --
+      --  The filters above ask which candidates are most likely. This asks
+      --  which are least surprising, which is not the same question: a
+      --  distribution with one overwhelming favourite is surprising when it
+      --  is followed and dull when it is not, and text that always follows
+      --  it reads as though the model had nothing to say.
+      Typical_P : Real := 1.0;
+
+      --  Keep the head of the sorted candidates up to where the curve stops
+      --  falling steeply, measured by the second differences of the sorted
+      --  probabilities. One disables it.
+      --
+      --  What it is for is the tail that top-p keeps when the head is flat:
+      --  a hundred candidates each near a hundredth reach any threshold
+      --  together, and cutting by cumulative probability cuts arbitrarily
+      --  among equals. This cuts where the shape changes instead.
+      Tail_Free : Real := 1.0;
+
+      --  With this probability, at each step, remove every candidate above
+      --  the threshold below except the least probable of them. Zero
+      --  disables it.
+      --
+      --  Deliberately the opposite of every filter above: those keep the
+      --  likeliest and this throws them away. It is for text that has to
+      --  stop being predictable rather than stop being wrong, and it is a
+      --  chance rather than a rule so that a sentence which needs its
+      --  obvious word can still have it.
+      XTC_Probability : Real := 0.0;
+
+      --  How probable a candidate must be for XTC to consider removing it.
+      XTC_Threshold : Real := 0.1;
+
+      --  How hard to penalize a token that would continue a sequence
+      --  already said. Zero disables it.
+      --
+      --  The repetition penalties above act on tokens; this acts on
+      --  sequences. A model repeating a phrase is not saying one token too
+      --  often -- each word of it may be perfectly ordinary -- it is
+      --  following the same path again, and what this penalizes is the next
+      --  step along a path already walked.
+      DRY_Multiplier : Real := 0.0;
+
+      --  Raised to the power of how far past the allowed length the
+      --  repetition runs, so a longer repeat is penalized much harder than
+      --  a shorter one.
+      DRY_Base : Real := 1.75;
+
+      --  How long a repeated sequence may be before it is penalized at all.
+      --  Two or three words repeat innocently; ten do not.
+      DRY_Allowed_Length : Natural := 2;
+
+      --  Mirostat version: zero for none, two for the algorithm below.
+      --  Version one is not implemented and naming it is refused rather
+      --  than quietly treated as two.
+      --
+      --  Mirostat replaces the truncation filters rather than joining them:
+      --  it keeps the candidates whose surprise is under a running target,
+      --  and moves that target after every token by how surprising the one
+      --  it chose turned out to be. What it holds steady is the surprise of
+      --  the text, which is what the filters above only approximate by
+      --  holding the shape of each step's distribution.
+      Mirostat : Natural := 0;
+
+      --  The surprise, in bits, that mirostat steers towards.
+      Mirostat_Tau : Real := 5.0;
+
+      --  How fast it steers. Larger reacts sooner and wanders more.
+      Mirostat_Eta : Real := 0.1;
    end record;
 
    --  A configuration that always selects the most probable token.
@@ -99,7 +180,17 @@ package Model_Runner.Sampling is
       Repeat_Penalty    => 1.0,
       Repeat_Window     => 0,
       Frequency_Penalty => 0.0,
-      Presence_Penalty  => 0.0);
+      Presence_Penalty  => 0.0,
+      Typical_P         => 1.0,
+      Tail_Free         => 1.0,
+      XTC_Probability   => 0.0,
+      XTC_Threshold     => 0.1,
+      DRY_Multiplier    => 0.0,
+      DRY_Base          => 1.75,
+      DRY_Allowed_Length => 2,
+      Mirostat          => 0,
+      Mirostat_Tau      => 5.0,
+      Mirostat_Eta      => 0.1);
 
    --  Report whether a configuration selects greedily.
    --
@@ -351,6 +442,10 @@ private
       --  The masks that belong to one step, kept apart from the permanent
       --  ones so that clearing them cannot clear those.
       Stepped    : Mask_Array_Access := null;
+
+      --  Mirostat's running target, in bits. Meaningless when mirostat is
+      --  off, and reset with the sampler.
+      Mu         : Real := 0.0;
 
       --  What the caller added to particular tokens. A short list rather
       --  than a vocabulary-sized array: a caller biases a handful of tokens

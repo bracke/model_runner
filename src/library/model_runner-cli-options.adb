@@ -28,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 50) of Registry_Row :=
+   Registry : constant array (1 .. 60) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -78,6 +78,16 @@ package body Model_Runner.CLI.Options is
       (Text ("--top-k"), [Command_Run => True, others => False], Text ("top_k")),
       (Text ("--top-p"), [Command_Run => True, others => False], Text ("top_p")),
       (Text ("--min-p"), [Command_Run => True, others => False], Text ("min_p")),
+      (Text ("--typical"), [Command_Run => True, others => False], Text ("typical")),
+      (Text ("--tail-free"), [Command_Run => True, others => False], Text ("tail_free")),
+      (Text ("--xtc-probability"), [Command_Run => True, others => False], Text ("xtc_probability")),
+      (Text ("--xtc-threshold"), [Command_Run => True, others => False], Text ("xtc_threshold")),
+      (Text ("--dry-multiplier"), [Command_Run => True, others => False], Text ("dry_multiplier")),
+      (Text ("--dry-base"), [Command_Run => True, others => False], Text ("dry_base")),
+      (Text ("--dry-allowed-length"), [Command_Run => True, others => False], Text ("dry_allowed_length")),
+      (Text ("--mirostat"), [Command_Run => True, others => False], Text ("mirostat")),
+      (Text ("--mirostat-tau"), [Command_Run => True, others => False], Text ("mirostat_tau")),
+      (Text ("--mirostat-eta"), [Command_Run => True, others => False], Text ("mirostat_eta")),
       (Text ("--chat-template"), [Command_Run => True, others => False], Text ("chat_template")),
       (Text ("--repeat-penalty"), [Command_Run => True, others => False], Text ("repeat_penalty")),
       (Text ("--frequency-penalty"), [Command_Run => True, others => False], Text ("frequency_penalty")),
@@ -678,6 +688,10 @@ package body Model_Runner.CLI.Options is
          Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Repeat_Penalty,
          Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
          Flag_Chat_Template,
+         Flag_Typical, Flag_Tail_Free,
+         Flag_XTC_Probability, Flag_XTC_Threshold,
+         Flag_DRY_Multiplier, Flag_DRY_Base, Flag_DRY_Allowed,
+         Flag_Mirostat, Flag_Mirostat_Tau, Flag_Mirostat_Eta,
          Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Logprobs,
          Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
@@ -1213,6 +1227,76 @@ package body Model_Runner.CLI.Options is
 
                   elsif Name = "--min-p" then
                      Real_Value (Flag_Min_P, Result.Sampling.Min_P, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--typical" then
+                     Real_Value (Flag_Typical, Result.Sampling.Typical_P,
+                                 Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--tail-free" then
+                     Real_Value (Flag_Tail_Free, Result.Sampling.Tail_Free,
+                                 Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--xtc-probability" then
+                     Real_Value (Flag_XTC_Probability,
+                                 Result.Sampling.XTC_Probability, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--xtc-threshold" then
+                     Real_Value (Flag_XTC_Threshold,
+                                 Result.Sampling.XTC_Threshold, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--dry-multiplier" then
+                     Real_Value (Flag_DRY_Multiplier,
+                                 Result.Sampling.DRY_Multiplier, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--dry-base" then
+                     Real_Value (Flag_DRY_Base, Result.Sampling.DRY_Base,
+                                 Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--dry-allowed-length" then
+                     Natural_Value (Flag_DRY_Allowed, 0, 64,
+                                    Result.Sampling.DRY_Allowed_Length, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--mirostat" then
+                     Natural_Value (Flag_Mirostat, 0, 2,
+                                    Result.Sampling.Mirostat, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--mirostat-tau" then
+                     Real_Value (Flag_Mirostat_Tau,
+                                 Result.Sampling.Mirostat_Tau, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--mirostat-eta" then
+                     Real_Value (Flag_Mirostat_Eta,
+                                 Result.Sampling.Mirostat_Eta, Good);
                      if not Good then
                         return;
                      end if;

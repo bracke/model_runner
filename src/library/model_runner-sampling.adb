@@ -178,6 +178,102 @@ package body Model_Runner.Sampling is
          Reject ("presence_penalty", Item.Presence_Penalty);
          return;
       end if;
+
+      if not N.Is_Finite (Item.Typical_P)
+        or else Item.Typical_P <= 0.0
+        or else Item.Typical_P > 1.0
+      then
+         Reject ("typical_p", Item.Typical_P);
+         return;
+      end if;
+
+      if not N.Is_Finite (Item.Tail_Free)
+        or else Item.Tail_Free <= 0.0
+        or else Item.Tail_Free > 1.0
+      then
+         Reject ("tail_free", Item.Tail_Free);
+         return;
+      end if;
+
+      if not N.Is_Finite (Item.XTC_Probability)
+        or else Item.XTC_Probability < 0.0
+        or else Item.XTC_Probability > 1.0
+      then
+         Reject ("xtc_probability", Item.XTC_Probability);
+         return;
+      end if;
+
+      if not N.Is_Finite (Item.XTC_Threshold)
+        or else Item.XTC_Threshold <= 0.0
+        or else Item.XTC_Threshold > 1.0
+      then
+         Reject ("xtc_threshold", Item.XTC_Threshold);
+         return;
+      end if;
+
+      if not N.Is_Finite (Item.DRY_Multiplier)
+        or else Item.DRY_Multiplier < 0.0
+        or else Item.DRY_Multiplier > 100.0
+      then
+         Reject ("dry_multiplier", Item.DRY_Multiplier);
+         return;
+      end if;
+
+      --  Above one, because a base of one raises to one however long the
+      --  repetition runs, which is a penalty that does not grow -- and
+      --  below one it shrinks with length, which is the opposite of what
+      --  this is for.
+      if not N.Is_Finite (Item.DRY_Base) or else Item.DRY_Base <= 1.0
+        or else Item.DRY_Base > 100.0
+      then
+         Reject ("dry_base", Item.DRY_Base);
+         return;
+      end if;
+
+      --  Two versions exist and this implements the second. Refusing the
+      --  first by name beats treating it as the second: they steer
+      --  differently, and a caller who asked for one and silently got the
+      --  other would be measuring the wrong thing.
+      if Item.Mirostat /= 0 and then Item.Mirostat /= 2 then
+         Status := E.Make (E.Sampling_Invalid_Configuration);
+         E.Add_Text (Status, "field", "mirostat", E.Param_Identifier);
+         E.Add_Integer (Status, "value", Long_Long_Integer (Item.Mirostat));
+         return;
+      end if;
+
+      if not N.Is_Finite (Item.Mirostat_Tau)
+        or else Item.Mirostat_Tau <= 0.0
+        or else Item.Mirostat_Tau > 100.0
+      then
+         Reject ("mirostat_tau", Item.Mirostat_Tau);
+         return;
+      end if;
+
+      if not N.Is_Finite (Item.Mirostat_Eta)
+        or else Item.Mirostat_Eta <= 0.0
+        or else Item.Mirostat_Eta > 10.0
+      then
+         Reject ("mirostat_eta", Item.Mirostat_Eta);
+         return;
+      end if;
+
+      --  Mirostat replaces the truncation filters, so asking for both is
+      --  asking for two answers to one question. Refused rather than
+      --  resolved by precedence: a caller who set top-p and mirostat has a
+      --  belief about what happens, and whichever way it were resolved that
+      --  belief would be wrong half the time.
+      if Item.Mirostat /= 0
+        and then (Item.Top_K /= 0
+                  or else Item.Top_P < 1.0
+                  or else Item.Min_P > 0.0
+                  or else Item.Typical_P < 1.0
+                  or else Item.Tail_Free < 1.0
+                  or else Item.XTC_Probability > 0.0)
+      then
+         Status := E.Make (E.Sampling_Invalid_Configuration);
+         E.Add_Text (Status, "field", "mirostat", E.Param_Identifier);
+         return;
+      end if;
    end Validate;
 
    ----------
@@ -242,6 +338,7 @@ package body Model_Runner.Sampling is
 
       Item.Used := 0;
       Item.Next_Slot := 0;
+      Item.Mu := 2.0 * Config.Mirostat_Tau;
       Item.Open_Flag := True;
       Status := E.Success;
    end Open;
@@ -294,10 +391,13 @@ package body Model_Runner.Sampling is
 
    --  Biases survive a reset: they are what the caller asked for, not
    --  something the run accumulated.
+   --  Mirostat starts each run with its target at twice tau, which is the
+   --  value the algorithm is defined to start from.
    procedure Reset (Item : in out Sampler) is
    begin
       Item.Used := 0;
       Item.Next_Slot := 0;
+      Item.Mu := 2.0 * Item.Settings.Mirostat_Tau;
       Seed_Generator (Item.State, Item.Seed);
    end Reset;
 
@@ -400,9 +500,70 @@ package body Model_Runner.Sampling is
       return False;
    end In_History;
 
-   --  Select greedily: the highest logit, breaking ties towards the lowest
-   --  token identifier. Deliberately separate from the probabilistic path so
-   --  that it cannot touch the generator.
+   --  The history in the order it happened, oldest first.
+   --
+   --  The ring above is written round and round; a sequence question needs
+   --  it straightened out, because what it asks is what followed what.
+   function In_Order (Item : Sampler; Index : Natural) return Token_Id is
+      Room : constant Natural := Item.History.all'Length;
+      From : constant Natural :=
+        (if Item.Used < Room then 0 else Item.Next_Slot);
+   begin
+      return Item.History.all ((From + Index) mod Room);
+   end In_Order;
+
+   --  How hard to penalize a token for continuing something already said.
+   --
+   --  The recent tokens end in some suffix; if that suffix appeared earlier,
+   --  whatever followed it then is a step down a path already walked, and
+   --  this is what it costs to take it again. The longest such match wins,
+   --  and the cost grows as the base raised to how far past the allowed
+   --  length that match runs.
+   --
+   --  Bounded by the window the history keeps, which is what --repeat-window
+   --  sets: this can only see repetition it can remember.
+   function Sequence_Penalty
+     (Item : Sampler; Token : Token_Id) return Real
+   is
+      Longest : Natural := 0;
+   begin
+      if Item.History = null or else Item.Used < 2 then
+         return 0.0;
+      end if;
+
+      --  Every place the token was said before. What matters is not that it
+      --  was said but what came before it: if the words leading up to it
+      --  then are the words leading up to now, saying it again continues
+      --  the repetition.
+      for Where in 0 .. Item.Used - 1 loop
+         if In_Order (Item, Where) = Token then
+            declare
+               Run : Natural := 0;
+            begin
+               while Run < Where
+                 and then Run < Item.Used
+                 and then In_Order (Item, Where - 1 - Run)
+                          = In_Order (Item, Item.Used - 1 - Run)
+               loop
+                  Run := Run + 1;
+               end loop;
+
+               if Run > Longest then
+                  Longest := Run;
+               end if;
+            end;
+         end if;
+      end loop;
+
+      if Longest <= Item.Settings.DRY_Allowed_Length then
+         return 0.0;
+      end if;
+
+      return Item.Settings.DRY_Multiplier
+             * Item.Settings.DRY_Base
+               ** Natural (Longest - Item.Settings.DRY_Allowed_Length);
+   end Sequence_Penalty;
+
    --  What the caller added to this token, or nothing. Walked rather than
    --  looked up: the list is at most sixty-four long and a token that has no
    --  bias is the common case, which a vocabulary-sized table would make
@@ -416,6 +577,65 @@ package body Model_Runner.Sampling is
       end loop;
       return 0.0;
    end Bias_Of;
+
+   --  One token's logit with everything that acts on tokens applied: the
+   --  caller's bias, the sequence penalty, and the three repetition
+   --  penalties. Not the temperature, which is not about the token.
+   --
+   --  Here rather than in the sampling loop because the greedy path needs
+   --  the same answer. It did not get it: penalties were applied where the
+   --  candidates are built, which greedy skips entirely, so every penalty
+   --  this program has quietly did nothing at temperature zero. A run that
+   --  repeats itself is exactly the run a caller reaches for --repeat-penalty
+   --  and --temperature 0 together.
+   function Adjusted
+     (Item   : Sampler;
+      Logits : Real_Array;
+      Index  : Element_Count) return Real
+   is
+      Value : Real := Logits (Logits'First + Index);
+   begin
+      if Item.Bias_Used > 0 then
+         Value := Value + Bias_Of (Item, Token_Id (Index));
+      end if;
+
+      if Item.Settings.DRY_Multiplier > 0.0 then
+         Value := Value - Sequence_Penalty (Item, Token_Id (Index));
+      end if;
+
+      if Item.Settings.Repeat_Penalty /= 1.0
+        and then In_History (Item, Token_Id (Index))
+      then
+         Value :=
+           (if Value > 0.0
+            then Value / Item.Settings.Repeat_Penalty
+            else Value * Item.Settings.Repeat_Penalty);
+      end if;
+
+      --  Counted once, and used by both penalties. Asking the history twice
+      --  for the same token would double the cost of a loop that already
+      --  walks the window for every candidate.
+      if Item.Settings.Frequency_Penalty /= 0.0
+        or else Item.Settings.Presence_Penalty /= 0.0
+      then
+         declare
+            Seen : constant Natural := Occurrences (Item, Token_Id (Index));
+         begin
+            if Seen > 0 then
+               Value :=
+                 Value
+                 - Item.Settings.Frequency_Penalty * Real (Seen)
+                 - Item.Settings.Presence_Penalty;
+            end if;
+         end;
+      end if;
+
+      return Value;
+   end Adjusted;
+
+   --  Select greedily: the highest logit, breaking ties towards the lowest
+   --  token identifier. Deliberately separate from the probabilistic path so
+   --  that it cannot touch the generator.
 
    procedure Select_Greedy
      (Item   : Sampler;
@@ -433,11 +653,9 @@ package body Model_Runner.Sampling is
            and then not Item.Stepped.all (Natural (Index))
          then
             declare
-               Value : constant Real :=
-                 Logits (Logits'First + Index)
-                 + (if Item.Bias_Used = 0
-                    then 0.0
-                    else Bias_Of (Item, Token_Id (Index)));
+               pragma Suppress (Validity_Check);
+
+               Value : constant Real := Adjusted (Item, Logits, Index);
             begin
                if Best = Model_Runner.Tokenizer.No_Token
                  or else Value > Best_Logit
@@ -682,44 +900,8 @@ package body Model_Runner.Sampling is
                --  before anything can ask whether it did.
                pragma Suppress (Validity_Check);
 
-               Value : Real := Logits (Logits'First + Index);
+               Value : Real := Adjusted (Item, Logits, Index);
             begin
-               --  3a  what the caller added to this token, before anything
-               --  else touches it: a bias says what the caller thinks of the
-               --  token, and dividing it by the temperature with the rest is
-               --  what makes that a statement rather than a second knob.
-               if Item.Bias_Used > 0 then
-                  Value := Value + Bias_Of (Item, Token_Id (Index));
-               end if;
-
-               if Item.Settings.Repeat_Penalty /= 1.0
-                 and then In_History (Item, Token_Id (Index))
-               then
-                  Value :=
-                    (if Value > 0.0
-                     then Value / Item.Settings.Repeat_Penalty
-                     else Value * Item.Settings.Repeat_Penalty);
-               end if;
-
-               --  Counted once, and used by both penalties. Asking the
-               --  history twice for the same token would double the cost of
-               --  a loop that already walks the window for every candidate.
-               if Item.Settings.Frequency_Penalty /= 0.0
-                 or else Item.Settings.Presence_Penalty /= 0.0
-               then
-                  declare
-                     Seen : constant Natural :=
-                       Occurrences (Item, Token_Id (Index));
-                  begin
-                     if Seen > 0 then
-                        Value :=
-                          Value
-                          - Item.Settings.Frequency_Penalty * Real (Seen)
-                          - Item.Settings.Presence_Penalty;
-                     end if;
-                  end;
-               end if;
-
                --  5  temperature
                Value := Value / Item.Settings.Temperature;
 
@@ -831,6 +1013,164 @@ package body Model_Runner.Sampling is
          end loop;
       end;
 
+      --  Mirostat instead of the filters, when it is on. It keeps the
+      --  candidates whose surprise is under a running target and leaves the
+      --  rest; the target moves after the choice, at the end of this
+      --  procedure. The configuration refuses mirostat together with any of
+      --  the filters, so nothing below can also have run.
+      if Item.Settings.Mirostat = 2 then
+         declare
+            Kept : Element_Count := 1;
+         begin
+            for Index in 0 .. Surviving - 1 loop
+               exit when Item.Working.all (Index).Probability <= 0.0;
+
+               --  Surprise in bits, which is what tau is in.
+               declare
+                  Bits : constant Real :=
+                    Real (-N.Log
+                            (N.Wide_Real
+                               (Item.Working.all (Index).Probability))
+                          / N.Log (2.0));
+               begin
+                  exit when Bits > Item.Mu;
+                  Kept := Index + 1;
+               end;
+            end loop;
+
+            Surviving := Kept;
+         end;
+      end if;
+
+      --  6a  tail-free: cut where the sorted curve stops falling steeply.
+      --
+      --  The second differences of the sorted probabilities say how fast
+      --  the curve is bending. Normalized, they are a distribution over
+      --  where the bend happens, and the cut goes at the point their
+      --  cumulative reaches the threshold.
+      if Item.Settings.Tail_Free < 1.0 and then Surviving > 2 then
+         declare
+            Bend  : N.Wide_Real := 0.0;
+            Taken : N.Wide_Real := 0.0;
+            Kept  : Element_Count := Surviving;
+
+            function Second (Index : Element_Count) return N.Wide_Real is
+              (abs (N.Wide_Real (Item.Working.all (Index).Probability)
+                    - 2.0 * N.Wide_Real
+                              (Item.Working.all (Index + 1).Probability)
+                    + N.Wide_Real
+                        (Item.Working.all (Index + 2).Probability)));
+         begin
+            for Index in 0 .. Surviving - 3 loop
+               Bend := Bend + Second (Index);
+            end loop;
+
+            if Bend > 0.0 then
+               for Index in 0 .. Surviving - 3 loop
+                  Taken := Taken + Second (Index);
+                  if Taken / Bend >= N.Wide_Real (Item.Settings.Tail_Free)
+                  then
+                     Kept := Index + 2;
+                     exit;
+                  end if;
+               end loop;
+
+               Surviving := Element_Count'Max (1, Kept);
+            end if;
+         end;
+      end if;
+
+      --  6b  locally typical: keep the candidates whose surprise is nearest
+      --  the distribution's own entropy, until they reach the threshold.
+      --
+      --  Nearest, not highest, so this reorders. The survivors are compacted
+      --  back into probability order afterwards, because everything below
+      --  and the draw itself read the array as sorted.
+      if Item.Settings.Typical_P < 1.0 and then Surviving > 1 then
+         declare
+            Entropy : N.Wide_Real := 0.0;
+
+            type Distance_Array is
+              array (Element_Count range 0 .. Surviving - 1) of N.Wide_Real;
+            Away : Distance_Array := [others => 0.0];
+
+            type Order_Array is
+              array (Element_Count range 0 .. Surviving - 1) of Element_Count;
+            Order : Order_Array;
+
+            Taken : N.Wide_Real := 0.0;
+            Kept  : Element_Count := 0;
+
+            type Keep_Array is
+              array (Element_Count range 0 .. Surviving - 1) of Boolean;
+            Keep : Keep_Array := [others => False];
+         begin
+            for Index in 0 .. Surviving - 1 loop
+               declare
+                  P : constant N.Wide_Real :=
+                    N.Wide_Real (Item.Working.all (Index).Probability);
+               begin
+                  if P > 0.0 then
+                     Entropy := Entropy - P * N.Log (P);
+                  end if;
+               end;
+            end loop;
+
+            for Index in 0 .. Surviving - 1 loop
+               declare
+                  P : constant N.Wide_Real :=
+                    N.Wide_Real (Item.Working.all (Index).Probability);
+               begin
+                  Away (Index) :=
+                    (if P > 0.0 then abs (-N.Log (P) - Entropy) else 0.0);
+               end;
+               Order (Index) := Index;
+            end loop;
+
+            --  Nearest first. Insertion sort over what top-k has already
+            --  cut down to, which is tens of candidates rather than the
+            --  vocabulary.
+            for Index in 1 .. Surviving - 1 loop
+               declare
+                  Where : Element_Count := Index;
+                  Held  : constant Element_Count := Order (Index);
+               begin
+                  while Where > 0
+                    and then Away (Order (Where - 1)) > Away (Held)
+                  loop
+                     Order (Where) := Order (Where - 1);
+                     Where := Where - 1;
+                  end loop;
+                  Order (Where) := Held;
+               end;
+            end loop;
+
+            for Index in 0 .. Surviving - 1 loop
+               Keep (Order (Index)) := True;
+               Kept := Kept + 1;
+               Taken := Taken
+                 + N.Wide_Real
+                     (Item.Working.all (Order (Index)).Probability);
+               exit when Taken >= N.Wide_Real (Item.Settings.Typical_P);
+            end loop;
+
+            --  Back into probability order, which is the order they were
+            --  already in: the kept ones keep their places relative to each
+            --  other and the rest close up behind them.
+            declare
+               Into : Element_Count := 0;
+            begin
+               for Index in 0 .. Surviving - 1 loop
+                  if Keep (Index) then
+                     Item.Working.all (Into) := Item.Working.all (Index);
+                     Into := Into + 1;
+                  end if;
+               end loop;
+               Surviving := Element_Count'Max (1, Into);
+            end;
+         end;
+      end if;
+
       --  7  top-p: the shortest prefix whose cumulative probability reaches
       --  the threshold. At least one candidate always survives.
       if Item.Settings.Top_P < 1.0 then
@@ -865,6 +1205,40 @@ package body Model_Runner.Sampling is
          end;
       end if;
 
+      --  8a  exclude the top choices, some of the time.
+      --
+      --  Every filter above keeps the likeliest; this throws them away. When
+      --  two or more candidates are above the threshold, all but the least
+      --  probable of those go, and what is left begins with the one that was
+      --  just under them.
+      if Item.Settings.XTC_Probability > 0.0 and then Surviving > 1 then
+         declare
+            Draw : N.Wide_Real;
+            Over : Element_Count := 0;
+         begin
+            Uniform (Item.State, Draw);
+
+            if Draw < N.Wide_Real (Item.Settings.XTC_Probability) then
+               for Index in 0 .. Surviving - 1 loop
+                  exit when Item.Working.all (Index).Probability
+                            < Item.Settings.XTC_Threshold;
+                  Over := Index + 1;
+               end loop;
+
+               --  Two or more, or there is nothing to exclude: removing the
+               --  only likely candidate would leave the tail alone, which is
+               --  not what this is for.
+               if Over > 1 then
+                  for Index in 0 .. Surviving - Over loop
+                     Item.Working.all (Index) :=
+                       Item.Working.all (Index + Over - 1);
+                  end loop;
+                  Surviving := Surviving - Over + 1;
+               end if;
+            end if;
+         end;
+      end if;
+
       --  9  renormalize the survivors
       declare
          Total : N.Wide_Real := 0.0;
@@ -896,6 +1270,33 @@ package body Model_Runner.Sampling is
                end if;
             end loop;
          end;
+
+         --  And what that choice was worth, for mirostat's target to steer
+         --  by. The surprise is measured against the distribution it drew
+         --  from, which is the truncated one: measuring against the model's
+         --  own would steer by a number this sampler does not control.
+         if Item.Settings.Mirostat = 2 then
+            declare
+               Chosen : N.Wide_Real := 0.0;
+            begin
+               for Index in 0 .. Surviving - 1 loop
+                  if Item.Working.all (Index).Token = Token then
+                     Chosen :=
+                       N.Wide_Real (Item.Working.all (Index).Probability)
+                       / Total;
+                     exit;
+                  end if;
+               end loop;
+
+               if Chosen > 0.0 then
+                  Item.Mu :=
+                    Item.Mu
+                    - Item.Settings.Mirostat_Eta
+                      * (Real (-N.Log (Chosen) / N.Log (2.0))
+                         - Item.Settings.Mirostat_Tau);
+               end if;
+            end;
+         end if;
       end;
 
       Status := E.Success;

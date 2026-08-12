@@ -7,6 +7,47 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Five more samplers: locally typical, tail-free, exclude-top-choices,
+  a sequence penalty and mirostat v2.**
+
+  Locally typical keeps the candidates whose surprise is nearest the
+  distribution's own entropy. Tail-free cuts where the sorted curve stops
+  falling steeply, by the second differences, which is what to use when the
+  head is flat and cumulative probability cuts arbitrarily among equals.
+  Exclude-top-choices does the opposite of every other filter -- it throws the
+  likeliest away, some of the time -- for text that has to stop being
+  predictable rather than stop being wrong. The sequence penalty acts on
+  paths rather than tokens: what it costs is the next step down a path
+  already walked, growing as a base raised to how far past the allowed length
+  the repetition runs. Mirostat steers for a steady surprise, moving its
+  target by how surprising each choice turned out to be.
+
+  Mirostat replaces the truncation filters rather than joining them, so
+  asking for both is refused rather than resolved by precedence: a caller who
+  set top-p and mirostat has a belief about what happens, and either
+  resolution makes that belief wrong half the time.
+
+  Two of the three tests written for these failed on the first run, and both
+  fixtures were wrong rather than the code. Typical sampling was tested on a
+  distribution with one overwhelming favourite, on the assumption that an
+  overwhelming favourite must be the surprising candidate -- it is the
+  opposite: a candidate holding nearly all the probability holds nearly all
+  the entropy, so its surprise is what the entropy is. And mirostat was
+  asserted to settle at its target measured in the model's bits, when the
+  algorithm steers by the surprise of the distribution it truncated; the test
+  now holds the ordering between two targets, which is the part that is a
+  property of the algorithm rather than of the fixture.
+
+### Fixed
+
+- **Every penalty did nothing at temperature zero.** The repetition,
+  frequency and presence penalties were applied where the candidate list is
+  built, and the greedy path does not build one -- it walks the logits and
+  takes the largest. So `--repeat-penalty` with `--temperature 0`, which is
+  exactly the combination a caller reaches for when a model loops, has been
+  silently ignored for as long as both have existed. Everything that acts on
+  a token is now one function that both paths call.
+
 - **`--logit-bias TOKEN=X` and `--logprobs N`.**
 
   A bias adds a fixed amount to a token's logit before anything else the
