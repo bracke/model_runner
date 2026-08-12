@@ -19,6 +19,7 @@ package body Tests.Sampling_Cases is
    use type Model_Runner.Errors.Error_Code;
    use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.Numerics.Real;
+   use type Model_Runner.Numerics.Wide_Real;
    use type Model_Runner.Tokenizer.Token_Id;
 
    package Conv renames Model_Runner.Conversation;
@@ -1081,6 +1082,236 @@ package body Tests.Sampling_Cases is
       end;
    end Automatic_Seed_Works;
 
+   -------------------------
+   -- Bias_Moves_A_Token --
+   -------------------------
+
+   --  A bias raises the token it names and leaves the others where they
+   --  were, and it does so at temperature zero as well as above it.
+   --
+   --  The greedy path is the half worth testing hardest: it is a different
+   --  loop from the probabilistic one and the obvious way to write this
+   --  feature -- fold the bias into the candidate list the filters read --
+   --  leaves greedy sampling untouched, so a caller checking the option by
+   --  hand at temperature zero would see nothing happen.
+   procedure Bias_Moves_A_Token
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 8;
+
+      Logits : N.Real_Array (0 .. Vocabulary - 1) :=
+        [others => 0.0];
+
+      Sampler : S.Sampler;
+      Status  : E.Error_Info;
+      Token   : Vocab.Token_Id;
+   begin
+      --  A clear favourite, so that a bias has something to overturn.
+      Logits (0) := 4.0;
+      for Index in 1 .. Logits'Last loop
+         Logits (Index) := 1.0 - N.Real (Index) * 0.1;
+      end loop;
+
+      S.Open (Sampler, S.Greedy_Configuration, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 0,
+              "the favourite was not chosen before any bias");
+
+      --  Enough to overturn it, and on a token that was nowhere near.
+      S.Bias (Sampler, 5, 10.0, Status);
+      Assert (E.Is_Ok (Status), "a bias was refused");
+      Assert (S.Bias_Count (Sampler) = 1, "the bias was not recorded");
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 5,
+              "a bias of ten did not move the greedy choice");
+
+      --  Replaced rather than added to, and negative biases push down.
+      S.Bias (Sampler, 5, -10.0, Status);
+      Assert (E.Is_Ok (Status), "a second bias on the same token was refused");
+      Assert (S.Bias_Count (Sampler) = 1,
+              "biasing the same token twice made two entries");
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 0,
+              "a negative bias did not put the choice back");
+
+      S.Close (Sampler);
+
+      --  And above temperature zero, where the whole pipeline runs. A bias
+      --  large enough leaves the token as the only survivor of the filters,
+      --  so this is a statement about the arithmetic rather than about the
+      --  draw.
+      declare
+         Config : S.Configuration := S.Greedy_Configuration;
+      begin
+         Config.Temperature := 1.0;
+         Config.Top_K := 1;
+         Config.Top_P := 1.0;
+         Config.Min_P := 0.0;
+
+         S.Open (Sampler, Config, Vocabulary, 1, Status);
+         Assert (E.Is_Ok (Status), "the sampler would not open");
+
+         S.Bias (Sampler, 7, 20.0, Status);
+         Assert (E.Is_Ok (Status), "a bias was refused");
+
+         for Pass in 1 .. 4 loop
+            S.Sample (Sampler, Logits, Token, Status);
+            Assert (E.Is_Ok (Status) and then Token = 7,
+                    "a bias of twenty did not survive the filters");
+         end loop;
+
+         S.Close (Sampler);
+      end;
+
+      --  What it refuses: a token that is not in the vocabulary, and more
+      --  biases than it holds.
+      S.Open (Sampler, S.Greedy_Configuration, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+
+      S.Bias (Sampler, Vocab.Token_Id (Vocabulary), 1.0, Status);
+      Assert (Status.Code = E.Sampling_Vocabulary_Mismatch,
+              "a bias on a token outside the vocabulary was accepted");
+
+      S.Close (Sampler);
+   end Bias_Moves_A_Token;
+
+   -------------------------------------
+   -- Explanation_Describes_The_Model --
+   -------------------------------------
+
+   --  An explanation reports the model's own distribution: a softmax over
+   --  the raw logits, with none of the sampling applied.
+   --
+   --  Three things are held. The probabilities are a distribution -- the
+   --  exponentials of every logprob sum to one over the whole vocabulary.
+   --  The alternatives come back in order, strongest first. And explaining
+   --  changes nothing: the same seed produces the same tokens whether or not
+   --  anybody asked.
+   procedure Explanation_Describes_The_Model
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 64;
+
+      Logits : N.Real_Array (0 .. Vocabulary - 1);
+
+      Sampler : S.Sampler;
+      Status  : E.Error_Info;
+      Token   : Vocab.Token_Id;
+      Report  : S.Explanation;
+   begin
+      for Index in Logits'Range loop
+         Logits (Index) :=
+           N.Real (Index mod 7) * 0.5 - N.Real (Index) * 0.03;
+      end loop;
+
+      S.Open (Sampler, S.Greedy_Configuration, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status), "the sampler refused the logits");
+
+      --  Every token, so that the sum is over the whole distribution.
+      S.Explain (Sampler, Logits, Token, S.Max_Alternatives, Report, Status);
+      Assert (E.Is_Ok (Status), "the explanation was refused");
+      Assert (Report.Chosen = Token, "the explanation names another token");
+      Assert (Report.Count = S.Max_Alternatives,
+              "the explanation carries" & Natural'Image (Report.Count)
+              & " alternatives, not" & Natural'Image (S.Max_Alternatives));
+
+      --  In order, strongest first.
+      for Index in 2 .. Report.Count loop
+         Assert (Report.Log_Values (Index) <= Report.Log_Values (Index - 1),
+                 "the alternatives are not in order at"
+                 & Natural'Image (Index));
+      end loop;
+
+      --  The greedy choice is the likeliest, so the two agree here.
+      Assert (Report.Tokens (1) = Token,
+              "the likeliest alternative is not the token greedy chose");
+      Assert (abs (Report.Log_Values (1) - Report.Log_Of) < 1.0E-6,
+              "the chosen token's probability differs from its own entry");
+
+      --  A distribution: the exponentials over the whole vocabulary sum to
+      --  one. Summed here from the logits directly, because the explanation
+      --  carries only the best few.
+      declare
+         Largest : N.Real := Logits (0);
+         Total   : N.Wide_Real := 0.0;
+         Sum     : N.Wide_Real := 0.0;
+      begin
+         for Index in Logits'Range loop
+            if Logits (Index) > Largest then
+               Largest := Logits (Index);
+            end if;
+         end loop;
+
+         for Index in Logits'Range loop
+            Total := Total
+              + N.Exp (N.Wide_Real (Logits (Index)) - N.Wide_Real (Largest));
+         end loop;
+
+         for Index in Logits'Range loop
+            Sum := Sum
+              + N.Exp (N.Wide_Real (Logits (Index)) - N.Wide_Real (Largest))
+                / Total;
+         end loop;
+
+         Assert (abs (Sum - 1.0) < 1.0E-6,
+                 "the distribution the explanation reports does not sum to "
+                 & "one");
+      end;
+
+      S.Close (Sampler);
+
+      --  And it changes nothing. The same configuration, the same seed, the
+      --  same logits: explaining between draws must not move the generator
+      --  on, or a run with --logprobs would produce different text from the
+      --  same run without it.
+      declare
+         Config : S.Configuration := S.Greedy_Configuration;
+
+         type Draw_List is array (1 .. 8) of Vocab.Token_Id;
+
+         Plain : Draw_List := [others => Vocab.No_Token];
+         Told  : Draw_List := [others => Vocab.No_Token];
+         Ignored : S.Explanation;
+      begin
+         Config.Temperature := 0.9;
+         Config.Top_K := 0;
+         Config.Top_P := 1.0;
+         Config.Min_P := 0.0;
+
+         S.Open (Sampler, Config, Vocabulary, 12_345, Status);
+         Assert (E.Is_Ok (Status), "the sampler would not open");
+         for Index in Plain'Range loop
+            S.Sample (Sampler, Logits, Plain (Index), Status);
+            Assert (E.Is_Ok (Status), "the sampler refused a draw");
+         end loop;
+         S.Close (Sampler);
+
+         S.Open (Sampler, Config, Vocabulary, 12_345, Status);
+         Assert (E.Is_Ok (Status), "the sampler would not open");
+         for Index in Told'Range loop
+            S.Sample (Sampler, Logits, Told (Index), Status);
+            Assert (E.Is_Ok (Status), "the sampler refused a draw");
+            S.Explain (Sampler, Logits, Told (Index), 4, Ignored, Status);
+            Assert (E.Is_Ok (Status), "the explanation was refused");
+         end loop;
+         S.Close (Sampler);
+
+         Assert (Plain = Told,
+                 "explaining changed what was sampled");
+      end;
+   end Explanation_Describes_The_Model;
+
    ----------
    -- Name --
    ----------
@@ -1670,6 +1901,14 @@ package body Tests.Sampling_Cases is
         (T, Penalty_Range_Rejected'Access,
          "a penalty large enough to make every logit infinite is refused, "
          & "and an ordinary negative one is not");
+      Register_Routine
+        (T, Bias_Moves_A_Token'Access,
+         "a per-token bias moves that token and only that token, on both "
+         & "the greedy path and the probabilistic one");
+      Register_Routine
+        (T, Explanation_Describes_The_Model'Access,
+         "an explanation reports the model's own distribution, in order, "
+         & "and changes nothing about what is sampled");
       Register_Routine
         (T, Rotary_Pairings_Differ'Access,
          "the two rotary pairings rotate different elements");

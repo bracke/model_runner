@@ -244,6 +244,18 @@ package Model_Runner.CLI.Options is
         [others => 0];
       Stop_Token_Count : Natural := 0;
 
+      --  Per-token additions to the logits, as TOKEN=AMOUNT pairs. A short
+      --  list because that is what the option is for: nudging a handful of
+      --  tokens up or down, not carrying a second copy of the vocabulary.
+      Bias_Tokens  : Model_Runner.Text.Number_List (1 .. 64) := [others => 0];
+      Bias_Amounts : Model_Runner.Numerics.Real_List (1 .. 64) :=
+        [others => 0.0];
+      Bias_Count   : Natural := 0;
+
+      --  How many alternatives to report for each generated token, or zero
+      --  for none.
+      Logprobs : Natural := 0;
+
       Memory_Limit : Interfaces.Unsigned_64 := 0;
 
       --  Bytes of device memory the model's matrices may take, and whether

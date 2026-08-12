@@ -18,6 +18,7 @@ with Model_Runner.Tokenizer;
 --     1  validate the vocabulary size
 --     2  reject non-finite logits
 --     3  apply forbidden-token masks
+--     3a apply the caller's per-token biases
 --     4  apply the repetition penalty over the recent window
 --     5  apply temperature
 --     6  apply top-k filtering
@@ -157,6 +158,45 @@ package Model_Runner.Sampling is
    --    repeated exactly.
    function Seed_Used (Item : Sampler) return Seed_Value;
 
+   --  Largest number of per-token biases one sampler will hold. A caller
+   --  wanting more than this is asking for a vocabulary-sized table, which is
+   --  a different feature: this is for nudging a handful of tokens.
+   Max_Biases : constant := 64;
+
+   --  A short list of tokens, for a caller carrying the other half of a
+   --  bias table beside the amounts.
+   type Token_List is array (Positive range <>) of Token_Id;
+
+   --  Add a fixed amount to a token's logit, every step.
+   --
+   --  Applied before the penalties and the temperature, so a bias is a
+   --  statement about the token and not about how hot the sampling is. It
+   --  acts on the greedy path too: a bias that only worked above temperature
+   --  zero would be a flag that quietly did nothing in the one mode a caller
+   --  can check by hand.
+   --
+   --  Setting a bias for a token that already has one replaces it. A bias of
+   --  Real'First forbids the token, which is what a caller writing minus
+   --  infinity means; use Forbid for that instead, which says so.
+   --
+   --  @param Item Sampler to update.
+   --  @param Token Token to bias.
+   --  @param Amount Added to the token's logit.
+   --  @param Status Success, or Sampling_Invalid_Configuration when there is
+   --    no room for another and Sampling_Vocabulary_Mismatch when the token
+   --    is outside the vocabulary.
+   procedure Bias
+     (Item   : in out Sampler;
+      Token  : Token_Id;
+      Amount : Real;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  How many tokens carry a bias.
+   --
+   --  @param Item Sampler to inspect.
+   --  @return Count of biased tokens.
+   function Bias_Count (Item : Sampler) return Natural;
+
    --  Forbid a token from ever being selected.
    --
    --  Used for tokens that must not appear in generated text, such as a
@@ -200,6 +240,57 @@ package Model_Runner.Sampling is
       Token  : out Token_Id;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Largest number of alternatives an explanation will carry.
+   Max_Alternatives : constant := 32;
+
+   --  What the model made of one position, as probabilities.
+   --
+   --  The numbers are natural logarithms of probabilities from the model's
+   --  own distribution: a plain softmax over the raw logits, with no
+   --  temperature, no masks, no penalties and no filters. That is a
+   --  deliberate choice and the only one worth publishing. A caller asking
+   --  how sure the model was is asking about the model; the sampling
+   --  pipeline is the caller's own doing, and reporting probabilities after
+   --  it would answer a question about the configuration rather than about
+   --  the text.
+   --
+   --  Chosen is the token the sampler actually returned, which is not always
+   --  the first alternative: a token below the top of the distribution is
+   --  what sampling above temperature zero is for.
+   type Explanation is record
+      Chosen  : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Log_Of  : Real := 0.0;
+
+      Count      : Natural := 0;
+      Tokens     : Token_List (1 .. Max_Alternatives) :=
+        [others => Model_Runner.Tokenizer.No_Token];
+      Log_Values : Model_Runner.Numerics.Real_List (1 .. Max_Alternatives) :=
+        [others => 0.0];
+   end record;
+
+   --  Explain one position: what the model thought of the token that was
+   --  chosen, and of the few it thought most likely.
+   --
+   --  Does not change the sampler and does not consume random state, so a
+   --  run with explanations produces the same text as one without. That is
+   --  worth more than the saving of folding it into Sample would buy.
+   --
+   --  @param Item Sampler, for the vocabulary size.
+   --  @param Logits Raw logits, as they were given to Sample.
+   --  @param Chosen Token that was selected.
+   --  @param Wanted How many alternatives to report, capped at
+   --    Max_Alternatives.
+   --  @param Report What the model made of it.
+   --  @param Status Success, Sampling_Vocabulary_Mismatch,
+   --    Sampling_Non_Finite_Logit or Sampling_Invalid_Distribution.
+   procedure Explain
+     (Item   : Sampler;
+      Logits : Real_Array;
+      Chosen : Token_Id;
+      Wanted : Natural;
+      Report : out Explanation;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Append a token to the history the repetition penalty reads.
    --
    --  Called for prompt tokens as well as generated ones, so that a prompt
@@ -229,6 +320,13 @@ private
    type Mask_Array is array (Natural range <>) of Boolean;
    type Mask_Array_Access is access Mask_Array;
 
+   type Bias_Entry is record
+      Token  : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Amount : Real := 0.0;
+   end record;
+
+   type Bias_Array is array (1 .. Max_Biases) of Bias_Entry;
+
    --  xoshiro256++ state. Chosen because it is small, fast, has no rejected
    --  seeds once initialized through SplitMix64, and produces the same stream
    --  on every host.
@@ -253,6 +351,14 @@ private
       --  The masks that belong to one step, kept apart from the permanent
       --  ones so that clearing them cannot clear those.
       Stepped    : Mask_Array_Access := null;
+
+      --  What the caller added to particular tokens. A short list rather
+      --  than a vocabulary-sized array: a caller biases a handful of tokens
+      --  and paying thirty-two thousand reals for that would be paying for
+      --  the feature nobody asked for.
+      Biases     : Bias_Array := [others => (Model_Runner.Tokenizer.No_Token,
+                                             0.0)];
+      Bias_Used  : Natural := 0;
    end record;
 
    overriding procedure Finalize (Item : in out Sampler);

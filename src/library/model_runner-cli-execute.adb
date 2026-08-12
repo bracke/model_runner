@@ -1181,6 +1181,7 @@ package body Model_Runner.CLI.Execute is
       Stop_Set  : Model_Runner.Stops.Set;
       Sink      : aliased Pres.Standard_Output_Sink;
       Reporter  : aliased Pres.Progress_Reporter (Screen'Unchecked_Access);
+      Told      : aliased Pres.Logprob_Reporter (Screen'Unchecked_Access);
       Clock     : aliased Model_Runner.Clocks.System_Clock;
       Seeds     : aliased Model_Runner.Entropy.Host_Source;
       Prompt    : Opt.Text_Access := null;
@@ -1562,7 +1563,15 @@ package body Model_Runner.CLI.Execute is
                Request : Gen.Request;
             begin
                Request.Max_Tokens := Item.Max_Tokens;
-               Request.Sampling := Item.Sampling;
+               for Index in 1 .. Item.Bias_Count loop
+               Request.Bias_Tokens (Index) :=
+                 Model_Runner.Tokenizer.Token_Id (Item.Bias_Tokens (Index));
+               Request.Bias_Amounts (Index) := Item.Bias_Amounts (Index);
+            end loop;
+            Request.Bias_Count := Item.Bias_Count;
+            Request.Logprobs := Item.Logprobs;
+
+            Request.Sampling := Item.Sampling;
                Request.Seed := Item.Seed;
                Request.Has_Seed := Item.Has_Seed;
                --  A backend that does not batch is asked for one token at
@@ -1629,6 +1638,10 @@ package body Model_Runner.CLI.Execute is
                   Time     => Clock'Unchecked_Access,
                   Seeds    => Seeds'Unchecked_Access,
                   Cancel   => Cancel'Unchecked_Access,
+                  Reporter =>
+                    (if Item.Logprobs > 0
+                     then Told'Unchecked_Access
+                     else null),
                   Outcome  => Outcome);
             end;
 

@@ -2,10 +2,8 @@ with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
 with Model_Runner.Backend.CPU;
-with Model_Runner.Numerics;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
-with Model_Runner.Tokenizer;
 
 package body Model_Runner.Generation is
 
@@ -110,6 +108,7 @@ package body Model_Runner.Generation is
       Time     : Model_Runner.Clocks.Clock_Reference;
       Seeds    : Model_Runner.Entropy.Source_Reference;
       Cancel   : C.Token_Reference;
+      Reporter : Explainer_Reference := null;
       Bounds   : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Outcome  : out Result)
@@ -285,6 +284,18 @@ package body Model_Runner.Generation is
             return;
          end if;
       end if;
+
+      --  What the caller wants nudged. Set once, before anything is
+      --  generated, because a bias is a property of the run.
+      for Index in 1 .. Item.Bias_Count loop
+         S.Bias (Sampler, Item.Bias_Tokens (Index), Item.Bias_Amounts (Index),
+                 Status);
+         if E.Is_Error (Status) then
+            Conclude (Runtime_Error, Status);
+            Cleanup;
+            return;
+         end if;
+      end loop;
 
       --  A beginning-of-sequence marker belongs to the prompt, never to the
       --  generated text.
@@ -571,6 +582,24 @@ package body Model_Runner.Generation is
                if E.Is_Error (Status) then
                   Conclude (Runtime_Error, Status);
                   exit Decode_Loop;
+               end if;
+
+               --  What the model made of this position, when somebody asked.
+               --  After the choice rather than instead of it: the report says
+               --  what was chosen as well as what was likely, and the two are
+               --  not always the same token.
+               if Reporter /= null and then Item.Logprobs > 0 then
+                  declare
+                     Report : S.Explanation;
+                     Told   : E.Error_Info;
+                  begin
+                     S.Explain
+                       (Sampler, Logits.all, Token, Item.Logprobs, Report,
+                        Told);
+                     if E.Is_Ok (Told) then
+                        Reporter.all.Explain (Report);
+                     end if;
+                  end;
                end if;
 
                --  Token-level stop conditions, before any text is produced, so

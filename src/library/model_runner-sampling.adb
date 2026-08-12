@@ -292,6 +292,8 @@ package body Model_Runner.Sampling is
    -- Reset --
    -----------
 
+   --  Biases survive a reset: they are what the caller asked for, not
+   --  something the run accumulated.
    procedure Reset (Item : in out Sampler) is
    begin
       Item.Used := 0;
@@ -401,6 +403,20 @@ package body Model_Runner.Sampling is
    --  Select greedily: the highest logit, breaking ties towards the lowest
    --  token identifier. Deliberately separate from the probabilistic path so
    --  that it cannot touch the generator.
+   --  What the caller added to this token, or nothing. Walked rather than
+   --  looked up: the list is at most sixty-four long and a token that has no
+   --  bias is the common case, which a vocabulary-sized table would make
+   --  fast and expensive.
+   function Bias_Of (Item : Sampler; Token : Token_Id) return Real is
+   begin
+      for Index in 1 .. Item.Bias_Used loop
+         if Item.Biases (Index).Token = Token then
+            return Item.Biases (Index).Amount;
+         end if;
+      end loop;
+      return 0.0;
+   end Bias_Of;
+
    procedure Select_Greedy
      (Item   : Sampler;
       Logits : Real_Array;
@@ -417,7 +433,11 @@ package body Model_Runner.Sampling is
            and then not Item.Stepped.all (Natural (Index))
          then
             declare
-               Value : constant Real := Logits (Logits'First + Index);
+               Value : constant Real :=
+                 Logits (Logits'First + Index)
+                 + (if Item.Bias_Used = 0
+                    then 0.0
+                    else Bias_Of (Item, Token_Id (Index)));
             begin
                if Best = Model_Runner.Tokenizer.No_Token
                  or else Value > Best_Logit
@@ -435,6 +455,165 @@ package body Model_Runner.Sampling is
          Status := E.Make (E.Sampling_No_Candidates);
       end if;
    end Select_Greedy;
+
+   ----------
+   -- Bias --
+   ----------
+
+   procedure Bias
+     (Item   : in out Sampler;
+      Token  : Token_Id;
+      Amount : Real;
+      Status : out E.Error_Info) is
+   begin
+      Status := E.Success;
+
+      if not Item.Open_Flag
+        or else Natural (Token) >= Item.Vocabulary
+      then
+         Status := E.Make (E.Sampling_Vocabulary_Mismatch);
+         E.Add_Integer (Status, "token", Long_Long_Integer (Token));
+         E.Add_Integer
+           (Status, "expected", Long_Long_Integer (Item.Vocabulary));
+         return;
+      end if;
+
+      for Index in 1 .. Item.Bias_Used loop
+         if Item.Biases (Index).Token = Token then
+            Item.Biases (Index).Amount := Amount;
+            return;
+         end if;
+      end loop;
+
+      if Item.Bias_Used = Max_Biases then
+         Status := E.Make (E.Sampling_Invalid_Configuration);
+         E.Add_Text (Status, "field", "logit_bias", E.Param_Identifier);
+         return;
+      end if;
+
+      Item.Bias_Used := Item.Bias_Used + 1;
+      Item.Biases (Item.Bias_Used) := (Token => Token, Amount => Amount);
+   end Bias;
+
+   function Bias_Count (Item : Sampler) return Natural is (Item.Bias_Used);
+
+
+   -------------
+   -- Explain --
+   -------------
+
+   procedure Explain
+     (Item   : Sampler;
+      Logits : Real_Array;
+      Chosen : Token_Id;
+      Wanted : Natural;
+      Report : out Explanation;
+      Status : out E.Error_Info)
+   is
+      Room : constant Natural := Natural'Min (Wanted, Max_Alternatives);
+
+      Largest : Real := 0.0;
+      Total   : N.Wide_Real := 0.0;
+
+      --  The best few, kept as they are met rather than by sorting the
+      --  vocabulary: a caller wants five of thirty-two thousand, and sorting
+      --  the rest to find them is the mistake the sampler already made once.
+      Best_Token : Token_List (1 .. Max_Alternatives) :=
+        [others => Model_Runner.Tokenizer.No_Token];
+      Best_Logit : Model_Runner.Numerics.Real_List (1 .. Max_Alternatives) :=
+        [others => 0.0];
+      Kept : Natural := 0;
+   begin
+      Report := (others => <>);
+
+      if not Item.Open_Flag then
+         Status := E.Make (E.Sampling_Invalid_Configuration);
+         return;
+      end if;
+
+      if Logits'Length /= Element_Count (Item.Vocabulary) then
+         Status := E.Make (E.Sampling_Vocabulary_Mismatch);
+         E.Add_Integer
+           (Status, "expected", Long_Long_Integer (Item.Vocabulary));
+         E.Add_Integer (Status, "actual", Long_Long_Integer (Logits'Length));
+         return;
+      end if;
+
+      declare
+         pragma Suppress (Validity_Check);
+      begin
+         for Index in Logits'Range loop
+            if not N.Is_Finite (Logits (Index)) then
+               Status := E.Make (E.Sampling_Non_Finite_Logit);
+               E.Add_Integer
+                 (Status, "token", Long_Long_Integer (Index - Logits'First));
+               return;
+            end if;
+         end loop;
+      end;
+
+      Largest := Logits (Logits'First);
+      for Index in Logits'Range loop
+         if Logits (Index) > Largest then
+            Largest := Logits (Index);
+         end if;
+      end loop;
+
+      for Index in Logits'Range loop
+         Total := Total
+           + N.Exp (N.Wide_Real (Logits (Index)) - N.Wide_Real (Largest));
+      end loop;
+
+      if Total <= 0.0 or else not N.Is_Finite (Total) then
+         Status := E.Make (E.Sampling_Invalid_Distribution);
+         return;
+      end if;
+
+      --  The chosen one, whatever the sampler made of the rest.
+      if Natural (Chosen) < Item.Vocabulary then
+         Report.Chosen := Chosen;
+         Report.Log_Of :=
+           Real (N.Wide_Real (Logits (Logits'First + Element_Count (Chosen)))
+                 - N.Wide_Real (Largest) - N.Log (Total));
+      end if;
+
+      for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
+         declare
+            Value : constant Real := Logits (Logits'First + Index);
+            Where : Natural := 0;
+         begin
+            if Kept < Room then
+               Kept := Kept + 1;
+               Where := Kept;
+            elsif Room > 0 and then Value > Best_Logit (Kept) then
+               Where := Kept;
+            end if;
+
+            if Where > 0 then
+               --  Into place, so the list stays in order and the last of it
+               --  is always the weakest kept.
+               while Where > 1 and then Best_Logit (Where - 1) < Value loop
+                  Best_Logit (Where) := Best_Logit (Where - 1);
+                  Best_Token (Where) := Best_Token (Where - 1);
+                  Where := Where - 1;
+               end loop;
+
+               Best_Logit (Where) := Value;
+               Best_Token (Where) := Token_Id (Index);
+            end if;
+         end;
+      end loop;
+
+      Report.Count := Kept;
+      for Index in 1 .. Kept loop
+         Report.Tokens (Index) := Best_Token (Index);
+         Report.Log_Values (Index) :=
+           Real (N.Wide_Real (Best_Logit (Index)) - N.Wide_Real (Largest)
+                 - N.Log (Total));
+      end loop;
+
+      Status := E.Success;
+   end Explain;
 
    ------------
    -- Sample --
@@ -505,6 +684,14 @@ package body Model_Runner.Sampling is
 
                Value : Real := Logits (Logits'First + Index);
             begin
+               --  3a  what the caller added to this token, before anything
+               --  else touches it: a bias says what the caller thinks of the
+               --  token, and dividing it by the temperature with the rest is
+               --  what makes that a statement rather than a second knob.
+               if Item.Bias_Used > 0 then
+                  Value := Value + Bias_Of (Item, Token_Id (Index));
+               end if;
+
                if Item.Settings.Repeat_Penalty /= 1.0
                  and then In_History (Item, Token_Id (Index))
                then

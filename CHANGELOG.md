@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--logit-bias TOKEN=X` and `--logprobs N`.**
+
+  A bias adds a fixed amount to a token's logit before anything else the
+  sampler does, and on the greedy path as well as the probabilistic one. The
+  obvious way to write it -- fold it into the candidate list the filters read
+  -- leaves temperature zero untouched, which is the one mode a caller can
+  check by hand, so the test drives both paths.
+
+  `--logprobs N` reports, per generated token, its log-probability and the N
+  likeliest alternatives, on standard error, one line a token. The numbers
+  come from a plain softmax over the raw logits: no temperature, no masks, no
+  penalties, no filters. That is the model's own distribution, and it is the
+  only reading worth publishing -- a caller asking how sure the model was is
+  asking about the model, and reporting probabilities from after the pipeline
+  would answer a question about the configuration instead. Explaining
+  consumes no random state, so a run with it produces the same text as one
+  without, which is asserted rather than assumed.
+
 - **The device can read the weights where they lie, and `--device-memory`
   says how much of its own memory it may use.** A device that shares the
   host's memory will take a pointer into this process instead of a copy, so

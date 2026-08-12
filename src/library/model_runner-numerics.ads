@@ -39,6 +39,11 @@ package Model_Runner.Numerics is
    type Element_Count is range 0 .. 2 ** 44;
    subtype Element_Index is Element_Count;
 
+   --  A short list of reals, for a caller carrying a handful of them
+   --  alongside a list of tokens. Indexed from one, unlike Real_Array, which
+   --  is indexed from zero because a logit vector is.
+   type Real_List is array (Positive range <>) of Real;
+
    type Real_Array is array (Element_Index range <>) of Real;
 
    --  A run of half-precision storage. Nothing computes in it: values are

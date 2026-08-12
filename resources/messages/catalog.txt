@@ -56,6 +56,8 @@ en.help.run.repeat_window =   --repeat-window N       how many recent tokens the
 en.help.run.seed =   --seed N                fixed 64-bit seed
 en.help.run.stop =   --stop TEXT             stop when this text is produced; repeatable
 en.help.run.stop_token =   --stop-token N          stop on this token identifier; repeatable
+en.help.run.logprobs =   --logprobs N            report each token's log-probability and the N likeliest
+en.help.run.logit_bias =   --logit-bias TOKEN=X    add X to that token's logit; repeatable
 en.help.run.memory_limit =   --memory-limit SIZE     limit model memory; accepts K, M and G suffixes
 en.help.run.device_memory =   --device-memory SIZE    device memory for the weights; 0 reads them where they lie
 en.help.run.mmap =   --mmap                  require memory mapping of the model file
@@ -732,6 +734,8 @@ qps.help.run.repeat_window = ⟦  --repeat-window Ñ       hów máñý ŕéçé
 qps.help.run.seed = ⟦  --seed Ñ                fíxéð 64-bíŧ ßééð⟧
 qps.help.run.stop = ⟦  --stop ŦÉXŦ             ßŧóp whéñ ŧhíß ŧéxŧ íß pŕóðúçéð; ŕépéáŧábĺé⟧
 qps.help.run.stop_token = ⟦  --stop-token Ñ          ßŧóp óñ ŧhíß ŧókéñ íðéñŧífíéŕ; ŕépéáŧábĺé⟧
+qps.help.run.logprobs = ⟦  --logprobs Ñ            ŕépóŕŧ éáçh ŧókéñ'ß ĺóg-pŕóƀáƀíĺíŧy áñð ŧhé Ñ ĺíkéĺíéßŧ⟧
+qps.help.run.logit_bias = ⟦  --logit-bias ŦÓKÉÑ=X    áðð X ŧó ŧháŧ ŧókéñ'ß ĺógíŧ; ŕépéáŧáƀĺé⟧
 qps.help.run.memory_limit = ⟦  --memory-limit ŠÍZÉ     ĺímíŧ móðéĺ mémóŕý; áççépŧß K, M áñð G ßúffíxéß⟧
 qps.help.run.device_memory = ⟦  --device-memory ŠÍZÉ    ðévíçé mémóŕý fóŕ ŧhé wéíghŧß; 0 ŕéáðß ŧhém whéŕé ŧhéy ĺíé⟧
 qps.help.run.mmap = ⟦  --mmap                  ŕéqúíŕé mémóŕý máppíñg óf ŧhé móðéĺ fíĺé⟧

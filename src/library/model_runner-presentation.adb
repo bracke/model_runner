@@ -488,6 +488,47 @@ package body Model_Runner.Presentation is
          Message (Item, "completion." & Gen.Reason_Name (Outcome.Reason)), Diagnostic);
    end Put_Statistics;
 
+   -------------
+   -- Explain --
+   -------------
+
+   overriding procedure Explain
+     (Item   : in out Logprob_Reporter;
+      Report : Model_Runner.Sampling.Explanation)
+   is
+      --  A number a reader and a program can both take. Six digits, which is
+      --  more than the arithmetic behind it carries and enough that two
+      --  tokens of nearly equal probability do not print the same.
+      function Shown (Value : Model_Runner.Sampling.Real) return String
+      is (T.Image (Long_Float (Value), 6));
+
+      Line : String (1 .. 1024) := [others => ' '];
+      Used : Natural := 0;
+
+      procedure Put (Text : String) is
+         Room : constant Natural :=
+           Natural'Min (Text'Length, Line'Length - Used);
+      begin
+         Line (Used + 1 .. Used + Room) :=
+           Text (Text'First .. Text'First + Room - 1);
+         Used := Used + Room;
+      end Put;
+   begin
+      Put ("token ");
+      Put (T.Image (Long_Long_Integer (Report.Chosen)));
+      Put (" logprob ");
+      Put (Shown (Report.Log_Of));
+
+      for Index in 1 .. Report.Count loop
+         Put (" | ");
+         Put (T.Image (Long_Long_Integer (Report.Tokens (Index))));
+         Put (" ");
+         Put (Shown (Report.Log_Values (Index)));
+      end loop;
+
+      Write_Line (Item.Screen.all, Diagnostic, Line (1 .. Used));
+   end Explain;
+
    -----------
    -- Write --
    -----------

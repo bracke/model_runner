@@ -10,7 +10,9 @@ with Model_Runner.Limits;
 with Model_Runner.Llama;
 with Model_Runner.Output;
 with Model_Runner.Progress;
+with Model_Runner.Numerics;
 with Model_Runner.Sampling;
+with Model_Runner.Tokenizer;
 with Model_Runner.Grammar;
 with Model_Runner.Stops;
 
@@ -48,6 +50,25 @@ package Model_Runner.Generation is
       Output_Closed,
       Runtime_Error);
 
+   --  Somewhere for per-token explanations to go.
+   --
+   --  An interface rather than a callback record, and separate from the text
+   --  sink, because the two answer to different destinations: the text is
+   --  what the program produced and the explanation is a report about it.
+   --  A caller wanting neither passes null and pays for nothing.
+   type Explainer is limited interface;
+
+   --  Receive what the model made of one position.
+   --
+   --  @param Item Explainer to write through.
+   --  @param Report The position, as probabilities.
+   procedure Explain
+     (Item   : in out Explainer;
+      Report : Model_Runner.Sampling.Explanation) is abstract;
+
+   --  A reference to whatever is receiving the explanations.
+   type Explainer_Reference is access all Explainer'Class;
+
    --  What to generate and how.
    type Request is record
       --  Largest number of tokens to produce. Must be greater than zero.
@@ -55,6 +76,21 @@ package Model_Runner.Generation is
 
       --  Validated sampling configuration.
       Sampling : Model_Runner.Sampling.Configuration;
+
+      --  Tokens the caller wants nudged, and by how much. Applied before
+      --  everything else the sampler does, on the greedy path as well as the
+      --  probabilistic one.
+      Bias_Tokens  : Model_Runner.Sampling.Token_List
+        (1 .. Model_Runner.Sampling.Max_Biases) :=
+          [others => Model_Runner.Tokenizer.No_Token];
+      Bias_Amounts : Model_Runner.Numerics.Real_List
+        (1 .. Model_Runner.Sampling.Max_Biases) := [others => 0.0];
+      Bias_Count   : Natural := 0;
+
+      --  How many alternatives to report for each generated token, or zero
+      --  for no reporting at all. The chosen token is reported whenever this
+      --  is above zero, whether or not it is among the alternatives.
+      Logprobs : Natural := 0;
 
       --  Explicit seed. When Has_Seed is False the seed comes from the entropy
       --  source, and the value actually used is reported in the result.
@@ -181,6 +217,9 @@ package Model_Runner.Generation is
    --    until the grammar may end, so a run cannot stop half way through
    --    what it was told to produce.
    --  @param Cancel Cancellation token, or null.
+   --  @param Reporter Where per-token explanations go, or null for none.
+   --    Reached only when Logprobs is above zero, so a caller that wants
+   --    them has to say both what it wants and where to put it.
    --  @param Bounds Session limits applied to retention and batching.
    --  @param Outcome Completion reason, counts, timings and any diagnostic.
    procedure Generate
@@ -195,6 +234,7 @@ package Model_Runner.Generation is
       Time     : Model_Runner.Clocks.Clock_Reference;
       Seeds    : Model_Runner.Entropy.Source_Reference;
       Cancel   : Model_Runner.Cancellation.Token_Reference;
+      Reporter : Explainer_Reference := null;
       Bounds   : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Outcome  : out Result);

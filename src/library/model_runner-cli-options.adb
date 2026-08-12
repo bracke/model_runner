@@ -28,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 48) of Registry_Row :=
+   Registry : constant array (1 .. 50) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -86,6 +86,10 @@ package body Model_Runner.CLI.Options is
       (Text ("--seed"), [Command_Run => True, others => False], Text ("seed")),
       (Text ("--stop"), [Command_Run => True, others => False], Text ("stop")),
       (Text ("--stop-token"), [Command_Run => True, others => False], Text ("stop_token")),
+      (Text ("--logit-bias"),
+       [Command_Run => True, others => False], Text ("logit_bias")),
+      (Text ("--logprobs"),
+       [Command_Run => True, others => False], Text ("logprobs")),
       (Text ("--memory-limit"),
        [Command_Run | Command_Embed => True, others => False], Text ("memory_limit")),
       (Text ("--device-memory"),
@@ -674,7 +678,8 @@ package body Model_Runner.CLI.Options is
          Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Repeat_Penalty,
          Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
          Flag_Chat_Template,
-         Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Locale,
+         Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Logprobs,
+         Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Repack,
          Flag_Cache,
@@ -1340,6 +1345,105 @@ package body Model_Runner.CLI.Options is
                         end if;
                         Result.Stop_Token_Count := Result.Stop_Token_Count + 1;
                         Result.Stop_Tokens (Result.Stop_Token_Count) := Number;
+                        Free_Text (Held);
+                     end;
+
+                  elsif Name = "--logprobs" then
+                     declare
+                        Number : Long_Long_Integer;
+                        Parsed : Boolean;
+                     begin
+                        Mark (Flag_Logprobs, Name, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        Take_Value (Name, Value_Present, Value_First, Argument,
+                                    Held, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        To_Number (Held.all, Number, Parsed);
+                        if not Parsed or else Number < 0
+                          or else Number
+                                  > Long_Long_Integer
+                                      (Model_Runner.Sampling.Max_Alternatives)
+                        then
+                           Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                           Free_Text (Held);
+                           return;
+                        end if;
+                        Result.Logprobs := Natural (Number);
+                        Free_Text (Held);
+                     end;
+
+                  elsif Name = "--logit-bias" then
+                     --  TOKEN=AMOUNT, repeatable. One argument rather than
+                     --  two, because the pair is one statement: a token
+                     --  without its amount and an amount without its token
+                     --  are both nothing, and two options would let a caller
+                     --  write one of each.
+                     declare
+                        Number : Long_Long_Integer;
+                        Amount : Model_Runner.Numerics.Real;
+                        Parsed : Boolean;
+                     begin
+                        Take_Value (Name, Value_Present, Value_First, Argument,
+                                    Held, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        declare
+                           Text_Held : constant String := Held.all;
+                           Split     : Natural := 0;
+                        begin
+                           for Index in Text_Held'Range loop
+                              if Text_Held (Index) = '=' then
+                                 Split := Index;
+                                 exit;
+                              end if;
+                           end loop;
+
+                           if Split = 0
+                             or else Split = Text_Held'First
+                             or else Split = Text_Held'Last
+                           then
+                              Fail (E.CLI_Invalid_Option_Value, Name,
+                                    Text_Held);
+                              Free_Text (Held);
+                              return;
+                           end if;
+
+                           To_Number
+                             (Text_Held (Text_Held'First .. Split - 1),
+                              Number, Parsed);
+                           if not Parsed or else Number < 0 then
+                              Fail (E.CLI_Invalid_Option_Value, Name,
+                                    Text_Held);
+                              Free_Text (Held);
+                              return;
+                           end if;
+
+                           To_Real
+                             (Text_Held (Split + 1 .. Text_Held'Last),
+                              Amount, Parsed);
+                           if not Parsed then
+                              Fail (E.CLI_Invalid_Option_Value, Name,
+                                    Text_Held);
+                              Free_Text (Held);
+                              return;
+                           end if;
+                        end;
+
+                        if Result.Bias_Count >= Result.Bias_Tokens'Length then
+                           Fail (E.CLI_Option_Out_Of_Range, Name);
+                           Free_Text (Held);
+                           return;
+                        end if;
+
+                        Result.Bias_Count := Result.Bias_Count + 1;
+                        Result.Bias_Tokens (Result.Bias_Count) := Number;
+                        Result.Bias_Amounts (Result.Bias_Count) := Amount;
                         Free_Text (Held);
                      end;
 

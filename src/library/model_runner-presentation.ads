@@ -3,6 +3,7 @@ with Model_Runner.Errors;
 with Interfaces;
 
 with Model_Runner.Generation;
+with Model_Runner.Sampling;
 with Model_Runner.Localization;
 with Model_Runner.Output;
 with Model_Runner.Progress;
@@ -268,6 +269,24 @@ package Model_Runner.Presentation is
       Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0);
+
+   --  Somewhere for per-token explanations to go: standard error, one line
+   --  a token, in a shape a program can read.
+   --
+   --  Standard error rather than standard output, because standard output
+   --  is the generated text and a caller redirecting it is asking for the
+   --  text and not for a commentary on it.
+   type Logprob_Reporter
+     (Screen : access Console) is limited new Model_Runner.Generation.Explainer
+   with null record;
+
+   --  Write one position's probabilities.
+   --
+   --  @param Item Reporter to write through.
+   --  @param Report What the model made of the position.
+   overriding procedure Explain
+     (Item   : in out Logprob_Reporter;
+      Report : Model_Runner.Sampling.Explanation);
 
    --  A sink that writes generated text to standard output.
    --
