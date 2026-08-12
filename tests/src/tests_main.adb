@@ -53,6 +53,24 @@ procedure Tests_Main is
 
    Reporter : AUnit.Reporter.Text.Text_Reporter;
 
+   --  A backend named the way --backend names it. An unknown name is the
+   --  processor rather than a refusal: these are measuring and validating
+   --  tools, and every one of them reports which backend it used, so a name
+   --  that missed cannot be mistaken for one that took.
+   --
+   --  One copy, because two commands take this option and two copies of a
+   --  lookup is one place for them to disagree about what "device" means.
+   function Backend_Of (Word : String)
+     return Model_Runner.Backend.Backend_Kind is
+   begin
+      for Kind in Model_Runner.Backend.Backend_Kind loop
+         if Model_Runner.Backend.Backend_Name (Kind) = Word then
+            return Kind;
+         end if;
+      end loop;
+      return Model_Runner.Backend.Backend_CPU;
+   end Backend_Of;
+
    --  Selected command, defaulting to the mandatory suite.
    function Command return String is
    begin
@@ -582,6 +600,7 @@ begin
             Tokens  => Number ("--max-tokens", 16),
             Threads => Number ("--threads", 4),
             Expect  => Option ("--expect", ""),
+            Backend => Backend_Of (Option ("--backend", "cpu")),
             Repack  => Mode_Of (Option ("--repack", "none")),
             Result  => Result);
 
@@ -672,20 +691,6 @@ begin
                return Default;
          end Number;
 
-         --  Named the way --backend names them, and an unknown name is the
-         --  processor rather than a refusal: this is a measuring tool and
-         --  the figure says which backend it came from.
-         function Named_Backend (Word : String)
-           return Model_Runner.Backend.Backend_Kind is
-         begin
-            for Kind in Model_Runner.Backend.Backend_Kind loop
-               if Model_Runner.Backend.Backend_Name (Kind) = Word then
-                  return Kind;
-               end if;
-            end loop;
-            return Model_Runner.Backend.Backend_CPU;
-         end Named_Backend;
-
          --  Named the way --repack names them.
          function Mode_Of (Word : String) return Model_Runner.Llama.Repack_Mode
          is
@@ -714,7 +719,7 @@ begin
             --  takes, so that a reader who saw --repack in the README does
             --  not have to guess whether it is a flag here.
             Repack      => Mode_Of (Option ("--repack", "none")),
-            Backend     => Named_Backend (Option ("--backend", "cpu")),
+            Backend     => Backend_Of (Option ("--backend", "cpu")),
             Repeats     => Number ("--repeats", 3),
             Result      => Result);
 

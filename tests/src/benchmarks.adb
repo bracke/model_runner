@@ -9,6 +9,7 @@ with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Grammar;
 with Model_Runner.Byte_Sources.Files;
@@ -807,6 +808,118 @@ package body Benchmarks is
          T.Free (Outputs);
       end Measure_Reference_Ratio;
 
+      --  The device against the processor, on the formats the device reads.
+      --
+      --  Both backends over the same matrix and the same vectors, one call
+      --  each, so what is compared is the whole cost of a product on each --
+      --  for the device that includes the vectors out, the dispatch, the
+      --  wait and the results back, which is most of what it costs on a
+      --  short batch and is exactly what a caller pays.
+      --
+      --  The matrix is handed over with a key, so it is uploaded on the
+      --  first pass and resident for the rest. Measuring without one would
+      --  measure the bus.
+      --
+      --  Nothing here runs on a machine with no device, and nothing fails
+      --  there either: the line is simply not printed.
+      procedure Measure_Device_Ratio
+        (Name    : String;
+         Format  : G.Tensor_Type := G.Type_Q8_0;
+         Vectors : N.Element_Count := 1)
+      is
+         Rows    : constant N.Element_Count := 512;
+         Columns : constant N.Element_Count := 2048;
+         Width   : constant B.Byte_Count :=
+           B.Byte_Count (Columns) / B.Byte_Count (G.Block_Elements (Format))
+           * B.Byte_Count (G.Block_Bytes (Format));
+
+         Data   : B.Byte_Array_Access;
+         Item   : T.View;
+         Status : E.Error_Info;
+
+         Inputs  : T.Real_Array_Access;
+         Outputs : T.Real_Array_Access;
+
+         --  Products a second, each way round.
+         Here_Rate, There_Rate : Long_Float := 0.0;
+
+         --  Passes per second of one product, by whichever backend. A pass
+         --  is Vectors products either way, so the two are the same work.
+         function Passes_Of (On_Device : Boolean) return Long_Float is
+            Started : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+            Passes  : Long_Long_Integer := 0;
+            Elapsed : Duration := 0.0;
+         begin
+            loop
+               if On_Device then
+                  Model_Runner.Backend.Device.Dispatch_Batch
+                    (Item, Inputs, Vectors, Outputs, Status);
+               else
+                  Model_Runner.Backend.CPU.Dispatch_Batch
+                    (null, Item, Inputs, Vectors, Outputs, Status);
+               end if;
+               exit when E.Is_Error (Status);
+               Passes := Passes + 1;
+               Elapsed := Ada.Real_Time.To_Duration
+                 (Ada.Real_Time.Clock - Started);
+               exit when Elapsed >= Seconds;
+            end loop;
+
+            if Elapsed <= 0.0 or else Passes = 0 then
+               return 0.0;
+            end if;
+            return Long_Float (Passes) / Long_Float (Elapsed);
+         end Passes_Of;
+      begin
+         if not Model_Runner.Backend.Device.Is_Ready then
+            return;
+         end if;
+
+         T.Allocate (Columns * Vectors, Inputs);
+         T.Allocate (Rows * Vectors, Outputs);
+         B.Allocate (Width * B.Byte_Count (Rows), Data);
+         if Data = null or else Inputs = null or else Outputs = null then
+            return;
+         end if;
+         Fill (Data.all);
+         Tame_Scales (Data.all, Format,
+                      B.Byte_Count (Rows) * B.Byte_Count (Columns)
+                      / B.Byte_Count (G.Block_Elements (Format)));
+         T.Make (Format, Rows, Columns, Data, 0, Item, Status);
+         if E.Is_Error (Status) then
+            B.Free (Data);
+            return;
+         end if;
+
+         for Index in Inputs.all'Range loop
+            Inputs.all (Index) := N.Real (Index mod 17) * 0.125 - 1.0;
+         end loop;
+
+         declare
+            Here  : Rate_Array (1 .. Rounds) := [others => 0.0];
+            There : Rate_Array (1 .. Rounds) := [others => 0.0];
+         begin
+            for Pass in Here'Range loop
+               Here (Pass) := Passes_Of (On_Device => False);
+               There (Pass) := Passes_Of (On_Device => True);
+            end loop;
+            Here_Rate := Middle (Here);
+            There_Rate := Middle (There);
+         end;
+
+         if Here_Rate > 0.0 and then There_Rate > 0.0 then
+            --  A ratio of times, which is a ratio of rates the other way up.
+            IO.Put_Line
+              ("  " & Name & Long_Float'Image (Here_Rate / There_Rate)
+               & "x the processor's time on the device"
+               & " (1 is level, below 1 is faster there)");
+         end if;
+
+         B.Free (Data);
+         T.Free (Inputs);
+         T.Free (Outputs);
+      end Measure_Device_Ratio;
+
       --  evaluating a prompt, where the same byte serves thirty-two.
       procedure Measure_Scaling
         (Name             : String;
@@ -1182,6 +1295,30 @@ package body Benchmarks is
       Measure_Reference_Ratio ("q4_k", G.Type_Q4_K);
       Measure_Reference_Ratio ("f32 ", G.Type_F32);
       IO.New_Line;
+
+      declare
+         Ready : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Ready);
+
+         if Ready then
+            IO.Put_Line
+              ("device backend against the CPU one, serial, matrix resident");
+            Measure_Device_Ratio ("q8_0, one vector per pass  ");
+            Measure_Device_Ratio ("q4_0, one vector per pass  ", G.Type_Q4_0);
+            Measure_Device_Ratio ("f32,  one vector per pass  ", G.Type_F32);
+            Measure_Device_Ratio ("q8_0, eight per pass       ",
+                                  G.Type_Q8_0, 8);
+            Measure_Device_Ratio ("q8_0, thirty-two per pass  ",
+                                  G.Type_Q8_0, 32);
+            IO.New_Line;
+         else
+            IO.Put_Line ("device backend: no device on this machine");
+            IO.New_Line;
+         end if;
+
+         Model_Runner.Backend.Device.Close;
+      end;
 
       IO.Put_Line ("merging an adapter");
       Measure_Merge ("weight updates at rank 1 ", 1);

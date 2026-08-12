@@ -829,6 +829,13 @@ tokenization, the greedy token identifiers and any recorded logits against it.
 Nothing is downloaded, and a missing file is a skip rather than a failure. See
 [docs/reference-runtime.md](docs/reference-runtime.md).
 
+`--backend NAME` points it at any backend this build has, which is what makes
+it a validation of a backend on somebody's own model rather than of the
+processor path alone. A backend that does not partition rows is not asked
+whether the worker count changes its answer, and says so rather than
+reporting an unrun check as one that held; a machine with no device is a skip
+for the same reason a missing model is.
+
 ```
 $ tests external-model --model /nowhere/x.gguf
 external-model: skipped (no model at /nowhere/x.gguf)
@@ -836,8 +843,8 @@ external-model: skipped (no model at /nowhere/x.gguf)
 $ tests external-model --model fixtures/tiny-model.gguf --prompt "ab" \
       --threads 4 --max-tokens 8
 external-model: ok, architecture llama, 21 tensors, no reference comparison,
-                prompt 3 tokens, generated 8, deterministic TRUE,
-                thread-stable TRUE
+                prompt 3 tokens, generated 8, backend cpu,
+                deterministic TRUE, thread-stable TRUE
 
 $ tests external-model --model fixtures/tiny-model.gguf --prompt "ab"
 external-model: FAILED (generation failed: MR-GEN-0002)
@@ -1190,6 +1197,26 @@ every matrix -- 1.5 tokens a second against the processor's 43.2.
 
 Each matrix is uploaded once and stays on the device. What crosses per
 product is the vectors out, the dispatch, and the results back.
+
+Under the model, one product at a time, `tests benchmark` measures where that
+leaves each format. A 512 by 2048 matrix, resident, against the serial
+processor path -- the device's time as a fraction of it, so below one is
+faster there:
+
+| Per pass | Device time / processor time |
+| --- | --- |
+| q8_0, one vector | 0.76 |
+| q4_0, one vector | 0.90 |
+| f32, one vector | 1.38 |
+| q8_0, eight vectors | 0.25 |
+| q8_0, thirty-two vectors | 0.099 |
+
+Binary32 is the one format the device is slower at, and that is the finding
+rather than a disappointment: it is four bytes a weight where q8_0 is one, so
+the vector-per-pass case is bus-bound and the decoding the shader does is
+what buys the other rows. The batch rows are where the shader's eight
+accumulators show: thirty-two vectors a pass cost a tenth of what the
+processor spends on them.
 
 The arithmetic is not the processor's: the shader accumulates a row in
 binary32 where the kernels accumulate in binary64 and round once. What that

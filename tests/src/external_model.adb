@@ -1,6 +1,8 @@
 with Ada.Directories;
 
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
+with Model_Runner.Backend.Reference;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
@@ -81,9 +83,25 @@ package body External_Model is
       Tokens  : Positive;
       Threads : Positive;
       Expect  : String := "";
+      Backend : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
       Repack  : L.Repack_Mode := L.No_Repack;
       Result  : out Report)
    is
+      use type Model_Runner.Backend.Backend_Kind;
+
+      --  Whether this backend partitions rows across workers. Asked of the
+      --  backend rather than of its name, so a backend that gains a pool
+      --  gains the check with it.
+      Shares : constant Boolean :=
+        (case Backend is
+           when Model_Runner.Backend.Backend_CPU =>
+             CPU.Describe (CPU.Max_Workers).Supports_Parallel,
+           when Model_Runner.Backend.Backend_Reference =>
+             Model_Runner.Backend.Reference.Describe.Supports_Parallel,
+           when Model_Runner.Backend.Backend_Device =>
+             Model_Runner.Backend.Device.Describe.Supports_Parallel);
+
       Expected    : Expectations.Recording;
       Greedy      : String (1 .. Max_Captured) := [others => ' '];
       Greedy_Last : Natural := 0;
@@ -302,6 +320,25 @@ package body External_Model is
          return;
       end if;
 
+      Result.Backend := Backend;
+      Result.Partitions := Shares;
+
+      --  The device is opened before the model loads, because preparation
+      --  asks the backend what it can read and a device that is not there
+      --  answers for nothing.
+      if Backend = Model_Runner.Backend.Backend_Device then
+         declare
+            Ready : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Ready);
+            if not Ready then
+               Result.Result := Skipped;
+               Say ("no compute device on this machine");
+               return;
+            end if;
+         end;
+      end if;
+
       Files.Open (Source, Path, Files.Mapping_Automatic, 0, Status);
       if E.Is_Error (Status) then
          Give_Up (Rejected, "cannot open: " & E.Diagnostic_Code (Status.Code));
@@ -316,7 +353,7 @@ package body External_Model is
       end if;
 
       L.Prepare
-        (Engine, Container, Source, Repack => Repack,
+        (Engine, Container, Source, Repack => Repack, Backend => Backend,
          Threads => Threads, Status => Status);
       if E.Is_Error (Status) then
          Give_Up (Rejected,
@@ -367,9 +404,12 @@ package body External_Model is
             return;
          end if;
 
-         Result.Thread_Checked := Threads > 1;
+         --  Only where the backend has workers to vary. Asking a device
+         --  whether four workers change its answer would report a check
+         --  that cannot run as one that held.
+         Result.Thread_Checked := Threads > 1 and then Shares;
 
-         if Threads > 1 then
+         if Result.Thread_Checked then
             declare
                Team : aliased CPU.Pool (CPU.Worker_Count (Threads));
             begin
@@ -404,7 +444,7 @@ package body External_Model is
             begin
                L.Prepare
                  (Plain, Container, Source, Threads => Threads,
-                  Status => Local);
+                  Backend => Backend, Status => Local);
 
                if E.Is_Ok (Local) then
                   declare
@@ -628,9 +668,14 @@ package body External_Model is
                  elsif Item.Repack_Match
                  then ", repacked text identical"
                  else ", repacked text differs")
+              & ", backend "
+              & Model_Runner.Backend.Backend_Name (Item.Backend)
               & ", deterministic " & Boolean'Image (Item.Deterministic)
               & (if Item.Thread_Checked
                  then ", thread-stable " & Boolean'Image (Item.Thread_Stable)
+                 elsif not Item.Partitions
+                 then ", thread-stability not checked: this backend does not "
+                      & "partition"
                  else ", thread-stability not checked: one worker")
               & (if Item.Reference_Run
                  then ", tokens-match " & Boolean'Image (Item.Tokens_Match)

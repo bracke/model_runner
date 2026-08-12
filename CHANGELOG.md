@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests external-model --backend NAME` and `tests benchmark` on a device.**
+  The two tools that measure and validate could only see the processor path,
+  which is a poor arrangement once there is a backend whose behaviour differs
+  from it in kind rather than in speed.
+
+  `external-model` now runs a caller's own model on any backend this build
+  has, opening a device before the model loads and releasing it after. A
+  backend that does not partition rows is not asked whether the worker count
+  changes its answer and says so, rather than reporting an unrun check as one
+  that held; a machine with no device is a skip, for the same reason a
+  missing model is. The summary line names the backend, which the README's
+  transcript now shows.
+
+  `tests benchmark` measures the device against the serial processor path on
+  a resident 512 by 2048 matrix, in the device's time as a fraction of the
+  processor's: 0.76 for q8_0 a vector at a time, 0.90 for q4_0, 1.38 for
+  binary32, 0.25 at eight vectors a pass and 0.099 at thirty-two. Binary32 is
+  the one format the device is slower at, which is the finding rather than a
+  disappointment -- four bytes a weight where q8_0 is one, so a vector at a
+  time is bus-bound and the decoding the shader does is what buys the rest.
+
 - **The device shader takes a batch, and reads packed weights.** Two changes
   to one shader, because both are the same loop with a different way of
   reading the weights, and together they are what turns the device backend

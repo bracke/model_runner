@@ -332,8 +332,9 @@ engine 53BFCFD80DB36781 src/library/model_runner-llama.adb src/library/model_run
 reference 06A825F8C420E7C3 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
-# and the 111-token prompt, on both backends -- and the claim that the two
-# print the same digest. Re-measure with `tests speed --model PATH --backend
+# and the 111-token prompt, on both backends -- the claim that the two print
+# the same digest, and the five per-format ratios in the table under it,
+# which come from `tests benchmark` rather than from a model. Re-measure with `tests speed --model PATH --backend
 # cpu` and again with `--backend device`, which is the command printed beside
 # the table. Both sides are listed here because the figure is a comparison:
 # a change that makes the processor slower moves it as surely as one that

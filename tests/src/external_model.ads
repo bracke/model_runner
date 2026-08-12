@@ -23,6 +23,7 @@
 --  one.
 --
 --  Task safety: a run uses one task.
+with Model_Runner.Backend;
 with Model_Runner.Llama;
 
 package External_Model is
@@ -55,6 +56,14 @@ package External_Model is
       Repack_Checked : Boolean := False;
       Repack_Match   : Boolean := False;
 
+      --  Which backend ran it, and whether that backend partitions rows.
+      --  A backend that does not cannot be asked whether the worker count
+      --  changes its answer, and reporting an unrun check as a held one is
+      --  the failure this pair exists to prevent.
+      Backend        : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
+      Partitions     : Boolean := True;
+
       Tokens_Match  : Boolean := False;
       Greedy_Match  : Boolean := False;
       Text_Match    : Boolean := False;
@@ -72,6 +81,12 @@ package External_Model is
    --    reference runtime, or an empty string for no comparison. When present,
    --    its prompt overrides the Prompt argument so that both sides see the
    --    same input.
+   --  @param Backend Which backend evaluates the model, as --backend
+   --    selects. A device is opened before the model loads and released
+   --    after, and a machine without one is a skip rather than a failure:
+   --    this runner exists to be pointed at a caller's own machine, and
+   --    refusing there for want of hardware would make it a test that only
+   --    passes in one place.
    --  @param Repack What to decode the weights into first. The conformance
    --    figures for repacking are taken on fixtures at most 256 wide and two
    --    deep; what rounding does to a model of a useful size is a question
@@ -85,6 +100,8 @@ package External_Model is
       Tokens  : Positive;
       Threads : Positive;
       Expect  : String := "";
+      Backend : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
       Repack  : Model_Runner.Llama.Repack_Mode :=
         Model_Runner.Llama.No_Repack;
       Result  : out Report);

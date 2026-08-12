@@ -24,7 +24,7 @@ package body Tool_Commands is
      & " --backend --repeats ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds ";
    Opts_External  : aliased constant String :=
-     " --model --prompt --max-tokens --threads --expect --repack ";
+     " --model --prompt --max-tokens --threads --expect --repack --backend ";
    Opts_Tokenize  : aliased constant String := " --model --prompt ";
 
    Takes_Check     : aliased constant String := "[ROOT] [--repository]";
@@ -35,7 +35,7 @@ package body Tool_Commands is
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N]";
    Takes_External  : aliased constant String :=
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"
-     & " [--expect TEXT] [--repack MODE]";
+     & " [--expect TEXT] [--repack MODE] [--backend NAME]";
    Takes_Tokenize  : aliased constant String := "--model PATH --prompt TEXT";
    Takes_Docs      : aliased constant String := "[ROOT]";
    Takes_Shader    : aliased constant String :=
