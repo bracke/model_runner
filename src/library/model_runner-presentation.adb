@@ -421,6 +421,7 @@ package body Model_Runner.Presentation is
       Outcome        : Gen.Result;
       Device         : String := "";
       Resident       : Natural := 0;
+      Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0)
    is
@@ -471,6 +472,9 @@ package body Model_Runner.Presentation is
          Put_Field
            (Item, "statistics.resident",
             T.Image (Long_Long_Integer (Resident)), Diagnostic);
+         Put_Field
+           (Item, "statistics.imported",
+            T.Image (Long_Long_Integer (Imported)), Diagnostic);
          Put_Field
            (Item, "statistics.resident_bytes",
             T.Image (Long_Long_Integer (Resident_Bytes)), Diagnostic);

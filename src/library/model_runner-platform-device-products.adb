@@ -3,6 +3,8 @@ with Ada.Unchecked_Conversion;
 with Interfaces.C;
 with Interfaces.C.Strings;
 
+with System.Storage_Elements;
+
 with Model_Runner.Shaders;
 
 --  Products on a device, through the same interface the parent opened it
@@ -27,6 +29,7 @@ with Model_Runner.Shaders;
 package body Model_Runner.Platform.Device.Products is
 
    use type Interfaces.C.int;
+   use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
    use type System.Address;
    use type Model_Runner.Numerics.Element_Count;
@@ -98,6 +101,49 @@ package body Model_Runner.Platform.Device.Products is
       Size  : Interfaces.Unsigned_64 := 0;
       Which : C.unsigned := 0;
    end record
+     with Convention => C;
+
+   --  Handing the device the host's own memory rather than a copy of what
+   --  is in it. Three structures and one entry point:
+   --
+   --  the buffer is told its memory will come from outside the interface,
+   --  the allocation is told which host pointer it is, and the interface is
+   --  asked which memory kinds that pointer can be taken as -- because a
+   --  pointer the device cannot address is a pointer it will not take, and
+   --  the answer is a mask rather than a yes.
+   Structure_External_Buffer : constant := 1_000_158_000 + 13;
+   Structure_Import_Host     : constant := 1_000_178_000;
+   Structure_Host_Properties : constant := 1_000_178_000 + 1;
+
+   Handle_Host_Allocation : constant := 16#80#;
+
+   type External_Buffer_Info is record
+      Kind    : C.unsigned := Structure_External_Buffer;
+      Next    : Address := Null_Handle;
+      Handles : C.unsigned := Handle_Host_Allocation;
+   end record
+     with Convention => C;
+
+   type Import_Host_Info is record
+      Kind    : C.unsigned := Structure_Import_Host;
+      Next    : Address := Null_Handle;
+      Handle  : C.unsigned := Handle_Host_Allocation;
+      Pointer : Address := Null_Handle;
+   end record
+     with Convention => C;
+
+   type Host_Pointer_Properties is record
+      Kind  : C.unsigned := Structure_Host_Properties;
+      Next  : Address := Null_Handle;
+      Kinds : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   type Host_Properties_Call is access
+     function (Device  : Address;
+               Handle  : C.unsigned;
+               Pointer : Address;
+               Result  : Address) return C.int
      with Convention => C;
 
    type Set_Layout_Binding is record
@@ -173,7 +219,7 @@ package body Model_Runner.Platform.Device.Products is
    --  Bytes of push constants, which the layout declares and every dispatch
    --  writes. One number in two places is one number that can differ, so it
    --  is this one.
-   Shape_Bytes : constant := 20;
+   Shape_Bytes : constant := 24;
 
    type Push_Range is record
       Stages : C.unsigned := Stage_Compute;
@@ -276,6 +322,7 @@ package body Model_Runner.Platform.Device.Products is
       Count   : C.unsigned := 1;
       First   : C.unsigned := 0;
       Packing : C.unsigned := 0;
+      Base    : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -389,6 +436,8 @@ package body Model_Runner.Platform.Device.Products is
    function To_Requirements is
      new Ada.Unchecked_Conversion (Address, Requirements_Call);
    function To_Bind is new Ada.Unchecked_Conversion (Address, Bind_Call);
+   function To_Host_Properties is
+     new Ada.Unchecked_Conversion (Address, Host_Properties_Call);
    function To_Map is new Ada.Unchecked_Conversion (Address, Map_Call);
    function To_Unmap is new Ada.Unchecked_Conversion (Address, Unmap_Call);
    function To_Allocate_Sets is
@@ -502,6 +551,152 @@ package body Model_Runner.Platform.Device.Products is
       Ok := Bind (Item.Logical, Buffer, Memory, 0) = 0;
    end Take;
 
+   --  Take the host's own memory as a buffer, rather than a copy of it.
+   --
+   --  What the device is given is a page-aligned address at or before the
+   --  weights and a length that covers them, so the matrix begins some way
+   --  into the buffer: that distance comes back as Base and goes to the
+   --  shader, which adds it to every offset it reads.
+   --
+   --  Every way this can fail is a False and a caller that copies instead:
+   --  a device without the extensions, a pointer the device cannot address,
+   --  an allocation refused. None of them is an error -- they are the same
+   --  answer arrived at one call later.
+   --
+   --  @param Item Engine holding the device.
+   --  @param From Where the weights are, in this process.
+   --  @param Bytes How many of them.
+   --  @param Buffer Receives the buffer.
+   --  @param Memory Receives the memory behind it.
+   --  @param Base Receives the distance from the buffer to the weights.
+   --  @param Ok True when the device took the pointer.
+   procedure Take_Host_Memory
+     (Item   : in out Engine;
+      From   : Address;
+      Bytes  : Interfaces.Unsigned_64;
+      Buffer : out Address;
+      Memory : out Address;
+      Base   : out Interfaces.Unsigned_64;
+      Ok     : out Boolean)
+   is
+      use type System.Storage_Elements.Integer_Address;
+
+      Create : constant Create_Call := To_Create (Point ("vkCreateBuffer"));
+      Allocate : constant Create_Call :=
+        To_Create (Point ("vkAllocateMemory"));
+      Bind : constant Bind_Call := To_Bind (Point ("vkBindBufferMemory"));
+      Asked : constant Host_Properties_Call :=
+        To_Host_Properties (Point ("vkGetMemoryHostPointerPropertiesEXT"));
+
+      Made : aliased Address := Null_Handle;
+
+      Where : constant System.Storage_Elements.Integer_Address :=
+        System.Storage_Elements.To_Integer (From);
+   begin
+      Buffer := Null_Handle;
+      Memory := Null_Handle;
+      Base := 0;
+      Ok := False;
+
+      if not Item.Imports or else Item.Import_To = 0
+        or else Create = null or else Allocate = null or else Bind = null
+        or else Asked = null or else Bytes = 0
+      then
+         return;
+      end if;
+
+      declare
+         Align : constant System.Storage_Elements.Integer_Address :=
+           System.Storage_Elements.Integer_Address (Item.Import_To);
+
+         Start : constant System.Storage_Elements.Integer_Address :=
+           Where - Where mod Align;
+
+         Slack : constant Interfaces.Unsigned_64 :=
+           Interfaces.Unsigned_64 (Where - Start);
+
+         --  A whole number of whatever the device wanted, because that is
+         --  what it will take: the pointer aligned and the length a
+         --  multiple of the same.
+         Span : constant Interfaces.Unsigned_64 :=
+           ((Slack + Bytes + Item.Import_To - 1) / Item.Import_To)
+           * Item.Import_To;
+
+         Head : constant Address :=
+           System.Storage_Elements.To_Address (Start);
+
+         Known : aliased Host_Pointer_Properties;
+         Kinds : Interfaces.Unsigned_32;
+         Which : Natural := 0;
+      begin
+         if Asked (Item.Logical, Handle_Host_Allocation, Head,
+                   Known'Address) /= 0
+         then
+            return;
+         end if;
+
+         Kinds := Interfaces.Unsigned_32 (Known.Kinds);
+         if Kinds = 0 then
+            return;
+         end if;
+
+         --  A kind the pointer can be taken as and the processor writes
+         --  and sees without being told to flush. Not the kind the uploads
+         --  use: that one is chosen for being fast for the device to read,
+         --  and a host pointer is rarely offered as it. On this machine the
+         --  uploads use kind three and a host pointer is offered as kind
+         --  five, which is why the first version of this imported nothing.
+         Kinds := Kinds and Item.Plain;
+         if Kinds = 0 then
+            return;
+         end if;
+
+         while (Kinds and 1) = 0 loop
+            Kinds := Interfaces.Shift_Right (Kinds, 1);
+            Which := Which + 1;
+         end loop;
+
+         declare
+            Outside : aliased External_Buffer_Info;
+            Request : aliased Buffer_Create_Info;
+         begin
+            Request.Size := Span;
+            Request.Next := Outside'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) /= 0
+            then
+               return;
+            end if;
+            Buffer := Made;
+         end;
+
+         declare
+            Imported : aliased Import_Host_Info;
+            Request  : aliased Memory_Allocate_Info;
+         begin
+            Imported.Pointer := Head;
+            Request.Next := Imported'Address;
+            Request.Size := Span;
+            Request.Which := C.unsigned (Which);
+
+            if Allocate (Item.Logical, Request'Address, Null_Handle,
+                         Made'Access) /= 0
+            then
+               return;
+            end if;
+            Memory := Made;
+         end;
+
+         if Bind (Item.Logical, Buffer, Memory, 0) /= 0 then
+            return;
+         end if;
+
+         Base := Slack;
+         Ok := True;
+      end;
+   end Take_Host_Memory;
+
    procedure Give_Back_Buffer
      (Item : in out Engine; Buffer : in out Address; Memory : in out Address)
    is
@@ -599,10 +794,11 @@ package body Model_Runner.Platform.Device.Products is
    ---------------------------------------------------------------------------
 
    procedure Open
-     (Item   : in out Engine;
-      On     : Context;
-      Ready  : out Boolean;
-      Budget : Interfaces.Unsigned_64 := 0)
+     (Item       : in out Engine;
+      On         : Context;
+      Ready      : out Boolean;
+      Budget     : Interfaces.Unsigned_64 := 0;
+      Share_Host : Boolean := False)
    is
       Made : aliased Address := Null_Handle;
    begin
@@ -621,6 +817,10 @@ package body Model_Runner.Platform.Device.Products is
       --  a public operation that answers exactly this question something
       --  nothing calls.
       Item.Heap := Memory_Bytes (On);
+      Item.Imports := Takes_Host_Memory (On);
+      Item.Import_To := Host_Alignment (On);
+      Item.Plain := Plain_Memory_Kinds (On);
+      Item.Share := Share_Host;
       Item.Budget :=
         (if Budget > 0 then Budget
          else Item.Heap / Budget_Whole * Budget_Share);
@@ -891,8 +1091,12 @@ package body Model_Runner.Platform.Device.Products is
       Item.Kept_Bytes := 0;
       Item.Clock := 0;
       Item.Released := 0;
+      Item.Taken := 0;
       Item.Heap := 0;
       Item.Budget := 0;
+      Item.Imports := False;
+      Item.Import_To := 0;
+      Item.Share := False;
 
       Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
       Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
@@ -950,9 +1154,14 @@ package body Model_Runner.Platform.Device.Products is
    begin
       Gone := False;
 
+      --  Among the ones that took budget, because those are the only ones
+      --  releasing which makes room. An imported matrix is the host's own
+      --  memory and giving it back frees none of the device's.
       for Index in 1 .. Item.Used loop
-         if Oldest = 0
-           or else Item.Kept (Index).Used_At < Item.Kept (Oldest).Used_At
+         if not Item.Kept (Index).Own
+           and then (Oldest = 0
+                     or else Item.Kept (Index).Used_At
+                             < Item.Kept (Oldest).Used_At)
          then
             Oldest := Index;
          end if;
@@ -964,15 +1173,23 @@ package body Model_Runner.Platform.Device.Products is
 
       Give_Back_Buffer
         (Item, Item.Kept (Oldest).Buffer, Item.Kept (Oldest).Memory);
-      Item.Kept_Bytes := Item.Kept_Bytes - Item.Kept (Oldest).Bytes;
       Item.Released := Item.Released + 1;
+
+      --  An imported matrix took none of the budget, so releasing it gives
+      --  none back. Subtracting its bytes would make the budget grow every
+      --  time one went, which on a model that does not fit is every token.
+      if Item.Kept (Oldest).Own then
+         Item.Taken := Item.Taken - 1;
+      else
+         Item.Kept_Bytes := Item.Kept_Bytes - Item.Kept (Oldest).Bytes;
+      end if;
 
       --  The last one moves into the gap, because the order of this list is
       --  nothing: what says which is oldest is the count each carries.
       Item.Kept (Oldest) := Item.Kept (Item.Used);
       Item.Kept (Item.Used) :=
         (Key => Null_Handle, Buffer => Null_Handle, Memory => Null_Handle,
-         Bytes => 0, Used_At => 0);
+         Bytes => 0, Used_At => 0, Base => 0, Own => False);
       Item.Used := Item.Used - 1;
 
       Gone := True;
@@ -991,6 +1208,8 @@ package body Model_Runner.Platform.Device.Products is
    is (Item.Budget);
 
    function Given_Back (Item : Engine) return Natural is (Item.Released);
+
+   function Imported (Item : Engine) return Natural is (Item.Taken);
 
    --------------
    -- Multiply --
@@ -1055,6 +1274,8 @@ package body Model_Runner.Platform.Device.Products is
       --  The matrix, kept when it has a key and made afresh when it has not.
       Weight_Buffer : Address := Null_Handle;
       Weight_Memory : Address := Null_Handle;
+      Weight_Base   : Interfaces.Unsigned_64 := 0;
+      Weight_Own    : Boolean := False;
       Borrowed      : Boolean := False;
 
       procedure Release_Borrowed is
@@ -1100,6 +1321,8 @@ package body Model_Runner.Platform.Device.Products is
             then
                Weight_Buffer := Item.Kept (Index).Buffer;
                Weight_Memory := Item.Kept (Index).Memory;
+               Weight_Base := Item.Kept (Index).Base;
+               Weight_Own := Item.Kept (Index).Own;
                Item.Kept (Index).Used_At := Item.Clock;
                exit;
             end if;
@@ -1107,56 +1330,94 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Weight_Buffer = Null_Handle then
-         --  Room for it first. A device with a heap smaller than the model
-         --  used to take matrices until an allocation failed and then fail
-         --  the product; now the matrix wanted longest ago goes back and
-         --  this one takes its place, which is slower than holding the whole
-         --  model and is not a failure.
-         if Key /= System.Null_Address and then Item.Budget > 0 then
-            declare
-               Gone : Boolean := True;
-            begin
-               while Gone
-                 and then Item.Used > 0
-                 and then Item.Kept_Bytes + Weight_Bytes > Item.Budget
-               loop
-                  Give_Back_Least (Item, Gone);
-               end loop;
-            end;
+         --  Where the weights already are, when the caller asked for that.
+         --
+         --  It saves memory and never time, and the difference was measured
+         --  rather than assumed. The same model and prompt on this machine:
+         --  10.21 tokens a second with the weights copied to the device,
+         --  2.58 with a budget holding a fifth of them and the rest uploaded
+         --  again as they are wanted, and 0.84 read where they lie. So this
+         --  is not the answer to a model that does not fit -- giving
+         --  matrices back and uploading them again is three times better
+         --  than that, which is the opposite of what this was written
+         --  expecting -- it is the answer to a machine that cannot hold the
+         --  model twice.
+         --
+         --  It costs no budget, because it is not the device's memory.
+         if Item.Share
+           and then Item.Imports
+           and then Key /= System.Null_Address
+         then
+            Take_Host_Memory
+              (Item, Weights (Weights'First)'Address, Weight_Bytes,
+               Weight_Buffer, Weight_Memory, Weight_Base, Good);
+            Weight_Own := Good;
+
+            if not Good then
+               Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
+               Weight_Base := 0;
+            end if;
          end if;
 
-         Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good);
-         if not Good then
-            Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
-            return;
+         if not Weight_Own then
+            --  Room for it, then. A device with a heap smaller than the
+            --  model used to take matrices until an allocation failed and
+            --  then fail the product; now the matrix wanted longest ago
+            --  goes back and this one takes its place.
+            if Key /= System.Null_Address and then Item.Budget > 0 then
+               declare
+                  Gone : Boolean := True;
+               begin
+                  while Gone
+                    and then Item.Used > 0
+                    and then Item.Kept_Bytes + Weight_Bytes > Item.Budget
+                  loop
+                     Give_Back_Least (Item, Gone);
+                  end loop;
+               end;
+            end if;
+
+            Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good);
+            if not Good then
+               Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
+               return;
+            end if;
+
+            Write_Bytes
+              (Item, Weight_Memory, Weight_Bytes,
+               Weights (Weights'First
+                        .. Weights'First
+                           + Model_Runner.Bytes.Byte_Count (Weight_Bytes) - 1),
+               Good);
+            if not Good then
+               Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
+               return;
+            end if;
          end if;
 
-         Write_Bytes
-           (Item, Weight_Memory, Weight_Bytes,
-            Weights (Weights'First
-                     .. Weights'First
-                        + Model_Runner.Bytes.Byte_Count (Weight_Bytes) - 1),
-            Good);
-         if not Good then
-            Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
-            return;
-         end if;
-
-         --  Kept if it was named and it fits, by count and by bytes;
-         --  otherwise it belongs to this call and goes back at the end of
-         --  it. One matrix larger than the whole budget is the case that
-         --  reaches the second condition with nothing left to release, and
-         --  it is handled the same way: computed, given back, correct.
+         --  Kept if it was named and it fits, by count and by bytes.
+         --  Otherwise it belongs to this call and goes back at the end of
+         --  it: one matrix larger than the whole budget, on a device that
+         --  will not take a host pointer, is the case that reaches this
+         --  with nothing left to release, and it is handled the same way --
+         --  computed, given back, correct.
          if Key /= System.Null_Address
            and then Item.Used < Max_Resident
-           and then (Item.Budget = 0
+           and then (Weight_Own
+                     or else Item.Budget = 0
                      or else Item.Kept_Bytes + Weight_Bytes <= Item.Budget)
          then
             Item.Used := Item.Used + 1;
             Item.Kept (Item.Used) :=
               (Key => Key, Buffer => Weight_Buffer, Memory => Weight_Memory,
-               Bytes => Weight_Bytes, Used_At => Item.Clock);
-            Item.Kept_Bytes := Item.Kept_Bytes + Weight_Bytes;
+               Bytes => Weight_Bytes, Used_At => Item.Clock,
+               Base => Weight_Base, Own => Weight_Own);
+
+            if Weight_Own then
+               Item.Taken := Item.Taken + 1;
+            else
+               Item.Kept_Bytes := Item.Kept_Bytes + Weight_Bytes;
+            end if;
          else
             Borrowed := True;
          end if;
@@ -1204,8 +1465,12 @@ package body Model_Runner.Platform.Device.Products is
 
          Buffers : constant array (1 .. 3) of Address :=
            [Weight_Buffer, Item.Vector_Buffer, Item.Result_Buffer];
+         --  The weight buffer is longer than the matrix when the device
+         --  took the host's memory: it starts at whatever boundary that
+         --  memory had to be aligned to, and the shader is told how far in
+         --  the matrix begins.
          Extent : constant array (1 .. 3) of Interfaces.Unsigned_64 :=
-           [Weight_Bytes, Vector_Bytes, Result_Bytes];
+           [Weight_Base + Weight_Bytes, Vector_Bytes, Result_Bytes];
 
          Told  : aliased Buffer_Info_Array;
          Notes : aliased Write_Array;
@@ -1279,7 +1544,8 @@ package body Model_Runner.Platform.Device.Products is
                      Columns => C.unsigned (Columns),
                      Count   => C.unsigned (Count),
                      First   => C.unsigned (First),
-                     Packing => C.unsigned (Weight_Packing'Pos (Packing)));
+                     Packing => C.unsigned (Weight_Packing'Pos (Packing)),
+                     Base    => C.unsigned (Weight_Base));
                begin
                   Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                         Shape_Bytes, Shape'Address);

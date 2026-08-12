@@ -255,6 +255,12 @@ package Model_Runner.Llama is
    --    Backend_Unsupported_Format naming the tensor and the format.
    --  @param Repack What to decode the weight matrices into, or No_Repack
    --    to read them as the file stores them.
+   --  @param Fit_Required Whether a model whose matrices are larger than the
+   --    backend's memory is refused. True refuses it, with both numbers in
+   --    the message: such a model runs, by giving back the matrix wanted
+   --    longest ago and uploading it again when it is next needed, but it
+   --    runs slower than the processor would. False says the caller knows
+   --    that -- because the caller set the budget -- and wants it anyway.
    --  @param Threads How many tasks may decode at once when repacking. The
    --    matrices are independent and each writes its own region, so this is
    --    the one part of a load that divides; at one it is what it was, which
@@ -272,6 +278,7 @@ package Model_Runner.Llama is
       Backend  : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Repack   : Repack_Mode := No_Repack;
+      Fit_Required : Boolean := True;
       Threads  : Positive := 1;
       Status   : out Model_Runner.Errors.Error_Info);
 

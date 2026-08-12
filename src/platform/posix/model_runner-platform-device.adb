@@ -36,6 +36,7 @@ with System.Storage_Elements;
 package body Model_Runner.Platform.Device is
 
    use type Interfaces.C.int;
+   use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
    use type System.Storage_Elements.Storage_Offset;
    use type Interfaces.C.unsigned;
@@ -185,6 +186,21 @@ package body Model_Runner.Platform.Device is
    end record
      with Convention => C;
 
+   --  What an extension is called, as the interface reports it: a fixed
+   --  name field and a revision. Read to find out whether this device will
+   --  take a pointer to the host's own memory.
+   Max_Extension_Name : constant := 256;
+   Max_Extensions     : constant := 512;
+
+   type Extension_Property is record
+      Name    : C.char_array (1 .. Max_Extension_Name) := [others => C.nul];
+      Version : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   type Extension_Array is
+     array (1 .. Max_Extensions) of aliased Extension_Property;
+
    --  What the interface says about memory: up to thirty-two kinds, each
    --  naming what it can do and which heap it comes from, then up to sixteen
    --  heaps, each with a size.
@@ -242,6 +258,18 @@ package body Model_Runner.Platform.Device is
                 Index  : C.unsigned;
                 Queue  : access System.Address)
      with Convention => C;
+
+   --  What extensions a device has, asked twice: once for the count and
+   --  once for the names.
+   type Extension_List_Call is access
+     function (Device : System.Address;
+               Layer  : C.Strings.chars_ptr;
+               Count  : access C.unsigned;
+               Room   : System.Address) return C.int
+     with Convention => C;
+
+   function To_Extension_List is
+     new Ada.Unchecked_Conversion (System.Address, Extension_List_Call);
 
    ------------------
    -- Is_Supported --
@@ -618,6 +646,15 @@ package body Model_Runner.Platform.Device is
                   if Fast < 0 and then Local then
                      Fast := Which - 1;
                   end if;
+
+                  --  And every kind the processor writes and sees without a
+                  --  flush, which is the set an imported host pointer has to
+                  --  be taken as one of.
+                  if Writable then
+                     Item.Plain_Kinds :=
+                       Item.Plain_Kinds
+                       or Interfaces.Shift_Left (1, Which - 1);
+                  end if;
                end;
             end loop;
          end loop;
@@ -660,12 +697,100 @@ package body Model_Runner.Platform.Device is
          Wanted.Priorities := Priority'Address;
          Request.Queues := Wanted'Address;
 
-         if Create (Physical, Request'Address, System.Null_Address,
-                    Logical'Access) /= 0
-         then
-            Item.Family := 0;
-            return;
-         end if;
+         --  Two extensions, and only when the device has both: one says a
+         --  buffer may come from somewhere outside the interface, the other
+         --  says that somewhere may be the host's own memory. A device
+         --  without them is opened exactly as before and is handed copies.
+         declare
+            Wanted_External : constant String := "VK_KHR_external_memory";
+            Wanted_Host     : constant String :=
+              "VK_EXT_external_memory_host";
+
+            Has_External, Has_Host : Boolean := False;
+
+            List  : constant Extension_List_Call :=
+              To_Extension_List
+                (Entry_Point (From.Handle,
+                              "vkEnumerateDeviceExtensionProperties"));
+
+            Count : aliased C.unsigned := 0;
+            Room  : aliased Extension_Array;
+
+            Names : aliased array (1 .. 2) of C.Strings.chars_ptr :=
+              [others => C.Strings.Null_Ptr];
+         begin
+            if List /= null
+              and then List (Physical, C.Strings.Null_Ptr, Count'Access,
+                             System.Null_Address) = 0
+              and then Count > 0
+            then
+               if Natural (Count) > Max_Extensions then
+                  Count := C.unsigned (Max_Extensions);
+               end if;
+
+               if List (Physical, C.Strings.Null_Ptr, Count'Access,
+                        Room'Address) = 0
+               then
+                  for Index in 1 .. Natural (Count) loop
+                     declare
+                        Text : constant String :=
+                          C.To_Ada (Room (Index).Name, Trim_Nul => True);
+                     begin
+                        if Text = Wanted_External then
+                           Has_External := True;
+                        elsif Text = Wanted_Host then
+                           Has_Host := True;
+                        end if;
+                     end;
+                  end loop;
+               end if;
+            end if;
+
+            if Has_External and then Has_Host then
+               Names (1) := C.Strings.New_String (Wanted_External);
+               Names (2) := C.Strings.New_String (Wanted_Host);
+               Request.Extension_Count := 2;
+               Request.Extensions := Names'Address;
+            end if;
+
+            if Create (Physical, Request'Address, System.Null_Address,
+                       Logical'Access) /= 0
+            then
+               --  Again with nothing asked for, because a device that
+               --  refused the extensions is still a device.
+               Request.Extension_Count := 0;
+               Request.Extensions := System.Null_Address;
+               Has_External := False;
+               Has_Host := False;
+
+               if Create (Physical, Request'Address, System.Null_Address,
+                          Logical'Access) /= 0
+               then
+                  for Held of Names loop
+                     if C.Strings."/=" (Held, C.Strings.Null_Ptr) then
+                        C.Strings.Free (Held);
+                     end if;
+                  end loop;
+                  Item.Family := 0;
+                  return;
+               end if;
+            end if;
+
+            for Held of Names loop
+               if C.Strings."/=" (Held, C.Strings.Null_Ptr) then
+                  C.Strings.Free (Held);
+               end if;
+            end loop;
+
+            --  The alignment a host pointer needs is a property this build
+            --  does not ask for -- it arrives through an interface version
+            --  the instance does not request -- so a page is assumed and the
+            --  import is attempted. A device wanting more refuses the
+            --  allocation and the caller copies instead, which is the same
+            --  answer arrived at one call later.
+            Item.Imports := Has_External and then Has_Host;
+            Item.Import_To := (if Item.Imports then 4096 else 0);
+         end;
 
          Item.Instance := From.Handle;
          Item.Physical := Physical;
@@ -724,6 +849,30 @@ package body Model_Runner.Platform.Device is
    function Queue_Family (Item : Context) return Natural is (Item.Family);
 
    function Shares_Memory (Item : Context) return Boolean is (Item.Shared);
+
+   ------------------------
+   -- Takes_Host_Memory --
+   ------------------------
+
+   --  Through the accessor rather than the field, because the accessor is
+   --  what answers this question and a package reading its own private part
+   --  around it would leave an operation nothing calls.
+   function Takes_Host_Memory (Item : Context) return Boolean
+   is (Item.Imports and then Shares_Memory (Item));
+
+   ---------------------
+   -- Host_Alignment --
+   ---------------------
+
+   function Host_Alignment (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Import_To);
+
+   --------------------------
+   -- Plain_Memory_Kinds --
+   --------------------------
+
+   function Plain_Memory_Kinds (Item : Context) return Interfaces.Unsigned_32
+   is (Item.Plain_Kinds);
 
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
    is (Item.Heap);

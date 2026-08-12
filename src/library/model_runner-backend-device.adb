@@ -24,6 +24,11 @@ package body Model_Runner.Backend.Device is
 
    Ready_Now : Boolean := False;
 
+   --  Whether this device was opened to read the weights where they lie.
+   --  Held here because Describe is asked about a device that is already
+   --  open and has to answer for how it was opened.
+   Sharing : Boolean := False;
+
    Named      : String (1 .. Devices.Max_Name_Bytes) := [others => ' '];
    Named_Last : Natural := 0;
 
@@ -63,7 +68,12 @@ package body Model_Runner.Backend.Device is
       --  What the open device will hold, which is nothing at all when none
       --  is open: this is asked while a model prepares, and by then the
       --  caller has opened one or has been told it could not.
-      Result.Memory_Bytes := Products.Capacity (Engine);
+      --
+      --  And nothing to answer for when the weights are being read where
+      --  they lie: there is no size a model has to be under, because none
+      --  of it is going into the device's own memory.
+      Result.Memory_Bytes :=
+        (if Sharing then 0 else Products.Capacity (Engine));
 
       return Result;
    end Describe;
@@ -73,8 +83,9 @@ package body Model_Runner.Backend.Device is
    ----------
 
    procedure Open
-     (Ready  : out Boolean;
-      Budget : Interfaces.Unsigned_64 := 0)
+     (Ready      : out Boolean;
+      Budget     : Interfaces.Unsigned_64 := 0;
+      Share_Host : Boolean := False)
    is
       Found : Boolean;
    begin
@@ -99,7 +110,7 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Products.Open (Engine, Opened, Found, Budget);
+      Products.Open (Engine, Opened, Found, Budget, Share_Host);
       if not Found then
          Devices.Close (Opened);
          return;
@@ -113,6 +124,7 @@ package body Model_Runner.Backend.Device is
            Text (Text'First .. Text'First + Named_Last - 1);
       end;
 
+      Sharing := Share_Host;
       Ready_Now := True;
       Ready := True;
    end Open;
@@ -127,6 +139,7 @@ package body Model_Runner.Backend.Device is
       Devices.Close (Opened);
       Devices.Close (Held);
       Ready_Now := False;
+      Sharing := False;
       Named_Last := 0;
    end Close;
 
@@ -154,6 +167,12 @@ package body Model_Runner.Backend.Device is
 
    function Resident_Bytes return Interfaces.Unsigned_64
    is (Products.Resident_Bytes (Engine));
+
+   ---------------
+   -- Imported --
+   ---------------
+
+   function Imported return Natural is (Products.Imported (Engine));
 
    -----------------
    -- Given_Back --

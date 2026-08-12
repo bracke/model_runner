@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 30) of Text_Access :=
+   Held : constant array (1 .. 29) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -12,13 +12,6 @@ package body Library_Surface is
       --  Second opinions.
       new String'("All_Finite"),
       new String'("Row_Dot"),
-
-      --  What an open device says about itself. Memory_Bytes came off this
-      --  list when the product engine started asking it: how much a device
-      --  has is what says how much of a model it can hold. Whether it shares
-      --  the host's memory is not asked yet -- it would say whether an
-      --  upload is a copy or a mapping, and nothing maps yet.
-      new String'("Shares_Memory"),
 
       --  State a library caller needs.
       --

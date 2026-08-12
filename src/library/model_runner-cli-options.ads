@@ -245,6 +245,19 @@ package Model_Runner.CLI.Options is
       Stop_Token_Count : Natural := 0;
 
       Memory_Limit : Interfaces.Unsigned_64 := 0;
+
+      --  Bytes of device memory the model's matrices may take, and whether
+      --  the caller said so. Zero and False leave the choice to the device:
+      --  a share of the heap it reports, and a refusal for a model larger
+      --  than that share. A caller who names a number has been told what
+      --  the device has and means it, so the refusal becomes a note and the
+      --  run goes ahead with whatever giving-back that implies.
+      Device_Memory     : Interfaces.Unsigned_64 := 0;
+      Device_Memory_Set : Boolean := False;
+
+      --  Zero bytes of the device's own memory, which means the weights are
+      --  read where they lie rather than copied anywhere.
+      Device_Share      : Boolean := False;
       Mapping      : Model_Runner.Byte_Sources.Files.Mapping_Policy :=
         Model_Runner.Byte_Sources.Files.Mapping_Automatic;
 

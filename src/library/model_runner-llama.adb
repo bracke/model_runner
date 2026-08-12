@@ -929,6 +929,7 @@ package body Model_Runner.Llama is
       Backend  : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Repack   : Repack_Mode := No_Repack;
+      Fit_Required : Boolean := True;
       Threads  : Positive := 1;
       Status   : out E.Error_Info)
    is
@@ -1534,7 +1535,7 @@ package body Model_Runner.Llama is
       --  but it runs slower than the processor would, and quietly. A caller
       --  who wants that can say --repack none, choose another backend, or
       --  raise nothing at all and be told what the numbers were.
-      if Item.Able.Memory_Bytes > 0 then
+      if Fit_Required and then Item.Able.Memory_Bytes > 0 then
          declare
             Held  : constant View_List := Matrices (Item);
             Total : Interfaces.Unsigned_64 := 0;

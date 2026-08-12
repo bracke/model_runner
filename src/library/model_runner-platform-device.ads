@@ -135,6 +135,30 @@ package Model_Runner.Platform.Device is
    --  @return True when one kind of memory serves both.
    function Shares_Memory (Item : Context) return Boolean;
 
+   --  Report whether the device will take the host's own memory directly.
+   --
+   --  True only where the device says it can and where it shares the host's
+   --  memory, because importing memory the device would have to copy anyway
+   --  buys nothing and hides where the copy happens.
+   --
+   --  @param Item Open device.
+   --  @return True when a host pointer can become a buffer.
+   function Takes_Host_Memory (Item : Context) return Boolean;
+
+   --  Which memory kinds the processor writes and reads directly.
+   --
+   --  @param Item Open device.
+   --  @return Mask over the device's memory kinds.
+   function Plain_Memory_Kinds
+     (Item : Context) return Interfaces.Unsigned_32;
+
+   --  What a host pointer must be aligned to before this device will take
+   --  it.
+   --
+   --  @param Item Open device.
+   --  @return Alignment in bytes, or zero when the device takes none.
+   function Host_Alignment (Item : Context) return Interfaces.Unsigned_64;
+
    --  How much memory the device says it has, in bytes.
    --
    --  The largest heap it reports. On a device that shares the machine's
@@ -176,6 +200,20 @@ private
       Fast     : Natural := 0;
       Shared   : Boolean := False;
       Heap     : Interfaces.Unsigned_64 := 0;
+
+      --  Whether this device will take a pointer to the host's own memory
+      --  as a buffer, instead of being given a copy of what is in it, and
+      --  what that pointer has to be aligned to. On a device that shares
+      --  the host's memory the copy is the same memory twice, which for a
+      --  model is a gigabyte of it.
+      Imports  : Boolean := False;
+      Import_To : Interfaces.Unsigned_64 := 0;
+
+      --  Which memory kinds the processor can both write and see without
+      --  being told to flush, as a mask over the device's list. An imported
+      --  host pointer can be taken as some kinds and not others, and the one
+      --  chosen has to be in both sets.
+      Plain_Kinds : Interfaces.Unsigned_32 := 0;
    end record;
 
    type Address_List is array (1 .. Max_Devices) of System.Address;

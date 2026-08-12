@@ -45,9 +45,14 @@ package Model_Runner.Backend.Device is
    --    chooses. What does not fit is given back and uploaded again when it
    --    is next wanted, so a budget is a speed decision rather than a limit
    --    on what will run.
+   --  @param Share_Host Whether to read the weights where they lie rather
+   --    than copy them to the device. It holds the model once instead of
+   --    twice and runs slower, measurably; the statistics report how many
+   --    matrices it applied to.
    procedure Open
-     (Ready  : out Boolean;
-      Budget : Interfaces.Unsigned_64 := 0);
+     (Ready      : out Boolean;
+      Budget     : Interfaces.Unsigned_64 := 0;
+      Share_Host : Boolean := False);
 
    --  Release the device and everything it holds. Idempotent.
    procedure Close;
@@ -75,6 +80,11 @@ package Model_Runner.Backend.Device is
    --
    --  @return Bytes resident.
    function Resident_Bytes return Interfaces.Unsigned_64;
+
+   --  How many matrices the device is reading where they already are.
+   --
+   --  @return Count taken rather than copied.
+   function Imported return Natural;
 
    --  How many matrices have been given back to make room for others.
    --

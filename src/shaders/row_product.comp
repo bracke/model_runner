@@ -48,6 +48,13 @@ layout(push_constant) uniform Shape {
     //  0 binary32, 1 q8_0, 2 q4_0. The host refuses anything else before it
     //  gets here, so there is no fourth case to be wrong about.
     uint format;
+
+    //  Where the matrix begins within the weight buffer. Zero when the host
+    //  copied the weights in, and the distance from a page boundary when it
+    //  handed the device its own memory instead: a pointer imported that way
+    //  has to be aligned to something larger than a tensor is, so the buffer
+    //  starts before the matrix does.
+    uint base;
 } shape;
 
 //  Vectors carried at once by one invocation. A constant, so that the loops
@@ -100,9 +107,12 @@ void main() {
         sum[k] = 0.0;
     }
 
-    uint base = row * row_bytes();
+    uint base = shape.base + row * row_bytes();
 
     if (shape.format == 0u) {
+        //  Words rather than bytes, which the base allows because both the
+        //  alignment a device asks of a host pointer and the alignment this
+        //  backend asks of a tensor are multiples of four.
         uint at = base >> 2u;
 
         for (uint col = 0u; col < shape.columns; ++col) {

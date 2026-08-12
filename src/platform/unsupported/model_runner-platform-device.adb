@@ -80,6 +80,30 @@ package body Model_Runner.Platform.Device is
 
    function Shares_Memory (Item : Context) return Boolean is (Item.Shared);
 
+   ------------------------
+   -- Takes_Host_Memory --
+   ------------------------
+
+   --  Through the accessor rather than the field, because the accessor is
+   --  what answers this question and a package reading its own private part
+   --  around it would leave an operation nothing calls.
+   function Takes_Host_Memory (Item : Context) return Boolean
+   is (Item.Imports and then Shares_Memory (Item));
+
+   ---------------------
+   -- Host_Alignment --
+   ---------------------
+
+   function Host_Alignment (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Import_To);
+
+   --------------------------
+   -- Plain_Memory_Kinds --
+   --------------------------
+
+   function Plain_Memory_Kinds (Item : Context) return Interfaces.Unsigned_32
+   is (Item.Plain_Kinds);
+
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
    is (Item.Heap);
 

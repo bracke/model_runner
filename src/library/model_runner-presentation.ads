@@ -251,6 +251,10 @@ package Model_Runner.Presentation is
    --    given, because they are answers to a question a run on the processor
    --    is not asked.
    --  @param Resident How many of the model's matrices the device holds.
+   --  @param Imported How many of those it is reading where they already
+   --    are, rather than from a copy. On a device that shares the host's
+   --    memory this is the difference between holding the model once and
+   --    holding it twice.
    --  @param Resident_Bytes How many bytes those take.
    --  @param Given_Back How many matrices were released to make room for
    --    others. Anything above zero says the model does not fit and is being
@@ -261,6 +265,7 @@ package Model_Runner.Presentation is
       Outcome        : Model_Runner.Generation.Result;
       Device         : String := "";
       Resident       : Natural := 0;
+      Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0);
 

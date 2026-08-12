@@ -58,11 +58,18 @@ package Model_Runner.Platform.Device.Products is
    --    caller that knows the device is doing something else can say so, and
    --    a caller that wants to see what a model does when it does not fit
    --    can make it not fit.
+   --  @param Share_Host Whether to hand the device the host's own memory
+   --    rather than copy the weights into its own, where the device will
+   --    take a pointer at all. It holds the model once instead of twice,
+   --    and the device reads it more slowly for the rest of the run:
+   --    measured on this machine at 0.84 tokens a second against 10.21 for
+   --    the same model copied in. A memory decision, not a speed one.
    procedure Open
-     (Item   : in out Engine;
-      On     : Context;
-      Ready  : out Boolean;
-      Budget : Interfaces.Unsigned_64 := 0);
+     (Item       : in out Engine;
+      On         : Context;
+      Ready      : out Boolean;
+      Budget     : Interfaces.Unsigned_64 := 0;
+      Share_Host : Boolean := False);
 
    --  Release everything the device was holding. Idempotent.
    --
@@ -168,6 +175,18 @@ package Model_Runner.Platform.Device.Products is
    --  @return Byte budget for resident matrices.
    function Capacity (Item : Engine) return Interfaces.Unsigned_64;
 
+   --  How many matrices the device is reading where they already are.
+   --
+   --  A device that shares the host's memory can be handed a pointer to the
+   --  weights instead of a copy of them, which is a gigabyte not copied and
+   --  a gigabyte not held twice for a model of that size. Not every device
+   --  will, and not every pointer can be taken, so this is what actually
+   --  happened rather than what was asked for.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Count of matrices taken where they lie.
+   function Imported (Item : Engine) return Natural;
+
    --  How many matrices have been given back to make room for others.
    --
    --  Zero for a model that fits, and a number that rises with every token
@@ -207,6 +226,14 @@ private
       --  makes the one given back the one least recently wanted, rather
       --  than whichever happens to be first.
       Used_At : Interfaces.Unsigned_64 := 0;
+
+      --  Where the matrix begins inside the buffer. Zero for a matrix
+      --  copied in, and the distance from a page boundary for one the
+      --  device took where it already was -- which can also be zero, when
+      --  the weights happen to start on one, so the flag below says which
+      --  of the two this is rather than the number.
+      Base    : Interfaces.Unsigned_64 := 0;
+      Own     : Boolean := False;
    end record;
 
    type Held_Array is array (1 .. Max_Resident) of Held_Matrix;
@@ -240,6 +267,16 @@ private
       Heap       : Interfaces.Unsigned_64 := 0;
       Budget     : Interfaces.Unsigned_64 := 0;
 
+      --  Whether this device will take the host's own memory as a buffer,
+      --  and what a pointer to it has to be aligned to.
+      Imports    : Boolean := False;
+      Import_To  : Interfaces.Unsigned_64 := 0;
+      Plain      : Interfaces.Unsigned_32 := 0;
+
+      --  Whether this engine was asked to read the weights where they lie
+      --  rather than copy them.
+      Share      : Boolean := False;
+
       --  The matrices this device is holding, and the two buffers that
       --  change every call.
       Kept       : Held_Array;
@@ -250,6 +287,10 @@ private
       --  many matrices have been given back to make room.
       Clock      : Interfaces.Unsigned_64 := 0;
       Released   : Natural := 0;
+
+      --  How many of the resident matrices are the host's own memory rather
+      --  than a copy of it.
+      Taken      : Natural := 0;
 
       Vector_Buffer : System.Address := System.Null_Address;
       Vector_Memory : System.Address := System.Null_Address;

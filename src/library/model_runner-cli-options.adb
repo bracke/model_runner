@@ -28,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 47) of Registry_Row :=
+   Registry : constant array (1 .. 48) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -88,6 +88,9 @@ package body Model_Runner.CLI.Options is
       (Text ("--stop-token"), [Command_Run => True, others => False], Text ("stop_token")),
       (Text ("--memory-limit"),
        [Command_Run | Command_Embed => True, others => False], Text ("memory_limit")),
+      (Text ("--device-memory"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("device_memory")),
       (Text ("--mmap"),
        [Command_Run | Command_Embed => True, others => False], Text ("mmap")),
       (Text ("--no-mmap"), [Command_Run => True, others => False], Text ("no_mmap")),
@@ -671,7 +674,7 @@ package body Model_Runner.CLI.Options is
          Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Repeat_Penalty,
          Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
          Flag_Chat_Template,
-         Flag_Seed, Flag_Memory, Flag_Locale,
+         Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Repack,
          Flag_Cache,
@@ -1359,6 +1362,36 @@ package body Model_Runner.CLI.Options is
                            Free_Text (Held);
                            return;
                         end if;
+                        Free_Text (Held);
+                     end;
+
+                  elsif Name = "--device-memory" then
+                     declare
+                        Parsed : Boolean;
+                     begin
+                        Mark (Flag_Device_Memory, Name, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        Take_Value (Name, Value_Present, Value_First, Argument,
+                                    Held, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        To_Bytes (Held.all, Result.Device_Memory, Parsed);
+                        if not Parsed then
+                           Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                           Free_Text (Held);
+                           return;
+                        end if;
+
+                        --  None of the device's own memory for the weights,
+                        --  which is not a refusal but an instruction: read
+                        --  them where they lie. It holds the model once
+                        --  instead of twice and runs slower, and both halves
+                        --  of that are measured in the README.
+                        Result.Device_Share := Result.Device_Memory = 0;
+                        Result.Device_Memory_Set := True;
                         Free_Text (Held);
                      end;
 

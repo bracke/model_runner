@@ -7,6 +7,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device can read the weights where they lie, and `--device-memory`
+  says how much of its own memory it may use.** A device that shares the
+  host's memory will take a pointer into this process instead of a copy, so
+  the model is held once rather than twice. Two extensions are asked for when
+  the device is opened, the pointer is aligned down to a page and the shader
+  is told how far into the buffer the matrix begins; every way it can fail is
+  a copy instead.
+
+  It is a memory decision and never a speed one, which is the opposite of
+  what it was written expecting. The same model and prompt: 10.69 tokens a
+  second with the weights copied to the device, 2.58 with a budget holding a
+  fifth of them and the rest uploaded again as they are wanted, and 0.74 read
+  where they lie. Giving matrices back and uploading them again beats
+  reading the host's memory by three to one, so this is not the answer to a
+  model that does not fit -- it is the answer to a machine that cannot hold
+  the model twice, which for a seven-billion parameter model at eight bits is
+  fourteen gigabytes against seven.
+
+  `--device-memory SIZE` names the share the weights may take. Naming it also
+  says the caller knows what the device has, so a model larger than the number
+  is run rather than refused. `--device-memory 0` means none of it: read them
+  where they are. The statistics say which of the three happened, and an
+  option that cannot do anything -- naming it without `--backend device` --
+  says so rather than being accepted and forgotten.
+
+  `Shares_Memory` came off the list of operations nothing calls. It had been
+  on it since device discovery arrived, with a note saying what it would be
+  for.
+
 - **The device's memory is asked about, and what does not fit is given
   back.** Two faults with one cause: nothing knew how much memory the device
   had. `Context.Heap` was read from the driver and used by nothing, and the

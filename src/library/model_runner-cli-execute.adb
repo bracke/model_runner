@@ -465,7 +465,15 @@ package body Model_Runner.CLI.Execute is
                and then not T.Is_Empty (Item.Adapter_Path)
              then L.To_F32
              else Item.Repack),
-            Selected_Workers (Item), Status);
+
+            --  A caller who named --device-memory has been told what the
+            --  device has and said what to use anyway, so a model larger
+            --  than that is run rather than refused. What it costs is
+            --  reported: the statistics say how many matrices were given
+            --  back, which is how many were uploaded again.
+            Fit_Required => not Item.Device_Memory_Set,
+            Threads      => Selected_Workers (Item),
+            Status       => Status);
 
          --  A chat format named on the command line replaces the model's
          --  own. Models whose template this build will not compile are
@@ -1685,6 +1693,7 @@ package body Model_Runner.CLI.Execute is
                  (Screen, Outcome,
                   Device         => Model_Runner.Backend.Device.Name,
                   Resident       => Model_Runner.Backend.Device.Resident,
+                  Imported       => Model_Runner.Backend.Device.Imported,
                   Resident_Bytes =>
                     Model_Runner.Backend.Device.Resident_Bytes,
                   Given_Back     => Model_Runner.Backend.Device.Given_Back);
@@ -1706,6 +1715,15 @@ package body Model_Runner.CLI.Execute is
       --  kind added to the enumeration stops this compiling until something
       --  here answers for it -- which is the only way a second backend can
       --  arrive without the flag that selects it quietly doing nothing.
+      --  An option that cannot do anything here says so rather than being
+      --  accepted and forgotten.
+      if Item.Device_Memory_Set
+        and then Model_Runner.Backend."/=" (Item.Backend,
+                                            Model_Runner.Backend.Backend_Device)
+      then
+         Pres.Put_Note (Screen, "cli.note.device_memory_unused");
+      end if;
+
       case Item.Backend is
       when Model_Runner.Backend.Backend_Reference =>
          --  No pool: this backend runs on the calling task and says so.
@@ -1719,7 +1737,8 @@ package body Model_Runner.CLI.Execute is
          declare
             Ready : Boolean;
          begin
-            Model_Runner.Backend.Device.Open (Ready);
+            Model_Runner.Backend.Device.Open
+              (Ready, Item.Device_Memory, Item.Device_Share);
 
             if not Ready then
                --  A condition of its own rather than a borrowed one. This
@@ -2009,12 +2028,20 @@ package body Model_Runner.CLI.Execute is
       --  device was refused by the first product with a state error. One
       --  copy of a choice is one place to make it; two copies is one place
       --  to forget it, which is what happened.
+      if Item.Device_Memory_Set
+        and then Model_Runner.Backend."/=" (Item.Backend,
+                                            Model_Runner.Backend.Backend_Device)
+      then
+         Pres.Put_Note (Screen, "cli.note.device_memory_unused");
+      end if;
+
       case Item.Backend is
       when Model_Runner.Backend.Backend_Device =>
          declare
             Ready : Boolean;
          begin
-            Model_Runner.Backend.Device.Open (Ready);
+            Model_Runner.Backend.Device.Open
+              (Ready, Item.Device_Memory, Item.Device_Share);
 
             if not Ready then
                Fail (E.Make (E.Backend_No_Device));

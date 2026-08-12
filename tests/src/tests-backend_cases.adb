@@ -24,6 +24,7 @@ package body Tests.Backend_Cases is
    use type Model_Runner.Errors.Error_Code;
    use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.Numerics.Real;
+   use type Model_Runner.Numerics.Wide_Real;
    use type Model_Runner.Tensors.Real_Array_Access;
 
    package B renames Model_Runner.Bytes;
@@ -664,6 +665,124 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Device_Gives_Back_What_It_Cannot_Hold;
 
+   ---------------------------------------------
+   -- Device_Reads_The_Host_Memory_When_Asked --
+   ---------------------------------------------
+
+   --  A device asked to read the weights where they lie gets the same
+   --  answers as one handed a copy of them.
+   --
+   --  Two things have to hold and only one of them is the arithmetic. The
+   --  other is the offset: a host pointer has to be aligned to something
+   --  larger than a matrix is, so the buffer starts before the weights do
+   --  and the shader is told how far in they begin. An off-by-one there
+   --  reads a different matrix, or reads past one, and the numbers say so.
+   --
+   --  Skipped where the device will not take a pointer, which is a device
+   --  with no memory in common with the host and any device at all on most
+   --  machines.
+   procedure Device_Reads_The_Host_Memory_When_Asked
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Ready : Boolean;
+
+      Wide : constant N.Element_Count := 64;
+      Tall : constant N.Element_Count := 40;
+
+      Storage : B.Byte_Array_Access;
+      Weight  : T.View;
+      Status  : E.Error_Info;
+
+      Vector : T.Real_Array_Access;
+      Room   : T.Real_Array_Access;
+
+      --  Every element different, so a matrix read at the wrong offset
+      --  gives a wrong answer rather than the same one.
+      function Element (Row, Column : N.Element_Count) return N.Real
+      is (N.Real (Row) * 0.125 - N.Real (Column) * 0.0625 + 0.5);
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Share_Host => True);
+
+      if not Ready then
+         return;
+      end if;
+
+      declare
+         Values : N.Real_Array (0 .. Wide * Tall - 1);
+      begin
+         for Row in 0 .. Tall - 1 loop
+            for Column in 0 .. Wide - 1 loop
+               Values (Row * Wide + Column) := Element (Row, Column);
+            end loop;
+         end loop;
+
+         declare
+            Bytes : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+         begin
+            B.Allocate (Bytes'Length, Storage);
+            Storage.all := Bytes;
+         end;
+      end;
+
+      T.Make (G.Type_F32, Tall, Wide, Storage, 0, Weight, Status);
+      Assert (E.Is_Ok (Status), "the weight view could not be built");
+
+      T.Allocate (Wide, Vector);
+      T.Allocate (Tall, Room);
+      Assert (Vector /= null and then Room /= null, "no room for the test");
+
+      for Index in Vector.all'Range loop
+         Vector.all (Index) := N.Real (Index mod 5) * 0.25 - 0.375;
+      end loop;
+
+      --  Twice, because the second time comes from what the device kept and
+      --  the first from what it took.
+      for Pass in 1 .. 2 loop
+         Model_Runner.Backend.Device.Dispatch (Weight, Vector, Room, Status);
+         Assert (E.Is_Ok (Status),
+                 "a product on the host's own memory was refused: "
+                 & E.Error_Code'Image (Status.Code));
+
+         for Row in 0 .. Tall - 1 loop
+            declare
+               Sum : N.Wide_Real := 0.0;
+            begin
+               for Column in 0 .. Wide - 1 loop
+                  Sum := Sum
+                    + N.Wide_Real (Element (Row, Column))
+                      * N.Wide_Real (Vector.all (Vector.all'First + Column));
+               end loop;
+
+               Assert (abs (Room.all (Room.all'First + Row) - N.Real (Sum))
+                       < 1.0E-4,
+                       "a matrix read where it lies gave a different answer "
+                       & "in row" & N.Element_Count'Image (Row));
+            end;
+         end loop;
+      end loop;
+
+      --  And it did read it where it lies, rather than quietly copying: the
+      --  point of the exercise is the one thing a correct answer alone
+      --  would not show.
+      Assert (Model_Runner.Backend.Device.Imported > 0
+                or else Model_Runner.Backend.Device.Resident = 0,
+              "a device asked to read the host's memory copied instead and "
+              & "said nothing");
+
+      Assert (Interfaces."=" (Model_Runner.Backend.Device.Resident_Bytes, 0)
+                or else Model_Runner.Backend.Device.Imported = 0,
+              "a device reading the host's memory is also holding bytes of "
+              & "its own for the same matrix");
+
+      T.Free (Vector);
+      T.Free (Room);
+      B.Free (Storage);
+      Model_Runner.Backend.Device.Close;
+   end Device_Reads_The_Host_Memory_When_Asked;
+
    ----------
    -- Name --
    ----------
@@ -887,6 +1006,10 @@ package body Tests.Backend_Cases is
         (T, Device_Reports_What_It_Reads'Access,
          "the device backend claims the formats its shader decodes and no "
          & "others");
+      Register_Routine
+        (T, Device_Reads_The_Host_Memory_When_Asked'Access,
+         "a device asked to read the weights where they lie gives the same "
+         & "answers as one handed a copy");
       Register_Routine
         (T, Device_Gives_Back_What_It_Cannot_Hold'Access,
          "a device with less memory than the matrices need gives back the "
