@@ -3,6 +3,7 @@ with Interfaces;
 with Ada.Real_Time;
 
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Clocks;
 with Model_Runner.Errors;
@@ -101,9 +102,13 @@ package body Speed_Run is
       Threads     : Positive;
       Batch       : Positive;
       Repack      : L.Repack_Mode;
+      Backend     : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
       Repeats     : Positive;
       Result      : out Report)
    is
+      use type Model_Runner.Backend.Backend_Kind;
+
       procedure Say (Text : String) is
          Room : constant Natural :=
            Natural'Min (Text'Length, Result.Detail'Length);
@@ -161,8 +166,25 @@ package body Speed_Run is
             return;
          end if;
 
+         --  A device is opened before the model is prepared, because the
+         --  preparation asks the backend what it can read and a device that
+         --  is not there answers for nothing.
+         if Backend = Model_Runner.Backend.Backend_Device then
+            declare
+               Ready : Boolean;
+            begin
+               Model_Runner.Backend.Device.Open (Ready);
+               if not Ready then
+                  Containers.Close (Container);
+                  Files.Close (Source);
+                  Say ("no device answered");
+                  return;
+               end if;
+            end;
+         end if;
+
          L.Prepare
-           (Engine, Container, Source, Repack => Repack,
+           (Engine, Container, Source, Repack => Repack, Backend => Backend,
             Threads => Threads, Status => Status);
          if E.Is_Error (Status) then
             Containers.Close (Container);
@@ -182,8 +204,13 @@ package body Speed_Run is
             --  nothing.
             Timer : aliased Model_Runner.Clocks.System_Clock;
             Team  : aliased CPU.Pool (CPU.Worker_Count (Threads));
+
+            --  No pool for a backend that does not partition, whatever the
+            --  thread count says.
             Where : constant CPU.Pool_Reference :=
-              (if Threads = 1 then null else Team'Unchecked_Access);
+              (if Threads = 1
+                 or else Backend /= Model_Runner.Backend.Backend_CPU
+               then null else Team'Unchecked_Access);
          begin
             for Pass in 1 .. Repeats loop
                declare

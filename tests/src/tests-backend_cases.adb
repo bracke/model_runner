@@ -2,6 +2,7 @@ with AUnit.Assertions;
 
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
@@ -343,6 +344,174 @@ package body Tests.Backend_Cases is
               "BF16 is implemented but not advertised");
    end Capabilities_Reported;
 
+   ----------------------------------
+   -- Device_Reports_What_It_Reads --
+   ----------------------------------
+
+   --  What the device backend says it can do, against what it does.
+   --
+   --  A capability record nobody asks is a record that can be wrong for a
+   --  year, and this one is asked per tensor while a model loads: a format
+   --  claimed here and not decoded by the shader is a model accepted and
+   --  computed wrongly, which is worse than a model refused.
+   procedure Device_Reports_What_It_Reads
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Said : constant Model_Runner.Backend.Capabilities :=
+        Model_Runner.Backend.Device.Describe;
+   begin
+      Assert (Model_Runner.Backend.Backend_Name (Said.Kind) = "device",
+              "wrong backend name");
+
+      --  The three the shader has a branch for.
+      Assert (Model_Runner.Backend.Supports (Said, G.Type_F32), "F32");
+      Assert (Model_Runner.Backend.Supports (Said, G.Type_Q8_0), "Q8_0");
+      Assert (Model_Runner.Backend.Supports (Said, G.Type_Q4_0), "Q4_0");
+
+      --  And nothing else, which is the half that matters: every other
+      --  format reaches a device by being repacked, and claiming one here
+      --  would take a model past the loader's check and into the shader,
+      --  which would read its bytes as something they are not.
+      for Format in G.Tensor_Type loop
+         if Format not in G.Type_F32 | G.Type_Q8_0 | G.Type_Q4_0 then
+            Assert (not Model_Runner.Backend.Supports (Said, Format),
+                    "the device backend claims " & G.Type_Name (Format)
+                    & ", which the shader has no branch for");
+         end if;
+      end loop;
+
+      Assert (Said.Supports_Matrix_Vector,
+              "the device backend disclaims the one operation it is");
+      Assert (Said.Supports_Batched,
+              "the device backend disclaims batching, which its shader "
+              & "carries");
+      Assert (not Said.Supports_Parallel,
+              "the device backend claims a pool it has none of");
+      Assert (Said.Max_Workers = 1, "wrong worker maximum");
+   end Device_Reports_What_It_Reads;
+
+   ---------------------------------
+   -- Device_Refuses_What_It_Must --
+   ---------------------------------
+
+   --  Every refusal the device backend can make, made.
+   --
+   --  These are the paths a model file can reach and a test rarely does: no
+   --  device open, a format the shader has no branch for, and shapes that do
+   --  not describe a product. None of them needs a device -- what is being
+   --  checked is that they are answered before one is asked for -- so this
+   --  runs the same on a machine with no device at all, which is where a
+   --  refusal being wrong would otherwise never show.
+   procedure Device_Refuses_What_It_Must
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Storage : B.Byte_Array_Access;
+      Weight  : T.View;
+      Status  : E.Error_Info;
+
+      Vector : T.Real_Array_Access;
+      Room   : T.Real_Array_Access;
+
+      Was_Open : constant Boolean := Model_Runner.Backend.Device.Is_Ready;
+   begin
+      --  Closed, whatever the machine has. A test that only refuses on a
+      --  machine without a device is a test that says nothing on the one
+      --  machine that runs this backend.
+      Model_Runner.Backend.Device.Close;
+
+      B.Allocate (16, Storage);
+      Storage.all := [others => 0];
+      T.Make (G.Type_F32, 2, 2, Storage, 0, Weight, Status);
+      Assert (E.Is_Ok (Status), "weight view could not be built");
+
+      T.Allocate (2, Vector);
+      T.Allocate (2, Room);
+
+      Model_Runner.Backend.Device.Dispatch (Weight, Vector, Room, Status);
+      Assert (Status.Code = E.Lifecycle_Invalid_State,
+              "a product on no device was not refused as a state");
+
+      Model_Runner.Backend.Device.Dispatch_Batch
+        (Weight, Vector, 1, Room, Status);
+      Assert (Status.Code = E.Lifecycle_Invalid_State,
+              "a batch on no device was not refused as a state");
+
+      --  And with a device, if there is one: the refusals that come after
+      --  the state check.
+      declare
+         Ready : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Ready);
+
+         if Ready then
+            declare
+               Packed : B.Byte_Array_Access;
+               Other  : T.View;
+            begin
+               --  A format with no branch in the shader. Q4_1 is decoded by
+               --  every other backend, which is what makes it the right one
+               --  to ask about: the refusal has to come from this backend
+               --  rather than from the program not knowing the format.
+               B.Allocate (40, Packed);
+               Packed.all := [others => 0];
+               T.Make (G.Type_Q4_1, 2, 32, Packed, 0, Other, Status);
+               Assert (E.Is_Ok (Status), "packed view could not be built");
+
+               Model_Runner.Backend.Device.Dispatch
+                 (Other, Vector, Room, Status);
+               Assert (Status.Code = E.Backend_Unsupported_Format,
+                       "a format the shader cannot read was not refused as "
+                       & "a format");
+
+               B.Free (Packed);
+            end;
+
+            --  Nothing to multiply.
+            Model_Runner.Backend.Device.Dispatch (Weight, null, Room, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a product with no vector was not refused as a shape");
+
+            Model_Runner.Backend.Device.Dispatch (Weight, Vector, null, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a product with nowhere to put it was not refused as a "
+                    & "shape");
+
+            --  A batch of none, which is not a batch.
+            Model_Runner.Backend.Device.Dispatch_Batch
+              (Weight, Vector, 0, Room, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a batch of no vectors was not refused as a shape");
+
+            --  A batch of two through storage that holds one.
+            Model_Runner.Backend.Device.Dispatch_Batch
+              (Weight, Vector, 2, Room, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a batch longer than its storage was not refused as a "
+                    & "shape");
+
+            --  And one that is right, so that the refusals above are known
+            --  to be refusals of what they name rather than of everything.
+            Model_Runner.Backend.Device.Dispatch (Weight, Vector, Room, Status);
+            Assert (E.Is_Ok (Status),
+                    "a product this backend can do was refused: "
+                    & E.Error_Code'Image (Status.Code));
+         end if;
+      end;
+
+      T.Free (Vector);
+      T.Free (Room);
+      B.Free (Storage);
+
+      --  Left as it was found. Another test may have a device open and this
+      --  one has just closed it.
+      if not Was_Open then
+         Model_Runner.Backend.Device.Close;
+      end if;
+   end Device_Refuses_What_It_Must;
+
    ----------
    -- Name --
    ----------
@@ -562,6 +731,14 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Capabilities_Reported'Access,
          "capabilities report only what the backend implements");
+      Register_Routine
+        (T, Device_Reports_What_It_Reads'Access,
+         "the device backend claims the formats its shader decodes and no "
+         & "others");
+      Register_Routine
+        (T, Device_Refuses_What_It_Must'Access,
+         "the device backend refuses no device, a format it cannot read, "
+         & "and shapes that are not products");
 
       Register_Routine
         (T, Cores_Are_Not_Above_Processors'Access,

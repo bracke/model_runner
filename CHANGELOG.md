@@ -7,6 +7,42 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device shader takes a batch, and reads packed weights.** Two changes
+  to one shader, because both are the same loop with a different way of
+  reading the weights, and together they are what turns the device backend
+  from a demonstration into the fastest one here on this machine.
+
+  A batch. One invocation carries eight vectors and reads each weight once
+  for all of them; a longer batch is more dispatches in the one command
+  buffer, not more submissions. `Supports_Batched` is now True, which is what
+  makes the evaluator hand it a prompt in one call.
+
+  A format. The shader decodes Q8_0 and Q4_0 from the bytes the file holds,
+  block scale and all, so a quantized model goes to the device as it is
+  stored -- a gigabyte for TinyLlama rather than the four `--repack f32`
+  would make of it. The other twelve formats have no branch in the shader and
+  are still refused by name, per tensor, while the model loads.
+
+  Measured with `tests speed --backend NAME`, which is new and exists so that
+  these figures are a command rather than a memory. TinyLlama-1.1B Q8_0,
+  median of three: the published seven-token run takes 1.345 s on the device
+  against 1.727 s on seven workers, and a 111-token prompt takes 3.827 s
+  against 6.285 s. Both backends print the same digest of what they
+  generated, so this is the same text and not a faster answer to a different
+  question.
+
+  The conformance sweep compares the device against the independent
+  implementation on each of the three architectures in each of the three
+  formats it reads, through both evaluation paths, including a batch longer
+  than the eight an invocation carries and a batch that is not a whole number
+  of them.
+
+- **Tests for what the device backend refuses.** No device open, a format the
+  shader has no branch for, a vector that is not there, a batch of none, and a
+  batch longer than its storage. The first two run on a machine with no
+  device at all, which is where a refusal being wrong would otherwise never
+  show.
+
 - **`--backend device` runs a model.** The fourth piece, and the one that
   makes the other three a backend rather than a demonstration. A matrix is
   uploaded once and stays on the device for the rest of the run; what crosses

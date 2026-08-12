@@ -35,6 +35,7 @@
 --  used.
 --
 --  Task safety: run from one task.
+with Model_Runner.Backend;
 with Model_Runner.Llama;
 
 package Speed_Run is
@@ -69,6 +70,10 @@ package Speed_Run is
    --    selects. The published comparison between the stored layout
    --    and the repacked one was taken by hand before this existed, which
    --    is the same gap the reference-backend ratio had.
+   --  @param Backend Which backend evaluates the model, as --backend
+   --    selects. The device figures were taken by hand before this existed,
+   --    which is the same gap the reference-backend ratio had and the same
+   --    answer: a figure that is a command can be taken again.
    --  @param Repeats How many times to run, for the median.
    --  @param Result What it measured.
    procedure Run
@@ -78,6 +83,8 @@ package Speed_Run is
       Threads     : Positive;
       Batch       : Positive;
       Repack      : Model_Runner.Llama.Repack_Mode;
+      Backend     : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
       Repeats     : Positive;
       Result      : out Report);
 

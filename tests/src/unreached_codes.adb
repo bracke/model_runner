@@ -33,12 +33,17 @@ package body Unreached_Codes is
          --  not -- which is a fixture nobody has written.
             | E.Arch_Invalid_Tensor_Format
 
-         --  The three backend refusals. Each guards a request the command
-         --  layer clamps before it arrives: a format the backend cannot
-         --  take, a capability it does not have, a worker that failed. The
-         --  clamps are tested; what is not is the backend refusing a caller
-         --  that ignored them, and no caller here can.
-            | E.Backend_Unsupported_Format
+         --  Two of the three backend refusals. Each guards a request the
+         --  command layer clamps before it arrives: a capability the backend
+         --  does not have, a worker that failed. The clamps are tested; what
+         --  is not is the backend refusing a caller that ignored them, and no
+         --  caller here can.
+         --
+         --  The third came off this list when a backend arrived that reads
+         --  three formats out of fifteen. Until then no backend refused a
+         --  format the program could decode, so nothing could ask one to --
+         --  which is the shape of every entry here, and worth noticing when
+         --  one stops holding.
             | E.Backend_Capability_Missing
             | E.Backend_Worker_Failed
 

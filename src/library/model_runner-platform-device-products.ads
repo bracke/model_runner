@@ -1,5 +1,6 @@
 with Interfaces;
 
+with Model_Runner.Bytes;
 with Model_Runner.Numerics;
 
 --  Matrix-vector products on a device.
@@ -34,6 +35,16 @@ package Model_Runner.Platform.Device.Products is
    --  driver.
    Max_Elements : constant := 2 ** 28;
 
+   --  Vectors one dispatch carries, which is what the shader declares an
+   --  invocation to hold. A longer batch is several dispatches in the one
+   --  command buffer, not several submissions.
+   Batch_Group : constant := 8;
+
+   --  How a matrix's bytes are packed. The device decodes these itself; a
+   --  format not named here reaches it only by being repacked into one that
+   --  is, which is four bytes a weight and the caller's decision.
+   type Weight_Packing is (Values_F32, Packed_Q8_0, Packed_Q4_0);
+
    --  What holds a device's pipeline for the product.
    type Engine is limited private;
 
@@ -58,11 +69,45 @@ package Model_Runner.Platform.Device.Products is
    --  @return True when it is ready to compute.
    function Is_Ready (Item : Engine) return Boolean;
 
-   --  One matrix-vector product.
+   --  One matrix against a batch of vectors.
    --
    --  Weights are read row by row, which is the layout every weight in this
    --  program already has: element (row, column) is at row * columns +
-   --  column.
+   --  column, however the row is packed.
+   --
+   --  The batch is where a device earns its place. Each weight is read once
+   --  for every vector of the batch rather than once for each, so a prompt
+   --  costs one pass over the model instead of a pass a token -- which is
+   --  the difference between a backend that helps with a prompt and one that
+   --  only helps with what comes after it.
+   --
+   --  @param Item Ready engine.
+   --  @param Weights The matrix as it is stored, whole rows in order.
+   --  @param Packing How those bytes are packed. Columns must be a whole
+   --    number of thirty-two element blocks for anything but Values_F32.
+   --  @param Rows Number of rows, which is the length of one result.
+   --  @param Columns Number of columns.
+   --  @param Vectors Count runs of Columns values, one after another.
+   --  @param Count How many vectors; one is a batch of one.
+   --  @param Target Receives Count runs of Rows values.
+   --  @param Key Where these weights live, which is what makes a second
+   --    product with the same matrix cost nothing to set up. Null_Address
+   --    keeps nothing, which is what a caller with a matrix it will not use
+   --    again should pass.
+   --  @param Ok True when the device computed it.
+   procedure Multiply
+     (Item    : in out Engine;
+      Weights : Model_Runner.Bytes.Byte_Array;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Vectors : Model_Runner.Numerics.Real_Array;
+      Count   : Positive;
+      Target  : out Model_Runner.Numerics.Real_Array;
+      Ok      : out Boolean;
+      Key     : System.Address := System.Null_Address);
+
+   --  The same, for one vector of binary32 weights already decoded.
    --
    --  @param Item Ready engine.
    --  @param Weights Rows * Columns values, row by row.
@@ -70,11 +115,8 @@ package Model_Runner.Platform.Device.Products is
    --  @param Rows Number of rows, which is the length of the result.
    --  @param Columns Number of columns.
    --  @param Target Receives Rows values.
-   --  @param Key Where these weights live, which is what makes a second
-   --    product with the same matrix cost nothing to set up. Null_Address
-   --    keeps nothing, which is what a caller with a matrix it will not use
-   --    again should pass.
    --  @param Ok True when the device computed it.
+   --  @param Key As above.
    procedure Multiply
      (Item    : in out Engine;
       Weights : Model_Runner.Numerics.Real_Array;
@@ -84,6 +126,16 @@ package Model_Runner.Platform.Device.Products is
       Target  : out Model_Runner.Numerics.Real_Array;
       Ok      : out Boolean;
       Key     : System.Address := System.Null_Address);
+
+   --  Bytes one row of a matrix takes.
+   --
+   --  @param Packing How the row is packed.
+   --  @param Columns Number of columns.
+   --  @return The byte count, or zero when the columns do not divide into
+   --    blocks the packing is made of.
+   function Row_Bytes
+     (Packing : Weight_Packing; Columns : Natural)
+      return Interfaces.Unsigned_64;
 
    --  How many matrices the device is holding.
    --

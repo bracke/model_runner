@@ -331,6 +331,15 @@ engine 53BFCFD80DB36781 src/library/model_runner-llama.adb src/library/model_run
 # that was added.
 reference 06A825F8C420E7C3 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
+# covers: the two-row table under "The device backend" -- the seven-token run
+# and the 111-token prompt, on both backends -- and the claim that the two
+# print the same digest. Re-measure with `tests speed --model PATH --backend
+# cpu` and again with `--backend device`, which is the command printed beside
+# the table. Both sides are listed here because the figure is a comparison:
+# a change that makes the processor slower moves it as surely as one that
+# makes the device faster.
+device 75E9F6C6B8D03F1F src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling B5443E99EAAA8126 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
 

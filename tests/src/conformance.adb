@@ -87,6 +87,13 @@ package body Conformance is
       --  format, backend and repack mode on its own.
       type Model_Shape is (Plain, Windowed, Mixed, Stretched, Apart);
 
+      --  The formats the device reads without being repacked into one. The
+      --  backend states them; this states them again rather than reading
+      --  them, because a fixture has to be written in each and the writer
+      --  takes a name.
+      Device_Formats : constant array (1 .. 3) of Tiny_Model.Weight_Format :=
+        [Tiny_Model.F32, Tiny_Model.Q8_0, Tiny_Model.Q4_0];
+
       Swept : constant array (1 .. 2) of Model_Runner.Backend.Backend_Kind :=
         [Model_Runner.Backend.Backend_CPU,
          Model_Runner.Backend.Backend_Reference];
@@ -604,17 +611,22 @@ package body Conformance is
             end loop;
          end loop;
 
-         --  And the device, on the one thing it takes.
+         --  And the device, on the three formats its shader decodes.
          --
          --  This is not crossed with the loops above and could not be: the
-         --  device reads binary32 and nothing else, so fourteen of the
-         --  fifteen formats reach it only through --repack f32, and running
-         --  that cross would compare the repacking fifteen times over rather
-         --  than the device once. What is held here is the claim that
+         --  other twelve formats reach it only through --repack f32, and
+         --  running that cross would compare the repacking twelve times over
+         --  rather than the device once. What is held here is the claim that
          --  matters -- that a product computed on a device gives the same
          --  logits as one computed on the processor -- over every
-         --  architecture, against the same independent implementation
-         --  everything else is compared against.
+         --  architecture and every format the device reads for itself,
+         --  against the same independent implementation everything else is
+         --  compared against.
+         --
+         --  Both evaluation paths, because the shader takes a batch by
+         --  reading each weight once for eight vectors and writing eight
+         --  results, and an off-by-one in either would show as a logit
+         --  belonging to the wrong position rather than as a failure.
          --
          --  Skipped where there is no device. A machine without one is the
          --  common case and this is not the test that would tell it so.
@@ -622,17 +634,32 @@ package body Conformance is
 
          if Device_Ready then
             for Which_Arch in Crossed'Range loop
-               Tiny_Model.Build
-                 (Image, Tiny_Model.F32, Kind => Crossed (Which_Arch));
-               Forget;
+               for Format of Device_Formats loop
+                  Tiny_Model.Build
+                    (Image, Format, Kind => Crossed (Which_Arch));
+                  Forget;
 
-               for Which in Sequence_Index loop
-                  Compare (Which, L.Exact, Model_Runner.Backend.Backend_Device,
-                           L.No_Repack);
-                  On_Device := On_Device + 1;
+                  for Which in Sequence_Index loop
+                     Compare
+                       (Which, L.Exact,
+                        Model_Runner.Backend.Backend_Device, L.No_Repack);
+                     On_Device := On_Device + 1;
+                  end loop;
+
+                  --  Eight tokens in one pass, and the same eight three at a
+                  --  time, which is a batch longer than the eight an
+                  --  invocation carries and a batch that is not a whole
+                  --  number of them.
+                  Compare
+                    (4, L.Exact, Model_Runner.Backend.Backend_Device,
+                     L.No_Repack, Batched => True);
+                  Compare
+                    (4, L.Exact, Model_Runner.Backend.Backend_Device,
+                     L.No_Repack, Batched => True, Chunk => 3);
+                  On_Device := On_Device + 2;
+
+                  B.Free (Image);
                end loop;
-
-               B.Free (Image);
             end loop;
          end if;
 

@@ -33,6 +33,8 @@ package body Model_Runner.Platform.Device.Products is
 
    package C renames Interfaces.C;
 
+   use type Model_Runner.Bytes.Byte_Count;
+
    subtype Address is System.Address;
 
    Null_Handle : constant Address := System.Null_Address;
@@ -168,10 +170,15 @@ package body Model_Runner.Platform.Device.Products is
 
    type Write_Array is array (1 .. 3) of aliased Write_Descriptor;
 
+   --  Bytes of push constants, which the layout declares and every dispatch
+   --  writes. One number in two places is one number that can differ, so it
+   --  is this one.
+   Shape_Bytes : constant := 20;
+
    type Push_Range is record
       Stages : C.unsigned := Stage_Compute;
       Offset : C.unsigned := 0;
-      Size   : C.unsigned := 8;
+      Size   : C.unsigned := Shape_Bytes;
    end record
      with Convention => C;
 
@@ -266,8 +273,12 @@ package body Model_Runner.Platform.Device.Products is
    type Shape_Constants is record
       Rows    : C.unsigned := 0;
       Columns : C.unsigned := 0;
+      Count   : C.unsigned := 1;
+      First   : C.unsigned := 0;
+      Packing : C.unsigned := 0;
    end record
      with Convention => C;
+
 
    ---------------------------------------------------------------------------
    --  Entry points
@@ -546,6 +557,42 @@ package body Model_Runner.Platform.Device.Products is
       Unmap (Item.Logical, Memory);
       Ok := True;
    end Write_Into;
+
+   --  The same for storage this does not interpret. A packed matrix is bytes
+   --  until the shader reads it, and copying it as anything else would be
+   --  claiming to know what it holds.
+   procedure Write_Bytes
+     (Item   : in out Engine;
+      Memory : Address;
+      Bytes  : Interfaces.Unsigned_64;
+      Values : Model_Runner.Bytes.Byte_Array;
+      Ok     : out Boolean)
+   is
+      Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
+      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+
+      Where : aliased Address := Null_Handle;
+   begin
+      Ok := False;
+
+      if Map = null or else Unmap = null then
+         return;
+      end if;
+
+      if Map (Item.Logical, Memory, 0, Bytes, 0, Where'Access) /= 0 then
+         return;
+      end if;
+
+      declare
+         Room : Model_Runner.Bytes.Byte_Array (Values'Range)
+           with Import, Address => Where;
+      begin
+         Room := Values;
+      end;
+
+      Unmap (Item.Logical, Memory);
+      Ok := True;
+   end Write_Bytes;
 
    ---------------------------------------------------------------------------
    --  Making and releasing
@@ -878,12 +925,43 @@ package body Model_Runner.Platform.Device.Products is
    -- Multiply --
    --------------
 
+   ----------------
+   -- Row_Bytes --
+   ----------------
+
+   function Row_Bytes
+     (Packing : Weight_Packing; Columns : Natural)
+      return Interfaces.Unsigned_64 is
+   begin
+      case Packing is
+         when Values_F32 =>
+            return Interfaces.Unsigned_64 (Columns) * 4;
+
+         when Packed_Q8_0 | Packed_Q4_0 =>
+            --  A block is thirty-two elements and a row is a whole number of
+            --  them. A width that is not says the caller and the file
+            --  disagree about the matrix, which is not a thing to round.
+            if Columns mod 32 /= 0 then
+               return 0;
+            end if;
+
+            return Interfaces.Unsigned_64 (Columns / 32)
+                   * (if Packing = Packed_Q8_0 then 34 else 18);
+      end case;
+   end Row_Bytes;
+
+   ---------------
+   -- Multiply --
+   ---------------
+
    procedure Multiply
      (Item    : in out Engine;
-      Weights : Model_Runner.Numerics.Real_Array;
-      Vector  : Model_Runner.Numerics.Real_Array;
+      Weights : Model_Runner.Bytes.Byte_Array;
+      Packing : Weight_Packing;
       Rows    : Natural;
       Columns : Natural;
+      Vectors : Model_Runner.Numerics.Real_Array;
+      Count   : Positive;
       Target  : out Model_Runner.Numerics.Real_Array;
       Ok      : out Boolean;
       Key     : System.Address := System.Null_Address)
@@ -894,12 +972,14 @@ package body Model_Runner.Platform.Device.Products is
       --  the instance behind it.
       Ignored : constant Boolean := Set_Asking (Item);
 
+      Wide : constant Interfaces.Unsigned_64 := Row_Bytes (Packing, Columns);
+
       Weight_Bytes : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Elements) * 4;
+        Interfaces.Unsigned_64 (Rows) * Wide;
       Vector_Bytes : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Columns) * 4;
+        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Count) * 4;
       Result_Bytes : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Rows) * 4;
+        Interfaces.Unsigned_64 (Rows) * Interfaces.Unsigned_64 (Count) * 4;
 
       --  The matrix, kept when it has a key and made afresh when it has not.
       Weight_Buffer : Address := Null_Handle;
@@ -922,10 +1002,16 @@ package body Model_Runner.Platform.Device.Products is
       if not Is_Ready (Item)
         or else Rows = 0
         or else Columns = 0
+        or else Wide = 0
         or else Elements > Max_Elements
-        or else Weights'Length < Elements
-        or else Vector'Length < Columns
-        or else Target'Length < Rows
+        or else Columns * Count > Max_Elements
+        or else Interfaces.Unsigned_64 (Weights'Length) < Weight_Bytes
+        or else Vectors'Length
+                  < Model_Runner.Numerics.Element_Count (Columns)
+                    * Model_Runner.Numerics.Element_Count (Count)
+        or else Target'Length
+                  < Model_Runner.Numerics.Element_Count (Rows)
+                    * Model_Runner.Numerics.Element_Count (Count)
       then
          return;
       end if;
@@ -953,11 +1039,11 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Write_Into
+         Write_Bytes
            (Item, Weight_Memory, Weight_Bytes,
             Weights (Weights'First
                      .. Weights'First
-                        + Model_Runner.Numerics.Element_Count (Elements) - 1),
+                        + Model_Runner.Bytes.Byte_Count (Weight_Bytes) - 1),
             Good);
          if not Good then
             Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
@@ -1001,9 +1087,10 @@ package body Model_Runner.Platform.Device.Products is
 
       Write_Into
         (Item, Item.Vector_Memory, Vector_Bytes,
-         Vector (Vector'First
-                 .. Vector'First
-                    + Model_Runner.Numerics.Element_Count (Columns) - 1),
+         Vectors (Vectors'First
+                  .. Vectors'First
+                     + Model_Runner.Numerics.Element_Count (Columns)
+                       * Model_Runner.Numerics.Element_Count (Count) - 1),
          Good);
       if not Good then
          Release_Borrowed;
@@ -1041,7 +1128,11 @@ package body Model_Runner.Platform.Device.Products is
       end;
 
       --  The work: one group per sixty-four rows, which is what the shader
-      --  declares a group to be.
+      --  declares a group to be, and one dispatch per Batch_Group vectors,
+      --  which is what an invocation carries. All of them in the one command
+      --  buffer: they write disjoint parts of the result and wait for
+      --  nothing, so what a longer batch costs is a dispatch and not a
+      --  submission.
       declare
          Reset_Buffer : constant Reset_Buffer_Call :=
            To_Reset_Buffer (Point ("vkResetCommandBuffer"));
@@ -1055,9 +1146,6 @@ package body Model_Runner.Platform.Device.Products is
          Push : constant Push_Call := To_Push (Point ("vkCmdPushConstants"));
          Dispatch : constant Dispatch_Call :=
            To_Dispatch (Point ("vkCmdDispatch"));
-
-         Shape : aliased Shape_Constants :=
-           (Rows => C.unsigned (Rows), Columns => C.unsigned (Columns));
 
          Sets  : aliased Address := Item.Descriptor;
          Began : aliased Command_Begin_Info;
@@ -1080,10 +1168,29 @@ package body Model_Runner.Platform.Device.Products is
          Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
          Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                     Sets'Address, 0, Null_Handle);
-         Push (Item.Buffer, Item.Layout, Stage_Compute, 0, 8, Shape'Address);
-         Dispatch
-           (Item.Buffer,
-            C.unsigned ((Rows + Group_Size - 1) / Group_Size), 1, 1);
+
+         declare
+            First : Natural := 0;
+         begin
+            while First < Count loop
+               declare
+                  Shape : aliased Shape_Constants :=
+                    (Rows    => C.unsigned (Rows),
+                     Columns => C.unsigned (Columns),
+                     Count   => C.unsigned (Count),
+                     First   => C.unsigned (First),
+                     Packing => C.unsigned (Weight_Packing'Pos (Packing)));
+               begin
+                  Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                        Shape_Bytes, Shape'Address);
+                  Dispatch
+                    (Item.Buffer,
+                     C.unsigned ((Rows + Group_Size - 1) / Group_Size), 1, 1);
+               end;
+
+               First := First + Batch_Group;
+            end loop;
+         end;
 
          if Stop (Item.Buffer) /= 0 then
             Release_Borrowed;
@@ -1145,7 +1252,8 @@ package body Model_Runner.Platform.Device.Products is
             Slice : Model_Runner.Numerics.Real_Array
               (Target'First
                .. Target'First
-                  + Model_Runner.Numerics.Element_Count (Rows) - 1)
+                  + Model_Runner.Numerics.Element_Count (Rows)
+                    * Model_Runner.Numerics.Element_Count (Count) - 1)
               with Import, Address => Where;
          begin
             Target (Slice'Range) := Slice;
@@ -1156,6 +1264,47 @@ package body Model_Runner.Platform.Device.Products is
 
       Release_Borrowed;
       Ok := True;
+   end Multiply;
+
+   ---------------
+   -- Multiply --
+   ---------------
+
+   procedure Multiply
+     (Item    : in out Engine;
+      Weights : Model_Runner.Numerics.Real_Array;
+      Vector  : Model_Runner.Numerics.Real_Array;
+      Rows    : Natural;
+      Columns : Natural;
+      Target  : out Model_Runner.Numerics.Real_Array;
+      Ok      : out Boolean;
+      Key     : System.Address := System.Null_Address)
+   is
+      Elements : constant Natural := Rows * Columns;
+   begin
+      Target := [others => 0.0];
+      Ok := False;
+
+      if Rows = 0 or else Columns = 0
+        or else Elements > Max_Elements
+        or else Weights'Length
+                  < Model_Runner.Numerics.Element_Count (Elements)
+      then
+         return;
+      end if;
+
+      --  The same values, as the bytes they already are. Binary32 is what
+      --  the buffer holds either way; naming it a format is the only
+      --  difference between this and the general one.
+      declare
+         Room : constant Model_Runner.Bytes.Byte_Array
+           (1 .. Model_Runner.Bytes.Byte_Count (Elements * 4))
+           with Import, Address => Weights (Weights'First)'Address;
+      begin
+         Multiply
+           (Item, Room, Values_F32, Rows, Columns, Vector, 1, Target, Ok,
+            Key);
+      end;
    end Multiply;
 
 end Model_Runner.Platform.Device.Products;

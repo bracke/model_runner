@@ -1,8 +1,23 @@
 #version 450
 
-//  One row of a matrix against one vector, per invocation.
+//  Rows of a matrix against a batch of vectors, one row per invocation.
 //
-//  y[row] = sum over col of w[row][col] * x[col]
+//  y[v][row] = sum over col of w[row][col] * x[v][col]
+//
+//  Two things are folded into one shader on purpose, because both are the
+//  same loop with a different way of reading w:
+//
+//  A batch. An invocation carries GROUP accumulators and reads each weight
+//  once for all of them, which is the saving a batch exists to make: the
+//  weights are what a product spends its time on, and reading them once for
+//  eight vectors is eight times less of it. A batch longer than GROUP is
+//  several dispatches, each told which vector it starts at.
+//
+//  A format. A weight is either a binary32 value or a block of packed bits
+//  with a scale, and unpacking is a handful of arithmetic where reading the
+//  matrix again is a pass over the whole model. So the weights are bound as
+//  plain words and decoded here, which is what lets a quantized model reach
+//  a device without four bytes a weight being made for it first.
 //
 //  The accumulation is in binary32, which is what a device offers without
 //  asking for an extension. The processor's own kernels accumulate a row in
@@ -15,14 +30,55 @@
 
 layout(local_size_x = 64) in;
 
-layout(std430, binding = 0) readonly  buffer Weights { float w[]; };
-layout(std430, binding = 1) readonly  buffer Vector  { float x[]; };
+layout(std430, binding = 0) readonly  buffer Weights { uint  w[]; };
+layout(std430, binding = 1) readonly  buffer Vectors { float x[]; };
 layout(std430, binding = 2) writeonly buffer Result  { float y[]; };
 
 layout(push_constant) uniform Shape {
     uint rows;
     uint columns;
+
+    //  How many vectors there are altogether, and which of them this
+    //  dispatch starts at. Both are needed: the first says where to read
+    //  and where to write, the count says which of this invocation's
+    //  accumulators are real.
+    uint count;
+    uint first;
+
+    //  0 binary32, 1 q8_0, 2 q4_0. The host refuses anything else before it
+    //  gets here, so there is no fourth case to be wrong about.
+    uint format;
 } shape;
+
+//  Vectors carried at once by one invocation. A constant, so that the loops
+//  over it unroll and the accumulators stay in registers; making it the
+//  batch length instead would put them in memory and give back what the
+//  batching just bought.
+const uint GROUP = 8u;
+
+//  One byte of the weights. Blocks are 34 and 18 bytes long, so a block
+//  boundary is not a word boundary and reading a word at a time would need
+//  every offset to be a special case.
+uint byte_at(uint at) {
+    return (w[at >> 2u] >> ((at & 3u) * 8u)) & 255u;
+}
+
+//  The scale in front of a block, which every packed format writes as a
+//  binary16 value.
+float scale_at(uint at) {
+    return unpackHalf2x16(byte_at(at) | (byte_at(at + 1u) << 8u)).x;
+}
+
+//  Bytes one row takes, which is what says where the next row starts.
+uint row_bytes() {
+    if (shape.format == 0u) {
+        return shape.columns * 4u;
+    }
+    if (shape.format == 1u) {
+        return (shape.columns / 32u) * 34u;
+    }
+    return (shape.columns / 32u) * 18u;
+}
 
 void main() {
     uint row = gl_GlobalInvocationID.x;
@@ -30,12 +86,78 @@ void main() {
         return;
     }
 
-    uint base = row * shape.columns;
-    float sum = 0.0;
-
-    for (uint col = 0; col < shape.columns; ++col) {
-        sum += w[base + col] * x[col];
+    //  Where each of this invocation's vectors begins. The ones past the end
+    //  of the batch read the last real vector rather than reading nothing:
+    //  the loops below have to have a constant trip count to unroll, and a
+    //  result nobody writes out is cheaper than a branch every element.
+    uint from[GROUP];
+    for (uint k = 0u; k < GROUP; ++k) {
+        from[k] = min(shape.first + k, shape.count - 1u) * shape.columns;
     }
 
-    y[row] = sum;
+    float sum[GROUP];
+    for (uint k = 0u; k < GROUP; ++k) {
+        sum[k] = 0.0;
+    }
+
+    uint base = row * row_bytes();
+
+    if (shape.format == 0u) {
+        uint at = base >> 2u;
+
+        for (uint col = 0u; col < shape.columns; ++col) {
+            float weight = uintBitsToFloat(w[at + col]);
+            for (uint k = 0u; k < GROUP; ++k) {
+                sum[k] += weight * x[from[k] + col];
+            }
+        }
+    } else if (shape.format == 1u) {
+        //  Thirty-two signed bytes behind one scale.
+        uint blocks = shape.columns / 32u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 34u;
+            float scale = scale_at(at);
+            uint col = b * 32u;
+
+            for (uint j = 0u; j < 32u; ++j) {
+                int packed = int(byte_at(at + 2u + j));
+                float weight = scale * float(packed > 127 ? packed - 256
+                                                          : packed);
+                for (uint k = 0u; k < GROUP; ++k) {
+                    sum[k] += weight * x[from[k] + col + j];
+                }
+            }
+        }
+    } else {
+        //  Thirty-two nibbles behind one scale, the low half of each byte
+        //  belonging to element j and the high half to element j + 16.
+        uint blocks = shape.columns / 32u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 18u;
+            float scale = scale_at(at);
+            uint col = b * 32u;
+
+            for (uint j = 0u; j < 16u; ++j) {
+                uint packed = byte_at(at + 2u + j);
+                float low  = scale * (float(packed & 15u) - 8.0);
+                float high = scale * (float(packed >> 4u) - 8.0);
+
+                for (uint k = 0u; k < GROUP; ++k) {
+                    sum[k] += low  * x[from[k] + col + j];
+                    sum[k] += high * x[from[k] + col + j + 16u];
+                }
+            }
+        }
+    }
+
+    //  Only the vectors this dispatch was given. The rest are the padding
+    //  above and belong to nobody.
+    uint taken = min(GROUP, shape.count - shape.first);
+    for (uint k = 0u; k < GROUP; ++k) {
+        if (k < taken) {
+            y[(shape.first + k) * shape.rows + row] = sum[k];
+        }
+    }
 }
