@@ -1874,6 +1874,106 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  A snapshot of a model whose key and value heads are different
+   --  widths.
+   --
+   --  The round-trip above uses a model where they are the same number,
+   --  and a cache written with the two widths crossed round-trips
+   --  perfectly when they are the same number. So does one written with
+   --  the value width where the key width belongs. Neither would survive a
+   --  model that states them apart, which is what this uses: key heads
+   --  twice the width the embedding implies and value heads three times
+   --  it.
+   --
+   --  Same test as the plain one, then. What makes it a different test is
+   --  the fixture.
+   procedure Snapshot_Keeps_The_Two_Widths_Apart
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7];
+
+      Image : B.Byte_Array_Access;
+      Kept  : B.Byte_Array_Access;
+      Direct, Restored : Logit_Vector;
+   begin
+      Tiny_Model.Build (Image, Apart_Widths => True);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         declare
+            Read : constant L.Configuration := L.Config (Under.Ready);
+         begin
+            Assert (Read.Head_Size /= Read.Value_Size,
+                    "this fixture is meant to have the two widths apart, "
+                    & "and they are both"
+                    & Natural'Image (Read.Head_Size));
+         end;
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Direct, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation failed");
+         end loop;
+
+         L.Snapshot (Live, Under.Ready, Kept, Status);
+         Assert (E.Is_Ok (Status),
+                 "the session did not snapshot: "
+                 & E.Error_Code'Image (Status.Code));
+
+         L.Evaluate (Live, Under.Ready, 4, Direct, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed after the snapshot");
+         L.Close (Live);
+      end;
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the second session did not open");
+
+         L.Adopt (Live, Under.Ready, Kept.all, Status);
+         Assert (E.Is_Ok (Status),
+                 "the snapshot was not adopted: "
+                 & E.Error_Code'Image (Status.Code));
+
+         L.Evaluate (Live, Under.Ready, 4, Restored, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed after adopting");
+         L.Close (Live);
+      end;
+
+      declare
+         Worst : Model_Runner.Numerics.Real := 0.0;
+      begin
+         for Index in Direct'Range loop
+            Worst := Model_Runner.Numerics.Real'Max
+              (Worst, abs (Direct (Index) - Restored (Index)));
+         end loop;
+
+         Assert (Worst = 0.0,
+                 "a cache whose keys and values are different widths did "
+                 & "not survive being written out and read back; the "
+                 & "logits moved by"
+                 & Model_Runner.Numerics.Real'Image (Worst));
+      end;
+
+      B.Free (Kept);
+      B.Free (Image);
+   end Snapshot_Keeps_The_Two_Widths_Apart;
+
    --  A context saved before an adapter was merged is not a context after
    --  it was.
    --
@@ -3273,6 +3373,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, Snapshot_Keeps_The_Two_Widths_Apart'Access,
+         "a snapshot keeps the key and value widths apart");
       Register_Routine
         (T, Adapter_Changes_Which_Model_A_Context_Belongs_To'Access,
          "a context saved before an adapter was merged is not a context "

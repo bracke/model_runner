@@ -558,7 +558,15 @@ package body Conformance is
                         --  Both evaluation paths, because the two storages
                         --  are two procedures and a copy nothing runs is
                         --  what this sweep exists to prevent.
-                        if Shape = Plain and then Repack = L.No_Repack then
+                        --
+                        --  And on the windowed shape as well as the plain
+                        --  one. The two procedures each carry their own copy
+                        --  of what a window means, and running the halved
+                        --  one only where there is no window left half of
+                        --  that claim resting on the other procedure's code.
+                        if Shape in Plain | Windowed
+                          and then Repack = L.No_Repack
+                        then
                            Compare (3, L.Halved, Backend, Repack);
                            Compare (4, L.Halved, Backend, Repack);
 
@@ -626,12 +634,12 @@ package body Conformance is
             --  is the finding rather than a gap: the published lossy figure
             --  describes a dense model with full attention and heads the
             --  width its embedding implies, and nothing else.
-            --  And the half-precision cache, which runs on the plain shape
-            --  with the weights unrounded: two sequences a backend, and one
-            --  of them again through the batched path where the backend
-            --  takes one.
+            --  And the half-precision cache, which runs on the plain and
+            --  windowed shapes with the weights unrounded: two sequences a
+            --  backend, and one of them again through the batched path
+            --  where the backend takes one.
             Cached : constant Natural :=
-              Formats * Arches * (Backends * 2 + Batching);
+              Formats * Arches * 2 * (Backends * 2 + Batching);
 
             Expected : constant Natural :=
               Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached;

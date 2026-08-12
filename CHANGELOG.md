@@ -805,6 +805,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The half-precision cache is swept on a windowed model too.** The two
+  storages are two procedures and each carries its own copy of what a window
+  means; the sweep ran the halved one only where there is no window, so half
+  of "both are reached by the sweep, so neither is a copy nothing runs" was
+  resting on the other procedure's code. It is reached now.
+
+  It is also correct, and it costs more than it did: 0.0327 worst absolute
+  against the independent implementation with a window where it is 0.0218
+  without one. A window sharpens the softmax, so a rounded key moves a logit
+  further -- the same reason brain floats cost more on a windowed model.
+
 - **`tests benchmark` measures merging an adapter**, at rank one and at rank
   sixteen. Nothing changed in the merge, and that is the finding: the
   measurement was taken to justify rewriting it and said not to.
