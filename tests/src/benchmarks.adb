@@ -11,6 +11,9 @@ with Model_Runner.Limits;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Grammar;
+with Model_Runner.Byte_Sources.Files;
+with Model_Runner.Llama;
+with Tiny_Model;
 with Model_Runner.Kernels;
 with Model_Runner.Sampling;
 with Model_Runner.Tokenizer;
@@ -324,6 +327,118 @@ package body Benchmarks is
 
          B.Free (Data);
       end Measure;
+
+      --  What merging an adapter costs.
+      --
+      --  It runs once at load rather than once a token, so it is a wait
+      --  rather than a rate -- but it is rank times every weight it
+      --  touches, and on a real model that is billions of updates. The
+      --  fixture is small, so what this reports is the rate; the wait on a
+      --  real model is that rate divided into its own element count, which
+      --  the README does.
+      procedure Measure_Merge (Name : String; Rank : Positive) is
+         Adapter : constant String := "obj/bench-adapter.gguf";
+
+         Image : B.Byte_Array_Access;
+
+         --  Every element the merge writes, once per pass: the query
+         --  projection of layer zero, at rank one.
+         Touched : constant N.Element_Count :=
+           N.Element_Count (Tiny_Model.Deep_Embedding)
+           * N.Element_Count (Tiny_Model.Heads * Tiny_Model.Deep_Head_Size)
+           * N.Element_Count (Rank);
+
+         Started : Ada.Real_Time.Time;
+         Done    : N.Element_Count := 0;
+         Rates   : Rate_Array (1 .. Rounds) := [others => 0.0];
+      begin
+         Tiny_Model.Build (Image, Tiny_Model.Q4_K);
+         Tiny_Model.Write_Adapter (Adapter, Deep => True, Rank => Rank);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Model_Runner.GGUF.Containers.Container;
+            Ready  : Model_Runner.Llama.Model;
+            Status : E.Error_Info;
+         begin
+            Model_Runner.GGUF.Containers.Reader.Parse
+              (Parsed, Source, Status => Status);
+            if E.Is_Error (Status) then
+               IO.Put_Line ("  merge: the fixture did not parse");
+               return;
+            end if;
+
+            Model_Runner.Llama.Prepare
+              (Ready, Parsed, Source,
+               Repack => Model_Runner.Llama.To_F32, Status => Status);
+            if E.Is_Error (Status) then
+               IO.Put_Line ("  merge: the fixture did not prepare");
+               return;
+            end if;
+
+            --  The file is opened and parsed once. What is being timed is
+            --  the merge, not the reading of a small file around it.
+            declare
+               From   : Model_Runner.Byte_Sources.Files.File_Source;
+               Second : Model_Runner.GGUF.Containers.Container;
+               Local  : E.Error_Info;
+            begin
+               Model_Runner.Byte_Sources.Files.Open
+                 (From, Adapter, Status => Local);
+               if E.Is_Error (Local) then
+                  IO.Put_Line ("  merge: the adapter did not open");
+                  return;
+               end if;
+
+               Model_Runner.GGUF.Containers.Reader.Parse
+                 (Second, From, Status => Local);
+               if E.Is_Error (Local) then
+                  IO.Put_Line ("  merge: the adapter did not parse");
+                  return;
+               end if;
+
+               for Pass in Rates'Range loop
+                  Done := 0;
+                  Started := Ada.Real_Time.Clock;
+                  loop
+                     --  A scale of zero, so that repeating the merge does
+                     --  not walk the weights away from where they started
+                     --  while it is being timed. It is the same arithmetic
+                     --  either way.
+                     Model_Runner.Llama.Merge_Adapter
+                       (Ready, Second, From, 0.0, Local);
+                     if E.Is_Error (Local) then
+                        IO.Put_Line
+                          ("  merge: refused, "
+                           & E.Error_Code'Image (Local.Code));
+                        exit;
+                     end if;
+
+                     Done := Done + Touched;
+                     exit when Ada.Real_Time.To_Duration
+                       (Ada.Real_Time.Clock - Started) >= Seconds;
+                  end loop;
+
+                  Rates (Pass) :=
+                    Rate_Of (Long_Long_Integer (Done),
+                             Ada.Real_Time.To_Duration
+                               (Ada.Real_Time.Clock - Started));
+               end loop;
+
+               Model_Runner.GGUF.Containers.Close (Second);
+               Model_Runner.Byte_Sources.Files.Close (From);
+            end;
+
+            Report_Rate (Name, Middle (Rates));
+
+            Model_Runner.Llama.Close (Ready, Status);
+            Model_Runner.GGUF.Containers.Close (Parsed);
+         end;
+
+         B.Free (Image);
+      end Measure_Merge;
 
       --  What sampling costs a token.
       --
@@ -1066,6 +1181,11 @@ package body Benchmarks is
       Measure_Reference_Ratio ("q8_0");
       Measure_Reference_Ratio ("q4_k", G.Type_Q4_K);
       Measure_Reference_Ratio ("f32 ", G.Type_F32);
+      IO.New_Line;
+
+      IO.Put_Line ("merging an adapter");
+      Measure_Merge ("weight updates at rank 1 ", 1);
+      Measure_Merge ("weight updates at rank 16", 16);
       IO.New_Line;
 
       IO.Put_Line ("sampling, one token chosen from 32000");

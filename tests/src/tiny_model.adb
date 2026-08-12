@@ -590,8 +590,15 @@ package body Tiny_Model is
    procedure Write_Adapter
      (Path    : String;
       Half    : Boolean := False;
-      Foreign : Boolean := False)
+      Foreign : Boolean := False;
+      Deep    : Boolean := False;
+      Rank    : Positive := 1)
    is
+      Wide_Of : constant Natural :=
+        (if Deep then Deep_Embedding else Embedding);
+      Tall_Of : constant Natural :=
+        (if Deep then Heads * Deep_Head_Size else Heads * Head_Size);
+
       use Ada.Streams;
 
       Builder : Fixtures.Builder;
@@ -612,24 +619,32 @@ package body Tiny_Model is
       --  is the output width by the rank. GGUF writes the contiguous
       --  dimension first, so each is written the way it is read.
       declare
-         Down : N.Real_Array (0 .. N.Element_Count (Embedding) - 1);
+         --  Rank rows of the first and rank columns of the second. Only the
+         --  first row and column carry the difference the merge test checks;
+         --  the rest are zero, so a higher rank costs the merge what a real
+         --  one costs without changing what it produces.
+         Down : N.Real_Array
+           (0 .. N.Element_Count (Wide_Of) * N.Element_Count (Rank) - 1) :=
+             [others => 0.0];
          Up   : N.Real_Array
-           (0 .. N.Element_Count (Heads * Head_Size) - 1);
+           (0 .. N.Element_Count (Tall_Of) * N.Element_Count (Rank) - 1) :=
+             [others => 0.0];
       begin
-         for Index in Down'Range loop
+         for Index in 0 .. N.Element_Count (Wide_Of) - 1 loop
             Down (Index) := Adapter_Row (Natural (Index));
          end loop;
-         for Index in Up'Range loop
-            Up (Index) := Adapter_Column (Natural (Index));
+         for Index in 0 .. N.Element_Count (Tall_Of) - 1 loop
+            Up (Index * N.Element_Count (Rank)) :=
+              Adapter_Column (Natural (Index));
          end loop;
 
          Fixtures.Add_Tensor
-           (Builder, Stem & ".lora_a", [G.U64 (Embedding), 1],
+           (Builder, Stem & ".lora_a", [G.U64 (Wide_Of), G.U64 (Rank)],
             G.Type_F32, Fixtures.Encode_F32 (Down));
 
          if not Half then
             Fixtures.Add_Tensor
-              (Builder, Stem & ".lora_b", [1, G.U64 (Heads * Head_Size)],
+              (Builder, Stem & ".lora_b", [G.U64 (Rank), G.U64 (Tall_Of)],
                G.Type_F32, Fixtures.Encode_F32 (Up));
          end if;
       end;

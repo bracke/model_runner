@@ -117,10 +117,19 @@ package Tiny_Model is
    --    describing half a difference is refused rather than half applied.
    --  @param Foreign Name the pair after a weight this profile does not
    --    adapt, so that an adapter for another model is refused.
+   --  @param Rank How many rows the pair has between them. One is enough to
+   --    check the arithmetic and is what the merge test uses; a real adapter
+   --    is eight to sixty-four, which is what the cost of merging one
+   --    depends on.
+   --  @param Deep Size the pair for the k-quant fixture's widths rather
+   --    than the narrow one's, which is what a model wide enough to be
+   --    worth timing a merge on uses.
    procedure Write_Adapter
      (Path    : String;
       Half    : Boolean := False;
-      Foreign : Boolean := False);
+      Foreign : Boolean := False;
+      Deep    : Boolean := False;
+      Rank    : Positive := 1);
 
    --  Build the fixture in memory.
    --

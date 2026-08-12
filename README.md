@@ -86,6 +86,15 @@ Only binary32 weights can be added to, so naming an adapter selects
 that flag already publishes. `--repack bf16` beside an adapter is a usage
 error rather than a quiet rounding of every merged weight.
 
+**What merging costs.** It is rank times every weight it touches, once at
+load. Measured on this machine: **0.27 ns** an update at rank sixteen, and
+4.4 ns at rank one -- the difference is that a rank-one merge reads and
+writes each weight for a single update where a rank-sixteen merge amortizes
+that over sixteen. TinyLlama-1.1B has about 968 million adaptable weights,
+so a rank-sixteen adapter is 15.5 billion updates: **about four seconds**.
+`tests benchmark` reports both ranks, because reporting only rank one would
+have made a four-second merge look like a minute.
+
 The scale multiplies the difference over and above the adapter's own alpha,
 so `1.0` is the fine-tune as trained and `0` is the model without it.
 Adapters for `attn_q`, `attn_k`, `attn_v`, `attn_output`, `ffn_gate`,

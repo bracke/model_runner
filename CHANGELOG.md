@@ -775,6 +775,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`tests benchmark` measures merging an adapter**, at rank one and at rank
+  sixteen. Nothing changed in the merge, and that is the finding: the
+  measurement was taken to justify rewriting it and said not to.
+
+  The rank-one figure alone -- 4.4 ns an update -- extrapolates to about a
+  minute for a rank-sixteen adapter on a billion-parameter model, which is
+  what prompted the rewrite. It is the wrong figure to extrapolate from. A
+  rank-one merge reads and writes each weight for a single update; a
+  rank-sixteen merge amortizes that read and write over sixteen, and comes
+  out at 0.27 ns an update. The real answer is about four seconds, and the
+  restructure written to fix the imagined minute measured slower than what
+  it replaced, twice, so it was thrown away.
+
+  Both ranks are reported for that reason. One of them is a number that
+  would have been believed.
+
 - **Sampling is fifteen times faster on a real vocabulary.** It runs once per
   token over as many candidates as the model has tokens, and every fixture
   here has sixteen, so nothing in the tests would have shown it: 2.86 ms a
