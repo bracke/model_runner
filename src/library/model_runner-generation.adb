@@ -25,6 +25,8 @@ package body Model_Runner.Generation is
    package P renames Model_Runner.Progress;
    package S renames Model_Runner.Sampling;
    package T renames Model_Runner.Tensors;
+
+   use type N.Element_Count;
    package Vocab renames Model_Runner.Tokenizer;
 
    --  Room kept in the pending buffer beyond the longest stop string. One
@@ -108,6 +110,8 @@ package body Model_Runner.Generation is
       Time     : Model_Runner.Clocks.Clock_Reference;
       Seeds    : Model_Runner.Entropy.Source_Reference;
       Cancel   : C.Token_Reference;
+      Draft    : access L.Model'Class := null;
+      Draft_Session : access L.Session := null;
       Reporter : Explainer_Reference := null;
       Bounds   : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
@@ -136,6 +140,41 @@ package body Model_Runner.Generation is
 
       Prompt_Count : Natural := 0;
       First_Token  : Positive := 1;
+
+      --  Drafting. On only when there is a draft model and a session on it,
+      --  a count of tokens to propose, greedy sampling and no grammar --
+      --  the last two because they are what makes "the same text as without
+      --  a draft" a statement anybody can check.
+      Drafting : constant Boolean :=
+        Draft /= null
+        and then Draft_Session /= null
+        and then Item.Draft_Tokens > 0
+        and then S.Is_Greedy (Item.Sampling)
+        and then Rules = null;
+
+      Largest_Draft : constant Natural :=
+        (if Drafting
+         then Natural'Min (Item.Draft_Tokens, L.Max_Batch - 1)
+         else 0);
+
+      --  What a round proposed and what came back for it. Proposals are the
+      --  draft's; Verified holds the ones the target agrees with, which is
+      --  a prefix of them and is what the run then emits one at a time.
+      Proposed : Token_Buffer := null;
+      Verified : Token_Buffer := null;
+      Verified_Count : Natural := 0;
+      Verified_At    : Natural := 0;
+
+      --  One vocabulary-sized row per position of a verification batch, and
+      --  a copy of the distribution the round started from.
+      --
+      --  The copy is for explaining. A verified token was chosen from a
+      --  particular distribution -- the first from the one the round began
+      --  with, the rest from the batch's rows -- and reporting the row the
+      --  round ended at would answer about the wrong position for every
+      --  token but the last.
+      Every  : T.Real_Array_Access := null;
+      Opened : T.Real_Array_Access := null;
       Status       : E.Error_Info := E.Success;
       Closed       : Boolean := False;
       Started      : Model_Runner.Clocks.Nanoseconds := 0;
@@ -146,9 +185,17 @@ package body Model_Runner.Generation is
       procedure Cleanup is
       begin
          T.Free (Logits);
+         T.Free (Every);
+         T.Free (Opened);
          B.Free (Pending);
          if Tokens /= null then
             Free_Tokens (Tokens);
+         end if;
+         if Proposed /= null then
+            Free_Tokens (Proposed);
+         end if;
+         if Verified /= null then
+            Free_Tokens (Verified);
          end if;
          S.Close (Sampler);
       end Cleanup;
@@ -304,6 +351,26 @@ package body Model_Runner.Generation is
       end if;
 
       T.Allocate (N.Element_Count (Settings.Vocabulary), Logits);
+
+      if Drafting then
+         Proposed := new Vocab.Token_Array (1 .. Largest_Draft + 1);
+         Verified := new Vocab.Token_Array (1 .. Largest_Draft + 1);
+         T.Allocate
+           (N.Element_Count (Settings.Vocabulary)
+            * N.Element_Count (Largest_Draft + 1), Every);
+
+         if Item.Logprobs > 0 then
+            T.Allocate (N.Element_Count (Settings.Vocabulary), Opened);
+         end if;
+
+         if Proposed = null or else Verified = null or else Every = null
+           or else (Item.Logprobs > 0 and then Opened = null)
+         then
+            Conclude (Runtime_Error, E.Make (E.Memory_Allocation_Failed));
+            Cleanup;
+            return;
+         end if;
+      end if;
       B.Allocate (B.Byte_Count (Longest + Fragment_Reserve) * 2, Pending);
       --  Sized for the worst case the tokenizer can produce -- byte fallback
       --  emits at most one token per byte, plus the beginning marker -- so
@@ -482,6 +549,25 @@ package body Model_Runner.Generation is
                   exit Prefill_Loop;
                end if;
 
+               --  The same prompt on the draft, so that it is looking at
+               --  what the target is looking at. Its logits are thrown away
+               --  here; what matters is its context.
+               if Drafting then
+                  declare
+                     Aside : E.Error_Info;
+                  begin
+                     L.Evaluate_Batch
+                       (Draft_Session.all, Draft.all,
+                        Tokens.all (Index .. Last), Logits.all,
+                        Cancel => Cancel, Status => Aside);
+
+                     if E.Is_Error (Aside) then
+                        Conclude (Runtime_Error, Aside);
+                        exit Prefill_Loop;
+                     end if;
+                  end;
+               end if;
+
                for Step in Index .. Last loop
                   S.Record_Token (Sampler, Tokens.all (Step));
                end loop;
@@ -503,6 +589,205 @@ package body Model_Runner.Generation is
         Model_Runner.Clocks.Rate_Per_Second
           (Interfaces.Unsigned_64 (Prompt_Count - First_Token + 1),
            Outcome.Prefill_Ns);
+
+      --  One round of drafting and checking.
+      --
+      --  The draft proposes what it would say next, one token at a time from
+      --  where it is; the target then reads all of them in one pass and says
+      --  what it would have said at each of those positions. The proposals
+      --  the target agrees with are what the run produces -- and because
+      --  this only runs at temperature zero, "agrees with" is the whole
+      --  test: the target's own choice at that position either is the
+      --  proposal or it is not.
+      --
+      --  What comes out is the same text the target would have produced
+      --  alone. What is saved is passes over the target's weights: however
+      --  many proposals are accepted, they cost one.
+      --
+      --  Both sessions are put back to the accepted length afterwards. The
+      --  target read further than that and the draft proposed further than
+      --  that, and neither of those positions describes the text.
+      declare
+         --  Declared here and called from the loop below, which is the only
+         --  caller it will ever have.
+         procedure Draft_Round
+           (Produced_Here : out Natural;
+            Failed        : out Boolean)
+         is
+            Before : constant Natural := L.Position (Session);
+            Count  : Natural := 0;
+            Local  : E.Error_Info;
+            Guess  : Token_Id;
+         begin
+            Produced_Here := 0;
+            Failed := False;
+
+            --  What the target would say now, which is the one token this
+            --  round is certain of before it starts. Kept, when anybody is
+            --  being told about the probabilities, because this is the
+            --  distribution that token came from.
+            if Opened /= null then
+               Opened.all := Logits.all;
+            end if;
+
+            S.Sample (Sampler, Logits.all, Guess, Local);
+            if E.Is_Error (Local) then
+               Conclude (Runtime_Error, Local);
+               Failed := True;
+               return;
+            end if;
+
+            Count := 1;
+            Proposed.all (1) := Guess;
+
+            --  And what the draft would say after it, and after that, and so
+            --  on. Each proposal costs the draft a pass; a draft as large as
+            --  the target would cost exactly what it saves.
+            for Step in 1 .. Largest_Draft loop
+               L.Evaluate
+                 (Draft_Session.all, Draft.all, Proposed.all (Count),
+                  Logits.all, Cancel, Local);
+               if E.Is_Error (Local) then
+                  Conclude (Runtime_Error, Local);
+                  Failed := True;
+                  return;
+               end if;
+
+               S.Sample (Sampler, Logits.all, Guess, Local);
+               if E.Is_Error (Local) then
+                  Conclude (Runtime_Error, Local);
+                  Failed := True;
+                  return;
+               end if;
+
+               Count := Count + 1;
+               Proposed.all (Count) := Guess;
+            end loop;
+
+            --  The first is the target's own; the rest are the draft's, and
+            --  those are what the count below is about.
+            Outcome.Drafted := Outcome.Drafted + Count - 1;
+
+            --  The target reads the lot in one pass, and says what it would
+            --  have said at each position.
+            L.Evaluate_Batch
+              (Session, Source, Proposed.all (1 .. Count), Logits.all,
+               Every => Every, Cancel => Cancel, Status => Local);
+            if E.Is_Error (Local) then
+               if Local.Code = E.Generation_Cancelled then
+                  Conclude (Cancelled);
+               elsif Local.Code = E.Generation_Context_Exhausted then
+                  Conclude (Context_Full);
+               else
+                  Conclude (Runtime_Error, Local);
+               end if;
+               Failed := True;
+               return;
+            end if;
+
+            --  The first proposal is the target's own and is always kept.
+            --  Each one after it is kept while the target's choice at the
+            --  position before it is the proposal.
+            Verified.all (1) := Proposed.all (1);
+            Verified_Count := 1;
+
+            for Step in 2 .. Count loop
+               declare
+                  Row : constant N.Element_Count :=
+                    N.Element_Count (Step - 2)
+                    * N.Element_Count (Settings.Vocabulary);
+
+                  Wanted : Token_Id;
+               begin
+                  S.Sample
+                    (Sampler,
+                     Every.all (Every.all'First + Row
+                                .. Every.all'First + Row
+                                   + N.Element_Count (Settings.Vocabulary)
+                                   - 1),
+                     Wanted, Local);
+                  if E.Is_Error (Local) then
+                     Conclude (Runtime_Error, Local);
+                     Failed := True;
+                     return;
+                  end if;
+
+                  exit when Wanted /= Proposed.all (Step);
+
+                  Verified_Count := Verified_Count + 1;
+                  Verified.all (Verified_Count) := Proposed.all (Step);
+               end;
+            end loop;
+
+            --  Back to what was agreed, on both sides. The target committed
+            --  every proposal and the draft committed every proposal but the
+            --  last, so both have gone further than the text has.
+            L.Rewind (Session, Before + Verified_Count, Local);
+            if E.Is_Error (Local) then
+               Conclude (Runtime_Error, Local);
+               Failed := True;
+               return;
+            end if;
+
+            L.Rewind
+              (Draft_Session.all,
+               Natural'Min (L.Position (Draft_Session.all),
+                            Before + Verified_Count),
+               Local);
+            if E.Is_Error (Local) then
+               Conclude (Runtime_Error, Local);
+               Failed := True;
+               return;
+            end if;
+
+            --  And forward, where the draft is behind. It proposed further
+            --  than it read: the last proposal is one it never evaluated,
+            --  so when every proposal is accepted the draft is a token short
+            --  of the text and the next round would ask it what comes next
+            --  without showing it what came last.
+            --
+            --  That is not a wrong answer anywhere -- the target checks
+            --  everything -- it is a draft guessing from a context missing
+            --  its last token, which guesses badly. Found by a model
+            --  drafting for itself and agreeing with only four of six
+            --  proposals, which is four more than a disagreement and two
+            --  fewer than the truth.
+            while L.Position (Draft_Session.all) < Before + Verified_Count
+            loop
+               declare
+                  Step : constant Natural :=
+                    L.Position (Draft_Session.all) - Before + 1;
+               begin
+                  L.Evaluate
+                    (Draft_Session.all, Draft.all, Verified.all (Step),
+                     Logits.all, Cancel, Local);
+                  if E.Is_Error (Local) then
+                     Conclude (Runtime_Error, Local);
+                     Failed := True;
+                     return;
+                  end if;
+               end;
+            end loop;
+
+            --  And what follows the last accepted token, for the next round
+            --  or the next single step to sample from.
+            declare
+               Row : constant N.Element_Count :=
+                 N.Element_Count (Verified_Count - 1)
+                 * N.Element_Count (Settings.Vocabulary);
+            begin
+               Logits.all :=
+                 Every.all (Every.all'First + Row
+                            .. Every.all'First + Row
+                               + N.Element_Count (Settings.Vocabulary) - 1);
+            end;
+
+            Outcome.Accepted := Outcome.Accepted + Verified_Count - 1;
+
+            Verified_At := 0;
+            Produced_Here := Verified_Count;
+         end Draft_Round;
+      begin
 
       --  Decode loop.
       Started := Model_Runner.Clocks.Read (Time);
@@ -577,11 +862,30 @@ package body Model_Runner.Generation is
                   end;
                end if;
 
-               --  Sample from the raw logits the last evaluation produced.
-               S.Sample (Sampler, Logits.all, Token, Status);
-               if E.Is_Error (Status) then
-                  Conclude (Runtime_Error, Status);
-                  exit Decode_Loop;
+               --  Where the next token comes from. Without a draft it is
+               --  sampled from the logits the last evaluation produced.
+               --  With one it comes from a round of proposals the target has
+               --  already checked, and the session is already past it -- so
+               --  the commit at the bottom of this loop is skipped for it.
+               if Drafting then
+                  if Verified_At >= Verified_Count then
+                     declare
+                        Made : Natural;
+                        Gave : Boolean;
+                     begin
+                        Draft_Round (Made, Gave);
+                        exit Decode_Loop when Gave;
+                     end;
+                  end if;
+
+                  Verified_At := Verified_At + 1;
+                  Token := Verified.all (Verified_At);
+               else
+                  S.Sample (Sampler, Logits.all, Token, Status);
+                  if E.Is_Error (Status) then
+                     Conclude (Runtime_Error, Status);
+                     exit Decode_Loop;
+                  end if;
                end if;
 
                --  What the model made of this position, when somebody asked.
@@ -592,10 +896,36 @@ package body Model_Runner.Generation is
                   declare
                      Report : S.Explanation;
                      Told   : E.Error_Info;
+
+                     --  Which distribution this token was chosen from. Not
+                     --  the current one when a round produced it: the first
+                     --  of a round came from what the round began with and
+                     --  the rest from the batch's own rows, and the current
+                     --  one describes the position after all of them.
+                     Row : constant N.Element_Count :=
+                       (if Drafting and then Verified_At > 1
+                        then N.Element_Count (Verified_At - 2)
+                             * N.Element_Count (Settings.Vocabulary)
+                        else 0);
                   begin
-                     S.Explain
-                       (Sampler, Logits.all, Token, Item.Logprobs, Report,
-                        Told);
+                     if not Drafting then
+                        S.Explain
+                          (Sampler, Logits.all, Token, Item.Logprobs, Report,
+                           Told);
+                     elsif Verified_At = 1 then
+                        S.Explain
+                          (Sampler, Opened.all, Token, Item.Logprobs, Report,
+                           Told);
+                     else
+                        S.Explain
+                          (Sampler,
+                           Every.all (Every.all'First + Row
+                                      .. Every.all'First + Row
+                                         + N.Element_Count
+                                             (Settings.Vocabulary) - 1),
+                           Token, Item.Logprobs, Report, Told);
+                     end if;
+
                      if E.Is_Ok (Told) then
                         Reporter.all.Explain (Report);
                      end if;
@@ -626,9 +956,18 @@ package body Model_Runner.Generation is
                   end if;
                end if;
 
-               --  Commit the token to the session.
+               --  Commit the token to the session, unless a round already
+               --  did: a verified token is in the target's context by the
+               --  time it reaches here, and evaluating it again would put it
+               --  there twice.
                S.Record_Token (Sampler, Token);
-               L.Evaluate (Session, Source, Token, Logits.all, Cancel, Status);
+
+               if Drafting then
+                  Status := E.Success;
+               else
+                  L.Evaluate
+                    (Session, Source, Token, Logits.all, Cancel, Status);
+               end if;
 
                if E.Is_Error (Status) then
                   if Status.Code = E.Generation_Cancelled then
@@ -714,6 +1053,7 @@ package body Model_Runner.Generation is
             end;
          end loop Decode_Loop;
       end if;
+      end;
 
       --  Flush the safely decodable remainder, but only when the run ended for
       --  a reason that leaves buffered text meaningful. A cancelled or failed

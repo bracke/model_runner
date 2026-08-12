@@ -256,6 +256,11 @@ package Model_Runner.CLI.Options is
       --  for none.
       Logprobs : Natural := 0;
 
+      --  A smaller model to propose tokens for the real one to check, and
+      --  how many it may propose at a time.
+      Draft_Path   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Draft_Tokens : Natural := 4;
+
       Memory_Limit : Interfaces.Unsigned_64 := 0;
 
       --  Bytes of device memory the model's matrices may take, and whether

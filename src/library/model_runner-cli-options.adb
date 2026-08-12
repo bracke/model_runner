@@ -28,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 60) of Registry_Row :=
+   Registry : constant array (1 .. 62) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -100,6 +100,10 @@ package body Model_Runner.CLI.Options is
        [Command_Run => True, others => False], Text ("logit_bias")),
       (Text ("--logprobs"),
        [Command_Run => True, others => False], Text ("logprobs")),
+      (Text ("--draft-model"),
+       [Command_Run => True, others => False], Text ("draft_model")),
+      (Text ("--draft-tokens"),
+       [Command_Run => True, others => False], Text ("draft_tokens")),
       (Text ("--memory-limit"),
        [Command_Run | Command_Embed => True, others => False], Text ("memory_limit")),
       (Text ("--device-memory"),
@@ -693,6 +697,7 @@ package body Model_Runner.CLI.Options is
          Flag_DRY_Multiplier, Flag_DRY_Base, Flag_DRY_Allowed,
          Flag_Mirostat, Flag_Mirostat_Tau, Flag_Mirostat_Eta,
          Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Logprobs,
+         Flag_Draft_Model, Flag_Draft_Tokens,
          Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Repack,
@@ -1431,6 +1436,26 @@ package body Model_Runner.CLI.Options is
                         Result.Stop_Tokens (Result.Stop_Token_Count) := Number;
                         Free_Text (Held);
                      end;
+
+                  elsif Name = "--draft-model" then
+                     Mark (Flag_Draft_Model, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Draft_Path := T.To_Bounded (Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--draft-tokens" then
+                     Natural_Value (Flag_Draft_Tokens, 1, 32,
+                                    Result.Draft_Tokens, Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--logprobs" then
                      declare

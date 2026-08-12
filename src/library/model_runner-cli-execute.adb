@@ -422,10 +422,16 @@ package body Model_Runner.CLI.Execute is
       Full      : Boolean;
       Observer  : Model_Runner.Progress.Observer_Reference;
       Cancel    : Model_Runner.Cancellation.Token_Reference;
-      Status    : out E.Error_Info)
+      Status    : out E.Error_Info;
+
+      --  Which file to load, for the caller that wants a second model: the
+      --  draft is loaded exactly as the model is, with the same limits and
+      --  the same refusals, and differs only in which path it reads.
+      Instead   : String := "")
    is
       Bounds : constant Model_Runner.Limits.Model_Limits := Model_Bounds (Item);
-      Path   : constant String := T.To_String (Item.Model_Path);
+      Path   : constant String :=
+        (if Instead = "" then T.To_String (Item.Model_Path) else Instead);
    begin
       Model_Runner.Progress.Publish
         (Observer,
@@ -1182,6 +1188,25 @@ package body Model_Runner.CLI.Execute is
       Sink      : aliased Pres.Standard_Output_Sink;
       Reporter  : aliased Pres.Progress_Reporter (Screen'Unchecked_Access);
       Told      : aliased Pres.Logprob_Reporter (Screen'Unchecked_Access);
+
+      --  A second, smaller model proposing tokens for the first to check,
+      --  when one was named. Held here so it outlives the generation.
+      Draft_Source    : Files.File_Source;
+      Draft_Container : Containers.Container;
+      Draft_Model     : aliased L.Model;
+      Draft_Session   : aliased L.Session;
+      Draft_Ready     : Boolean := False;
+
+      --  Two models that do not number their tokens alike.
+      function Draft_Mismatch (Draft, Wanted : Natural) return E.Error_Info is
+         Result : E.Error_Info := E.Make (E.Arch_Unsupported_Feature);
+      begin
+         E.Add_Text (Result, "feature", "draft_vocabulary",
+                     E.Param_Identifier);
+         E.Add_Integer (Result, "actual", Long_Long_Integer (Draft));
+         E.Add_Integer (Result, "expected", Long_Long_Integer (Wanted));
+         return Result;
+      end Draft_Mismatch;
       Clock     : aliased Model_Runner.Clocks.System_Clock;
       Seeds     : aliased Model_Runner.Entropy.Host_Source;
       Prompt    : Opt.Text_Access := null;
@@ -1296,6 +1321,44 @@ package body Model_Runner.CLI.Execute is
          if E.Is_Error (Condition) then
             Fail (Condition);
             return;
+         end if;
+
+         --  A draft model, when one was named: a second, smaller model that
+         --  proposes what it would say next so that this one can check
+         --  several tokens in a single pass over its weights.
+         --
+         --  Loaded exactly as the model was, with the same limits and the
+         --  same refusals. What is checked here is the one thing that makes
+         --  two models comparable at all: a proposal is a token identifier,
+         --  so two models that number their tokens differently would be
+         --  agreeing about numbers rather than about text.
+         if not T.Is_Empty (Item.Draft_Path) then
+            Load (Item, Screen, Draft_Source, Draft_Container, Draft_Model,
+                  True, null, Cancel'Unchecked_Access, Condition,
+                  Instead => T.To_String (Item.Draft_Path));
+            if E.Is_Error (Condition) then
+               Fail (Condition);
+               return;
+            end if;
+
+            if L.Config (Draft_Model).Vocabulary
+               /= L.Config (Prepared).Vocabulary
+            then
+               Fail (Draft_Mismatch (L.Config (Draft_Model).Vocabulary,
+                                     L.Config (Prepared).Vocabulary));
+               return;
+            end if;
+
+            L.Open
+              (Draft_Session, Draft_Model, Item.Context_Size,
+               Session_Bounds => Session_Bounds (Item),
+               Cache => Item.Cache, Status => Condition);
+            if E.Is_Error (Condition) then
+               Fail (Condition);
+               return;
+            end if;
+
+            Draft_Ready := True;
          end if;
 
          --  The grammar, before anything is generated. A grammar that will
@@ -1570,6 +1633,8 @@ package body Model_Runner.CLI.Execute is
             end loop;
             Request.Bias_Count := Item.Bias_Count;
             Request.Logprobs := Item.Logprobs;
+            Request.Draft_Tokens :=
+              (if Draft_Ready then Item.Draft_Tokens else 0);
 
             Request.Sampling := Item.Sampling;
                Request.Seed := Item.Seed;
@@ -1638,6 +1703,12 @@ package body Model_Runner.CLI.Execute is
                   Time     => Clock'Unchecked_Access,
                   Seeds    => Seeds'Unchecked_Access,
                   Cancel   => Cancel'Unchecked_Access,
+                  Draft    =>
+                    (if Draft_Ready then Draft_Model'Unchecked_Access
+                     else null),
+                  Draft_Session =>
+                    (if Draft_Ready then Draft_Session'Unchecked_Access
+                     else null),
                   Reporter =>
                     (if Item.Logprobs > 0
                      then Told'Unchecked_Access

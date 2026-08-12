@@ -462,6 +462,18 @@ package body Model_Runner.Presentation is
       Put_Field
         (Item, "statistics.workers",
          T.Image (Long_Long_Integer (Outcome.Workers)), Diagnostic);
+      --  What a draft model proposed and how much of it was taken, for a
+      --  run that had one. The only number that says whether the draft was
+      --  worth its own passes.
+      if Outcome.Drafted > 0 then
+         Put_Field
+           (Item, "statistics.drafted",
+            T.Image (Long_Long_Integer (Outcome.Drafted)), Diagnostic);
+         Put_Field
+           (Item, "statistics.accepted",
+            T.Image (Long_Long_Integer (Outcome.Accepted)), Diagnostic);
+      end if;
+
       --  What the device did with the model, for a run that used one. A
       --  count of matrices given back is the one number here that says a
       --  run was slower than it looked: everything above zero was uploaded

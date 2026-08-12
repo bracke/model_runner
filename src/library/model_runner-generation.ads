@@ -92,6 +92,26 @@ package Model_Runner.Generation is
       --  is above zero, whether or not it is among the alternatives.
       Logprobs : Natural := 0;
 
+      --  How many tokens a draft model may propose at a time, or zero for no
+      --  drafting. Reached only when Generate is given a draft model and a
+      --  session on it.
+      --
+      --  What drafting buys is that a batch of proposals costs one pass over
+      --  the target's weights where the same tokens one at a time cost one
+      --  each -- so a draft that guesses well turns several tokens into the
+      --  price of one. What it costs is the draft model's own passes, which
+      --  is why the draft has to be much the smaller of the two for this to
+      --  be worth anything.
+      --
+      --  Only at temperature zero, and only without a grammar. Both
+      --  restrictions are about being able to say what this produces: at
+      --  temperature zero a proposal is either what the target would have
+      --  chosen or it is not, so accepting the ones that match gives exactly
+      --  the text the target would have produced alone. Above it, keeping
+      --  that guarantee needs an acceptance test written against the
+      --  sampler's own distribution, which this does not have.
+      Draft_Tokens : Natural := 0;
+
       --  Explicit seed. When Has_Seed is False the seed comes from the entropy
       --  source, and the value actually used is reported in the result.
       Seed     : Seed_Value := 0;
@@ -144,6 +164,16 @@ package Model_Runner.Generation is
       Backend          : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Workers          : Positive := 1;
+
+      --  How many tokens a draft model proposed and how many of those the
+      --  real one agreed with. Both zero without a draft.
+      --
+      --  Reported because it is the only number that says whether a draft is
+      --  worth having. A draft that guesses well turns several tokens into
+      --  the price of one; a draft that guesses badly costs its own passes
+      --  and buys nothing, and the two are indistinguishable from the text.
+      Drafted          : Natural := 0;
+      Accepted         : Natural := 0;
       Text             : Model_Runner.Bytes.Byte_Array_Access := null;
       Text_Length      : Natural := 0;
       Error            : Model_Runner.Errors.Error_Info;
@@ -216,6 +246,12 @@ package Model_Runner.Generation is
    --    before anything is sampled, and the end-of-sequence token is removed
    --    until the grammar may end, so a run cannot stop half way through
    --    what it was told to produce.
+   --  @param Draft A smaller model proposing tokens for this one to check,
+   --    or null for none. It must have the same vocabulary: a proposal is a
+   --    token identifier and two models that number their tokens
+   --    differently would be agreeing about numbers rather than about text.
+   --  @param Draft_Session An open session on that model, at the same
+   --    position as Session. The prompt is evaluated on both.
    --  @param Cancel Cancellation token, or null.
    --  @param Reporter Where per-token explanations go, or null for none.
    --    Reached only when Logprobs is above zero, so a caller that wants
@@ -234,6 +270,8 @@ package Model_Runner.Generation is
       Time     : Model_Runner.Clocks.Clock_Reference;
       Seeds    : Model_Runner.Entropy.Source_Reference;
       Cancel   : Model_Runner.Cancellation.Token_Reference;
+      Draft    : access Model_Runner.Llama.Model'Class := null;
+      Draft_Session : access Model_Runner.Llama.Session := null;
       Reporter : Explainer_Reference := null;
       Bounds   : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;

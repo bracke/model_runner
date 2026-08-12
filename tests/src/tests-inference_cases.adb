@@ -61,7 +61,10 @@ package body Tests.Inference_Cases is
    type Harness (Image : access constant B.Byte_Array) is limited record
       Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
       Parsed : Containers.Container;
-      Ready  : L.Model;
+      --  Aliased so that a test can hand this model to something that takes
+      --  a reference -- a draft model, say. A component is not aliased by
+      --  being in a record.
+      Ready  : aliased L.Model;
    end record;
 
    --  Parse and prepare the tiny model, asserting each stage.
@@ -1390,6 +1393,241 @@ package body Tests.Inference_Cases is
 
       B.Free (Image);
    end Sessions_On_One_Model_Do_Not_Collide;
+
+   -----------------------------------
+   -- Rewind_Gives_Back_Positions --
+   -----------------------------------
+
+   --  A session put back to an earlier position evaluates from there, and
+   --  gets what it would have got had it never gone further.
+   --
+   --  This is what checking a guess needs: a caller that evaluated several
+   --  tokens on the strength of a proposal and found the proposal wrong has
+   --  to put the context back to where it stopped being right. If anything
+   --  past the position were still read, the run would attend to tokens
+   --  nobody said -- and the text would be plausible, which is the failure
+   --  worth testing for.
+   procedure Rewind_Gives_Back_Positions
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+
+      Prefix : constant array (1 .. 3) of Vocab.Token_Id := [4, 5, 6];
+      Wrong  : constant array (1 .. 2) of Vocab.Token_Id := [9, 9];
+      After  : constant Vocab.Token_Id := 7;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         Straight, Rewound : Logit_Vector := [others => 0.0];
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         --  The prefix and then one more token, without going astray.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            for Token of Prefix loop
+               L.Evaluate (Live, Under.Ready, Token, Straight,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the prefix failed");
+            end loop;
+            L.Evaluate (Live, Under.Ready, After, Straight, Status => Status);
+            Assert (E.Is_Ok (Status), "the continuation failed");
+            L.Close (Live);
+         end;
+
+         --  The prefix, two tokens that turn out to be wrong, back to the
+         --  prefix, and then the same one more token.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            for Token of Prefix loop
+               L.Evaluate (Live, Under.Ready, Token, Rewound,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the prefix failed");
+            end loop;
+            for Token of Wrong loop
+               L.Evaluate (Live, Under.Ready, Token, Rewound,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the wrong turn failed");
+            end loop;
+
+            Assert (L.Position (Live) = Prefix'Length + Wrong'Length,
+                    "the session is not where the tokens put it");
+
+            L.Rewind (Live, Prefix'Length, Status);
+            Assert (E.Is_Ok (Status),
+                    "the rewind was refused: "
+                    & E.Error_Code'Image (Status.Code));
+            Assert (L.Position (Live) = Prefix'Length,
+                    "the rewind did not move the position");
+
+            L.Evaluate (Live, Under.Ready, After, Rewound, Status => Status);
+            Assert (E.Is_Ok (Status), "the continuation failed");
+
+            --  Forward is not rewinding.
+            L.Rewind (Live, Prefix'Length + 10, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a rewind past the end was accepted");
+
+            L.Close (Live);
+         end;
+
+         for Index in Straight'Range loop
+            Assert (Straight (Index) = Rewound (Index),
+                    "a rewound session got different logits at"
+                    & N.Element_Count'Image (Index));
+         end loop;
+      end;
+
+      B.Free (Image);
+   end Rewind_Gives_Back_Positions;
+
+   ---------------------------------------
+   -- Drafting_Produces_The_Same_Text --
+   ---------------------------------------
+
+   --  A run with a draft model produces exactly the text of the same run
+   --  without one.
+   --
+   --  That is the whole guarantee, and it is why drafting is confined to
+   --  temperature zero: there a proposal either is what the target would
+   --  have chosen or it is not, so keeping the ones that match cannot change
+   --  the answer. What it changes is how many passes over the target's
+   --  weights it took to get there, which is a speed question and not a
+   --  correctness one.
+   --
+   --  The model drafts for itself here. A model is a perfect draft of
+   --  itself, so every proposal is accepted and the whole path is
+   --  exercised -- the batch, the per-position logits, the acceptance test
+   --  and the rewind on both sessions -- while the answer stays checkable
+   --  against the run beside it. A draft that agreed with nothing would
+   --  exercise the rewind and little else.
+   procedure Drafting_Produces_The_Same_Text
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Image : B.Byte_Array_Access;
+
+      Prompt : constant String := "ab";
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         --  Two runs, told apart by whether the second is given a draft.
+
+         procedure Turn
+           (With_Draft : Boolean;
+            Text       : out Model_Runner.Bytes.Byte_Array_Access;
+            Length     : out Natural;
+            Proposed   : out Natural;
+            Accepted   : out Natural)
+         is
+            Live    : L.Session;
+            Second  : aliased L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+         begin
+            L.Open (Live, Under.Ready, Status => Local);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            if With_Draft then
+               L.Open (Second, Under.Ready, Status => Local);
+               Assert (E.Is_Ok (Local), "the draft session did not open");
+            end if;
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 6;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 7;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Retain_Text := True;
+            Request.Draft_Tokens := (if With_Draft then 3 else 0);
+
+            Gen.Generate
+              (Under.Ready, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null,
+               Draft =>
+                 (if With_Draft then Under.Ready'Unchecked_Access
+                  else null),
+               Draft_Session =>
+                 (if With_Draft then Second'Unchecked_Access else null),
+               Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Text := Outcome.Text;
+            Length := Outcome.Text_Length;
+            Proposed := Outcome.Drafted;
+            Accepted := Outcome.Accepted;
+
+            Model_Runner.Stops.Close (Stop);
+            if With_Draft then
+               L.Close (Second);
+            end if;
+            L.Close (Live);
+         end Turn;
+
+         Plain_Text, Draft_Text : Model_Runner.Bytes.Byte_Array_Access;
+         Plain_Last, Draft_Last : Natural;
+         Ignored_A, Ignored_B   : Natural;
+         Proposed, Accepted     : Natural;
+      begin
+         Start (Under);
+
+         Turn (False, Plain_Text, Plain_Last, Ignored_A, Ignored_B);
+         Turn (True, Draft_Text, Draft_Last, Proposed, Accepted);
+
+         Assert (Plain_Last > 0, "the plain run produced nothing");
+         Assert (Draft_Last = Plain_Last,
+                 "the drafted run produced" & Natural'Image (Draft_Last)
+                 & " bytes against" & Natural'Image (Plain_Last));
+
+         Assert (B."/=" (Plain_Text, null)
+                   and then B."/=" (Draft_Text, null),
+                 "a run retained no text");
+         Assert (B."=" (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                        Draft_Text.all (1 .. B.Byte_Index (Draft_Last))),
+                 "a run with a draft produced different text");
+
+         --  And the draft path was actually taken, rather than the run
+         --  quietly falling back to one token at a time.
+         Assert (Proposed > 0,
+                 "the drafted run proposed nothing, so this compares two "
+                 & "runs of the same path");
+         Assert (Accepted = Proposed,
+                 "a model drafting for itself had"
+                 & Natural'Image (Accepted) & " of"
+                 & Natural'Image (Proposed) & " proposals accepted, and a "
+                 & "model always agrees with itself");
+
+         B.Free (Plain_Text);
+         B.Free (Draft_Text);
+      end;
+
+      B.Free (Image);
+   end Drafting_Produces_The_Same_Text;
 
    ----------
    -- Name --
@@ -3893,6 +4131,14 @@ package body Tests.Inference_Cases is
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
+      Register_Routine
+        (T, Rewind_Gives_Back_Positions'Access,
+         "a session put back to an earlier position evaluates from there "
+         & "and gets what it would have got had it never gone further");
+      Register_Routine
+        (T, Drafting_Produces_The_Same_Text'Access,
+         "a run with a draft model produces exactly the text of the same "
+         & "run without one");
       Register_Routine
         (T, Sessions_On_One_Model_Do_Not_Collide'Access,
          "two sessions on one model, evaluated in turn, each get what they "

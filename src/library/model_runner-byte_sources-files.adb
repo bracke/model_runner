@@ -73,7 +73,16 @@ package body Model_Runner.Byte_Sources.Files is
       end if;
 
       begin
-         Stream_IO.Open (Item.File, Stream_IO.In_File, Path);
+         --  Shared, because a program may want the same file open twice:
+         --  a model and a draft model may be the same file, and the
+         --  language's default for reading is exclusive within one program
+         --  -- so the second open failed with "cannot open", which is a
+         --  true sentence about a file that is plainly there.
+         --
+         --  Read-only either way. Two readers of one file need nothing from
+         --  each other.
+         Stream_IO.Open
+           (Item.File, Stream_IO.In_File, Path, Form => "shared=yes");
       exception
          when Ada.IO_Exceptions.Name_Error
             | Ada.IO_Exceptions.Use_Error

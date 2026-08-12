@@ -1155,11 +1155,11 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 7-token prompt, 12 generated | 1.583 s | **1.299 s** |
-| -- evaluating the prompt | 0.376 s | 0.215 s |
-| -- generating | 1.206 s | 1.084 s |
-| 111-token prompt, 1 generated | 6.271 s | **3.971 s** |
-| -- evaluating the prompt | 6.147 s | 3.812 s |
+| 7-token prompt, 12 generated | 1.610 s | 1.795 s |
+| -- evaluating the prompt | 0.401 s | 0.216 s |
+| -- generating | 1.208 s | 1.597 s |
+| 111-token prompt, 1 generated | 6.633 s | **3.846 s** |
+| -- evaluating the prompt | 6.515 s | 3.696 s |
 
 Both backends print the same digest of what they generated -- `7784f0` and
 `af63c7` for the two runs -- so this is the same text, not a faster answer to
@@ -1168,10 +1168,13 @@ a different question.
 Read the left column with the caveat it deserves. This machine had other work
 on it, and the two columns are not equally hurt by that: the processor column
 competes for the cores it is using and the device column does not. Taken
-six times over two days, the seven-token run measured 1.727, 2.167, 1.723,
-1.640, 1.499 and 1.583 s on the processor against 1.345, 1.214, 1.287, 1.292,
-1.288 and 1.299 on the device -- the device column varies by three per cent
-and the processor column by forty -- and
+seven times over two days, the seven-token run measured 1.727, 2.167, 1.723,
+1.640, 1.499, 1.583 and 1.610 s on the processor against 1.345, 1.214, 1.287,
+1.292, 1.288, 1.299 and 1.795 on the device. Six of those seven device
+figures sit within three per cent of each other and the seventh is half a
+second above all of them, on the run where the processor was also slow: that
+is the machine, not a change, and it is the one pair here where the device
+loses the short run. The long run has never been close, and
 the quiet-machine figure for the processor -- published at the top of this
 section -- is 1.28 s. So the device's advantage on the short run is real but
 smaller than any one pair suggests, and on the long run it is comfortable at
@@ -1244,11 +1247,11 @@ faster there:
 
 | Per pass | Device time / processor time |
 | --- | --- |
-| q8_0, one vector | 0.81 |
-| q4_0, one vector | 0.99 |
-| f32, one vector | 1.38 |
-| q8_0, eight vectors | 0.25 |
-| q8_0, thirty-two vectors | 0.106 |
+| q8_0, one vector | 0.78 |
+| q4_0, one vector | 0.97 |
+| f32, one vector | 1.37 |
+| q8_0, eight vectors | 0.23 |
+| q8_0, thirty-two vectors | 0.101 |
 
 Binary32 is the one format the device is slower at, and that is the finding
 rather than a disappointment: it is four bytes a weight where q8_0 is one, so
@@ -1261,6 +1264,43 @@ The arithmetic is not the processor's: the shader accumulates a row in
 binary32 where the kernels accumulate in binary64 and round once. What that
 costs is measured in the conformance section above, over every architecture
 and each of the three formats the device reads.
+
+### Drafting
+
+`--draft-model PATH` gives the run a second, smaller model to propose what
+comes next. The real model then reads several proposals in one pass and says
+what it would have said at each of those positions; the proposals it agrees
+with are what the run produces. Because this runs only at temperature zero, a
+proposal either is the model's own choice or it is not, so the text is
+exactly what the model would have produced alone -- held by a test that runs
+the same prompt with and without a draft and compares.
+
+What it saves is passes over the big model's weights: however many proposals
+are accepted, they cost one pass. What it costs is the draft model's own
+passes, one per proposal, and the output projection once per checked position
+rather than once per token.
+
+So a draft earns its keep only when it is much smaller than the model and
+usually right, and this machine has no such pair: the only two models here
+that number their tokens alike are two quantizations of the same
+1.1-billion-parameter model. Measured with the smaller of them drafting for
+the larger, four proposals at a time:
+
+| | Generation |
+| --- | --- |
+| no draft | 10.39 tokens/s |
+| drafted by the same model at two bits | 0.98 tokens/s |
+
+with 9 of 16 proposals accepted. A draft the size of the model it drafts for
+costs exactly what it saves and then some, which is what that measures. The
+statistics report both numbers for every run with a draft, because they are
+the only ones that say whether a particular draft is worth having.
+
+Not with a grammar, and not above temperature zero. Both are refusals of the
+same kind: above temperature zero, keeping the guarantee needs an acceptance
+test written against the sampler's own distribution, which this does not
+have, and a grammar constrains what may be produced in a way the proposals
+know nothing about.
 
 ### Repacking
 

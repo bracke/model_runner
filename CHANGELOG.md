@@ -7,6 +7,49 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--draft-model PATH` and `--draft-tokens N`: a smaller model proposes,
+  the real one checks.** The draft says what it would produce next, several
+  tokens at a time; the model reads all of them in one pass over its weights
+  and says what it would have said at each of those positions, and the
+  proposals it agrees with are what the run produces.
+
+  Only at temperature zero, and not with a grammar. That is what makes the
+  guarantee sayable: a proposal either is the model's own choice or it is
+  not, so the text is exactly what the model would have produced alone. Held
+  by a test that runs the same prompt with and without a draft and compares
+  the bytes. Above temperature zero the same guarantee needs an acceptance
+  test written against the sampler's distribution, which this does not have,
+  so it is refused rather than approximated.
+
+  The statistics report how many tokens were proposed and how many accepted,
+  because they are the only numbers that say whether a particular draft is
+  worth having. On this machine no pair of models makes it pay -- the only
+  two that number their tokens alike are two quantizations of the same 1.1B
+  model -- and the README publishes that: 10.39 tokens a second without a
+  draft against 0.98 with one, at 9 of 16 proposals accepted. A draft the
+  size of the model it drafts for costs exactly what it saves and then some.
+
+  Two supporting pieces, both useful on their own: `Evaluate_Batch` can now
+  produce the logits of every position of a batch rather than only the last,
+  and a session can be rewound to an earlier committed position.
+
+  A model drafting for itself accepted only four proposals of six, which
+  should have been six of six. The draft proposes further than it reads --
+  the last proposal is one it never evaluated -- so when everything is
+  accepted the draft ends a token behind the text and guesses the next round
+  from a context missing its last token. Nothing is ever wrong from that,
+  because the target checks everything; it just guesses badly, which is
+  invisible except in the acceptance count.
+
+### Fixed
+
+- **The same file could not be opened twice.** A model file is opened for
+  reading, and the language's default for that is exclusive within one
+  program, so naming one file as both the model and the draft failed with
+  "cannot open" -- a true sentence about a file that is plainly there. Model
+  files are now opened shared, which is what two readers of one read-only
+  file need from each other: nothing.
+
 - **Several sessions on one prepared model.** It was one, and the reason was
   a comment saying so rather than anything in the way: a model carries no
   per-evaluation state -- the activations, the normalized copies and the

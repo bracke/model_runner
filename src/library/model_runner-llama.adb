@@ -3277,6 +3277,39 @@ package body Model_Runner.Llama is
    -- Reset --
    -----------
 
+   ------------
+   -- Rewind --
+   ------------
+
+   procedure Rewind
+     (Item     : in out Session;
+      Position : Natural;
+      Status   : out E.Error_Info) is
+   begin
+      Status := E.Success;
+
+      if Item.Current = Closed or else Item.Current = Failed then
+         Status := E.Make (E.Lifecycle_Invalid_State);
+         E.Add_Text
+           (Status, "state",
+            Model_Runner.Text.To_Lower (Session_State'Image (Item.Current)),
+            E.Param_Identifier);
+         return;
+      end if;
+
+      if Position > Item.Committed then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Integer (Status, "input", Long_Long_Integer (Position));
+         E.Add_Integer (Status, "expected", Long_Long_Integer (Item.Committed));
+         return;
+      end if;
+
+      --  Nothing is cleared. What is past the position is not read: every
+      --  attention reads the committed length and every write past it is a
+      --  write to a slot that will be written again before it is read.
+      Item.Committed := Position;
+   end Rewind;
+
    procedure Reset (Item : in out Session) is
    begin
       --  Only the logical contents are invalidated. The cache and scratch
@@ -3592,6 +3625,7 @@ package body Model_Runner.Llama is
       Tokens : Model_Runner.Tokenizer.Token_Array;
       Logits : out Real_Array;
       States : T.Real_Array_Access := null;
+      Every  : T.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out E.Error_Info)
    is
@@ -3991,6 +4025,41 @@ package body Model_Runner.Llama is
                   Source.Output_Norm.all, Settings.Epsilon,
                   States.all (States.all'First + Origin
                               .. States.all'First + Origin + Width - 1));
+            end;
+         end loop;
+      end if;
+
+      --  Every position's logits, for a caller checking what another model
+      --  proposed. The output projection once per position, which is the
+      --  largest matrix here: asked for and never given away.
+      if Every /= null
+        and then Every.all'Length
+                 >= Count * Element_Count (Settings.Vocabulary)
+      then
+         for Which in 0 .. Count - 1 loop
+            declare
+               Origin : constant Element_Count := Slot (Which, Width);
+               Into   : constant Element_Count :=
+                 Which * Element_Count (Settings.Vocabulary);
+            begin
+               K.RMS_Norm
+                 (Acts.all (Origin .. Origin + Width - 1),
+                  Source.Output_Norm.all, Settings.Epsilon,
+                  Item.Normalized.all);
+
+               Product
+                 (Item, Source.Output, Item.Normalized, Item.Logit_Row,
+                  Status);
+               if E.Is_Error (Status) then
+                  Release;
+                  Item.Current := Failed;
+                  return;
+               end if;
+
+               Every.all (Every.all'First + Into
+                          .. Every.all'First + Into
+                             + Element_Count (Settings.Vocabulary) - 1) :=
+                 Item.Logit_Row.all;
             end;
          end loop;
       end if;

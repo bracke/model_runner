@@ -668,12 +668,20 @@ package Model_Runner.Llama is
    --    batch, Embedding elements each, or null to keep only the last
    --    position's. Only a caller pooling over the positions of a text
    --    wants them, and only that caller should pay for writing them out.
+   --  @param Every Receives the logits of every position of the batch,
+   --    Vocabulary elements each, or null for only the last position's.
+   --    What this costs is the output projection once per position, which
+   --    is the largest matrix in the model: a caller that does not need
+   --    them should not ask. A caller checking what another model proposed
+   --    does need them, because the answer at each position is the whole
+   --    question.
    procedure Evaluate_Batch
      (Item   : in out Session;
       Source : Model'Class;
       Tokens : Model_Runner.Tokenizer.Token_Array;
       Logits : out Real_Array;
       States : Model_Runner.Tensors.Real_Array_Access := null;
+      Every  : Model_Runner.Tensors.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out Model_Runner.Errors.Error_Info);
 
@@ -742,6 +750,29 @@ package Model_Runner.Llama is
    --  @param Item Prepared model.
    --  @return The fingerprint, or zero before preparation.
    function Fingerprint (Item : Model) return Interfaces.Unsigned_64;
+
+   --  Give back the last few committed positions.
+   --
+   --  What it is for is checking: a caller that evaluated several tokens on
+   --  the strength of a guess, and found the guess wrong partway, has to put
+   --  the context back to where the guess stopped being right. Everything
+   --  after Position becomes uncommitted and is overwritten by whatever is
+   --  evaluated next; nothing is released and nothing is cleared, because a
+   --  position that is not committed is never read.
+   --
+   --  Going forward is not rewinding and is refused: the positions between
+   --  where a session is and where it would be have no keys and no values,
+   --  and a session that claimed them would attend to arithmetic nobody did.
+   --
+   --  @param Item Session to rewind.
+   --  @param Position Committed position to go back to, at most the current
+   --    one.
+   --  @param Status Success, Lifecycle_Invalid_State when the session is not
+   --    open, or Tensor_Shape_Mismatch when the position is ahead of it.
+   procedure Rewind
+     (Item     : in out Session;
+      Position : Natural;
+      Status   : out Model_Runner.Errors.Error_Info);
 
    --  Invalidate the cache and the history without releasing memory.
    --
