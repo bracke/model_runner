@@ -946,9 +946,9 @@ Named in the specification, absent here:
   shader compiled into the binary rather than read from a file.
 
   That product is checked against the processor rather than reported: on this
-  machine an integrated Radeon and a software rasterizer both agree with a
-  binary64 reference to under a ten-millionth over a hundred and twenty-eight
-  terms, which is what binary32 accumulation carries.
+  machine an integrated Radeon and a software rasterizer both agree with the
+  same product computed in binary64 to under a ten-millionth over a hundred
+  and twenty-eight terms, which is what binary32 accumulation carries.
 
   What is left is the fourth piece: making it a backend the engine can be
   told to use, which means keeping a model resident on the device instead of
