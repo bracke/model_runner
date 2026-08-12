@@ -7,6 +7,14 @@ package body Model_Runner.Platform.Device is
 
    function Is_Supported return Boolean is (False);
 
+   function Entry_Point
+     (Instance : System.Address; Name : String) return System.Address
+   is
+      pragma Unreferenced (Instance, Name);
+   begin
+      return System.Null_Address;
+   end Entry_Point;
+
    procedure Open (Item : in out Inventory; Found : out Boolean) is
    begin
       Close (Item);
@@ -55,6 +63,7 @@ package body Model_Runner.Platform.Device is
 
    procedure Close (Item : in out Context) is
    begin
+      Item.Instance := System.Null_Address;
       Item.Physical := System.Null_Address;
       Item.Logical := System.Null_Address;
       Item.Queue := System.Null_Address;

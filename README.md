@@ -937,17 +937,25 @@ Named in the specification, absent here:
   the CPU: one for speed and one for being obviously right. Nothing computes
   on a GPU yet.
 
-  The first piece of one is here: `version` reports what devices the machine
-  has, found through the host's Vulkan loader, which is opened by name at the
-  moment it is asked for rather than linked. A machine without a loader, a
-  driver or a device reports none and goes on exactly as before -- being told
-  no is the whole point of asking, and it is what most machines will say.
+  Three of the four pieces of one are here. `version` reports what devices
+  the machine has, found through the host's Vulkan loader, opened by name at
+  the moment it is asked for rather than linked -- a machine without a
+  loader, a driver or a device reports none and goes on exactly as before. A
+  device can be opened, with a queue that accepts compute and the memory an
+  upload goes through. And a device computes a matrix-vector product, from a
+  shader compiled into the binary rather than read from a file.
 
-  What is left is the rest of it: a device and a queue, buffers to hold the
-  weights, a compute shader for the matrix product, and the plumbing that
-  makes it a third backend the existing capability checks can refuse work to.
-  Those are the next three pieces, in that order, and each is a thing that
-  can be measured against the CPU backend when it lands rather than believed.
+  That product is checked against the processor rather than reported: on this
+  machine an integrated Radeon and a software rasterizer both agree with a
+  binary64 reference to under a ten-millionth over a hundred and twenty-eight
+  terms, which is what binary32 accumulation carries.
+
+  What is left is the fourth piece: making it a backend the engine can be
+  told to use, which means keeping a model resident on the device instead of
+  handing over the same weights for every product. Until that exists there is
+  nothing to time, and the first timing may well be unflattering -- this
+  device is integrated and shares a fifteen-watt budget with the processor
+  it would be helping.
 
   This paragraph used to say a GPU backend was ruled out because it would
   need a foreign library "which the rules above do not allow". No rule above

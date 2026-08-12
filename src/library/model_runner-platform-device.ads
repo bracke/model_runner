@@ -156,7 +156,17 @@ private
 
    --  What Open found, kept for the operations above. The handles are the
    --  host's own and mean nothing here.
+   --  Find one of the host interface's entry points by name.
+   --
+   --  Private because what an entry point is belongs to whatever interface
+   --  the host has, and only the children of this package have any use for
+   --  one. An instance is needed for all but a handful of them, which is
+   --  why the context keeps the one it was opened from.
+   function Entry_Point
+     (Instance : System.Address; Name : String) return System.Address;
+
    type Context is limited record
+      Instance : System.Address := System.Null_Address;
       Physical : System.Address := System.Null_Address;
       Logical  : System.Address := System.Null_Address;
       Queue    : System.Address := System.Null_Address;

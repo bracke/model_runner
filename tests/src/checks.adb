@@ -1344,9 +1344,18 @@ package body Checks is
       --  towards saying an operation is used. This check is for the ones
       --  nothing uses at all.
       declare
-         Room  : constant := 400;
+         --  Raised from four hundred when the count reached it. That it
+         --  reached it was found the hard way: the collector stopped taking
+         --  names and the check then reported that an operation declared in
+         --  plain sight was declared nowhere. A bound that is silently full
+         --  makes a check weaker as a project grows, which is the opposite
+         --  of what a check is for, so overflowing it is now a failure that
+         --  names itself.
+         Room  : constant := 800;
          Width : constant := 64;
          Named : constant := 64;
+
+         Overflowed : Boolean := False;
 
          type Operation is record
             Name : String (1 .. Width) := [others => ' '];
@@ -1439,6 +1448,13 @@ package body Checks is
                            end loop;
 
                            if To > From
+                             and then Count >= Room
+                             and then To - From <= Width
+                           then
+                              Overflowed := True;
+                           end if;
+
+                           if To > From
                              and then Count < Room
                              and then To - From <= Width
                            then
@@ -1512,6 +1528,13 @@ package body Checks is
          if Count < 200 then
             Fail ("only" & Natural'Image (Count) & " public operations were "
                   & "found; the check no longer matches the specs it reads");
+         end if;
+
+         Result.Performed := Result.Performed + 1;
+         if Overflowed then
+            Fail ("more than" & Natural'Image (Room) & " public operations "
+                  & "were found and the rest were not checked; raise the "
+                  & "bound in this check");
          end if;
 
          for Index in 1 .. Count loop
@@ -5097,11 +5120,37 @@ package body Checks is
                        Ada.Directories.Simple_Name (Item);
                      Body_Name : constant String :=
                        Spec (Spec'First .. Spec'Last - 1) & 'b';
+                     --  A package under this name is usually the host
+                     --  boundary itself, and then it needs one body per
+                     --  host and no other. It may instead be portable code
+                     --  that goes through the boundary -- a child of a
+                     --  platform package, using what its parent found --
+                     --  and then it has one body in the library and none
+                     --  per host. The two cannot be confused, because a
+                     --  package cannot have both, and requiring one or the
+                     --  other keeps the rule as strict as it was.
+                     Portable : constant Boolean :=
+                       Ada.Directories.Exists
+                         (Full & "/src/library/" & Body_Name);
                   begin
                      for Set of Sets loop
                         Result.Performed := Result.Performed + 1;
 
-                        if Bodies_For (Body_Name, Set) /= 1 then
+                        if Portable then
+                           if Bodies_For (Body_Name, Set) /= 0 then
+                              Fail (Body_Name & " has a body in the library "
+                                    & "and"
+                                    & Natural'Image
+                                        (Bodies_For (Body_Name, Set))
+                                    & " for the host built from "
+                                    & Set (1).all
+                                    & (if Set (2).all = "" then ""
+                                       else " and " & Set (2).all)
+                                    & ", where it must have one or the "
+                                    & "other");
+                           end if;
+
+                        elsif Bodies_For (Body_Name, Set) /= 1 then
                            Fail (Body_Name & " has"
                                  & Natural'Image (Bodies_For (Body_Name, Set))
                                  & " bodies for the host built from "

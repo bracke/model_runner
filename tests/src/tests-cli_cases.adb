@@ -23,6 +23,7 @@ with Model_Runner.Errors;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Device;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Presentation;
 with Model_Runner.Kernels;
 with Fixtures;
@@ -331,6 +332,160 @@ package body Tests.CLI_Cases is
 
       return Result;
    end Parsed;
+
+   --  A device computes the product the processor computes.
+   --
+   --  This is the first thing that runs on a device, so it is the first
+   --  that can be checked rather than reported. The shader accumulates a
+   --  row in binary32 where the processor accumulates in binary64 and
+   --  rounds once, so the two are not equal and are not meant to be: what
+   --  is held is that they agree to the precision binary32 carries.
+   --
+   --  The values are deliberately awkward. An earlier version of this used
+   --  multiples of an eighth, and every product and every sum of them is
+   --  exact in binary32, so the two agreed to the last bit and the test
+   --  said nothing about the arithmetic it exists to check.
+   --
+   --  Skipped where there is no device, which is most machines. A test
+   --  that demanded one would fail on them for a reason that has nothing
+   --  to do with this program.
+   procedure Device_Product_Matches_The_Processor
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package Devices renames Model_Runner.Platform.Device;
+      package Products renames Model_Runner.Platform.Device.Products;
+      package N renames Model_Runner.Numerics;
+      use type N.Element_Count;
+      use type N.Wide_Real;
+
+      Held  : Devices.Inventory;
+      Found : Boolean;
+
+      Checked : Natural := 0;
+   begin
+      Devices.Open (Held, Found);
+
+      for Which in 1 .. Devices.Count (Held) loop
+         declare
+            Opened : Devices.Context;
+            Engine : Products.Engine;
+            Ready  : Boolean;
+         begin
+            Devices.Open (Opened, Held, Which, Ready);
+
+            if Ready then
+               Products.Open (Engine, Opened, Ready);
+            end if;
+
+            if Ready then
+               Assert (Products.Is_Ready (Engine),
+                       "a device took the pipeline and then said it had "
+                       & "not");
+
+               --  Shapes that are not multiples of the group the shader
+               --  declares, so that the invocations past the last row are
+               --  the ones the shader turns away rather than ones nobody
+               --  asked for.
+               for Shape in 1 .. 3 loop
+                  declare
+                     Rows : constant Natural :=
+                       (case Shape is when 1 => 4, when 2 => 100,
+                        when others => 257);
+                     Cols : constant Natural :=
+                       (case Shape is when 1 => 3, when 2 => 128,
+                        when others => 64);
+
+                     Weights : N.Real_Array
+                       (0 .. N.Element_Count (Rows * Cols) - 1);
+                     Vector : N.Real_Array (0 .. N.Element_Count (Cols) - 1);
+                     Target : N.Real_Array (0 .. N.Element_Count (Rows) - 1);
+
+                     Worst : N.Real := 0.0;
+                     Ok    : Boolean;
+                  begin
+                     for Index in Weights'Range loop
+                        Weights (Index) :=
+                          1.0 / N.Real (3 + Natural (Index) mod 97) - 0.037;
+                     end loop;
+
+                     for Index in Vector'Range loop
+                        Vector (Index) :=
+                          1.0 / N.Real (7 + Natural (Index) mod 13) - 0.011;
+                     end loop;
+
+                     Products.Multiply
+                       (Engine, Weights, Vector, Rows, Cols, Target, Ok);
+                     Assert (Ok,
+                             "a device refused a product of"
+                             & Natural'Image (Rows) & " by"
+                             & Natural'Image (Cols));
+
+                     for Row in 0 .. N.Element_Count (Rows) - 1 loop
+                        declare
+                           Sum : N.Wide_Real := 0.0;
+                        begin
+                           for Col in 0 .. N.Element_Count (Cols) - 1 loop
+                              Sum := Sum
+                                + N.Wide_Real
+                                    (Weights (Row * N.Element_Count (Cols)
+                                              + Col))
+                                  * N.Wide_Real (Vector (Col));
+                           end loop;
+
+                           Worst := N.Real'Max
+                             (Worst, abs (Target (Row) - N.Real (Sum)));
+                        end;
+                     end loop;
+
+                     --  Binary32 over a hundred and twenty-eight terms
+                     --  measures under a ten-millionth here. The bound is
+                     --  what that arithmetic can carry, not what this run
+                     --  happened to produce.
+                     Assert (Worst < 1.0E-5,
+                             "a device and the processor disagree about a"
+                             & Natural'Image (Rows) & " by"
+                             & Natural'Image (Cols) & " product by"
+                             & N.Real'Image (Worst));
+
+                     Checked := Checked + 1;
+                  end;
+               end loop;
+
+               --  A shape nobody has.
+               declare
+                  Given  : constant N.Real_Array (0 .. 0) := [others => 0.0];
+                  Wanted : N.Real_Array (0 .. 0) := [others => 0.0];
+                  Ok     : Boolean;
+               begin
+                  Products.Multiply
+                    (Engine, Given, Given, 0, 0, Wanted, Ok);
+                  Assert (not Ok, "a device accepted a product of nothing");
+               end;
+            end if;
+
+            Products.Close (Engine);
+            Assert (not Products.Is_Ready (Engine),
+                    "closing an engine left it ready");
+
+            --  Closing twice is closing.
+            Products.Close (Engine);
+            Devices.Close (Opened);
+         end;
+      end loop;
+
+      Devices.Close (Held);
+
+      --  Nothing is asserted about how many devices answered. What is
+      --  asserted is that a machine which has one gets the right answer
+      --  from it, and this says so where it happened.
+      if Checked = 0 then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device computed a product here");
+      end if;
+   end Device_Product_Matches_The_Processor;
 
    --  Asking the machine what devices it has answers, either way.
    --
@@ -8782,6 +8937,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Conversation_Survives_Interactive_Edits'Access,
          "the conversation keeps its shape under the edits interactive makes");
+      Register_Routine
+        (T, Device_Product_Matches_The_Processor'Access,
+         "a device computes the product the processor computes");
       Register_Routine
         (T, Devices_Are_Reported_Either_Way'Access,
          "asking the machine what devices it has answers, either way");

@@ -53,7 +53,6 @@ package body Untested_Surface is
          | "Metadata_Bytes"
          | "Metadata_Element_Kind"
          | "Model_Name"
-         | "Multiply"
          | "Next_Seed"
          | "Ordinal"
          | "Plan_For"

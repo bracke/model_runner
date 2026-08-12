@@ -299,6 +299,26 @@ package body Model_Runner.Platform.Device is
       return Find /= null;
    end Is_Supported;
 
+   ------------------
+   -- Entry_Point --
+   ------------------
+
+   function Entry_Point
+     (Instance : System.Address; Name : String) return System.Address
+   is
+      Room   : C.Strings.chars_ptr := C.Strings.New_String (Name);
+      Result : System.Address := System.Null_Address;
+   begin
+      Load;
+
+      if Find /= null then
+         Result := Find (Instance, Room);
+      end if;
+
+      C.Strings.Free (Room);
+      return Result;
+   end Entry_Point;
+
    ----------
    -- Open --
    ----------
@@ -310,17 +330,6 @@ package body Model_Runner.Platform.Device is
         new Ada.Unchecked_Conversion (System.Address, Enumerate_Call);
       function To_Properties is
         new Ada.Unchecked_Conversion (System.Address, Properties_Call);
-
-      --  Find an entry point by name, through the loader's own finder.
-      function Entry_Point
-        (Instance : System.Address; Name : String) return System.Address
-      is
-         Room   : C.Strings.chars_ptr := C.Strings.New_String (Name);
-         Result : constant System.Address := Find (Instance, Room);
-      begin
-         C.Strings.Free (Room);
-         return Result;
-      end Entry_Point;
 
       Instance : aliased System.Address := System.Null_Address;
    begin
@@ -504,16 +513,6 @@ package body Model_Runner.Platform.Device is
       function To_Queue is
         new Ada.Unchecked_Conversion (System.Address, Get_Queue_Call);
 
-      function Entry_Point
-        (Instance : System.Address; Name : String) return System.Address
-      is
-         Room   : C.Strings.chars_ptr := C.Strings.New_String (Name);
-         Result : constant System.Address := Find (Instance, Room);
-      begin
-         C.Strings.Free (Room);
-         return Result;
-      end Entry_Point;
-
       Physical : System.Address;
    begin
       Close (Item);
@@ -668,6 +667,7 @@ package body Model_Runner.Platform.Device is
             return;
          end if;
 
+         Item.Instance := From.Handle;
          Item.Physical := Physical;
          Item.Logical := Logical;
       end;
@@ -707,6 +707,7 @@ package body Model_Runner.Platform.Device is
          end;
       end if;
 
+      Item.Instance := System.Null_Address;
       Item.Physical := System.Null_Address;
       Item.Logical := System.Null_Address;
       Item.Queue := System.Null_Address;

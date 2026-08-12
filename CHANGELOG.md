@@ -7,6 +7,41 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A device computes a matrix-vector product.** The second half of the
+  third piece, and the first thing here that runs on a device rather than
+  reporting on one -- so the first that can be checked instead of described.
+
+  A pipeline is made once and the buffers per call, which is the wrong way
+  round for speed and the right way round for a piece whose job is to be
+  correct: keeping a model resident is what the fourth piece is for. What
+  goes to the device is the shape and three buffers; what comes back is
+  compared against the same product in binary64.
+
+  On this machine an integrated Radeon and a software rasterizer both agree
+  to 3.7e-08 over a hundred and twenty-eight terms, which is what binary32
+  accumulation carries. The first version of that test used multiples of an
+  eighth, every product and sum of which is exact in binary32, and reported
+  a difference of exactly zero -- a fixture that could not tell the two
+  arithmetics apart, which is the third time this session that a test looked
+  like proof and was not.
+
+### Fixed
+
+- **A repository check silently stopped checking.** The collector that finds
+  every public operation held four hundred of them and the project has more,
+  so the rest were dropped without a word -- and the check then reported
+  that an operation declared in plain sight was declared nowhere, which is
+  how it was found. The bound is larger and overflowing it now fails by
+  name. A bound that is silently full makes a check weaker as a project
+  grows, which is the opposite of what a check is for.
+
+- **The rule that a platform package needs one body per host** now
+  distinguishes a package that is the host boundary from one that is
+  portable code going through it. The first needs a body per host and no
+  other; the second has one body in the library and none per host. A package
+  cannot have both, so requiring one or the other keeps the rule as strict
+  as it was.
+
 - **A compute shader for the matrix product, and a way to carry one.** The
   third piece, in two halves; this is the first of them.
 
