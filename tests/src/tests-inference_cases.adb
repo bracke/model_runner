@@ -2344,6 +2344,118 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Snapshot_Is_The_Session;
 
+   --  Merging an adapter into a weight that is not square.
+   --
+   --  The test above uses this fixture's query projection, which is as
+   --  many rows as it has columns. A merge that had its rows and columns
+   --  the wrong way round would read the pair transposed and still fit,
+   --  still run, and still produce a plausible model. Nothing about a
+   --  square matrix can tell the two apart.
+   --
+   --  The fixture that states its key and value head widths separately has
+   --  a query projection of sixteen rows by eight columns, so it can.
+   procedure Adapter_Merges_Into_A_Tall_Weight
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt  : constant Vocab.Token_Array := [1, 4, 5, 6, 7];
+      Adapter : constant String := "obj/tall-adapter.gguf";
+
+      --  The logits from a model built with the difference already in it,
+      --  or from the plain one with the adapter merged.
+      procedure Answer
+        (Baked  : Boolean;
+         Result : out Logit_Vector;
+         Merge  : out E.Error_Info)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Merge := E.Success;
+         Tiny_Model.Build
+           (Image, Apart_Widths => True, Merged => Baked);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Ready  : L.Model;
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            L.Prepare
+              (Ready, Parsed, Source, Repack => L.To_F32, Status => Status);
+            Assert (E.Is_Ok (Status), "the model did not prepare");
+
+            if not Baked then
+               Tiny_Model.Write_Adapter (Adapter, Apart => True);
+
+               declare
+                  From   : Model_Runner.Byte_Sources.Files.File_Source;
+                  Second : Containers.Container;
+                  Local  : E.Error_Info;
+               begin
+                  Model_Runner.Byte_Sources.Files.Open
+                    (From, Adapter, Status => Local);
+                  Assert (E.Is_Ok (Local), "the adapter did not open");
+
+                  Containers.Reader.Parse (Second, From, Status => Local);
+                  Assert (E.Is_Ok (Local), "the adapter did not parse");
+
+                  L.Merge_Adapter (Ready, Second, From, Status => Merge);
+
+                  Containers.Close (Second);
+                  Model_Runner.Byte_Sources.Files.Close (From);
+               end;
+            end if;
+
+            if E.Is_Ok (Merge) then
+               L.Open (Live, Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the session did not open");
+
+               for Token of Prompt loop
+                  L.Evaluate (Live, Ready, Token, Result, Status => Status);
+                  Assert (E.Is_Ok (Status), "evaluation failed");
+               end loop;
+
+               L.Close (Live);
+            else
+               Result := [others => 0.0];
+            end if;
+
+            L.Close (Ready, Status);
+            Containers.Close (Parsed);
+         end;
+
+         B.Free (Image);
+      end Answer;
+
+      Adapted, Baked : Logit_Vector;
+      Merge : E.Error_Info;
+      Worst : Model_Runner.Numerics.Real := 0.0;
+   begin
+      Answer (Baked => False, Result => Adapted, Merge => Merge);
+      Assert (E.Is_Ok (Merge),
+              "an adapter on a weight that is not square did not merge: "
+              & E.Error_Code'Image (Merge.Code));
+
+      Answer (Baked => True, Result => Baked, Merge => Merge);
+
+      for Index in Baked'Range loop
+         Worst := Model_Runner.Numerics.Real'Max
+           (Worst, abs (Baked (Index) - Adapted (Index)));
+      end loop;
+
+      Assert (Worst < 1.0E-4,
+              "merging into a weight of sixteen rows by eight columns and "
+              & "writing the same difference into the weights disagree by"
+              & Model_Runner.Numerics.Real'Image (Worst));
+   end Adapter_Merges_Into_A_Tall_Weight;
+
    --  Merging an adapter is the arithmetic it claims.
    --
    --  An adapter says what a fine-tune changed, as a pair of small
@@ -3386,6 +3498,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Snapshot_Is_The_Session'Access,
          "a snapshot is the session it was taken from");
+      Register_Routine
+        (T, Adapter_Merges_Into_A_Tall_Weight'Access,
+         "an adapter merges into a weight that is not square");
       Register_Routine
         (T, Adapter_Merges_What_It_Describes'Access,
          "merging an adapter is the arithmetic it claims");

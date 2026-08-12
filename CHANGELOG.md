@@ -805,6 +805,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The adapter merge is tested on a weight that is not square.** The
+  fixture's query projection is as many rows as it has columns, so a merge
+  with its rows and columns the wrong way round reads the pair transposed
+  and still fits, still runs, and still produces a plausible model. Nothing
+  about a square matrix can tell the two apart.
+
+  The fixture that states its key and value head widths separately has a
+  query projection of sixteen rows by eight columns. Transposing the shape
+  check fails against it and passes against the square one.
+
+  That is three tests now whose fixtures were chosen so that two things
+  differ: the key and value widths, the model with and without an adapter,
+  and a weight's rows and columns. One of the three found a real bug and the
+  other two would not have found theirs.
+
 - **The half-precision cache is swept on a windowed model too.** The two
   storages are two procedures and each carries its own copy of what a window
   means; the sweep ran the halved one only where there is no window, so half

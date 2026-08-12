@@ -592,12 +592,15 @@ package body Tiny_Model is
       Half    : Boolean := False;
       Foreign : Boolean := False;
       Deep    : Boolean := False;
-      Rank    : Positive := 1)
+      Rank    : Positive := 1;
+      Apart   : Boolean := False)
    is
       Wide_Of : constant Natural :=
         (if Deep then Deep_Embedding else Embedding);
       Tall_Of : constant Natural :=
-        (if Deep then Heads * Deep_Head_Size else Heads * Head_Size);
+        (if Deep then Heads * Deep_Head_Size
+         elsif Apart then Heads * 2 * Head_Size
+         else Heads * Head_Size);
 
       use Ada.Streams;
 

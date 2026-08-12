@@ -117,6 +117,10 @@ package Tiny_Model is
    --    describing half a difference is refused rather than half applied.
    --  @param Foreign Name the pair after a weight this profile does not
    --    adapt, so that an adapter for another model is refused.
+   --  @param Apart Size the pair for the fixture whose key and value head
+   --    widths are stated apart, where the weight the adapter touches is not
+   --    square. A square weight cannot tell a merge that has its rows and
+   --    columns the right way round from one that does not.
    --  @param Rank How many rows the pair has between them. One is enough to
    --    check the arithmetic and is what the merge test uses; a real adapter
    --    is eight to sixty-four, which is what the cost of merging one
@@ -129,7 +133,8 @@ package Tiny_Model is
       Half    : Boolean := False;
       Foreign : Boolean := False;
       Deep    : Boolean := False;
-      Rank    : Positive := 1);
+      Rank    : Positive := 1;
+      Apart   : Boolean := False);
 
    --  Build the fixture in memory.
    --
