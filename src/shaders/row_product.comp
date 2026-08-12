@@ -1,0 +1,41 @@
+#version 450
+
+//  One row of a matrix against one vector, per invocation.
+//
+//  y[row] = sum over col of w[row][col] * x[col]
+//
+//  The accumulation is in binary32, which is what a device offers without
+//  asking for an extension. The processor's own kernels accumulate a row in
+//  binary64 and round once at the end, so the two do not agree bit for bit
+//  and are not meant to; what they have to agree on is the answer to within
+//  the tolerance the conformance sweep states.
+//
+//  Rows are contiguous, which is the layout every weight in this program
+//  already has: a row is what a matrix-vector product reads in one run.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly  buffer Weights { float w[]; };
+layout(std430, binding = 1) readonly  buffer Vector  { float x[]; };
+layout(std430, binding = 2) writeonly buffer Result  { float y[]; };
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+} shape;
+
+void main() {
+    uint row = gl_GlobalInvocationID.x;
+    if (row >= shape.rows) {
+        return;
+    }
+
+    uint base = row * shape.columns;
+    float sum = 0.0;
+
+    for (uint col = 0; col < shape.columns; ++col) {
+        sum += w[base + col] * x[col];
+    }
+
+    y[row] = sum;
+}

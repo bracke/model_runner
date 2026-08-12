@@ -18,6 +18,7 @@ with Checks;
 with Conformance;
 with External_Model;
 with Docs_Generation;
+with Shader_Generation;
 with Benchmarks;
 
 with Model_Runner.Byte_Sources.Files;
@@ -611,6 +612,40 @@ begin
               (Ada.Text_IO.Standard_Error,
                "could not write the error-code reference");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
+   elsif Command = "shader" then
+      --  Turn a compiled shader into the Ada constant the engine hands to a
+      --  device. Compiling is not done here: it needs a shader compiler,
+      --  which is not a build dependency of this project.
+      declare
+         Root : constant String :=
+           (if Ada.Command_Line.Argument_Count >= 4
+            then Ada.Command_Line.Argument (4)
+            else "..");
+         Written : Boolean;
+      begin
+         if Ada.Command_Line.Argument_Count < 3 then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "usage: tests shader SOURCE.comp COMPILED.spv [ROOT]");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         else
+            Shader_Generation.Write_Shader
+              (Root, Ada.Command_Line.Argument (2),
+               Ada.Command_Line.Argument (3), Written);
+
+            if Written then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "wrote " & Root & "/src/library/model_runner-shaders.ads");
+            else
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "could not write the shader constant");
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            end if;
          end if;
       end;
 

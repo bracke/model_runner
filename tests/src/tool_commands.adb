@@ -9,6 +9,7 @@ package body Tool_Commands is
    Name_External       : aliased constant String := "external-model";
    Name_Tokenize       : aliased constant String := "tokenize";
    Name_Docs           : aliased constant String := "docs";
+   Name_Shader         : aliased constant String := "shader";
    Name_Fixtures       : aliased constant String := "fixtures";
    Name_Package        : aliased constant String := "package";
    Name_Pristine       : aliased constant String := "pristine";
@@ -37,6 +38,8 @@ package body Tool_Commands is
      & " [--expect TEXT] [--repack MODE]";
    Takes_Tokenize  : aliased constant String := "--model PATH --prompt TEXT";
    Takes_Docs      : aliased constant String := "[ROOT]";
+   Takes_Shader    : aliased constant String :=
+     "SOURCE.comp COMPILED.spv [ROOT]";
    Takes_Fixtures  : aliased constant String := "[DIR]";
    Takes_Package   : aliased constant String := "[ROOT] [INTO]";
    Takes_Pristine  : aliased constant String := "[ROOT]";
@@ -60,6 +63,8 @@ package body Tool_Commands is
      "tokenize text with a model's own vocabulary";
    Says_Docs : aliased constant String :=
      "regenerate the documentation derived from the Ada registries";
+   Says_Shader : aliased constant String :=
+     "turn a compiled shader into the Ada constant the engine hands a device";
    Says_Fixtures : aliased constant String :=
      "write the committed test fixtures";
    Says_Package : aliased constant String :=
@@ -67,7 +72,7 @@ package body Tool_Commands is
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
 
-   Held : constant array (1 .. 12) of Command :=
+   Held : constant array (1 .. 13) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -85,6 +90,8 @@ package body Tool_Commands is
       (Name_Tokenize'Access, Takes_Tokenize'Access, Says_Tokenize'Access,
        Opts_Tokenize'Access),
       (Name_Docs'Access, Takes_Docs'Access, Says_Docs'Access,
+       Opts_None'Access),
+      (Name_Shader'Access, Takes_Shader'Access, Says_Shader'Access,
        Opts_None'Access),
       (Name_Fixtures'Access, Takes_Fixtures'Access, Says_Fixtures'Access,
        Opts_None'Access),

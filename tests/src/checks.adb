@@ -19,6 +19,8 @@ with Unreached_Codes;
 with Untested_Surface;
 with Template_Registry;
 with Tiny_Model;
+with Model_Runner.Shaders;
+with Shader_Generation;
 with Tool_Commands;
 
 with Model_Runner;
@@ -2710,9 +2712,14 @@ package body Checks is
          --  Public operations kept without a caller, and why. An operation
          --  that only a user of this crate would call belongs here; one that
          --  is simply unused does not, and gets removed instead.
+         --  Row_Product is the compiled shader, which is a constant and not
+         --  an operation: this check reads a spec by shape and cannot tell
+         --  the two apart. It is handed to nothing yet, and what will hand
+         --  it over is the piece of the device backend after this one.
          function Excused (Name : String) return Boolean
          is (Name in "Run_Process" | "Physical_Cores" | "Host_Name"
-                     | "No_Color_Requested" | "Failure_Name" | "Interrupts");
+                     | "No_Color_Requested" | "Failure_Name" | "Interrupts"
+                     | "Row_Product");
 
          procedure Examine (Relative : String) is
             Text   : constant String := Contents (Relative);
@@ -4162,6 +4169,30 @@ package body Checks is
       --  A mismatch is not a defect in the code. It is a question that has to
       --  be answered before release: re-measure, or say why the change cannot
       --  have moved the number.
+
+      --  The same question about a shader. A compiled shader is committed as
+      --  Ada beside the source it came from, and nothing in a build recompiles
+      --  it: a shader edited and not recompiled would go on running the old
+      --  words with the new source sitting beside them, which is the kind of
+      --  wrong that survives every test because every test runs the words.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/row_product.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/row_product.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Row_Product_Digest then
+            Fail ("src/shaders/row_product.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader "
+                  & "src/shaders/row_product.comp OUT.spv' again");
+         end if;
+      end;
       declare
          Record_Path : constant String := "docs/measured-figures.txt";
          Listing     : constant String := Contents (Record_Path);

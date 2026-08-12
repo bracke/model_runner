@@ -7,6 +7,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A compute shader for the matrix product, and a way to carry one.** The
+  third piece, in two halves; this is the first of them.
+
+  The shader is GLSL under `src/shaders`, one row of a matrix against one
+  vector per invocation. Compiled, it is a run of thirty-two bit words, and a
+  binary in a source tree is a thing nobody can read or review -- so `tests
+  shader` writes those words out as Ada beside the source they came from.
+  That also settles how the engine gets them: it is one of the units that
+  may not reach the filesystem, so a compiled shader has to be something it
+  is linked against rather than something it opens.
+
+  Compiling is not part of a build. It needs a shader compiler, which should
+  not become a dependency of this project for a file that changes twice a
+  year. Whoever changes the shader compiles it and runs the tool.
+
+  Which leaves the obvious way to be wrong: a shader edited and not
+  recompiled would go on running the old words with the new source sitting
+  beside them, and every test would pass, because every test runs the words.
+  The generated file records a digest of the source it came from and the
+  release checklist compares it against the tree, the same bargain the
+  measured figures already make.
+
+  The accumulation in the shader is binary32, which is what a device offers
+  without asking for an extension; the processor's kernels accumulate a row
+  in binary64 and round once. The two are not meant to agree bit for bit,
+  and what they must agree on is the answer to the tolerance the sweep
+  states -- which is a thing to measure when there is something to measure
+  it with. Nothing hands these words to a device yet.
+
 - **A device can be opened.** The second of the four pieces: asking a device
   for a queue that accepts compute, and finding the two kinds of memory
   anything running on it needs -- one the processor can write and one the
