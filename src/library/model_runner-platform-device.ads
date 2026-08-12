@@ -1,3 +1,5 @@
+with Interfaces;
+
 with System;
 
 --  What compute devices the host can reach.
@@ -81,6 +83,67 @@ package Model_Runner.Platform.Device is
    --  @return True for a discrete device.
    function Is_Discrete (Item : Inventory; Index : Positive) return Boolean;
 
+   --  An open device: something that can be given work.
+   --
+   --  Opening one asks the host for a queue that accepts compute, and finds
+   --  the two kinds of memory anything running on it needs -- one the
+   --  processor can write, and one the device reads fastest. On a device
+   --  that shares the machine's memory those are the same kind, which is
+   --  what makes an integrated device cheap to hand data to and no faster
+   --  to read it back from.
+   type Context is limited private;
+
+   --  Open the numbered device.
+   --
+   --  @param Item Context to fill; released first.
+   --  @param From Inventory the device was named in.
+   --  @param Index Device number, from one.
+   --  @param Ready True when the device opened and offers a compute queue.
+   procedure Open
+     (Item  : in out Context;
+      From  : Inventory;
+      Index : Positive;
+      Ready : out Boolean);
+
+   --  Release a device. Idempotent.
+   --
+   --  @param Item Context to release.
+   procedure Close (Item : in out Context);
+
+   --  Report whether a context has a device behind it.
+   --
+   --  @param Item Context to inspect.
+   --  @return True when it is open.
+   function Is_Open (Item : Context) return Boolean;
+
+   --  Which family of queues the compute queue came from.
+   --
+   --  Reported because it is the one number about a device that decides
+   --  what work it will accept, and a reader chasing a refusal wants it.
+   --
+   --  @param Item Open context.
+   --  @return Family number, or zero when the context is not open.
+   function Queue_Family (Item : Context) return Natural;
+
+   --  Whether the memory the processor writes is also the memory the device
+   --  reads.
+   --
+   --  True on a device that shares the machine's memory. It decides whether
+   --  handing over a model costs a copy or costs nothing.
+   --
+   --  @param Item Open context.
+   --  @return True when one kind of memory serves both.
+   function Shares_Memory (Item : Context) return Boolean;
+
+   --  How much memory the device says it has, in bytes.
+   --
+   --  The largest heap it reports. On a device that shares the machine's
+   --  memory this is a share of that memory rather than a separate store.
+   --
+   --  @param Item Open context.
+   --  @return Bytes, or zero when the context is not open.
+   function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64;
+
 private
 
    type Name_Text is record
@@ -91,10 +154,30 @@ private
    type Name_List is array (1 .. Max_Devices) of Name_Text;
    type Discrete_List is array (1 .. Max_Devices) of Boolean;
 
+   --  What Open found, kept for the operations above. The handles are the
+   --  host's own and mean nothing here.
+   type Context is limited record
+      Physical : System.Address := System.Null_Address;
+      Logical  : System.Address := System.Null_Address;
+      Queue    : System.Address := System.Null_Address;
+
+      Family   : Natural := 0;
+      Upload   : Natural := 0;
+      Fast     : Natural := 0;
+      Shared   : Boolean := False;
+      Heap     : Interfaces.Unsigned_64 := 0;
+   end record;
+
+   type Address_List is array (1 .. Max_Devices) of System.Address;
+
    type Inventory is limited record
       Used     : Natural := 0;
       Names    : Name_List;
       Discrete : Discrete_List := [others => False];
+
+      --  The host's own handle for each device, kept so that one of them
+      --  can be opened afterwards.
+      Handles  : Address_List := [others => System.Null_Address];
 
       --  The interface's own handle, kept so that closing gives it back.
       --  Zero when nothing is open. An address rather than a pointer to

@@ -36,6 +36,7 @@ with System.Storage_Elements;
 package body Model_Runner.Platform.Device is
 
    use type Interfaces.C.int;
+   use type Interfaces.Unsigned_64;
    use type System.Storage_Elements.Storage_Offset;
    use type Interfaces.C.unsigned;
    use type System.Address;
@@ -132,6 +133,115 @@ package body Model_Runner.Platform.Device is
    Offset_Device_Name : constant := 20;
 
    Device_Kind_Discrete : constant := 2;
+
+   --  Queue families and devices, which is the rest of what opening one
+   --  needs. A queue family is a group of queues that accept the same kinds
+   --  of work; a device is made with the families it will use named up
+   --  front.
+   Structure_Queue_Create  : constant := 2;
+   Structure_Device_Create : constant := 3;
+
+   Queue_Compute : constant := 2;
+
+   Memory_Device_Local  : constant := 1;
+   Memory_Host_Visible  : constant := 2;
+   Memory_Host_Coherent : constant := 4;
+
+   Max_Families : constant := 16;
+
+   type Queue_Family_Properties is record
+      Flags       : C.unsigned := 0;
+      Count       : C.unsigned := 0;
+      Timestamps  : C.unsigned := 0;
+      Granule_X   : C.unsigned := 0;
+      Granule_Y   : C.unsigned := 0;
+      Granule_Z   : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   type Family_Array is array (1 .. Max_Families) of Queue_Family_Properties;
+
+   type Queue_Create_Info is record
+      Kind       : C.unsigned := Structure_Queue_Create;
+      Next       : System.Address := System.Null_Address;
+      Flags      : C.unsigned := 0;
+      Family     : C.unsigned := 0;
+      Count      : C.unsigned := 1;
+      Priorities : System.Address := System.Null_Address;
+   end record
+     with Convention => C;
+
+   type Device_Create_Info is record
+      Kind            : C.unsigned := Structure_Device_Create;
+      Next            : System.Address := System.Null_Address;
+      Flags           : C.unsigned := 0;
+      Queue_Count     : C.unsigned := 1;
+      Queues          : System.Address := System.Null_Address;
+      Layer_Count     : C.unsigned := 0;
+      Layers          : System.Address := System.Null_Address;
+      Extension_Count : C.unsigned := 0;
+      Extensions      : System.Address := System.Null_Address;
+      Features        : System.Address := System.Null_Address;
+   end record
+     with Convention => C;
+
+   --  What the interface says about memory: up to thirty-two kinds, each
+   --  naming what it can do and which heap it comes from, then up to sixteen
+   --  heaps, each with a size.
+   Max_Memory_Kinds : constant := 32;
+   Max_Memory_Heaps : constant := 16;
+
+   type Memory_Kind is record
+      Flags : C.unsigned := 0;
+      Heap  : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   type Memory_Heap is record
+      Size  : Interfaces.Unsigned_64 := 0;
+      Flags : C.unsigned := 0;
+      Pad   : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   type Memory_Kind_Array is array (1 .. Max_Memory_Kinds) of Memory_Kind;
+   type Memory_Heap_Array is array (1 .. Max_Memory_Heaps) of Memory_Heap;
+
+   type Memory_Properties is record
+      Kind_Count : C.unsigned := 0;
+      Kinds      : Memory_Kind_Array;
+      Heap_Count : C.unsigned := 0;
+      Heaps      : Memory_Heap_Array;
+   end record
+     with Convention => C;
+
+   type Family_Query_Call is access
+     procedure (Device   : System.Address;
+                Count    : access C.unsigned;
+                Families : System.Address)
+     with Convention => C;
+
+   type Memory_Query_Call is access
+     procedure (Device : System.Address; Properties : System.Address)
+     with Convention => C;
+
+   type Create_Device_Call is access
+     function (Physical  : System.Address;
+               Info      : System.Address;
+               Allocator : System.Address;
+               Device    : access System.Address) return C.int
+     with Convention => C;
+
+   type Destroy_Device_Call is access
+     procedure (Device : System.Address; Allocator : System.Address)
+     with Convention => C;
+
+   type Get_Queue_Call is access
+     procedure (Device : System.Address;
+                Family : C.unsigned;
+                Index  : C.unsigned;
+                Queue  : access System.Address)
+     with Convention => C;
 
    ------------------
    -- Is_Supported --
@@ -305,6 +415,7 @@ package body Model_Runner.Platform.Device is
 
                   Item.Names (Index).Last := Last;
                   Item.Names (Index).Text (1 .. Last) := Text (1 .. Last);
+                  Item.Handles (Index) := Devices (Index);
                end;
             end;
          end loop;
@@ -338,6 +449,7 @@ package body Model_Runner.Platform.Device is
       Item.Handle := System.Null_Address;
       Item.Used := 0;
       Item.Discrete := [others => False];
+      Item.Handles := [others => System.Null_Address];
 
       for Index in Item.Names'Range loop
          Item.Names (Index).Last := 0;
@@ -371,5 +483,248 @@ package body Model_Runner.Platform.Device is
    begin
       return Index <= Item.Used and then Item.Discrete (Index);
    end Is_Discrete;
+
+
+   ---------------------------------------------------------------------------
+   --  An open device
+   ---------------------------------------------------------------------------
+
+   procedure Open
+     (Item  : in out Context;
+      From  : Inventory;
+      Index : Positive;
+      Ready : out Boolean)
+   is
+      function To_Families is
+        new Ada.Unchecked_Conversion (System.Address, Family_Query_Call);
+      function To_Memory is
+        new Ada.Unchecked_Conversion (System.Address, Memory_Query_Call);
+      function To_Create is
+        new Ada.Unchecked_Conversion (System.Address, Create_Device_Call);
+      function To_Queue is
+        new Ada.Unchecked_Conversion (System.Address, Get_Queue_Call);
+
+      function Entry_Point
+        (Instance : System.Address; Name : String) return System.Address
+      is
+         Room   : C.Strings.chars_ptr := C.Strings.New_String (Name);
+         Result : constant System.Address := Find (Instance, Room);
+      begin
+         C.Strings.Free (Room);
+         return Result;
+      end Entry_Point;
+
+      Physical : System.Address;
+   begin
+      Close (Item);
+      Ready := False;
+
+      if Find = null
+        or else From.Handle = System.Null_Address
+        or else Index > From.Used
+      then
+         return;
+      end if;
+
+      Physical := From.Handles (Index);
+      if Physical = System.Null_Address then
+         return;
+      end if;
+
+      --  A family that accepts compute. Graphics is not asked for and not
+      --  wanted: nothing here draws.
+      declare
+         Families : constant Family_Query_Call :=
+           To_Families
+             (Entry_Point (From.Handle,
+                           "vkGetPhysicalDeviceQueueFamilyProperties"));
+
+         Room    : Family_Array;
+         Counted : aliased C.unsigned := Max_Families;
+         Chosen  : Integer := -1;
+      begin
+         if Families = null then
+            return;
+         end if;
+
+         Families (Physical, Counted'Access, Room'Address);
+
+         for Which in 1 .. Natural'Min (Natural (Counted), Max_Families) loop
+            if Chosen < 0
+              and then (Room (Which).Flags and Queue_Compute) /= 0
+              and then Room (Which).Count > 0
+            then
+               Chosen := Which - 1;
+            end if;
+         end loop;
+
+         if Chosen < 0 then
+            return;
+         end if;
+
+         Item.Family := Natural (Chosen);
+      end;
+
+      --  The memory it offers: one kind the processor can write, one the
+      --  device reads fastest. On a device that shares the machine's memory
+      --  they are the same kind, which is what Shares_Memory reports.
+      declare
+         Memory : constant Memory_Query_Call :=
+           To_Memory
+             (Entry_Point (From.Handle,
+                           "vkGetPhysicalDeviceMemoryProperties"));
+
+         Room : Memory_Properties;
+
+         Upload : Integer := -1;
+         Fast   : Integer := -1;
+      begin
+         if Memory = null then
+            Item.Family := 0;
+            return;
+         end if;
+
+         Memory (Physical, Room'Address);
+
+         --  A kind the processor can write, preferring one the device also
+         --  reads directly. Taking the first that the processor can write
+         --  reported this machine's integrated device as not sharing its
+         --  memory, because the kind that does both is further down the
+         --  list than one that only the processor can reach -- a plausible
+         --  answer and the wrong one.
+         for Pass in 1 .. 2 loop
+            for Which in 1 .. Natural'Min (Natural (Room.Kind_Count),
+                                           Max_Memory_Kinds)
+            loop
+               declare
+                  Flags : constant C.unsigned := Room.Kinds (Which).Flags;
+
+                  Writable : constant Boolean :=
+                    (Flags and Memory_Host_Visible) /= 0
+                    and then (Flags and Memory_Host_Coherent) /= 0;
+
+                  Local : constant Boolean :=
+                    (Flags and Memory_Device_Local) /= 0;
+               begin
+                  --  The first pass takes only a kind that is both; the
+                  --  second settles for one the processor can write.
+                  if Upload < 0
+                    and then Writable
+                    and then (Local or else Pass = 2)
+                  then
+                     Upload := Which - 1;
+                     Item.Shared := Local;
+                  end if;
+
+                  if Fast < 0 and then Local then
+                     Fast := Which - 1;
+                  end if;
+               end;
+            end loop;
+         end loop;
+
+         if Upload < 0 or else Fast < 0 then
+            Item.Family := 0;
+            Item.Shared := False;
+            return;
+         end if;
+
+         Item.Upload := Natural (Upload);
+         Item.Fast := Natural (Fast);
+
+         for Which in 1 .. Natural'Min (Natural (Room.Heap_Count),
+                                        Max_Memory_Heaps)
+         loop
+            if Room.Heaps (Which).Size > Item.Heap then
+               Item.Heap := Room.Heaps (Which).Size;
+            end if;
+         end loop;
+      end;
+
+      --  And the device itself, with the one queue.
+      declare
+         Create : constant Create_Device_Call :=
+           To_Create (Entry_Point (From.Handle, "vkCreateDevice"));
+
+         Priority : aliased C.C_float := 1.0;
+         Wanted   : aliased Queue_Create_Info;
+         Request  : aliased Device_Create_Info;
+
+         Logical : aliased System.Address := System.Null_Address;
+      begin
+         if Create = null then
+            Item.Family := 0;
+            return;
+         end if;
+
+         Wanted.Family := C.unsigned (Item.Family);
+         Wanted.Priorities := Priority'Address;
+         Request.Queues := Wanted'Address;
+
+         if Create (Physical, Request'Address, System.Null_Address,
+                    Logical'Access) /= 0
+         then
+            Item.Family := 0;
+            return;
+         end if;
+
+         Item.Physical := Physical;
+         Item.Logical := Logical;
+      end;
+
+      declare
+         Queue : constant Get_Queue_Call :=
+           To_Queue (Entry_Point (From.Handle, "vkGetDeviceQueue"));
+
+         Handle : aliased System.Address := System.Null_Address;
+      begin
+         if Queue /= null then
+            Queue (Item.Logical, C.unsigned (Item.Family), 0, Handle'Access);
+            Item.Queue := Handle;
+         end if;
+      end;
+
+      Ready := Item.Logical /= System.Null_Address;
+   end Open;
+
+   procedure Close (Item : in out Context) is
+      function To_Destroy is
+        new Ada.Unchecked_Conversion (System.Address, Destroy_Device_Call);
+   begin
+      if Item.Logical /= System.Null_Address and then Find /= null then
+         declare
+            Room : C.Strings.chars_ptr :=
+              C.Strings.New_String ("vkDestroyDevice");
+
+            Destroy : constant Destroy_Device_Call :=
+              To_Destroy (Find (System.Null_Address, Room));
+         begin
+            C.Strings.Free (Room);
+
+            if Destroy /= null then
+               Destroy (Item.Logical, System.Null_Address);
+            end if;
+         end;
+      end if;
+
+      Item.Physical := System.Null_Address;
+      Item.Logical := System.Null_Address;
+      Item.Queue := System.Null_Address;
+      Item.Family := 0;
+      Item.Upload := 0;
+      Item.Fast := 0;
+      Item.Shared := False;
+      Item.Heap := 0;
+   end Close;
+
+   function Is_Open (Item : Context) return Boolean
+   is (Item.Logical /= System.Null_Address);
+
+   function Queue_Family (Item : Context) return Natural is (Item.Family);
+
+   function Shares_Memory (Item : Context) return Boolean is (Item.Shared);
+
+   function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Heap);
 
 end Model_Runner.Platform.Device;

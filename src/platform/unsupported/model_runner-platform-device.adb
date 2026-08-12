@@ -18,6 +18,7 @@ package body Model_Runner.Platform.Device is
       Item.Used := 0;
       Item.Discrete := [others => False];
       Item.Handle := System.Null_Address;
+      Item.Handles := [others => System.Null_Address];
 
       for Index in Item.Names'Range loop
          Item.Names (Index).Last := 0;
@@ -39,5 +40,38 @@ package body Model_Runner.Platform.Device is
    begin
       return Index <= Item.Used and then Item.Discrete (Index);
    end Is_Discrete;
+
+   procedure Open
+     (Item  : in out Context;
+      From  : Inventory;
+      Index : Positive;
+      Ready : out Boolean)
+   is
+      pragma Unreferenced (From, Index);
+   begin
+      Close (Item);
+      Ready := False;
+   end Open;
+
+   procedure Close (Item : in out Context) is
+   begin
+      Item.Physical := System.Null_Address;
+      Item.Logical := System.Null_Address;
+      Item.Queue := System.Null_Address;
+      Item.Family := 0;
+      Item.Upload := 0;
+      Item.Fast := 0;
+      Item.Shared := False;
+      Item.Heap := 0;
+   end Close;
+
+   function Is_Open (Item : Context) return Boolean is (False);
+
+   function Queue_Family (Item : Context) return Natural is (Item.Family);
+
+   function Shares_Memory (Item : Context) return Boolean is (Item.Shared);
+
+   function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Heap);
 
 end Model_Runner.Platform.Device;

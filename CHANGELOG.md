@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A device can be opened.** The second of the four pieces: asking a device
+  for a queue that accepts compute, and finding the two kinds of memory
+  anything running on it needs -- one the processor can write and one the
+  device reads directly.
+
+  On this machine the integrated Radeon reports both as the same kind, which
+  is what makes handing a model to it cost nothing but the write. The
+  software rasterizer beside it says the same, for the obvious reason.
+
+  Choosing that memory the obvious way was wrong and the machine said so.
+  Taking the first kind the processor can write reported this device as not
+  sharing its memory, because the kind that does both is further down the
+  list than one only the processor can reach: a plausible answer, and the
+  wrong one. It now prefers a kind that is both and settles for one that is
+  writable, which is also the order a backend wants them in.
+
+  Nothing computes yet. What is left is buffers and a compute shader for the
+  matrix product, then the plumbing that makes it a third backend.
+
 - **The machine can be asked what compute devices it has.** `version`
   reports them, found through the host's Vulkan loader.
 

@@ -389,6 +389,58 @@ package body Tests.CLI_Cases is
                  "closing an inventory left devices in it");
       end loop;
 
+      --  And opening each of them, which is what a backend would do before
+      --  it could do anything else. A device that names itself and then
+      --  cannot be opened is a device this program would have to refuse, so
+      --  the outcome is checked rather than assumed either way.
+      Devices.Open (Held, Found);
+
+      for Index in 1 .. Devices.Count (Held) loop
+         declare
+            Opened : Devices.Context;
+            Ready  : Boolean;
+         begin
+            Devices.Open (Opened, Held, Index, Ready);
+
+            Assert (Ready = Devices.Is_Open (Opened),
+                    "a device reported itself open and not open at once");
+
+            if Ready then
+               --  A device that opened has a queue that accepts compute,
+               --  and memory. Neither number means anything on its own
+               --  here; that they are answerable at all is what the piece
+               --  after this one starts from.
+               Assert (Devices.Memory_Bytes (Opened) > 0,
+                       "a device opened and reported no memory at all");
+               Assert (Devices.Queue_Family (Opened) < 64,
+                       "a device opened with an implausible queue family:"
+                       & Natural'Image (Devices.Queue_Family (Opened)));
+            else
+               Assert (Devices.Queue_Family (Opened) = 0,
+                       "a device that did not open named a queue family");
+            end if;
+
+            Devices.Close (Opened);
+            Assert (not Devices.Is_Open (Opened),
+                    "closing a device left it open");
+
+            --  Closing twice is closing.
+            Devices.Close (Opened);
+         end;
+      end loop;
+
+      --  A device number nobody has.
+      declare
+         Opened : Devices.Context;
+         Ready  : Boolean;
+      begin
+         Devices.Open (Opened, Held, Devices.Count (Held) + 1, Ready);
+         Assert (not Ready, "a device past the last one opened");
+         Devices.Close (Opened);
+      end;
+
+      Devices.Close (Held);
+
       --  And closing one that was never opened.
       Devices.Close (Held);
 

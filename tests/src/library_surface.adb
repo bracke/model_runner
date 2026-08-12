@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 29) of Text_Access :=
+   Held : constant array (1 .. 31) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -12,6 +12,14 @@ package body Library_Surface is
       --  Second opinions.
       new String'("All_Finite"),
       new String'("Row_Dot"),
+
+      --  What an open device says about itself. Nothing in the program
+      --  opens one yet: discovery is the first piece of a device backend
+      --  and the part that runs on it is the next. These are what it will
+      --  ask, and they are tested now so that the piece after this one
+      --  starts from something known rather than something hoped.
+      new String'("Shares_Memory"),
+      new String'("Memory_Bytes"),
 
       --  State a library caller needs.
       --
