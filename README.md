@@ -306,7 +306,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Localization | Every application-authored string through `messages`; 158 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
-| Backends | Two, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long — see below for the measurement — for asking a suspicious result again by different code |
+| Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. Binary32 only, so a quantized model needs `--repack f32`; each matrix is uploaded once and stays on the device for the rest of the run. A machine with no device is told so rather than quietly given another backend |
 | Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests tokenize`, `tests docs`, `tests shader`, `tests fixtures`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
@@ -653,9 +653,9 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 7875, logits compared 108000,
+conformance: sequences 7887, logits compared 108192,
              worst absolute 2.14340155850756E-05,
-             worst relative 1.90905622023861E-03,
+             worst relative 5.39566401500295E-03,
              rounded logits compared 10800,
              rounded worst absolute 1.36861269753309E-01,
              rounded worst relative 1.83560177726357E+00,
@@ -668,7 +668,7 @@ conformance: sequences 7875, logits compared 108000,
 Three architectures -- `llama`, `qwen2` and `qwen3` -- in each of the five
 shapes a supported model comes in: dense, sliding-window, a mixture of
 experts, a stretched rotation, and heads wider than the embedding implies with
-keys and values different widths again. Both backends, every evaluation path -- a token at a
+keys and values different widths again. The processor and the binary64 backends, every evaluation path -- a token at a
 time, a whole prompt in one pass, and a prompt handed over in several --
 serial and across a worker pool, every repacking mode, and every one of the
 fifteen weight formats the engine decodes: binary32, F16, BF16, Q4_0, Q4_1,
@@ -677,6 +677,18 @@ them and the reference reads each of them, both worked out from the layouts
 rather than by calling the engine, so a packing mistake cannot be common to
 the two sides. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
 outside it.
+
+The device backend is compared separately rather than crossed with the rest,
+because it reads binary32 and nothing else: fourteen of those fifteen formats
+would reach it only through `--repack f32`, and crossing it would compare the
+repacking fifteen times over rather than the device once. It runs each of the
+three architectures against the same independent implementation, and on a
+machine with no device it runs nothing and says so by the count. Its
+arithmetic is where the worst relative figure above comes from -- the shader
+accumulates a row in binary32 where the processor's kernels accumulate in
+binary64 and round once -- and it is a relative figure on a logit near zero:
+the worst absolute difference is unchanged at 2.1e-05, which is under the
+absolute floor.
 
 The reference runs once for each fixture and sequence rather than once for
 each comparison. It reads the file and the tokens and nothing else -- it does
@@ -933,43 +945,20 @@ Prompt text given with `--prompt` may be visible to other local processes. Use
 
 Named in the specification, absent here:
 
-- **A backend that is not the processor.** There are two, and both run on
-  the CPU: one for speed and one for being obviously right. Nothing computes
-  on a GPU yet.
-
-  Three of the four pieces of one are here. `version` reports what devices
-  the machine has, found through the host's Vulkan loader, opened by name at
-  the moment it is asked for rather than linked -- a machine without a
-  loader, a driver or a device reports none and goes on exactly as before. A
-  device can be opened, with a queue that accepts compute and the memory an
-  upload goes through. And a device computes a matrix-vector product, from a
-  shader compiled into the binary rather than read from a file.
-
-  That product is checked against the processor rather than reported: on this
-  machine an integrated Radeon and a software rasterizer both agree with the
-  same product computed in binary64 to under a ten-millionth over a hundred
-  and twenty-eight terms, which is what binary32 accumulation carries.
-
-  What is left is the fourth piece: making it a backend the engine can be
-  told to use, which means keeping a model resident on the device instead of
-  handing over the same weights for every product. Until that exists there is
-  nothing to time, and the first timing may well be unflattering -- this
-  device is integrated and shares a fifteen-watt budget with the processor
-  it would be helping.
-
-  This paragraph used to say a GPU backend was ruled out because it would
-  need a foreign library "which the rules above do not allow". No rule above
-  said that and no check enforced it; it was a sentence that read like a
-  constraint and was an assumption.
-
 - **Hand-written vector code or intrinsics.** The kernels are ordinary Ada and
   the compiler vectorizes them; there is no assembly in this repository. That
   is a fact about the code and not a rule: machine code insertions are an Ada
   feature and a check used to refuse them, which guarded this sentence rather
   than anything about the program. What the release checklist does hold is
   that no source in another language lives here, which is a different
-  question. See below for what the compiler's vectorization does and does not
-  buy.
+  question -- and one `src/shaders/row_product.comp` answers with a yes: it is
+  GLSL, because a compute shader has to be written in a language a graphics
+  driver's compiler reads. What the checklist refuses is compiled code in
+  another language -- C, C++, assembly -- and it holds the shader to something
+  stricter instead: the source's digest is recorded beside the compiled form,
+  so a shader edited and not recompiled fails the checklist rather than going
+  on running the old one.
+
 ## Speed
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
@@ -1142,6 +1131,40 @@ for q4_k and 3.1x for f32. The rest of the twelve is the worker pool and the
 batching, which is the honest way to read the figure: `reference` is between
 two and three times slower than the same loop written for speed, and the
 remaining factor is the parallelism it has none of.
+
+### The device backend
+
+`--backend device` runs the products on a compute device. On this machine --
+an integrated Radeon sharing a fifteen-watt budget with the processor it
+would be helping -- against SmolLM2-360M repacked to binary32, sixteen tokens
+from a five-token prompt:
+
+| Backend | Prompt | Generation |
+| --- | --- | --- |
+| `cpu`, 7 workers | 43.2 tokens/s | 21.0 tokens/s |
+| `cpu`, 1 worker | 11.4 tokens/s | 6.3 tokens/s |
+| `device` | 1.5 tokens/s | 5.7 tokens/s |
+
+So the device generates at about the rate of one core and a quarter of what
+seven do, and it evaluates a prompt at a seventh of one core's rate. That is
+the unflattering figure this was expected to produce, and the two halves of
+it have different causes. Generation is one vector at a time whatever
+computes it, and there the device is genuinely competing. A prompt is not:
+`cpu` shares one reading of the weights between the tokens of a batch, and
+this backend declares it does not batch, so a five-token prompt is five
+separate dispatches of every matrix in the model -- five round trips through
+a queue and a fence where the processor makes one pass. A batching shader is
+the obvious next thing and is not written.
+
+Each matrix is uploaded once and stays on the device: what the loop costs is
+the vector out, the dispatch, and the result back. Without that the figure
+would be the whole model over the bus for every token, which is not a
+measurement worth taking.
+
+The text is identical to the processor's, token for token, on this model and
+on the fixtures. The arithmetic is not: the shader accumulates a row in
+binary32 where the kernels accumulate in binary64 and round once, and what
+that costs is measured in the conformance section above.
 
 ### Repacking
 

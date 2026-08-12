@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--backend device` runs a model.** The fourth piece, and the one that
+  makes the other three a backend rather than a demonstration. A matrix is
+  uploaded once and stays on the device for the rest of the run; what crosses
+  per product is the vector out, the dispatch and the result back.
+
+  Binary32 only, so a quantized model reaches it through `--repack f32`. That
+  did not work at first and the reason was a check asking the wrong question:
+  the per-tensor backend format check ran against the format the *file* holds,
+  which refused every quantized model on the one backend repacking exists to
+  make usable. It now asks what the backend will read, and it no longer asks
+  it at all of the norms and biases, which are decoded into vectors at load
+  and never handed to a backend in any format.
+
+  Measured rather than described. Against SmolLM2-360M on an integrated
+  Radeon, generation runs at 5.7 tokens/s where one processor core does 6.3
+  and seven do 21.0; a prompt runs at 1.5 tokens/s against 43.2, because this
+  backend declares it does not batch and so evaluates a five-token prompt as
+  five separate passes over every matrix. The text is identical to the
+  processor's, token for token.
+
+  The conformance sweep compares it against the independent implementation on
+  each of the three architectures, separately rather than crossed: it reads
+  one of the fifteen formats, so crossing it would have measured the
+  repacking fifteen times over instead of the device once. Its binary32
+  accumulation is where the sweep's worst relative figure now comes from --
+  5.4e-03 against 1.9e-03 -- on a logit near zero; the worst absolute figure
+  is unchanged.
+
 - **A device computes a matrix-vector product.** The second half of the
   third piece, and the first thing here that runs on a device rather than
   reporting on one -- so the first that can be checked instead of described.
@@ -26,6 +54,16 @@ Keep a Changelog and the project uses semantic versioning.
   like proof and was not.
 
 ### Fixed
+
+- **The loader aborted the process when a second engine was opened.** Entry
+  points were found through an instance held in a package variable, set when
+  an engine opened and never cleared. Closing an engine and then the device
+  under it left that variable naming an instance that no longer existed, and
+  the next engine's Open -- which releases before it makes -- asked the dead
+  instance for `vkDestroyBuffer`. The loader does not return null for an
+  invalid instance: it aborts, which it did, in the middle of the test suite
+  and with no output flushed. Each engine now carries the instance it was
+  opened on, and an engine that was never opened asks nobody.
 
 - **A repository check silently stopped checking.** The collector that finds
   every public operation held four hundred of them and the project has more,

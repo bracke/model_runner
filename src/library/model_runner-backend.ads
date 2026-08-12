@@ -13,7 +13,7 @@ package Model_Runner.Backend is
 
    --  Stable backend identifiers. Never localized; they appear in diagnostics
    --  and in the support matrix as identifiers.
-   type Backend_Kind is (Backend_CPU, Backend_Reference);
+   type Backend_Kind is (Backend_CPU, Backend_Reference, Backend_Device);
 
    --  Name of a backend.
    --
@@ -22,7 +22,8 @@ package Model_Runner.Backend is
    function Backend_Name (Item : Backend_Kind) return String
    is (case Item is
          when Backend_CPU       => "cpu",
-         when Backend_Reference => "reference");
+         when Backend_Reference => "reference",
+         when Backend_Device    => "device");
 
    type Format_Support is array (Model_Runner.GGUF.Tensor_Type) of Boolean;
 

@@ -8,6 +8,7 @@ with Interfaces;
 
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Bytes;
 with Model_Runner.Clocks;
@@ -373,7 +374,9 @@ package body Model_Runner.CLI.Execute is
          when Model_Runner.Backend.Backend_CPU =>
            Workers_CPU.Describe (Workers_CPU.Max_Workers),
          when Model_Runner.Backend.Backend_Reference =>
-           Model_Runner.Backend.Reference.Describe);
+           Model_Runner.Backend.Reference.Describe,
+         when Model_Runner.Backend.Backend_Device =>
+           Model_Runner.Backend.Device.Describe);
 
    --  Worker count: an explicit --threads wins, otherwise the core count
    --  bounded by what the backend accepts. One worker means serial
@@ -1694,6 +1697,25 @@ package body Model_Runner.CLI.Execute is
       when Model_Runner.Backend.Backend_Reference =>
          --  No pool: this backend runs on the calling task and says so.
          Run_With (null);
+
+      when Model_Runner.Backend.Backend_Device =>
+         --  A device instead of a pool. Opened here rather than at the first
+         --  product so that a machine without one is told before a model is
+         --  loaded: being refused after a minute of loading is being refused
+         --  a minute late.
+         declare
+            Ready : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Ready);
+
+            if not Ready then
+               Fail (E.Make (E.Backend_Capability_Missing));
+               return;
+            end if;
+
+            Run_With (null);
+            Model_Runner.Backend.Device.Close;
+         end;
 
       when Model_Runner.Backend.Backend_CPU =>
          if Team_Size <= 1 then

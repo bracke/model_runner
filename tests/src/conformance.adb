@@ -10,6 +10,7 @@ with Model_Runner.Tokenizer;
 with Reference_Transformer;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Tiny_Model;
 
@@ -85,6 +86,10 @@ package body Conformance is
       --  is a different route through the evaluator and each is worth every
       --  format, backend and repack mode on its own.
       type Model_Shape is (Plain, Windowed, Mixed, Stretched, Apart);
+
+      Swept : constant array (1 .. 2) of Model_Runner.Backend.Backend_Kind :=
+        [Model_Runner.Backend.Backend_CPU,
+         Model_Runner.Backend.Backend_Reference];
 
       --  The architectures the sweep crosses with everything else. Qwen3_MoE
       --  is not among them and that is deliberate: it is Qwen3 with its
@@ -369,7 +374,9 @@ package body Conformance is
                  Model_Runner.Backend.CPU.Describe
                    (Model_Runner.Backend.CPU.Max_Workers).Supports_Parallel,
                when Model_Runner.Backend.Backend_Reference =>
-                 Model_Runner.Backend.Reference.Describe.Supports_Parallel);
+                 Model_Runner.Backend.Reference.Describe.Supports_Parallel,
+               when Model_Runner.Backend.Backend_Device =>
+                 Model_Runner.Backend.Device.Describe.Supports_Parallel);
 
          function Batches
            (Kind : Model_Runner.Backend.Backend_Kind) return Boolean
@@ -378,12 +385,24 @@ package body Conformance is
                  Model_Runner.Backend.CPU.Describe
                    (Model_Runner.Backend.CPU.Max_Workers).Supports_Batched,
                when Model_Runner.Backend.Backend_Reference =>
-                 Model_Runner.Backend.Reference.Describe.Supports_Batched);
+                 Model_Runner.Backend.Reference.Describe.Supports_Batched,
+               when Model_Runner.Backend.Backend_Device =>
+                 Model_Runner.Backend.Device.Describe.Supports_Batched);
 
          Batching : Natural := 0;
          Sharing  : Natural := 0;
+
+         --  How many comparisons the device pass below made. Zero on a
+         --  machine with no device, which is most of them.
+         On_Device : Natural := 0;
+         Device_Ready : Boolean := False;
       begin
-         for Backend in Model_Runner.Backend.Backend_Kind loop
+         --  The backends this crosses with everything else. The device one
+         --  is not among them and cannot be: it takes binary32 only, so it
+         --  would refuse twelve of the fifteen formats outright, and the
+         --  count below would have to know which. It is compared against the
+         --  processor on its own, on a model it can take.
+         for Backend of Swept loop
             for Which_Arch in Crossed'Range loop
                for Format in Tiny_Model.Weight_Format loop
                   for Shape in Model_Shape loop
@@ -585,6 +604,40 @@ package body Conformance is
             end loop;
          end loop;
 
+         --  And the device, on the one thing it takes.
+         --
+         --  This is not crossed with the loops above and could not be: the
+         --  device reads binary32 and nothing else, so fourteen of the
+         --  fifteen formats reach it only through --repack f32, and running
+         --  that cross would compare the repacking fifteen times over rather
+         --  than the device once. What is held here is the claim that
+         --  matters -- that a product computed on a device gives the same
+         --  logits as one computed on the processor -- over every
+         --  architecture, against the same independent implementation
+         --  everything else is compared against.
+         --
+         --  Skipped where there is no device. A machine without one is the
+         --  common case and this is not the test that would tell it so.
+         Model_Runner.Backend.Device.Open (Device_Ready);
+
+         if Device_Ready then
+            for Which_Arch in Crossed'Range loop
+               Tiny_Model.Build
+                 (Image, Tiny_Model.F32, Kind => Crossed (Which_Arch));
+               Forget;
+
+               for Which in Sequence_Index loop
+                  Compare (Which, L.Exact, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack);
+                  On_Device := On_Device + 1;
+               end loop;
+
+               B.Free (Image);
+            end loop;
+         end if;
+
+         Model_Runner.Backend.Device.Close;
+
          --  Every combination the loops above visit, times the four sequences
          --  each one compares.
          --
@@ -593,7 +646,7 @@ package body Conformance is
          --  somebody last typed: a format that quietly failed to load lowered
          --  the count until the number was edited to match, which is the exact
          --  failure this is meant to catch. It happened twice.
-         for Kind in Model_Runner.Backend.Backend_Kind loop
+         for Kind of Swept loop
             if Batches (Kind) then
                Batching := Batching + 1;
             end if;
@@ -605,9 +658,7 @@ package body Conformance is
          declare
             Formats : constant Natural :=
               Tiny_Model.Weight_Format'Pos (Tiny_Model.Weight_Format'Last) + 1;
-            Backends : constant Natural :=
-              Model_Runner.Backend.Backend_Kind'Pos
-                (Model_Runner.Backend.Backend_Kind'Last) + 1;
+            Backends : constant Natural := Swept'Length;
             Repacks : constant Natural :=
               L.Repack_Mode'Pos (L.Repack_Mode'Last) + 1;
 
@@ -642,7 +693,8 @@ package body Conformance is
               Formats * Arches * 2 * (Backends * 2 + Batching);
 
             Expected : constant Natural :=
-              Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached;
+              Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached
+              + On_Device;
 
          begin
             Result.Ran := Result.Sequences = Expected;

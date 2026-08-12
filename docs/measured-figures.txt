@@ -304,11 +304,32 @@ kernels 659A79D4E78E7815 src/library/model_runner-quantization.adb src/library/m
 # digest of each adapter merged and the fingerprint mixes it in. Both run at
 # load and neither is on an evaluation path. Not re-measured, and the model
 # those figures need is not on this machine.
-engine 21FE239F2491F495 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# 2026-08-12, the device backend. Two changes to llama.adb reach these
+# groups. Llama.Resolve gained two parameters and now asks the backend about
+# the format it will read rather than the one the file holds; that runs once
+# per tensor during Prepare, which both figures quote separately from what
+# they measure -- the same argument the entry above makes, and the same one
+# the file's own rule allows. Llama.Product_Batch gained a `when
+# Backend_Device` alternative to a case statement that already had one for
+# every other backend; the alternative these figures take is unchanged, and
+# an alternative not taken is not work done.
+#
+# Re-measured anyway, because the model is on this machine now and the entries
+# above could not say that: `tests speed` reports 1.72, 2.11 and 1.78 s
+# against the published 1.28. That is not republished and the reason is the
+# machine rather than the code -- three other agents were running on it, at a
+# load average of 2.4 on eight cores, and the published figure was taken on a
+# quiet one. A figure taken under contention would replace a measurement with
+# a coincidence. What the run does say is that the generated text is
+# unchanged: the same output digest, 7784f071e5740782, in all three.
+engine 53BFCFD80DB36781 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
-reference C0B0D88E3DA9AAEB src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# 2026-08-12, the device backend. The same two changes, for the same reason,
+# and this group is a ratio between two backends neither of which is the one
+# that was added.
+reference 06A825F8C420E7C3 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling B5443E99EAAA8126 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

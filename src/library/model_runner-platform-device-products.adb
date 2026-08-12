@@ -8,6 +8,12 @@ with Model_Runner.Shaders;
 --  Products on a device, through the same interface the parent opened it
 --  with.
 --
+--  A weight handed over once stays. What that costs is a table of what is
+--  held, keyed by where the matrix lives in the model's own storage; what it
+--  buys is that the second product with the same matrix moves a vector
+--  rather than a matrix, which on any real model is every product but the
+--  first.
+--
 --  Handles here are addresses. The interface has two kinds -- ones that are
 --  pointers and ones that are sixty-four bit numbers -- and on the machines
 --  this program targets both are eight bytes, so one Ada type carries both.
@@ -398,12 +404,148 @@ package body Model_Runner.Platform.Device.Products is
    function To_Reset_Fences is
      new Ada.Unchecked_Conversion (Address, Reset_Fences_Call);
 
-   --  The instance every entry point below is found through. Kept from the
-   --  context an engine was opened on.
+   --  The instance every entry point below is found through. Set from the
+   --  engine whose operation is running, because an entry point belongs to
+   --  the instance it was found through and outlives none of them.
+   --
+   --  It used to be set once, when an engine was opened, and left. Closing
+   --  an engine and then the device under it left this naming an instance
+   --  that no longer existed, and the next engine's Open -- which releases
+   --  before it makes -- asked that dead instance for vkDestroyBuffer. The
+   --  loader does not return null for an invalid instance; it aborts the
+   --  process, which is what it did.
    Instance_Of : Address := Null_Handle;
 
+   --  Null when there is no instance to ask, so that a caller releasing an
+   --  engine that was never made asks nobody rather than asking a handle
+   --  that is not one.
    function Point (Name : String) return Address
-   is (Entry_Point (Instance_Of, Name));
+   is (if Instance_Of = Null_Handle
+       then Null_Handle
+       else Entry_Point (Instance_Of, Name));
+
+   --  Point this engine's instance at the loader before anything is asked of
+   --  it. A function so that it can be a declaration in the operations that
+   --  need it, which is how it comes before their first entry point.
+   function Set_Asking (Item : Engine) return Boolean is
+   begin
+      Instance_Of := Item.Instance;
+      return True;
+   end Set_Asking;
+
+   --  Make a buffer and the memory behind it, both released by the caller.
+   procedure Take
+     (Item   : in out Engine;
+      Bytes  : Interfaces.Unsigned_64;
+      Buffer : out Address;
+      Memory : out Address;
+      Ok     : out Boolean)
+   is
+      Create : constant Create_Call := To_Create (Point ("vkCreateBuffer"));
+      Wants  : constant Requirements_Call :=
+        To_Requirements (Point ("vkGetBufferMemoryRequirements"));
+      Allocate : constant Create_Call :=
+        To_Create (Point ("vkAllocateMemory"));
+      Bind : constant Bind_Call := To_Bind (Point ("vkBindBufferMemory"));
+
+      Made : aliased Address := Null_Handle;
+   begin
+      Buffer := Null_Handle;
+      Memory := Null_Handle;
+      Ok := False;
+
+      if Create = null or else Wants = null or else Allocate = null
+        or else Bind = null or else Bytes = 0
+      then
+         return;
+      end if;
+
+      declare
+         Request : aliased Buffer_Create_Info;
+      begin
+         Request.Size := Bytes;
+         if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
+            /= 0
+         then
+            return;
+         end if;
+         Buffer := Made;
+      end;
+
+      declare
+         Needed  : aliased Memory_Requirements;
+         Request : aliased Memory_Allocate_Info;
+      begin
+         Wants (Item.Logical, Buffer, Needed'Address);
+         Request.Size := Needed.Size;
+         Request.Which := C.unsigned (Item.Upload);
+
+         if Allocate (Item.Logical, Request'Address, Null_Handle,
+                      Made'Access) /= 0
+         then
+            return;
+         end if;
+         Memory := Made;
+      end;
+
+      Ok := Bind (Item.Logical, Buffer, Memory, 0) = 0;
+   end Take;
+
+   procedure Give_Back_Buffer
+     (Item : in out Engine; Buffer : in out Address; Memory : in out Address)
+   is
+      Destroy : constant Destroy_Call :=
+        To_Destroy (Point ("vkDestroyBuffer"));
+      Free : constant Destroy_Call := To_Destroy (Point ("vkFreeMemory"));
+   begin
+      if Buffer /= Null_Handle and then Destroy /= null
+        and then Item.Logical /= Null_Handle
+      then
+         Destroy (Item.Logical, Buffer, Null_Handle);
+      end if;
+      Buffer := Null_Handle;
+
+      if Memory /= Null_Handle and then Free /= null
+        and then Item.Logical /= Null_Handle
+      then
+         Free (Item.Logical, Memory, Null_Handle);
+      end if;
+      Memory := Null_Handle;
+   end Give_Back_Buffer;
+
+   --  Copy values into a buffer's memory.
+   procedure Write_Into
+     (Item   : in out Engine;
+      Memory : Address;
+      Bytes  : Interfaces.Unsigned_64;
+      Values : Model_Runner.Numerics.Real_Array;
+      Ok     : out Boolean)
+   is
+      Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
+      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+
+      Where : aliased Address := Null_Handle;
+   begin
+      Ok := False;
+
+      if Map = null or else Unmap = null then
+         return;
+      end if;
+
+      if Map (Item.Logical, Memory, 0, Bytes, 0, Where'Access) /= 0 then
+         return;
+      end if;
+
+      declare
+         Room : Model_Runner.Numerics.Real_Array (Values'Range)
+           with Import, Address => Where;
+      begin
+         Room := Values;
+      end;
+
+      Unmap (Item.Logical, Memory);
+      Ok := True;
+   end Write_Into;
 
    ---------------------------------------------------------------------------
    --  Making and releasing
@@ -423,7 +565,8 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      Instance_Of := On.Instance;
+      Item.Instance := On.Instance;
+      Instance_Of := Item.Instance;
 
       Item.Logical := On.Logical;
       Item.Queue := On.Queue;
@@ -661,6 +804,10 @@ package body Model_Runner.Platform.Device.Products is
    end Open;
 
    procedure Close (Item : in out Engine) is
+      --  Whatever this engine was opened on, which is nothing at all for an
+      --  engine that never was.
+      Restore : constant Address := Instance_Of;
+
       procedure Give_Back (Handle : in out Address; Name : String) is
          Destroy : constant Destroy_Call := To_Destroy (Point (Name));
       begin
@@ -673,6 +820,23 @@ package body Model_Runner.Platform.Device.Products is
          Handle := Null_Handle;
       end Give_Back;
    begin
+      Instance_Of := Item.Instance;
+
+      --  Everything the device was holding for a model, then the two that
+      --  change every call.
+      for Index in 1 .. Item.Used loop
+         Give_Back_Buffer
+           (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory);
+         Item.Kept (Index).Key := Null_Handle;
+         Item.Kept (Index).Bytes := 0;
+      end loop;
+      Item.Used := 0;
+
+      Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+      Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+      Item.Vector_Bytes := 0;
+      Item.Result_Bytes := 0;
+
       --  In the reverse of the order they were made, and each only if it
       --  was. The command buffer goes with its pool and the descriptor set
       --  with its own, so neither is given back on its own.
@@ -690,6 +854,11 @@ package body Model_Runner.Platform.Device.Products is
       Item.Queue := Null_Handle;
       Item.Family := 0;
       Item.Upload := 0;
+      Item.Instance := Null_Handle;
+
+      --  Whoever was asking before this, if anyone was. Close is called from
+      --  Open, and Open has an instance of its own to go back to.
+      Instance_Of := Restore;
    end Close;
 
    function Is_Ready (Item : Engine) return Boolean
@@ -699,6 +868,16 @@ package body Model_Runner.Platform.Device.Products is
    --  One product
    ---------------------------------------------------------------------------
 
+   --------------
+   -- Resident --
+   --------------
+
+   function Resident (Item : Engine) return Natural is (Item.Used);
+
+   --------------
+   -- Multiply --
+   --------------
+
    procedure Multiply
      (Item    : in out Engine;
       Weights : Model_Runner.Numerics.Real_Array;
@@ -706,11 +885,15 @@ package body Model_Runner.Platform.Device.Products is
       Rows    : Natural;
       Columns : Natural;
       Target  : out Model_Runner.Numerics.Real_Array;
-      Ok      : out Boolean)
+      Ok      : out Boolean;
+      Key     : System.Address := System.Null_Address)
    is
       Elements : constant Natural := Rows * Columns;
 
-      --  What each of the three buffers holds, in bytes.
+      --  Whichever engine is being asked, because an entry point belongs to
+      --  the instance behind it.
+      Ignored : constant Boolean := Set_Asking (Item);
+
       Weight_Bytes : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Elements) * 4;
       Vector_Bytes : constant Interfaces.Unsigned_64 :=
@@ -718,55 +901,20 @@ package body Model_Runner.Platform.Device.Products is
       Result_Bytes : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Rows) * 4;
 
-      Buffers : array (1 .. 3) of Address := [others => Null_Handle];
-      Memory  : array (1 .. 3) of Address := [others => Null_Handle];
+      --  The matrix, kept when it has a key and made afresh when it has not.
+      Weight_Buffer : Address := Null_Handle;
+      Weight_Memory : Address := Null_Handle;
+      Borrowed      : Boolean := False;
 
-      Extent : constant array (1 .. 3) of Interfaces.Unsigned_64 :=
-        [Weight_Bytes, Vector_Bytes, Result_Bytes];
-
-      --  Give back whatever was taken, in either outcome.
-      procedure Release is
-         Destroy_Buffer : constant Destroy_Call :=
-           To_Destroy (Point ("vkDestroyBuffer"));
-         Free_Memory : constant Destroy_Call :=
-           To_Destroy (Point ("vkFreeMemory"));
+      procedure Release_Borrowed is
       begin
-         for Index in Buffers'Range loop
-            if Buffers (Index) /= Null_Handle and then Destroy_Buffer /= null
-            then
-               Destroy_Buffer (Item.Logical, Buffers (Index), Null_Handle);
-            end if;
-            Buffers (Index) := Null_Handle;
+         if Borrowed then
+            Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
+            Borrowed := False;
+         end if;
+      end Release_Borrowed;
 
-            if Memory (Index) /= Null_Handle and then Free_Memory /= null then
-               Free_Memory (Item.Logical, Memory (Index), Null_Handle);
-            end if;
-            Memory (Index) := Null_Handle;
-         end loop;
-      end Release;
-
-      --  Copy a run of values into a mapped buffer, as binary32.
-      procedure Fill
-        (Where  : Address;
-         Values : Model_Runner.Numerics.Real_Array)
-      is
-         Room : Model_Runner.Numerics.Real_Array (Values'Range)
-           with Import, Address => Where;
-      begin
-         Room := Values;
-      end Fill;
-
-      procedure Drain
-        (Where  : Address;
-         Values : out Model_Runner.Numerics.Real_Array)
-      is
-         Room : Model_Runner.Numerics.Real_Array (Values'Range)
-           with Import, Address => Where;
-      begin
-         Values := Room;
-      end Drain;
-
-      Made : aliased Address := Null_Handle;
+      Good : Boolean;
    begin
       Target := [others => 0.0];
       Ok := False;
@@ -782,113 +930,101 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      --  Three buffers, each with memory the processor can write.
-      declare
-         Create : constant Create_Call :=
-           To_Create (Point ("vkCreateBuffer"));
-         Wants : constant Requirements_Call :=
-           To_Requirements (Point ("vkGetBufferMemoryRequirements"));
-         Allocate : constant Create_Call :=
-           To_Create (Point ("vkAllocateMemory"));
-         Bind : constant Bind_Call :=
-           To_Bind (Point ("vkBindBufferMemory"));
-      begin
-         if Create = null or else Wants = null or else Allocate = null
-           or else Bind = null
-         then
-            return;
-         end if;
-
-         for Index in Buffers'Range loop
-            declare
-               Request : aliased Buffer_Create_Info;
-            begin
-               Request.Size := Extent (Index);
-
-               if Create (Item.Logical, Request'Address, Null_Handle,
-                          Made'Access) /= 0
-               then
-                  Release;
-                  return;
-               end if;
-
-               Buffers (Index) := Made;
-            end;
-
-            declare
-               Needed  : aliased Memory_Requirements;
-               Request : aliased Memory_Allocate_Info;
-            begin
-               Wants (Item.Logical, Buffers (Index), Needed'Address);
-
-               Request.Size := Needed.Size;
-               Request.Which := C.unsigned (Item.Upload);
-
-               if Allocate (Item.Logical, Request'Address, Null_Handle,
-                            Made'Access) /= 0
-               then
-                  Release;
-                  return;
-               end if;
-
-               Memory (Index) := Made;
-            end;
-
-            if Bind (Item.Logical, Buffers (Index), Memory (Index), 0) /= 0
+      --  Is it already there? A matrix is what it is and where it is: the
+      --  same address with a different length is a different matrix, and
+      --  the length is checked so that a caller reusing storage cannot be
+      --  handed somebody else's weights.
+      if Key /= System.Null_Address then
+         for Index in 1 .. Item.Used loop
+            if Item.Kept (Index).Key = Key
+              and then Item.Kept (Index).Bytes = Weight_Bytes
             then
-               Release;
-               return;
+               Weight_Buffer := Item.Kept (Index).Buffer;
+               Weight_Memory := Item.Kept (Index).Memory;
+               exit;
             end if;
          end loop;
-      end;
+      end if;
 
-      --  What goes in.
-      declare
-         Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
-         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
-
-         Where : aliased Address := Null_Handle;
-      begin
-         if Map = null or else Unmap = null then
-            Release;
+      if Weight_Buffer = Null_Handle then
+         Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good);
+         if not Good then
+            Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
             return;
          end if;
 
-         if Map (Item.Logical, Memory (1), 0, Weight_Bytes, 0, Where'Access)
-            /= 0
-         then
-            Release;
+         Write_Into
+           (Item, Weight_Memory, Weight_Bytes,
+            Weights (Weights'First
+                     .. Weights'First
+                        + Model_Runner.Numerics.Element_Count (Elements) - 1),
+            Good);
+         if not Good then
+            Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
             return;
          end if;
-         Fill (Where, Weights (Weights'First
-                               .. Weights'First
-                                  + Model_Runner.Numerics.Element_Count
-                                      (Elements) - 1));
-         Unmap (Item.Logical, Memory (1));
 
-         if Map (Item.Logical, Memory (2), 0, Vector_Bytes, 0, Where'Access)
-            /= 0
-         then
-            Release;
+         --  Kept if it was named and there is room; otherwise it belongs to
+         --  this call and goes back at the end of it.
+         if Key /= System.Null_Address and then Item.Used < Max_Resident then
+            Item.Used := Item.Used + 1;
+            Item.Kept (Item.Used) :=
+              (Key => Key, Buffer => Weight_Buffer, Memory => Weight_Memory,
+               Bytes => Weight_Bytes);
+         else
+            Borrowed := True;
+         end if;
+      end if;
+
+      --  The two that change every call, grown when they have to.
+      if Item.Vector_Bytes < Vector_Bytes then
+         Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+         Take (Item, Vector_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
+               Good);
+         if not Good then
+            Release_Borrowed;
             return;
          end if;
-         Fill (Where, Vector (Vector'First
-                              .. Vector'First
-                                 + Model_Runner.Numerics.Element_Count
-                                     (Columns) - 1));
-         Unmap (Item.Logical, Memory (2));
-      end;
+         Item.Vector_Bytes := Vector_Bytes;
+      end if;
+
+      if Item.Result_Bytes < Result_Bytes then
+         Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+         Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
+               Good);
+         if not Good then
+            Release_Borrowed;
+            return;
+         end if;
+         Item.Result_Bytes := Result_Bytes;
+      end if;
+
+      Write_Into
+        (Item, Item.Vector_Memory, Vector_Bytes,
+         Vector (Vector'First
+                 .. Vector'First
+                    + Model_Runner.Numerics.Element_Count (Columns) - 1),
+         Good);
+      if not Good then
+         Release_Borrowed;
+         return;
+      end if;
 
       --  What the shader is pointed at.
       declare
          Update : constant Update_Sets_Call :=
            To_Update_Sets (Point ("vkUpdateDescriptorSets"));
 
+         Buffers : constant array (1 .. 3) of Address :=
+           [Weight_Buffer, Item.Vector_Buffer, Item.Result_Buffer];
+         Extent : constant array (1 .. 3) of Interfaces.Unsigned_64 :=
+           [Weight_Bytes, Vector_Bytes, Result_Bytes];
+
          Told  : aliased Buffer_Info_Array;
          Notes : aliased Write_Array;
       begin
          if Update = null then
-            Release;
+            Release_Borrowed;
             return;
          end if;
 
@@ -904,12 +1040,13 @@ package body Model_Runner.Platform.Device.Products is
          Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
       end;
 
-      --  The work itself: one group per sixty-four rows, since that is what
-      --  the shader declares a group to be.
+      --  The work: one group per sixty-four rows, which is what the shader
+      --  declares a group to be.
       declare
          Reset_Buffer : constant Reset_Buffer_Call :=
            To_Reset_Buffer (Point ("vkResetCommandBuffer"));
-         Start : constant Begin_Call := To_Begin (Point ("vkBeginCommandBuffer"));
+         Start : constant Begin_Call :=
+           To_Begin (Point ("vkBeginCommandBuffer"));
          Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
          Bind_Pipeline : constant Bind_Pipeline_Call :=
            To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
@@ -929,14 +1066,14 @@ package body Model_Runner.Platform.Device.Products is
            or else Bind_Pipeline = null or else Bind_Sets = null
            or else Push = null or else Dispatch = null
          then
-            Release;
+            Release_Borrowed;
             return;
          end if;
 
          if Reset_Buffer (Item.Buffer, 0) /= 0
            or else Start (Item.Buffer, Began'Address) /= 0
          then
-            Release;
+            Release_Borrowed;
             return;
          end if;
 
@@ -949,7 +1086,7 @@ package body Model_Runner.Platform.Device.Products is
             C.unsigned ((Rows + Group_Size - 1) / Group_Size), 1, 1);
 
          if Stop (Item.Buffer) /= 0 then
-            Release;
+            Release_Borrowed;
             return;
          end if;
       end;
@@ -966,7 +1103,7 @@ package body Model_Runner.Platform.Device.Products is
          Request       : aliased Submit_Info;
       begin
          if Submit = null or else Wait = null or else Reset = null then
-            Release;
+            Release_Borrowed;
             return;
          end if;
 
@@ -975,7 +1112,7 @@ package body Model_Runner.Platform.Device.Products is
          if Reset (Item.Logical, 1, Fence_Handle'Address) /= 0
            or else Submit (Item.Queue, 1, Request'Address, Item.Fence) /= 0
          then
-            Release;
+            Release_Borrowed;
             return;
          end if;
 
@@ -985,7 +1122,7 @@ package body Model_Runner.Platform.Device.Products is
          if Wait (Item.Logical, 1, Fence_Handle'Address, 1,
                   1_000_000_000) /= 0
          then
-            Release;
+            Release_Borrowed;
             return;
          end if;
       end;
@@ -997,21 +1134,27 @@ package body Model_Runner.Platform.Device.Products is
 
          Where : aliased Address := Null_Handle;
       begin
-         if Map (Item.Logical, Memory (3), 0, Result_Bytes, 0, Where'Access)
-            /= 0
+         if Map (Item.Logical, Item.Result_Memory, 0, Result_Bytes, 0,
+                 Where'Access) /= 0
          then
-            Release;
+            Release_Borrowed;
             return;
          end if;
 
-         Drain (Where, Target (Target'First
-                               .. Target'First
-                                  + Model_Runner.Numerics.Element_Count
-                                      (Rows) - 1));
-         Unmap (Item.Logical, Memory (3));
+         declare
+            Slice : Model_Runner.Numerics.Real_Array
+              (Target'First
+               .. Target'First
+                  + Model_Runner.Numerics.Element_Count (Rows) - 1)
+              with Import, Address => Where;
+         begin
+            Target (Slice'Range) := Slice;
+         end;
+
+         Unmap (Item.Logical, Item.Result_Memory);
       end;
 
-      Release;
+      Release_Borrowed;
       Ok := True;
    end Multiply;
 

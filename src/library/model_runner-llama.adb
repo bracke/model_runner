@@ -2,6 +2,7 @@ with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
 with Model_Runner.Arithmetic;
+with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Text;
 
@@ -580,7 +581,17 @@ package body Model_Runner.Llama is
       Rows     : Element_Count;
       Columns  : Element_Count;
       Result   : out T.View;
-      Status   : out E.Error_Info)
+      Status   : out E.Error_Info;
+
+      --  What the caller asked to have the weights decoded into, because
+      --  that -- and not what the file holds -- is what a backend will read
+      --  from this tensor.
+      Repack   : Repack_Mode := No_Repack;
+
+      --  False for a tensor decoded once at load and never handed over: a
+      --  norm or a bias is a vector by the time anything computes with it,
+      --  so the format the file wrote it in is nothing the backend sees.
+      Reaches  : Boolean := True)
    is
       Index : constant Natural := Containers.Find_Tensor (Source, Name);
    begin
@@ -608,29 +619,34 @@ package body Model_Runner.Llama is
       --  model loads: a backend that cannot take a format should refuse the
       --  model that carries it, not meet it in the middle of a token.
       --
-      --  No shipped configuration reaches this. The one backend claims
-      --  exactly the formats the decoder decodes, and a format outside that
-      --  set is refused by the check above. It is written anyway, because it
-      --  is the seam a narrower backend plugs into, and because a capability
-      --  record nothing consults is one that can be wrong for a year --
-      --  which is how Supports_Batched came to say False while every prefill
-      --  batched. Supports had no caller at all before this.
-      if not Model_Runner.Backend.Supports
-               (Item.Able, Containers.Tensor_Format (Source, Index))
-      then
-         Status := E.Make (E.Backend_Unsupported_Format);
-         E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
-         E.Add_Text
-           (Status, "format",
-            Model_Runner.GGUF.Type_Name
-              (Containers.Tensor_Format (Source, Index)),
-            E.Param_Identifier);
-         E.Add_Text
-           (Status, "backend",
-            Model_Runner.Backend.Backend_Name (Item.Able.Kind),
-            E.Param_Identifier);
-         return;
-      end if;
+      --  Asked of the format the backend will read, which is the repacking
+      --  target when there is one. Asking it of the file's format instead
+      --  refuses `--repack f32` on a quantized model -- and a backend that
+      --  reads binary32 only is exactly the backend repacking exists to make
+      --  usable, so the check would have refused every model the flag was
+      --  for. It did, once.
+      declare
+         Seen : constant Model_Runner.GGUF.Tensor_Type :=
+           (case Repack is
+              when No_Repack => Containers.Tensor_Format (Source, Index),
+              when To_F32    => Model_Runner.GGUF.Type_F32,
+              when To_BF16   => Model_Runner.GGUF.Type_BF16);
+      begin
+         if Reaches
+           and then not Model_Runner.Backend.Supports (Item.Able, Seen)
+         then
+            Status := E.Make (E.Backend_Unsupported_Format);
+            E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+            E.Add_Text
+              (Status, "format", Model_Runner.GGUF.Type_Name (Seen),
+               E.Param_Identifier);
+            E.Add_Text
+              (Status, "backend",
+               Model_Runner.Backend.Backend_Name (Item.Able.Kind),
+               E.Param_Identifier);
+            return;
+         end if;
+      end;
 
       --  And where it sits. A backend states the alignment it needs from
       --  tensor storage; a file is free to place a tensor anywhere its own
@@ -701,7 +717,8 @@ package body Model_Runner.Llama is
       Weight : T.View;
    begin
       Result := null;
-      Resolve (Item, Source, Name, 1, Width, Weight, Status);
+      Resolve (Item, Source, Name, 1, Width, Weight, Status,
+               Reaches => False);
       if E.Is_Error (Status) then
          return;
       end if;
@@ -738,7 +755,8 @@ package body Model_Runner.Llama is
       Source  : Containers.Container;
       Index   : Natural;
       Current : in out Layer;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Repack  : Repack_Mode := No_Repack)
    is
       Width : constant Element_Count :=
         Element_Count (Item.Settings.Embedding);
@@ -772,28 +790,28 @@ package body Model_Runner.Llama is
    begin
       Resolve
         (Item, Source, Layer_Key (Index, "ffn_gate_inp.weight"),
-         Count, Width, Current.Router, Status);
+         Count, Width, Current.Router, Status, Repack);
       if E.Is_Error (Status) then
          return;
       end if;
 
       Resolve
         (Item, Source, Layer_Key (Index, "ffn_gate_exps.weight"),
-         Feed * Count, Width, Gates, Status);
+         Feed * Count, Width, Gates, Status, Repack);
       if E.Is_Error (Status) then
          return;
       end if;
 
       Resolve
         (Item, Source, Layer_Key (Index, "ffn_up_exps.weight"),
-         Feed * Count, Width, Ups, Status);
+         Feed * Count, Width, Ups, Status, Repack);
       if E.Is_Error (Status) then
          return;
       end if;
 
       Resolve
         (Item, Source, Layer_Key (Index, "ffn_down_exps.weight"),
-         Width * Count, Feed, Downs, Status);
+         Width * Count, Feed, Downs, Status, Repack);
       if E.Is_Error (Status) then
          return;
       end if;
@@ -888,6 +906,8 @@ package body Model_Runner.Llama is
             Item.Able := Workers_CPU.Describe;
          when Model_Runner.Backend.Backend_Reference =>
             Item.Able := Model_Runner.Backend.Reference.Describe;
+         when Model_Runner.Backend.Backend_Device =>
+            Item.Able := Model_Runner.Backend.Device.Describe;
       end case;
 
       --  Evaluation is matrix by vector and nothing else. A backend that
@@ -1024,7 +1044,7 @@ package body Model_Runner.Llama is
       begin
          Resolve
            (Item, Source, "token_embd.weight", Vocab, Width,
-            Item.Embeddings, Status);
+            Item.Embeddings, Status, Repack);
          if E.Is_Error (Status) then
             Fail (Status);
             return;
@@ -1062,7 +1082,7 @@ package body Model_Runner.Llama is
          else
             Resolve
               (Item, Source, "output.weight", Vocab, Width,
-               Item.Output, Status);
+               Item.Output, Status, Repack);
             if E.Is_Error (Status) then
                Fail (Status);
                return;
@@ -1087,17 +1107,17 @@ package body Model_Runner.Llama is
 
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_q.weight"),
-                  Wide, Width, Current.Query, Status);
+                  Wide, Width, Current.Query, Status, Repack);
                exit when E.Is_Error (Status);
 
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_k.weight"),
-                  KV, Width, Current.Key, Status);
+                  KV, Width, Current.Key, Status, Repack);
                exit when E.Is_Error (Status);
 
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_v.weight"),
-                  KV_Out, Width, Current.Value, Status);
+                  KV_Out, Width, Current.Value, Status, Repack);
                exit when E.Is_Error (Status);
 
                --  Qwen2 adds a bias to each projection; Llama and Qwen3
@@ -1143,7 +1163,7 @@ package body Model_Runner.Llama is
 
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_output.weight"),
-                  Width, Blend, Current.Attention_Out, Status);
+                  Width, Blend, Current.Attention_Out, Status, Repack);
                exit when E.Is_Error (Status);
 
                Resolve_Norm
@@ -1154,20 +1174,21 @@ package body Model_Runner.Llama is
                if Item.Settings.Experts = 0 then
                   Resolve
                     (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
-                     Feed, Width, Current.Gate, Status);
+                     Feed, Width, Current.Gate, Status, Repack);
                   exit when E.Is_Error (Status);
 
                   Resolve
                     (Item, Source, Layer_Key (Index, "ffn_up.weight"),
-                     Feed, Width, Current.Up, Status);
+                     Feed, Width, Current.Up, Status, Repack);
                   exit when E.Is_Error (Status);
 
                   Resolve
                     (Item, Source, Layer_Key (Index, "ffn_down.weight"),
-                     Width, Feed, Current.Down, Status);
+                     Width, Feed, Current.Down, Status, Repack);
                   exit when E.Is_Error (Status);
                else
-                  Resolve_Experts (Item, Source, Index, Current, Status);
+                  Resolve_Experts
+                    (Item, Source, Index, Current, Status, Repack);
                   exit when E.Is_Error (Status);
                end if;
             end;
@@ -1532,6 +1553,9 @@ package body Model_Runner.Llama is
          when Model_Runner.Backend.Backend_Reference =>
             Model_Runner.Backend.Reference.Product
               (Weight, Vector, Target, Status);
+         when Model_Runner.Backend.Backend_Device =>
+            Model_Runner.Backend.Device.Dispatch
+              (Weight, Vector, Target, Status);
       end case;
    end Product;
 
@@ -1549,6 +1573,10 @@ package body Model_Runner.Llama is
               (Item.Team, Weight, Vectors, Count, Target, Status);
          when Model_Runner.Backend.Backend_Reference =>
             Model_Runner.Backend.Reference.Product_Batch
+              (Weight, Vectors, Count, Target, Status);
+
+         when Model_Runner.Backend.Backend_Device =>
+            Model_Runner.Backend.Device.Dispatch_Batch
               (Weight, Vectors, Count, Target, Status);
       end case;
    end Product_Batch;

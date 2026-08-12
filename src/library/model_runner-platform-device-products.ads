@@ -1,3 +1,5 @@
+with Interfaces;
+
 with Model_Runner.Numerics;
 
 --  Matrix-vector products on a device.
@@ -68,6 +70,10 @@ package Model_Runner.Platform.Device.Products is
    --  @param Rows Number of rows, which is the length of the result.
    --  @param Columns Number of columns.
    --  @param Target Receives Rows values.
+   --  @param Key Where these weights live, which is what makes a second
+   --    product with the same matrix cost nothing to set up. Null_Address
+   --    keeps nothing, which is what a caller with a matrix it will not use
+   --    again should pass.
    --  @param Ok True when the device computed it.
    procedure Multiply
      (Item    : in out Engine;
@@ -76,11 +82,37 @@ package Model_Runner.Platform.Device.Products is
       Rows    : Natural;
       Columns : Natural;
       Target  : out Model_Runner.Numerics.Real_Array;
-      Ok      : out Boolean);
+      Ok      : out Boolean;
+      Key     : System.Address := System.Null_Address);
+
+   --  How many matrices the device is holding.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Count of matrices kept.
+   function Resident (Item : Engine) return Natural;
 
 private
 
+   --  How many matrices one engine will keep. A model of a few dozen layers
+   --  has some hundreds of them; past this the oldest are not evicted but
+   --  the newest are simply not kept, which costs time and never
+   --  correctness.
+   Max_Resident : constant := 1024;
+
+   type Held_Matrix is record
+      Key    : System.Address := System.Null_Address;
+      Buffer : System.Address := System.Null_Address;
+      Memory : System.Address := System.Null_Address;
+      Bytes  : Interfaces.Unsigned_64 := 0;
+   end record;
+
+   type Held_Array is array (1 .. Max_Resident) of Held_Matrix;
+
    type Engine is limited record
+      --  The instance every entry point this engine uses is found through.
+      --  An engine outlives no instance and each names its own.
+      Instance : System.Address := System.Null_Address;
+
       --  The device this belongs to, and the queue work goes to. Copies of
       --  what the context holds: an engine outlives no context, and holding
       --  them saves reaching back through one on every call.
@@ -99,6 +131,19 @@ private
       Commands   : System.Address := System.Null_Address;
       Buffer     : System.Address := System.Null_Address;
       Fence      : System.Address := System.Null_Address;
+
+      --  The matrices this device is holding, and the two buffers that
+      --  change every call.
+      Kept       : Held_Array;
+      Used       : Natural := 0;
+
+      Vector_Buffer : System.Address := System.Null_Address;
+      Vector_Memory : System.Address := System.Null_Address;
+      Vector_Bytes  : Interfaces.Unsigned_64 := 0;
+
+      Result_Buffer : System.Address := System.Null_Address;
+      Result_Memory : System.Address := System.Null_Address;
+      Result_Bytes  : Interfaces.Unsigned_64 := 0;
    end record;
 
 end Model_Runner.Platform.Device.Products;

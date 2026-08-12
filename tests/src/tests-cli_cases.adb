@@ -8321,10 +8321,18 @@ package body Tests.CLI_Cases is
             Looked  : constant String := Inspected (Kind);
             Worked  : constant String := Ran (Kind);
 
-            --  Three were asked for; the backend that cannot run in parallel
+            --  Three were asked for; a backend that cannot run in parallel
             --  gets one, and says one.
             Expected : constant String :=
-              (if Kind = Back.Backend_Reference then "1" else "3");
+              (if Back.Backend_Kind'Pos (Kind)
+                 = Back.Backend_Kind'Pos (Back.Backend_CPU)
+               then "3" else "1");
+
+            --  A run on a device needs a device. Inspection does not -- it
+            --  reports what was asked for without opening anything -- so
+            --  the inspection half is asserted on every machine and the run
+            --  half only where the run happened.
+            Ran_It : constant Boolean := Field (Worked, "backend") /= "";
          begin
             Assert (Field (Looked, "backend") = Name,
                     "inspect reported backend """
@@ -8333,13 +8341,19 @@ package body Tests.CLI_Cases is
                     "inspect reported """ & Field (Looked, "worker tasks")
                     & """ worker tasks for " & Name & ", not " & Expected);
 
-            Assert (Field (Worked, "backend") = Name,
-                    "the statistics reported backend """
-                    & Field (Worked, "backend") & """ for " & Name);
-            Assert (Field (Worked, "worker tasks") = Expected,
-                    "the statistics reported """
-                    & Field (Worked, "worker tasks") & """ worker tasks for "
-                    & Name & ", not " & Expected);
+            if Ran_It then
+               Assert (Field (Worked, "backend") = Name,
+                       "the statistics reported backend """
+                       & Field (Worked, "backend") & """ for " & Name);
+               Assert (Field (Worked, "worker tasks") = Expected,
+                       "the statistics reported """
+                       & Field (Worked, "worker tasks")
+                       & """ worker tasks for " & Name & ", not "
+                       & Expected);
+            else
+               Assert (Kind = Back.Backend_Device,
+                       "the " & Name & " backend did not run at all");
+            end if;
          end;
       end loop;
    end Runs_Report_Which_Backend_Ran;
