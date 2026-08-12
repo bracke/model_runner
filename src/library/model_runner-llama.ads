@@ -70,8 +70,24 @@ with Model_Runner.Tokenizer;
 --  has succeeded. A failure at any stage releases everything acquired so far,
 --  and a partially initialized model is never observable as usable.
 --
+--  Several sessions. A prepared model carries no per-evaluation state: the
+--  activations, the normalized copies, the query and the key and value rows
+--  all belong to the session, and the weights are read and never written. So
+--  a model may have any number of sessions open at once, each with its own
+--  context, and they do not see each other. What one model buys is the
+--  loading and the memory: a second session on a model already prepared
+--  costs its own cache and nothing else.
+--
+--  Anything that would write to the model is refused while a session is open
+--  -- merging an adapter, closing the model -- which is what makes the
+--  sentence above true rather than hopeful.
+--
 --  Task safety: a Model is immutable once prepared and may be read
---  concurrently. A Session holds mutable state and belongs to one task.
+--  concurrently. A Session holds mutable state and belongs to one task. Two
+--  sessions may therefore be evaluated from two tasks, on a backend that
+--  allows it: the processor backends do, each session bringing its own
+--  worker pool, and the device backend does not -- it is one queue and says
+--  so.
 package Model_Runner.Llama is
 
    subtype Real is Model_Runner.Numerics.Real;
@@ -475,6 +491,9 @@ package Model_Runner.Llama is
       Cache    : Cache_Precision := Exact);
 
    --  Open a session on a prepared model.
+   --
+   --  Several sessions may be open on one model at once; see the note at
+   --  the top of this specification for what they do and do not share.
    --
    --  @param Item Session to open; closed first.
    --  @param Source Prepared model; must outlive the session.

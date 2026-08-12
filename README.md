@@ -296,7 +296,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Chat templates | Bounded allowlisted engine: `for`, `if`/`elif`/`else`, `set`, comments, `+`-joined output, `==`/`!=`/`and`/`or`/`not` with parentheses, `is defined`/`is none`/`in`, `trim` and `length`, message indexing, front slicing such as `messages[1:]`, `loop.first`/`last`/`index`, whitespace control. Enough that the template a current Llama-3 file ships with renders. Compiled and validated at load time; `macro`, `include` and `import` are rejected there, while a value the engine cannot compute -- a function call, `tojson`, arithmetic -- is refused if the render reaches it, which the tool-calling branches of a plain conversation never do |
 | Architecture profile | `llama`, `qwen2`, `qwen3` and `qwen3moe`, each read under its own metadata keys and refused by name otherwise, with the refusal naming every one this build reads. All are the same shape with a difference: qwen2 a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour; qwen3 no biases and a root-mean-square normalization of every query and key head before the rotation, equally required; qwen3moe that again with the feed-forward block behind a router. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, uniformly across layers. A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
 | Execution | Embedding lookup, per-layer RMS norm, Q/K/V projection, rotary encoding, grouped-query causal attention without duplicating key or value heads, output projection, SiLU-gated feed-forward, residuals, raw logits |
-| KV cache and session | Explicit cache sized with checked arithmetic, transactional commit, state machine, reset preserving allocations, committed-prefix reuse |
+| KV cache and session | Explicit cache sized with checked arithmetic, transactional commit, state machine, reset preserving allocations, committed-prefix reuse. Any number of sessions may be open on one prepared model at once: a model carries no per-evaluation state -- the activations, the normalized copies and the query and key rows all belong to the session -- so a second sequence costs its own cache and nothing else. Held by a test that interleaves two sessions a token at a time and checks each gets what it would have got alone; interleaved rather than sequential, because sequential sessions pass even on a model that does hold such state. Anything that would write to the model is refused while a session is open. The command runs one sequence: this is a capability of the library, and no option asks for two |
 | Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, per-token biases, sequence penalty, repetition penalty, frequency and presence penalties, temperature, top-k, tail-free, locally typical, top-p, min-p, exclude-top-choices, renormalize, select. Everything that acts on a token acts on the greedy path too, which is where a caller can check by hand what a penalty did -- they did not, for as long as they have existed. Mirostat v2 replaces the truncation filters rather than joining them and is refused alongside any of them, because two answers to one question is not a configuration. Greedy is tie-broken to the lowest token and consumes no random state; xoshiro256++ seeded per session. `--logit-bias TOKEN=X` nudges a token; `--logprobs N` reports what the model made of each position, from a plain softmax over the raw logits with none of the sampling applied |
 | Stops | End-of-sequence, stop tokens, stop strings matched across token boundaries with earliest-then-longest resolution and no leaked bytes |
 | Generation | Prefill, decode loop, streaming to an output sink, eight completion reasons, statistics against a monotonic clock, bounded text retention |
@@ -1155,11 +1155,11 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 7-token prompt, 12 generated | 1.499 s | **1.288 s** |
-| -- evaluating the prompt | 0.334 s | 0.205 s |
-| -- generating | 1.160 s | 1.084 s |
-| 111-token prompt, 1 generated | 6.287 s | **3.941 s** |
-| -- evaluating the prompt | 6.152 s | 3.789 s |
+| 7-token prompt, 12 generated | 1.583 s | **1.299 s** |
+| -- evaluating the prompt | 0.376 s | 0.215 s |
+| -- generating | 1.206 s | 1.084 s |
+| 111-token prompt, 1 generated | 6.271 s | **3.971 s** |
+| -- evaluating the prompt | 6.147 s | 3.812 s |
 
 Both backends print the same digest of what they generated -- `7784f0` and
 `af63c7` for the two runs -- so this is the same text, not a faster answer to
@@ -1168,10 +1168,10 @@ a different question.
 Read the left column with the caveat it deserves. This machine had other work
 on it, and the two columns are not equally hurt by that: the processor column
 competes for the cores it is using and the device column does not. Taken
-five times over one afternoon, the seven-token run measured 1.727, 2.167,
-1.723, 1.640 and 1.499 s on the processor against 1.345, 1.214, 1.287, 1.292
-and 1.288 on the device -- the device column varies by three per cent and the
-processor column by forty -- and
+six times over two days, the seven-token run measured 1.727, 2.167, 1.723,
+1.640, 1.499 and 1.583 s on the processor against 1.345, 1.214, 1.287, 1.292,
+1.288 and 1.299 on the device -- the device column varies by three per cent
+and the processor column by forty -- and
 the quiet-machine figure for the processor -- published at the top of this
 section -- is 1.28 s. So the device's advantage on the short run is real but
 smaller than any one pair suggests, and on the long run it is comfortable at
@@ -1244,11 +1244,11 @@ faster there:
 
 | Per pass | Device time / processor time |
 | --- | --- |
-| q8_0, one vector | 0.82 |
+| q8_0, one vector | 0.81 |
 | q4_0, one vector | 0.99 |
-| f32, one vector | 1.26 |
-| q8_0, eight vectors | 0.26 |
-| q8_0, thirty-two vectors | 0.132 |
+| f32, one vector | 1.38 |
+| q8_0, eight vectors | 0.25 |
+| q8_0, thirty-two vectors | 0.106 |
 
 Binary32 is the one format the device is slower at, and that is the finding
 rather than a disappointment: it is four bytes a weight where q8_0 is one, so

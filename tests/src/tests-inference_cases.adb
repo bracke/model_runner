@@ -1257,6 +1257,140 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end Device_Says_When_A_Model_Will_Not_Fit;
 
+   -------------------------------------------
+   -- Sessions_On_One_Model_Do_Not_Collide --
+   -------------------------------------------
+
+   --  Two sessions on one prepared model, evaluated a token at a time in
+   --  turn, each get what they would have got alone.
+   --
+   --  What this holds is that a model carries no state belonging to an
+   --  evaluation. It was one session per model until now, so nothing had
+   --  ever asked: the activations, the normalized copies and the query and
+   --  key rows all live in the session, and if any of them had drifted into
+   --  the model the two sequences would read each other's arithmetic and
+   --  neither would be wrong in a way anybody would notice.
+   --
+   --  Interleaved rather than run one after the other, because sequential
+   --  sessions would pass on a model that did hold such state.
+   procedure Sessions_On_One_Model_Do_Not_Collide
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+
+      First_Prompt  : constant array (1 .. 4) of Vocab.Token_Id :=
+        [4, 5, 6, 7];
+      Second_Prompt : constant array (1 .. 4) of Vocab.Token_Id :=
+        [9, 8, 7, 6];
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+
+         Alone_First  : Logit_Vector := [others => 0.0];
+         Alone_Second : Logit_Vector := [others => 0.0];
+         Together     : Logit_Vector := [others => 0.0];
+
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         --  Each on its own first, which is what the interleaved pair has
+         --  to reproduce.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the first session did not open");
+            for Token of First_Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Alone_First,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the first sequence failed");
+            end loop;
+            L.Close (Live);
+         end;
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the second session did not open");
+            for Token of Second_Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Alone_Second,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the second sequence failed");
+            end loop;
+            L.Close (Live);
+         end;
+
+         --  The two sequences differ, or the comparison below would hold
+         --  however badly the sessions collided.
+         declare
+            Same : Boolean := True;
+         begin
+            for Index in Alone_First'Range loop
+               if Alone_First (Index) /= Alone_Second (Index) then
+                  Same := False;
+                  exit;
+               end if;
+            end loop;
+            Assert (not Same,
+                    "the two sequences produce the same logits, so this "
+                    & "fixture cannot tell a collision from a coincidence");
+         end;
+
+         --  And now together, a token each in turn.
+         declare
+            One, Two : L.Session;
+         begin
+            L.Open (One, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the first of two did not open");
+
+            L.Open (Two, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a second session on one model was refused: "
+                    & E.Error_Code'Image (Status.Code));
+
+            for Step in First_Prompt'Range loop
+               L.Evaluate (One, Under.Ready, First_Prompt (Step), Together,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the interleaved first failed");
+
+               L.Evaluate (Two, Under.Ready, Second_Prompt (Step),
+                           Alone_Second, Status => Status);
+               Assert (E.Is_Ok (Status), "the interleaved second failed");
+            end loop;
+
+            for Index in Together'Range loop
+               Assert (Together (Index) = Alone_First (Index),
+                       "an interleaved session got different logits from "
+                       & "the same sequence run alone, at"
+                       & N.Element_Count'Image (Index));
+            end loop;
+
+            Assert (L.Position (One) = First_Prompt'Length
+                      and then L.Position (Two) = Second_Prompt'Length,
+                    "the two sessions did not each advance by their own "
+                    & "tokens");
+
+            L.Close (One);
+            L.Close (Two);
+         end;
+
+         --  And the model closes once they have gone, which is what says
+         --  the count went up twice and down twice.
+         L.Close (Under.Ready, Status);
+         Assert (E.Is_Ok (Status),
+                 "the model would not close after two sessions: "
+                 & E.Error_Code'Image (Status.Code));
+      end;
+
+      B.Free (Image);
+   end Sessions_On_One_Model_Do_Not_Collide;
+
    ----------
    -- Name --
    ----------
@@ -3759,6 +3893,10 @@ package body Tests.Inference_Cases is
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
+      Register_Routine
+        (T, Sessions_On_One_Model_Do_Not_Collide'Access,
+         "two sessions on one model, evaluated in turn, each get what they "
+         & "would have got alone");
       Register_Routine
         (T, Device_Says_When_A_Model_Will_Not_Fit'Access,
          "a model whose matrices are larger than the device will hold is "

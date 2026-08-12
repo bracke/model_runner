@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Several sessions on one prepared model.** It was one, and the reason was
+  a comment saying so rather than anything in the way: a model carries no
+  per-evaluation state -- the activations, the normalized copies and the
+  query and key rows all belong to the session -- and the specification has
+  said since it was written that a prepared model is immutable and may be
+  read concurrently. The refusal contradicted its own documentation.
+
+  Held by a test that opens two sessions and evaluates them a token at a
+  time in turn, checking each gets exactly what it got alone, and checking
+  first that the two sequences differ so a collision cannot pass as a
+  coincidence. Interleaved rather than sequential, because sequential
+  sessions pass even on a model that does hold such state.
+
+  What is still refused while a session is open is anything that would write
+  to the model: merging an adapter, closing it. That is what makes the claim
+  true rather than hopeful.
+
+  The command still runs one sequence. This is a capability of the library
+  and no option asks for two.
+
 - **Five more samplers: locally typical, tail-free, exclude-top-choices,
   a sequence penalty and mirostat v2.**
 

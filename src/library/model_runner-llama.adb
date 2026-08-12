@@ -2989,12 +2989,6 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      if Source.Sessions > 0 then
-         --  V1 supports one active session per prepared model.
-         Status := E.Make (E.Lifecycle_Session_Active);
-         return;
-      end if;
-
       Settings := Source.Settings;
       Capacity := (if Context = 0 then Settings.Context_Length else Context);
 
