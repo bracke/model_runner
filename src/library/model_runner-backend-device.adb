@@ -283,18 +283,20 @@ package body Model_Runner.Backend.Device is
             return;
          end if;
 
+         --  The whole storage, and where in it this matrix begins. Not the
+         --  matrix alone: a device reading the weights where they lie is
+         --  handed a page-aligned range, and a range described by the matrix
+         --  alone would be one nobody could check the ends of.
          declare
-            Storage : constant Model_Runner.Bytes.Byte_Array (1 .. Bytes)
-              with Import,
-                   Address =>
-                     Weight.Data.all (Weight.Data.all'First + Weight.Offset)
-                       'Address;
+            Storage : Model_Runner.Bytes.Byte_Array
+              (1 .. Weight.Data.all'Length)
+              with Import, Address => Weight.Data.all'Address;
          begin
             Products.Multiply
-              (Engine, Storage, Packing,
+              (Engine, Storage, Weight.Offset, Packing,
                Natural (Weight.Rows), Natural (Weight.Columns),
                Vectors.all, Positive (Count), Target.all, Ok,
-               Key => Storage'Address);
+               Key => Storage (Storage'First + Weight.Offset)'Address);
          end;
       end;
 

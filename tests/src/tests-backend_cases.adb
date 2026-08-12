@@ -24,7 +24,7 @@ package body Tests.Backend_Cases is
    use type Model_Runner.Errors.Error_Code;
    use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.Numerics.Real;
-   use type Model_Runner.Numerics.Wide_Real;
+   use type Model_Runner.Bytes.Byte_Count;
    use type Model_Runner.Tensors.Real_Array_Access;
 
    package B renames Model_Runner.Bytes;
@@ -670,17 +670,24 @@ package body Tests.Backend_Cases is
    ---------------------------------------------
 
    --  A device asked to read the weights where they lie gets the same
-   --  answers as one handed a copy of them.
+   --  answers as the processor, in every format the shader decodes and
+   --  through both of the ways it is asked.
    --
    --  Two things have to hold and only one of them is the arithmetic. The
-   --  other is the offset: a host pointer has to be aligned to something
-   --  larger than a matrix is, so the buffer starts before the weights do
-   --  and the shader is told how far in they begin. An off-by-one there
-   --  reads a different matrix, or reads past one, and the numbers say so.
+   --  other is the offset: a host pointer is aligned down to a page, so the
+   --  buffer starts before the weights do and the shader is told how far in
+   --  they begin. That offset is added to word indices for binary32 and to
+   --  byte indices for the packed formats -- two different arithmetics, and
+   --  the first version of this test exercised one of them.
    --
-   --  Skipped where the device will not take a pointer, which is a device
-   --  with no memory in common with the host and any device at all on most
-   --  machines.
+   --  The storage is deliberately large and the matrix deliberately in the
+   --  middle of it. A device is handed whole pages, so a matrix within a
+   --  page of either end of what this process owns is copied instead --
+   --  which is what every matrix of a small fixture is, and why the
+   --  conformance sweep cannot test this and says so.
+   --
+   --  Skipped where the device will not take a pointer at all, which is any
+   --  device on most machines.
    procedure Device_Reads_The_Host_Memory_When_Asked
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -688,20 +695,26 @@ package body Tests.Backend_Cases is
 
       Ready : Boolean;
 
-      Wide : constant N.Element_Count := 64;
-      Tall : constant N.Element_Count := 40;
+      Wide  : constant N.Element_Count := 128;
+      Tall  : constant N.Element_Count := 40;
+      Batch : constant N.Element_Count := 11;
+
+      --  Somewhere in the middle, and not on a boundary of anything: a page
+      --  either side of the matrix and an offset that is not a multiple of
+      --  a page, so the distance the shader is told about is not zero.
+      Room_Bytes : constant B.Byte_Count := 1024 * 1024;
+      At_Byte    : constant B.Byte_Count := 300_000;
 
       Storage : B.Byte_Array_Access;
-      Weight  : T.View;
       Status  : E.Error_Info;
 
-      Vector : T.Real_Array_Access;
-      Room   : T.Real_Array_Access;
+      Vectors : T.Real_Array_Access;
+      Here    : T.Real_Array_Access;
+      There   : T.Real_Array_Access;
 
-      --  Every element different, so a matrix read at the wrong offset
-      --  gives a wrong answer rather than the same one.
-      function Element (Row, Column : N.Element_Count) return N.Real
-      is (N.Real (Row) * 0.125 - N.Real (Column) * 0.0625 + 0.5);
+      Values : N.Real_Array (0 .. Wide * Tall - 1);
+
+      Took : Natural := 0;
    begin
       Model_Runner.Backend.Device.Close;
       Model_Runner.Backend.Device.Open (Ready, Share_Host => True);
@@ -710,75 +723,126 @@ package body Tests.Backend_Cases is
          return;
       end if;
 
-      declare
-         Values : N.Real_Array (0 .. Wide * Tall - 1);
-      begin
-         for Row in 0 .. Tall - 1 loop
-            for Column in 0 .. Wide - 1 loop
-               Values (Row * Wide + Column) := Element (Row, Column);
-            end loop;
-         end loop;
+      B.Allocate (Room_Bytes, Storage);
+      Assert (Storage /= null, "no room for the test");
+      Storage.all := [others => 0];
 
+      T.Allocate (Wide * Batch, Vectors);
+      T.Allocate (Tall * Batch, Here);
+      T.Allocate (Tall * Batch, There);
+      Assert (Vectors /= null and then Here /= null and then There /= null,
+              "no room for the vectors");
+
+      for Index in Vectors.all'Range loop
+         Vectors.all (Index) :=
+           N.Real (Index mod 13) * 0.125 - 0.4375;
+      end loop;
+
+      --  Awkward values rather than round ones: the packed formats round
+      --  what they are given, and values a quantizer reproduces exactly
+      --  would let a decoding fault pass unnoticed.
+      for Index in Values'Range loop
+         Values (Index) :=
+           1.0 / N.Real (3 + Natural (Index) mod 89) - 0.037;
+      end loop;
+
+      for Format in 1 .. 3 loop
          declare
-            Bytes : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+            Kind : constant G.Tensor_Type :=
+              (case Format is
+                 when 1 => G.Type_F32,
+                 when 2 => G.Type_Q8_0,
+                 when others => G.Type_Q4_0);
+
+            Packed : constant B.Byte_Array :=
+              (case Format is
+                 when 1 => Fixtures.Encode_F32 (Values),
+                 when 2 => Fixtures.Encode_Q8_0 (Values),
+                 when others => Fixtures.Encode_Q4_0 (Values));
+
+            Weight : T.View;
          begin
-            B.Allocate (Bytes'Length, Storage);
-            Storage.all := Bytes;
+            Storage.all (Storage.all'First + At_Byte
+                         .. Storage.all'First + At_Byte + Packed'Length - 1) :=
+              Packed;
+
+            T.Make (Kind, Tall, Wide, Storage, At_Byte, Weight, Status);
+            Assert (E.Is_Ok (Status),
+                    "the weight view could not be built for "
+                    & G.Type_Name (Kind));
+
+            --  One vector, and then a batch that is neither one dispatch's
+            --  worth nor a whole number of them.
+            for Batched in Boolean loop
+               declare
+                  Count : constant N.Element_Count :=
+                    (if Batched then Batch else 1);
+               begin
+                  Here.all := [others => 0.0];
+                  There.all := [others => 0.0];
+
+                  if Batched then
+                     CPU.Dispatch_Batch
+                       (null, Weight, Vectors, Count, Here, Status);
+                  else
+                     CPU.Dispatch (null, Weight, Vectors, Here, Status);
+                  end if;
+                  Assert (E.Is_Ok (Status),
+                          "the processor refused the product");
+
+                  if Batched then
+                     Model_Runner.Backend.Device.Dispatch_Batch
+                       (Weight, Vectors, Count, There, Status);
+                  else
+                     Model_Runner.Backend.Device.Dispatch
+                       (Weight, Vectors, There, Status);
+                  end if;
+                  Assert (E.Is_Ok (Status),
+                          "a product on the host's own memory was refused: "
+                          & E.Error_Code'Image (Status.Code));
+
+                  for Index in 0 .. Tall * Count - 1 loop
+                     declare
+                        Want : constant N.Real :=
+                          Here.all (Here.all'First + Index);
+                        Got  : constant N.Real :=
+                          There.all (There.all'First + Index);
+                     begin
+                        --  Binary32 against binary64 over 128 terms, on
+                        --  values around a tenth: this is what that
+                        --  arithmetic carries, and it is the same bound the
+                        --  product test uses.
+                        Assert (abs (Want - Got) < 1.0E-4,
+                                "a matrix read where it lies disagrees with "
+                                & "the processor in "
+                                & G.Type_Name (Kind)
+                                & (if Batched then " batched" else "")
+                                & " at" & N.Element_Count'Image (Index)
+                                & ":" & N.Real'Image (Want)
+                                & " against" & N.Real'Image (Got));
+                     end;
+                  end loop;
+               end;
+            end loop;
+
+            --  And it was read where it lies rather than quietly copied,
+            --  which a correct answer alone would not show. This is the
+            --  assertion the first version of the test did not make, and
+            --  without it the whole thing passed while importing nothing.
+            Assert (Model_Runner.Backend.Device.Imported > Took,
+                    "a device asked to read " & G.Type_Name (Kind)
+                    & " where it lies copied it instead");
+            Took := Model_Runner.Backend.Device.Imported;
          end;
-      end;
-
-      T.Make (G.Type_F32, Tall, Wide, Storage, 0, Weight, Status);
-      Assert (E.Is_Ok (Status), "the weight view could not be built");
-
-      T.Allocate (Wide, Vector);
-      T.Allocate (Tall, Room);
-      Assert (Vector /= null and then Room /= null, "no room for the test");
-
-      for Index in Vector.all'Range loop
-         Vector.all (Index) := N.Real (Index mod 5) * 0.25 - 0.375;
       end loop;
 
-      --  Twice, because the second time comes from what the device kept and
-      --  the first from what it took.
-      for Pass in 1 .. 2 loop
-         Model_Runner.Backend.Device.Dispatch (Weight, Vector, Room, Status);
-         Assert (E.Is_Ok (Status),
-                 "a product on the host's own memory was refused: "
-                 & E.Error_Code'Image (Status.Code));
+      Assert (Interfaces."=" (Model_Runner.Backend.Device.Resident_Bytes, 0),
+              "a device reading the host's memory is holding bytes of its "
+              & "own as well");
 
-         for Row in 0 .. Tall - 1 loop
-            declare
-               Sum : N.Wide_Real := 0.0;
-            begin
-               for Column in 0 .. Wide - 1 loop
-                  Sum := Sum
-                    + N.Wide_Real (Element (Row, Column))
-                      * N.Wide_Real (Vector.all (Vector.all'First + Column));
-               end loop;
-
-               Assert (abs (Room.all (Room.all'First + Row) - N.Real (Sum))
-                       < 1.0E-4,
-                       "a matrix read where it lies gave a different answer "
-                       & "in row" & N.Element_Count'Image (Row));
-            end;
-         end loop;
-      end loop;
-
-      --  And it did read it where it lies, rather than quietly copying: the
-      --  point of the exercise is the one thing a correct answer alone
-      --  would not show.
-      Assert (Model_Runner.Backend.Device.Imported > 0
-                or else Model_Runner.Backend.Device.Resident = 0,
-              "a device asked to read the host's memory copied instead and "
-              & "said nothing");
-
-      Assert (Interfaces."=" (Model_Runner.Backend.Device.Resident_Bytes, 0)
-                or else Model_Runner.Backend.Device.Imported = 0,
-              "a device reading the host's memory is also holding bytes of "
-              & "its own for the same matrix");
-
-      T.Free (Vector);
-      T.Free (Room);
+      T.Free (Vectors);
+      T.Free (Here);
+      T.Free (There);
       B.Free (Storage);
       Model_Runner.Backend.Device.Close;
    end Device_Reads_The_Host_Memory_When_Asked;

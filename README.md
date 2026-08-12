@@ -1155,11 +1155,11 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 7-token prompt, 12 generated | 1.640 s | **1.292 s** |
-| -- evaluating the prompt | 0.390 s | 0.213 s |
-| -- generating | 1.254 s | 1.079 s |
-| 111-token prompt, 1 generated | 6.225 s | **4.007 s** |
-| -- evaluating the prompt | 6.082 s | 3.849 s |
+| 7-token prompt, 12 generated | 1.499 s | **1.288 s** |
+| -- evaluating the prompt | 0.334 s | 0.205 s |
+| -- generating | 1.160 s | 1.084 s |
+| 111-token prompt, 1 generated | 6.287 s | **3.941 s** |
+| -- evaluating the prompt | 6.152 s | 3.789 s |
 
 Both backends print the same digest of what they generated -- `7784f0` and
 `af63c7` for the two runs -- so this is the same text, not a faster answer to
@@ -1168,9 +1168,10 @@ a different question.
 Read the left column with the caveat it deserves. This machine had other work
 on it, and the two columns are not equally hurt by that: the processor column
 competes for the cores it is using and the device column does not. Taken
-four times over one afternoon, the seven-token run measured 1.727, 2.167,
-1.723 and 1.640 s on the processor against 1.345, 1.214, 1.287 and 1.292 on
-the device, and
+five times over one afternoon, the seven-token run measured 1.727, 2.167,
+1.723, 1.640 and 1.499 s on the processor against 1.345, 1.214, 1.287, 1.292
+and 1.288 on the device -- the device column varies by three per cent and the
+processor column by forty -- and
 the quiet-machine figure for the processor -- published at the top of this
 section -- is 1.28 s. So the device's advantage on the short run is real but
 smaller than any one pair suggests, and on the long run it is comfortable at
@@ -1226,9 +1227,9 @@ what it was written expecting. The same model and prompt, three ways:
 
 | Where the weights are | Generation |
 | --- | --- |
-| copied to the device, all of them | 10.69 tokens/s |
-| a fifth copied, the rest uploaded again as wanted | 2.58 tokens/s |
-| read where they lie, none copied | 0.74 tokens/s |
+| copied to the device, all of them | 9.95 tokens/s |
+| a fifth copied, the rest uploaded again as wanted | 2.59 tokens/s |
+| read where they lie, none copied | 0.80 tokens/s |
 
 So giving matrices back and uploading them again beats reading the host's
 memory by three to one, and reading where they lie is worth asking for only
@@ -1243,11 +1244,11 @@ faster there:
 
 | Per pass | Device time / processor time |
 | --- | --- |
-| q8_0, one vector | 0.81 |
-| q4_0, one vector | 0.98 |
-| f32, one vector | 1.42 |
-| q8_0, eight vectors | 0.25 |
-| q8_0, thirty-two vectors | 0.107 |
+| q8_0, one vector | 0.82 |
+| q4_0, one vector | 0.99 |
+| f32, one vector | 1.26 |
+| q8_0, eight vectors | 0.26 |
+| q8_0, thirty-two vectors | 0.132 |
 
 Binary32 is the one format the device is slower at, and that is the finding
 rather than a disappointment: it is four bytes a weight where q8_0 is one, so

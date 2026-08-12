@@ -564,6 +564,13 @@ package body Model_Runner.Platform.Device.Products is
    --  answer arrived at one call later.
    --
    --  @param Item Engine holding the device.
+   --  @param Whole Where the storage the weights live in begins, and how far
+   --    it runs. The device is given a page-aligned range and pages are
+   --    larger than tensors, so what it is handed reaches before the matrix
+   --    and past it; both ends have to stay inside memory this process
+   --    owns, and this is what says where that is. A range that would leave
+   --    it is copied instead.
+   --  @param Span How long that storage is.
    --  @param From Where the weights are, in this process.
    --  @param Bytes How many of them.
    --  @param Buffer Receives the buffer.
@@ -572,6 +579,8 @@ package body Model_Runner.Platform.Device.Products is
    --  @param Ok True when the device took the pointer.
    procedure Take_Host_Memory
      (Item   : in out Engine;
+      Whole  : Address;
+      Span   : Interfaces.Unsigned_64;
       From   : Address;
       Bytes  : Interfaces.Unsigned_64;
       Buffer : out Address;
@@ -618,17 +627,34 @@ package body Model_Runner.Platform.Device.Products is
          --  A whole number of whatever the device wanted, because that is
          --  what it will take: the pointer aligned and the length a
          --  multiple of the same.
-         Span : constant Interfaces.Unsigned_64 :=
+         Length : constant Interfaces.Unsigned_64 :=
            ((Slack + Bytes + Item.Import_To - 1) / Item.Import_To)
            * Item.Import_To;
 
          Head : constant Address :=
            System.Storage_Elements.To_Address (Start);
 
+         --  Both ends of what the device would be handed, against both
+         --  ends of what this process owns. The rounding is what makes this
+         --  necessary: a matrix at the end of a heap arena rounds up past
+         --  the arena, and a device told to take memory nobody allocated is
+         --  a fault this program would have asked for.
+         Owned_First : constant System.Storage_Elements.Integer_Address :=
+           System.Storage_Elements.To_Integer (Whole);
+         Owned_Last  : constant System.Storage_Elements.Integer_Address :=
+           Owned_First + System.Storage_Elements.Integer_Address (Span);
+
          Known : aliased Host_Pointer_Properties;
          Kinds : Interfaces.Unsigned_32;
          Which : Natural := 0;
       begin
+         if Start < Owned_First
+           or else Start + System.Storage_Elements.Integer_Address (Length)
+                   > Owned_Last
+         then
+            return;
+         end if;
+
          if Asked (Item.Logical, Handle_Host_Allocation, Head,
                    Known'Address) /= 0
          then
@@ -660,7 +686,7 @@ package body Model_Runner.Platform.Device.Products is
             Outside : aliased External_Buffer_Info;
             Request : aliased Buffer_Create_Info;
          begin
-            Request.Size := Span;
+            Request.Size := Length;
             Request.Next := Outside'Address;
 
             if Create (Item.Logical, Request'Address, Null_Handle,
@@ -677,7 +703,7 @@ package body Model_Runner.Platform.Device.Products is
          begin
             Imported.Pointer := Head;
             Request.Next := Imported'Address;
-            Request.Size := Span;
+            Request.Size := Length;
             Request.Which := C.unsigned (Which);
 
             if Allocate (Item.Logical, Request'Address, Null_Handle,
@@ -1247,6 +1273,7 @@ package body Model_Runner.Platform.Device.Products is
    procedure Multiply
      (Item    : in out Engine;
       Weights : Model_Runner.Bytes.Byte_Array;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
       Packing : Weight_Packing;
       Rows    : Natural;
       Columns : Natural;
@@ -1297,7 +1324,8 @@ package body Model_Runner.Platform.Device.Products is
         or else Wide = 0
         or else Elements > Max_Elements
         or else Columns * Count > Max_Elements
-        or else Interfaces.Unsigned_64 (Weights'Length) < Weight_Bytes
+        or else Interfaces.Unsigned_64 (Weights'Length)
+                  < Interfaces.Unsigned_64 (At_Byte) + Weight_Bytes
         or else Vectors'Length
                   < Model_Runner.Numerics.Element_Count (Columns)
                     * Model_Runner.Numerics.Element_Count (Count)
@@ -1334,9 +1362,9 @@ package body Model_Runner.Platform.Device.Products is
          --
          --  It saves memory and never time, and the difference was measured
          --  rather than assumed. The same model and prompt on this machine:
-         --  10.21 tokens a second with the weights copied to the device,
-         --  2.58 with a budget holding a fifth of them and the rest uploaded
-         --  again as they are wanted, and 0.84 read where they lie. So this
+         --  9.95 tokens a second with the weights copied to the device,
+         --  2.59 with a budget holding a fifth of them and the rest uploaded
+         --  again as they are wanted, and 0.80 read where they lie. So this
          --  is not the answer to a model that does not fit -- giving
          --  matrices back and uploading them again is three times better
          --  than that, which is the opposite of what this was written
@@ -1349,8 +1377,13 @@ package body Model_Runner.Platform.Device.Products is
            and then Key /= System.Null_Address
          then
             Take_Host_Memory
-              (Item, Weights (Weights'First)'Address, Weight_Bytes,
-               Weight_Buffer, Weight_Memory, Weight_Base, Good);
+              (Item,
+               Whole => Weights (Weights'First)'Address,
+               Span  => Interfaces.Unsigned_64 (Weights'Length),
+               From  => Weights (Weights'First + At_Byte)'Address,
+               Bytes => Weight_Bytes,
+               Buffer => Weight_Buffer, Memory => Weight_Memory,
+               Base => Weight_Base, Ok => Good);
             Weight_Own := Good;
 
             if not Good then
@@ -1385,8 +1418,8 @@ package body Model_Runner.Platform.Device.Products is
 
             Write_Bytes
               (Item, Weight_Memory, Weight_Bytes,
-               Weights (Weights'First
-                        .. Weights'First
+               Weights (Weights'First + At_Byte
+                        .. Weights'First + At_Byte
                            + Model_Runner.Bytes.Byte_Count (Weight_Bytes) - 1),
                Good);
             if not Good then
@@ -1668,7 +1701,7 @@ package body Model_Runner.Platform.Device.Products is
            with Import, Address => Weights (Weights'First)'Address;
       begin
          Multiply
-           (Item, Room, Values_F32, Rows, Columns, Vector, 1, Target, Ok,
+           (Item, Room, 0, Values_F32, Rows, Columns, Vector, 1, Target, Ok,
             Key);
       end;
    end Multiply;

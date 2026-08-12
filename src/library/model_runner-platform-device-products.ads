@@ -62,7 +62,7 @@ package Model_Runner.Platform.Device.Products is
    --    rather than copy the weights into its own, where the device will
    --    take a pointer at all. It holds the model once instead of twice,
    --    and the device reads it more slowly for the rest of the run:
-   --    measured on this machine at 0.84 tokens a second against 10.21 for
+   --    measured on this machine at 0.80 tokens a second against 9.95 for
    --    the same model copied in. A memory decision, not a speed one.
    procedure Open
      (Item       : in out Engine;
@@ -95,7 +95,12 @@ package Model_Runner.Platform.Device.Products is
    --  only helps with what comes after it.
    --
    --  @param Item Ready engine.
-   --  @param Weights The matrix as it is stored, whole rows in order.
+   --  @param Weights The storage the matrix lives in, which is the model's
+   --    own bytes rather than the matrix alone: what a device is handed when
+   --    it reads the weights where they lie is a page-aligned range, and
+   --    pages are larger than tensors, so the range reaches either side of
+   --    the matrix and both ends have to be inside memory this process owns.
+   --  @param At_Byte Where the matrix begins in that storage.
    --  @param Packing How those bytes are packed. Columns must be a whole
    --    number of thirty-two element blocks for anything but Values_F32.
    --  @param Rows Number of rows, which is the length of one result.
@@ -111,6 +116,7 @@ package Model_Runner.Platform.Device.Products is
    procedure Multiply
      (Item    : in out Engine;
       Weights : Model_Runner.Bytes.Byte_Array;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
       Packing : Weight_Packing;
       Rows    : Natural;
       Columns : Natural;

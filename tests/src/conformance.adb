@@ -630,6 +630,17 @@ package body Conformance is
          --
          --  Skipped where there is no device. A machine without one is the
          --  common case and this is not the test that would tell it so.
+         --  Copied to the device, and only copied.
+         --
+         --  Reading the weights where they lie is the other way this
+         --  backend can work, and this sweep cannot exercise it: a device is
+         --  handed a page-aligned range, so a matrix within a page of either
+         --  end of its storage is copied instead, and every matrix of a
+         --  fixture eight wide and two deep is within a page of both. Run
+         --  here it would report fifty-four more comparisons and test the
+         --  same path twice, which is worse than not running it. It is
+         --  tested where the memory can be made large enough to matter, in
+         --  the backend tests.
          Model_Runner.Backend.Device.Open (Device_Ready);
 
          if Device_Ready then

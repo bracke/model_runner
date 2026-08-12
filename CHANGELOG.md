@@ -170,6 +170,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The imported range could reach past the memory it was taken from.** A
+  device is handed whole pages, so the range rounds down at the start and up
+  at the end -- and a matrix at the end of a heap arena rounds up past the
+  arena, which is memory nobody allocated. What the device is given is now
+  checked against the storage the matrix lives in, and a range that would
+  leave it is copied instead. On a memory-mapped model that costs one matrix
+  of one hundred and fifty-five: the last one.
+
+- **The host-memory path was tested on binary32 only, and by a test that
+  could not fail.** The offset the shader is told about is added to word
+  indices for binary32 and to byte indices for Q8_0 and Q4_0 -- two
+  arithmetics, one exercised -- and only through the unbatched path. Worse,
+  the test asserted nothing about whether an import had happened, and the
+  fixture it used was small enough that none did: every matrix of it is
+  within a page of both ends of its storage, so every one was copied. The
+  test passed by testing the copy path twice.
+
+  It now runs every format the shader decodes, batched and not, against the
+  processor's own answers, in storage large enough that the import can
+  happen, and asserts that it did. Checked by breaking the packed-format
+  offset on purpose and watching it fail.
+
+  The conformance sweep does not cross this and cannot: its fixtures are
+  eight wide and two deep, so every matrix is within a page of both ends of
+  the model. Running it there would report fifty-four more comparisons and
+  test the same path twice, which is worse than not running it, and the
+  sweep says so where the device pass is set up.
+
 - **`embed --backend device` refused every model.** The run command opens a
   device before it loads; the embed command never did, so a device was
   selected, prepared against, and then asked for a product it could not make.
