@@ -1,5 +1,7 @@
 private with Ada.Finalization;
 
+with Interfaces;
+
 with Model_Runner.Backend.CPU;
 with Model_Runner.Byte_Sources;
 with Model_Runner.Bytes;
@@ -648,6 +650,72 @@ package Model_Runner.Llama is
       States : Model_Runner.Tensors.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out Model_Runner.Errors.Error_Info);
+
+   --  What a session has committed, as bytes.
+   --
+   --  A prompt costs what it costs to read: on this machine a thousand
+   --  tokens is tens of seconds of prefill, where its cache is tens of
+   --  megabytes. Keeping that and handing it back next time is the
+   --  difference between waiting for the model to re-read a document and
+   --  not.
+   --
+   --  Only the committed positions are written, not the capacity: a session
+   --  with room for two thousand tokens and fifty in it produces fifty. The
+   --  bytes name the model they belong to, the shape of the cache and the
+   --  precision it is held in, and Adopt refuses anything that does not
+   --  match rather than reading one model's attention into another's.
+   --
+   --  Bytes rather than a file, because this package interprets what a
+   --  model says and units that do that may not reach the filesystem. Where
+   --  the bytes go is the caller's business.
+   --
+   --  @param Item Session to write out.
+   --  @param Source Model it was opened on.
+   --  @param Into Newly allocated bytes; the caller frees them. Null on
+   --    failure.
+   --  @param Status Success, Lifecycle_Invalid_State, or
+   --    Memory_Allocation_Failed.
+   procedure Snapshot
+     (Item   : Session;
+      Source : Model'Class;
+      Into   : out Model_Runner.Bytes.Byte_Array_Access;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Read a snapshot back into an open session.
+   --
+   --  The session is reset first, so a failure leaves nothing of either the
+   --  old contents or the new: a session half filled would be a
+   --  conversation that never happened.
+   --
+   --  A snapshot is untrusted input. Every field is range checked against
+   --  the model and the session it is being read into, and any mismatch is
+   --  refused. What cannot be checked is whether the contents mean
+   --  anything: bytes that match the model and the shape are read, and what
+   --  they say the model was thinking is what the model will think.
+   --  Adopting a file is trusting whoever wrote it with the conversation.
+   --
+   --  @param Item Open session to fill.
+   --  @param Source Model it was opened on.
+   --  @param From Bytes a Snapshot produced.
+   --  @param Status Success, Lifecycle_Cache_Unreadable or
+   --    Lifecycle_Cache_Mismatched.
+   procedure Adopt
+     (Item   : in out Session;
+      Source : Model'Class;
+      From   : Model_Runner.Bytes.Byte_Array;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  A number identifying the model a saved session belongs to.
+   --
+   --  It is the validated shape -- every width, count and identifier the
+   --  cache's layout depends on -- together with the size of the tensor
+   --  data and a sample of its bytes. That identifies a model file; it does
+   --  not verify one, and it is not meant to. Two files that agree on all
+   --  of it are the same model for the purposes of a cache.
+   --
+   --  @param Item Prepared model.
+   --  @return The fingerprint, or zero before preparation.
+   function Fingerprint (Item : Model) return Interfaces.Unsigned_64;
 
    --  Invalidate the cache and the history without releasing memory.
    --

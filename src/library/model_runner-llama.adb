@@ -1,8 +1,6 @@
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
-with Interfaces;
-
 with Model_Runner.Arithmetic;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Text;
@@ -2327,6 +2325,431 @@ package body Model_Runner.Llama is
          E.Add_Text (Status, "tensor", "lora_a", E.Param_Identifier);
       end if;
    end Merge_Adapter;
+
+   ---------------------------------------------------------------------------
+   --  Saved sessions
+   ---------------------------------------------------------------------------
+
+   --  What a saved session begins with, so that a file that is not one is
+   --  refused before anything in it is believed.
+   Session_Magic : constant := 16#4D52_5345_5353_0001#;
+
+   --  The layout below. A file written by another version is refused rather
+   --  than guessed at.
+   Session_Version : constant := 1;
+
+   ------------------
+   -- Fingerprint --
+   ------------------
+
+   function Fingerprint (Item : Model) return Interfaces.Unsigned_64 is
+      --  An ordinary multiply-and-mix. This identifies a model; it does not
+      --  authenticate one, and a stronger function would only make it look
+      --  as though it did.
+      Digest : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+
+      procedure Mix (Value : Interfaces.Unsigned_64) is
+      begin
+         Digest := (Digest xor Value) * 16#0000_0100_0000_01B3#;
+      end Mix;
+
+      procedure Mix_Count (Value : Natural) is
+      begin
+         Mix (Interfaces.Unsigned_64 (Value));
+      end Mix_Count;
+   begin
+      if not Item.Ready then
+         return 0;
+      end if;
+
+      Mix_Count (Architecture'Pos (Item.Settings.Kind));
+      Mix_Count (Item.Settings.Context_Length);
+      Mix_Count (Item.Settings.Embedding);
+      Mix_Count (Item.Settings.Feed_Forward);
+      Mix_Count (Item.Settings.Layers);
+      Mix_Count (Item.Settings.Heads);
+      Mix_Count (Item.Settings.KV_Heads);
+      Mix_Count (Item.Settings.Head_Size);
+      Mix_Count (Item.Settings.Value_Size);
+      Mix_Count (Item.Settings.Rotary);
+      Mix_Count (Item.Settings.Vocabulary);
+      Mix_Count (Item.Settings.Window);
+      Mix_Count (Item.Settings.Experts);
+      Mix_Count (Item.Settings.Experts_Used);
+      Mix_Count (Repack_Mode'Pos (Item.Packing));
+
+      --  And the weights themselves, by their size and a sample. Reading
+      --  all of them would be a second pass over a model at every load for
+      --  a number only a saved session uses.
+      if Item.Arena /= null then
+         Mix (Interfaces.Unsigned_64 (Item.Arena.all'Length));
+
+         declare
+            Step : constant B.Byte_Count :=
+              B.Byte_Count'Max (1, B.Byte_Count (Item.Arena.all'Length) / 4096);
+            At_Byte : B.Byte_Count := 0;
+         begin
+            while At_Byte < B.Byte_Count (Item.Arena.all'Length) loop
+               Mix (Interfaces.Unsigned_64
+                      (Item.Arena.all (Item.Arena.all'First + At_Byte)));
+               At_Byte := At_Byte + Step;
+            end loop;
+         end;
+      end if;
+
+      return Digest;
+   end Fingerprint;
+
+   --------------
+   -- Snapshot --
+   --------------
+
+   procedure Snapshot
+     (Item   : Session;
+      Source : Model'Class;
+      Into   : out B.Byte_Array_Access;
+      Status : out E.Error_Info)
+   is
+      Settings : constant Configuration := Source.Settings;
+
+      Held     : constant B.Byte_Count := B.Byte_Count (Item.Committed);
+      KV_Width : constant B.Byte_Count :=
+        B.Byte_Count (Settings.KV_Heads * Settings.Head_Size);
+      V_Width  : constant B.Byte_Count :=
+        B.Byte_Count (Settings.KV_Heads * Settings.Value_Size);
+      Layers   : constant B.Byte_Count := B.Byte_Count (Settings.Layers);
+
+      --  Ten numbers of eight bytes, then a token each, then the two caches
+      --  at four bytes an element whichever precision they are held in.
+      Length : constant B.Byte_Count :=
+        10 * 8 + Held * 8
+        + Layers * Held * KV_Width * 4
+        + Layers * Held * V_Width * 4;
+
+      At_Byte : B.Byte_Count := 0;
+
+      procedure Put (Value : Interfaces.Unsigned_64) is
+      begin
+         Into.all (Into.all'First + At_Byte .. Into.all'First + At_Byte + 7) :=
+           B.Put_U64 (Value);
+         At_Byte := At_Byte + 8;
+      end Put;
+
+      procedure Put_Count (Value : Natural) is
+      begin
+         Put (Interfaces.Unsigned_64 (Value));
+      end Put_Count;
+
+      procedure Put_Bits (Bits : Interfaces.Unsigned_32) is
+      begin
+         Into.all (Into.all'First + At_Byte .. Into.all'First + At_Byte + 3) :=
+           B.Put_U32 (Bits);
+         At_Byte := At_Byte + 4;
+      end Put_Bits;
+   begin
+      Into := null;
+      Status := E.Success;
+
+      if Item.Current not in Ready | Evaluating_Prompt | Generating
+        or else Item.Owner = null
+      then
+         Status := E.Make (E.Lifecycle_Invalid_State);
+         return;
+      end if;
+
+      B.Allocate (Length, Into);
+      if Into = null then
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+
+      Put (Interfaces.Unsigned_64'(Session_Magic));
+      Put_Count (Natural'(Session_Version));
+      Put (Fingerprint (Source));
+      Put_Count (Settings.Layers);
+      Put_Count (Settings.KV_Heads);
+      Put_Count (Settings.Head_Size);
+      Put_Count (Settings.Value_Size);
+      Put_Count (Item.Context);
+      Put_Count (Item.Committed);
+      Put_Count (Cache_Precision'Pos (Item.Held));
+
+      for Index in 0 .. Item.Committed - 1 loop
+         Put_Count (Natural (Item.History.all (Index)));
+      end loop;
+
+      --  The cache is laid out by capacity, so one layer's committed
+      --  positions are a run and the layers are not adjacent.
+      for Layer_Index in 0 .. Layers - 1 loop
+         declare
+            First : constant Element_Count :=
+              Element_Count (Layer_Index)
+              * Element_Count (Item.Context) * Element_Count (KV_Width);
+         begin
+            for Index in 0 .. Element_Count (Held * KV_Width) - 1 loop
+               if Item.Held = Exact then
+                  Put_Bits (N.Bits (Item.Keys.all (First + Index)));
+               else
+                  Put_Bits
+                    (Interfaces.Unsigned_32
+                       (Item.Half_Keys.all (First + Index)));
+               end if;
+            end loop;
+         end;
+      end loop;
+
+      for Layer_Index in 0 .. Layers - 1 loop
+         declare
+            First : constant Element_Count :=
+              Element_Count (Layer_Index)
+              * Element_Count (Item.Context) * Element_Count (V_Width);
+         begin
+            for Index in 0 .. Element_Count (Held * V_Width) - 1 loop
+               if Item.Held = Exact then
+                  Put_Bits (N.Bits (Item.Values.all (First + Index)));
+               else
+                  Put_Bits
+                    (Interfaces.Unsigned_32
+                       (Item.Half_Values.all (First + Index)));
+               end if;
+            end loop;
+         end;
+      end loop;
+   end Snapshot;
+
+   -----------
+   -- Adopt --
+   -----------
+
+   procedure Adopt
+     (Item   : in out Session;
+      Source : Model'Class;
+      From   : B.Byte_Array;
+      Status : out E.Error_Info)
+   is
+      use type Interfaces.Unsigned_32;
+
+      Settings : constant Configuration := Source.Settings;
+
+      KV_Width : constant Element_Count :=
+        Element_Count (Settings.KV_Heads * Settings.Head_Size);
+      V_Width  : constant Element_Count :=
+        Element_Count (Settings.KV_Heads * Settings.Value_Size);
+
+      At_Byte : B.Byte_Count := 0;
+      Trouble : Boolean := False;
+
+      procedure Refuse (Code : E.Error_Code; What : String) is
+      begin
+         if not Trouble then
+            Trouble := True;
+            Status := E.Make (Code);
+            E.Add_Text (Status, "construct", What, E.Param_Text);
+         end if;
+      end Refuse;
+
+      function Get return Interfaces.Unsigned_64 is
+         Ok : Boolean;
+         Value : Interfaces.Unsigned_64;
+      begin
+         if Trouble then
+            return 0;
+         end if;
+
+         Value := B.Get_U64 (From, At_Byte, Ok);
+         if not Ok then
+            Refuse (E.Lifecycle_Cache_Unreadable, "truncated");
+            return 0;
+         end if;
+
+         At_Byte := At_Byte + 8;
+         return Value;
+      end Get;
+
+      function Get_Bits return Interfaces.Unsigned_32 is
+         Ok : Boolean;
+         Value : Interfaces.Unsigned_32;
+      begin
+         if Trouble then
+            return 0;
+         end if;
+
+         Value := B.Get_U32 (From, At_Byte, Ok);
+         if not Ok then
+            Refuse (E.Lifecycle_Cache_Unreadable, "truncated");
+            return 0;
+         end if;
+
+         At_Byte := At_Byte + 4;
+         return Value;
+      end Get_Bits;
+
+      --  One run of the cache, into whichever storage the session holds.
+      procedure Get_Run
+        (Keys : Boolean; First : Element_Count; Count : Element_Count) is
+      begin
+         for Index in 0 .. Count - 1 loop
+            declare
+               Bits : constant Interfaces.Unsigned_32 := Get_Bits;
+            begin
+               exit when Trouble;
+
+               if Item.Held = Exact then
+                  declare
+                     Value : constant Real := N.From_Bits (Bits);
+                  begin
+                     --  A cache of not-a-number would poison every later
+                     --  position, and these bytes are untrusted.
+                     if not N.Is_Finite (Value) then
+                        Refuse (E.Lifecycle_Cache_Unreadable, "not a number");
+                        exit;
+                     end if;
+
+                     if Keys then
+                        Item.Keys.all (First + Index) := Value;
+                     else
+                        Item.Values.all (First + Index) := Value;
+                     end if;
+                  end;
+               else
+                  declare
+                     Value : constant N.Half :=
+                       N.Half (Bits and 16#FFFF#);
+                  begin
+                     if not N.Is_Finite (N.To_Real (Value)) then
+                        Refuse (E.Lifecycle_Cache_Unreadable, "not a number");
+                        exit;
+                     end if;
+
+                     if Keys then
+                        Item.Half_Keys.all (First + Index) := Value;
+                     else
+                        Item.Half_Values.all (First + Index) := Value;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      end Get_Run;
+
+      Held : Element_Count := 0;
+   begin
+      Status := E.Success;
+
+      if Item.Current not in Ready | Evaluating_Prompt | Generating
+        or else Item.Owner = null
+      then
+         Status := E.Make (E.Lifecycle_Invalid_State);
+         return;
+      end if;
+
+      --  Nothing of what was there survives, whether or not this succeeds.
+      Reset (Item);
+
+      declare
+         Magic   : constant Interfaces.Unsigned_64 := Get;
+         Version : constant Interfaces.Unsigned_64 := Get;
+         Mark    : constant Interfaces.Unsigned_64 := Get;
+         Layers  : constant Interfaces.Unsigned_64 := Get;
+         KV      : constant Interfaces.Unsigned_64 := Get;
+         Wide    : constant Interfaces.Unsigned_64 := Get;
+         Deep    : constant Interfaces.Unsigned_64 := Get;
+         Room    : constant Interfaces.Unsigned_64 := Get;
+         Filled  : constant Interfaces.Unsigned_64 := Get;
+         Packed  : constant Interfaces.Unsigned_64 := Get;
+      begin
+         if not Trouble and then Magic /= Session_Magic then
+            Refuse (E.Lifecycle_Cache_Unreadable, "not a saved session");
+         end if;
+
+         if not Trouble and then Version /= Session_Version then
+            Refuse (E.Lifecycle_Cache_Unreadable, "another version");
+         end if;
+
+         if not Trouble and then Mark /= Fingerprint (Source) then
+            Refuse (E.Lifecycle_Cache_Mismatched, "another model");
+         end if;
+
+         if not Trouble
+           and then (Layers /= Interfaces.Unsigned_64 (Settings.Layers)
+                     or else KV /= Interfaces.Unsigned_64 (Settings.KV_Heads)
+                     or else Wide
+                             /= Interfaces.Unsigned_64 (Settings.Head_Size)
+                     or else Deep
+                             /= Interfaces.Unsigned_64 (Settings.Value_Size))
+         then
+            Refuse (E.Lifecycle_Cache_Mismatched, "another shape");
+         end if;
+
+         if not Trouble
+           and then Room /= Interfaces.Unsigned_64 (Item.Context)
+         then
+            Refuse (E.Lifecycle_Cache_Mismatched, "another context");
+         end if;
+
+         if not Trouble
+           and then Packed
+                    /= Interfaces.Unsigned_64
+                         (Cache_Precision'Pos (Item.Held))
+         then
+            Refuse (E.Lifecycle_Cache_Mismatched, "another precision");
+         end if;
+
+         if not Trouble
+           and then Filled > Interfaces.Unsigned_64 (Item.Context)
+         then
+            Refuse (E.Lifecycle_Cache_Unreadable, "more than the context");
+         end if;
+
+         if not Trouble then
+            Held := Element_Count (Filled);
+         end if;
+      end;
+
+      if not Trouble then
+         for Index in 0 .. Natural (Held) - 1 loop
+            declare
+               Value : constant Interfaces.Unsigned_64 := Get;
+            begin
+               exit when Trouble;
+
+               if Value >= Interfaces.Unsigned_64 (Settings.Vocabulary) then
+                  Refuse (E.Lifecycle_Cache_Unreadable, "token out of range");
+                  exit;
+               end if;
+
+               Item.History.all (Index) :=
+                 Model_Runner.Tokenizer.Token_Id (Value);
+            end;
+         end loop;
+      end if;
+
+      if not Trouble then
+         for Layer_Index in 0 .. Element_Count (Settings.Layers) - 1 loop
+            Get_Run
+              (True, Layer_Index * Element_Count (Item.Context) * KV_Width,
+               Held * KV_Width);
+            exit when Trouble;
+         end loop;
+      end if;
+
+      if not Trouble then
+         for Layer_Index in 0 .. Element_Count (Settings.Layers) - 1 loop
+            Get_Run
+              (False, Layer_Index * Element_Count (Item.Context) * V_Width,
+               Held * V_Width);
+            exit when Trouble;
+         end loop;
+      end if;
+
+      if Trouble then
+         --  Nothing half read is left where a conversation would be.
+         Reset (Item);
+         return;
+      end if;
+
+      Item.Committed := Natural (Held);
+   end Adopt;
 
    ------------------
    -- Plan_Session --

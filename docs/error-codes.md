@@ -203,6 +203,8 @@ ordinal is never reused, not because they might appear.
 | `MR-LIFE-0006` | `error.lifecycle.already_closed` | recovery_terminal | 8 | reserved |
 | `MR-LIFE-0007` | `error.lifecycle.mapping_unavailable` | recovery_terminal | 8 | reserved |
 | `MR-LIFE-0008` | `error.lifecycle.mapping_required` | recovery_resource_limited | 5 | raised |
+| `MR-LIFE-0009` | `error.lifecycle.cache_unreadable` | recovery_terminal | 8 | raised |
+| `MR-LIFE-0010` | `error.lifecycle.cache_mismatched` | recovery_terminal | 8 | raised |
 
 ## GEN
 

@@ -28,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 45) of Registry_Row :=
+   Registry : constant array (1 .. 47) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -44,6 +44,10 @@ package body Model_Runner.CLI.Options is
        Text ("kv_cache")),
       (Text ("--pooling"), [Command_Embed => True, others => False],
        Text ("pooling")),
+      (Text ("--load-session"), [Command_Run => True, others => False],
+       Text ("load_session")),
+      (Text ("--save-session"), [Command_Run => True, others => False],
+       Text ("save_session")),
       (Text ("--lora"), [Command_Run => True, others => False],
        Text ("lora")),
       (Text ("--lora-scale"), [Command_Run => True, others => False],
@@ -672,6 +676,8 @@ package body Model_Runner.CLI.Options is
          Flag_Repack,
          Flag_Cache,
          Flag_Pooling,
+         Flag_Load_Session,
+         Flag_Save_Session,
          Flag_Adapter,
          Flag_Adapter_Scale,
          Flag_Grammar,
@@ -917,6 +923,20 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Prompt_Kind := Prompt_Inline;
+
+                  elsif Name = "--load-session" then
+                     Bounded_Value
+                       (Flag_Load_Session, Result.Load_Session, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--save-session" then
+                     Bounded_Value
+                       (Flag_Save_Session, Result.Save_Session, Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--lora" then
                      Bounded_Value (Flag_Adapter, Result.Adapter_Path, Good);

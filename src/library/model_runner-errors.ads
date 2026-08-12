@@ -224,6 +224,10 @@ package Model_Runner.Errors is
       Lifecycle_Mapping_Unavailable,
       Lifecycle_Mapping_Required,
 
+      --  A saved session.
+      Lifecycle_Cache_Unreadable,
+      Lifecycle_Cache_Mismatched,
+
       --  Generation coordination.
       Generation_Prompt_Too_Long,
       Generation_Context_Exhausted,

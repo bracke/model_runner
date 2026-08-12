@@ -2,6 +2,7 @@ with AUnit.Assertions;
 
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Files;
+
 with Model_Runner.Byte_Sources.Memory;
 
 with Model_Runner.Cancellation;
@@ -41,6 +42,7 @@ package body Tests.Inference_Cases is
    use type Model_Runner.Tokenizer.Model_Kind;
 
    package B renames Model_Runner.Bytes;
+   use type B.Byte_Count;
    package E renames Model_Runner.Errors;
    package L renames Model_Runner.Llama;
    package N renames Model_Runner.Numerics;
@@ -1872,6 +1874,141 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Unreached_Engine_Refusals_Are_Reached;
 
+   --  A snapshot is the session it was taken from.
+   --
+   --  The point of taking one is not to re-read a prompt, so what has to
+   --  be true is that a session filled from it answers exactly as the one
+   --  it came from would have. Evaluating the same next token through both
+   --  is what says so: the logits depend on every key and value of every
+   --  layer, so a cache read back one position out, one layer out, or with
+   --  the keys and values crossed would not produce them.
+   --
+   --  And bytes that do not belong are refused rather than read. The cases
+   --  below are the ones a person actually meets: a context of another
+   --  size, and something that is not a snapshot at all.
+   procedure Snapshot_Is_The_Session
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7];
+
+      Image  : B.Byte_Array_Access;
+      Kept   : B.Byte_Array_Access;
+      Direct, Restored : Logit_Vector;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Direct, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation failed");
+         end loop;
+
+         L.Snapshot (Live, Under.Ready, Kept, Status);
+         Assert (E.Is_Ok (Status),
+                 "the session did not snapshot: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (B."/=" (Kept, null), "the snapshot produced no bytes");
+
+         --  One more token, from the session that read the prompt.
+         L.Evaluate (Live, Under.Ready, 4, Direct, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed after the snapshot");
+
+         L.Close (Live);
+      end;
+
+      --  A fresh session, filled from those bytes, asked for the same
+      --  token.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the second session did not open");
+
+         L.Adopt (Live, Under.Ready, Kept.all, Status);
+         Assert (E.Is_Ok (Status),
+                 "the snapshot was not adopted: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Assert (L.Position (Live) = Prompt'Length,
+                 "the filled session holds"
+                 & Natural'Image (L.Position (Live))
+                 & " positions where it took"
+                 & Natural'Image (Prompt'Length));
+
+         L.Evaluate (Live, Under.Ready, 4, Restored, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed after adopting");
+
+         L.Close (Live);
+      end;
+
+      declare
+         Worst : Model_Runner.Numerics.Real := 0.0;
+      begin
+         for Index in Direct'Range loop
+            Worst := Model_Runner.Numerics.Real'Max
+              (Worst, abs (Direct (Index) - Restored (Index)));
+         end loop;
+
+         Assert (Worst = 0.0,
+                 "a session filled from a snapshot answered differently "
+                 & "from the one it came from, by"
+                 & Model_Runner.Numerics.Real'Image (Worst));
+      end;
+
+      --  A context of another size is another cache, whatever the model.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Context => 8, Status => Status);
+         Assert (E.Is_Ok (Status), "the narrow session did not open");
+
+         L.Adopt (Live, Under.Ready, Kept.all, Status);
+         Assert (Status.Code = E.Lifecycle_Cache_Mismatched,
+                 "a snapshot taken at another context was adopted: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = 0,
+                 "a refused adoption left something behind");
+
+         --  And bytes that are not a snapshot at all. The model's own,
+         --  which are to hand and are certainly not one.
+         L.Adopt (Live, Under.Ready, Held, Status);
+         Assert (Status.Code = E.Lifecycle_Cache_Unreadable,
+                 "a model file was adopted as a snapshot: "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  And a snapshot cut short.
+         L.Adopt
+           (Live, Under.Ready,
+            Kept.all (Kept.all'First .. Kept.all'First + 40), Status);
+         Assert (E.Is_Error (Status),
+                 "a truncated snapshot was adopted");
+
+         L.Close (Live);
+      end;
+
+      B.Free (Kept);
+      B.Free (Image);
+   end Snapshot_Is_The_Session;
+
    --  Merging an adapter is the arithmetic it claims.
    --
    --  An adapter says what a fine-tune changed, as a pair of small
@@ -2901,6 +3038,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, Snapshot_Is_The_Session'Access,
+         "a snapshot is the session it was taken from");
       Register_Routine
         (T, Adapter_Merges_What_It_Describes'Access,
          "merging an adapter is the arithmetic it claims");

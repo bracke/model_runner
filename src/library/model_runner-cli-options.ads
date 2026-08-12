@@ -276,6 +276,13 @@ package Model_Runner.CLI.Options is
       --  as binary32, so naming one selects that repacking when the caller
       --  named none, and naming brain floats beside it is a usage error
       --  rather than a quiet rounding of every merged weight.
+      --  A saved session to fill the cache from before the prompt is read,
+      --  and one to write it to when the run is done. Either may be given
+      --  without the other: reading a document once and saving it, then
+      --  asking about it many times, is the shape this is for.
+      Load_Session : Model_Runner.Text.Bounded;
+      Save_Session : Model_Runner.Text.Bounded;
+
       Adapter_Path  : Model_Runner.Text.Bounded;
       Adapter_Scale : Model_Runner.Numerics.Real := 1.0;
 

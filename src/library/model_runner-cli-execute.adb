@@ -1,5 +1,6 @@
 with Ada.Directories;
 with Ada.IO_Exceptions;
+with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 
@@ -63,6 +64,7 @@ package body Model_Runner.CLI.Execute is
    package Opt renames Model_Runner.CLI.Options;
 
    use type Opt.Command_Kind;
+   use type Model_Runner.Bytes.Byte_Array_Access;
    use type L.Repack_Mode;
    use type Opt.Pooling_Kind;
    use type N.Element_Count;
@@ -77,6 +79,44 @@ package body Model_Runner.CLI.Execute is
      new Ada.Unchecked_Deallocation (String, Opt.Text_Access);
 
    --  Read a whole file as UTF-8, subject to a size limit.
+   --  Write bytes to a path, replacing whatever was there.
+   --
+   --  Here rather than in the engine: the units that interpret what a model
+   --  says may not reach the filesystem, and a saved context is written by
+   --  the program rather than by the model.
+   procedure Write_File
+     (Path   : String;
+      Data   : Model_Runner.Bytes.Byte_Array;
+      Status : out E.Error_Info)
+   is
+      use Ada.Streams;
+
+      Handle : Ada.Streams.Stream_IO.File_Type;
+      Block  : Stream_Element_Array (1 .. Stream_Element_Offset (Data'Length));
+      At_Byte : Stream_Element_Offset := 0;
+   begin
+      Status := E.Success;
+
+      for Value of Data loop
+         At_Byte := At_Byte + 1;
+         Block (At_Byte) := Stream_Element (Value);
+      end loop;
+
+      begin
+         Ada.Streams.Stream_IO.Create
+           (Handle, Ada.Streams.Stream_IO.Out_File, Path);
+         Ada.Streams.Stream_IO.Write (Handle, Block);
+         Ada.Streams.Stream_IO.Close (Handle);
+      exception
+         when others =>
+            if Ada.Streams.Stream_IO.Is_Open (Handle) then
+               Ada.Streams.Stream_IO.Close (Handle);
+            end if;
+            Status := E.Make (E.IO_Open_Failed);
+            E.Add_Text (Status, "path", Path, E.Param_Path);
+      end;
+   end Write_File;
+
    procedure Read_File
      (Path   : String;
       Limit  : Natural;
@@ -1236,6 +1276,55 @@ package body Model_Runner.CLI.Execute is
             end;
          end if;
 
+         --  A saved session, before the prompt is looked at. What it fills
+         --  is the cache and the history, which is exactly what the prompt
+         --  would otherwise have to be read to produce; the generation then
+         --  keeps whatever of it the prompt agrees with and re-reads only
+         --  the rest.
+         --
+         --  A restore that fails ends the run. It was asked for, and going
+         --  on without it would silently do the slow thing after being told
+         --  to do the fast one.
+         if not T.Is_Empty (Item.Load_Session) then
+            declare
+               Kept : Files.File_Source;
+            begin
+               Files.Open
+                 (Kept, T.To_String (Item.Load_Session), Status => Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               declare
+                  Length : constant Model_Runner.Bytes.Byte_Count :=
+                    Files.Size (Kept);
+                  Room   : Model_Runner.Bytes.Byte_Array_Access;
+               begin
+                  Model_Runner.Bytes.Allocate (Length, Room);
+                  if Room = null then
+                     Files.Close (Kept);
+                     Fail (E.Make (E.Memory_Allocation_Failed));
+                     return;
+                  end if;
+
+                  Files.Read (Kept, 0, Room.all, Condition);
+                  Files.Close (Kept);
+
+                  if E.Is_Ok (Condition) then
+                     L.Adopt (Session, Prepared, Room.all, Condition);
+                  end if;
+
+                  Model_Runner.Bytes.Free (Room);
+
+                  if E.Is_Error (Condition) then
+                     Fail (Condition);
+                     return;
+                  end if;
+               end;
+            end;
+         end if;
+
          --  Interactive mode owns its own loop; it needs the same prepared model
          --  and session, so it is entered here rather than earlier.
          if Item.Prompt_Kind = Opt.Prompt_Interactive then
@@ -1464,6 +1553,13 @@ package body Model_Runner.CLI.Execute is
                --  rendered text the token belongs.
                Request.Add_Beginning := Item.Raw;
 
+               --  Keep what the restored cache and the prompt agree on. The
+               --  session already holds a conversation; this is what makes
+               --  restoring it worth anything, and where they diverge the
+               --  engine resets and reads the prompt as it would have.
+               Request.Reuse_Committed_Prefix :=
+                 not T.Is_Empty (Item.Load_Session);
+
                Gen.Generate
                  (Source   => Prepared,
                   Session  => Session,
@@ -1501,6 +1597,31 @@ package body Model_Runner.CLI.Execute is
          if Outcome.Reason = Gen.Cancelled then
             Fail (E.Make (E.Generation_Cancelled));
             return;
+         end if;
+
+         --  And the context out, when it was asked for. After the run
+         --  rather than before it, because what is worth saving is the
+         --  prompt and the reply together: the next run continues from
+         --  where this one stopped.
+         if not T.Is_Empty (Item.Save_Session) then
+            declare
+               Room : Model_Runner.Bytes.Byte_Array_Access;
+            begin
+               L.Snapshot (Session, Prepared, Room, Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               Write_File
+                 (T.To_String (Item.Save_Session), Room.all, Condition);
+               Model_Runner.Bytes.Free (Room);
+
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+            end;
          end if;
 
          --  Statistics go to standard error, so a redirected standard output

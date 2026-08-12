@@ -331,6 +331,86 @@ package body Tests.CLI_Cases is
       return Result;
    end Parsed;
 
+   --  A saved context is the context, and a run that reuses one answers
+   --  as it would have.
+   --
+   --  Saving one is a speed decision and nothing else, so the way it can
+   --  fail is by changing the answer: a cache read back one position out,
+   --  or read back and then re-read on top of itself, would produce text
+   --  that is plausible and different. Both runs below are greedy, so the
+   --  two texts have to be the same text.
+   procedure Saved_Context_Changes_Nothing
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Model : constant String := "obj/session-model.gguf";
+      Saved : constant String := "obj/session-cache.bin";
+
+      --  One run, optionally writing or reading the context.
+      function Said (Option, Value : String) return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "abab");
+         Add (Source, "--max-tokens");
+         Add (Source, "4");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         if Option /= "" then
+            Add (Source, Option);
+            Add (Source, Value);
+         end if;
+
+         Ran (Source, Status);
+         Assert (Status = 0,
+                 "a run with " & Option & " failed with status"
+                 & Natural'Image (Status));
+         return Last_Output;
+      end Said;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      declare
+         Plain  : constant String := Said ("", "");
+         Stored : constant String := Said ("--save-session", Saved);
+         Reused : constant String := Said ("--load-session", Saved);
+      begin
+         Assert (Plain'Length > 0, "the plain run produced nothing");
+         Assert (Stored = Plain,
+                 "saving the context changed the answer: <" & Stored
+                 & "> against <" & Plain & ">");
+         Assert (Reused = Plain,
+                 "reusing a saved context changed the answer: <" & Reused
+                 & "> against <" & Plain & ">");
+      end;
+
+      --  A context that is not there is not a context.
+      declare
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+         Add (Source, "--load-session");
+         Add (Source, "obj/no-such-session.bin");
+
+         Ran (Source, Status);
+         Assert (Status /= 0,
+                 "a run told to read a saved context that is not there "
+                 & "reported success");
+      end;
+   end Saved_Context_Changes_Nothing;
+
    --  A grammar constrains what a run may produce.
    --
    --  The engine tests say the matcher accepts the right texts. This says
@@ -8583,6 +8663,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Conversation_Survives_Interactive_Edits'Access,
          "the conversation keeps its shape under the edits interactive makes");
+      Register_Routine
+        (T, Saved_Context_Changes_Nothing'Access,
+         "a saved context is the context, and reusing one changes nothing");
       Register_Routine
         (T, Grammar_Constrains_The_Run'Access,
          "a grammar constrains what a run may produce");

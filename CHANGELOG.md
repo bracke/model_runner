@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Saved contexts: `--save-session` and `--load-session`.** Reading a prompt
+  costs what it costs -- prefill runs at about 27 tokens a second here, so a
+  thousand-token document is more than half a minute before the model says
+  anything, and its cache is tens of megabytes. Writing that out and handing
+  it back is the difference between re-reading a document every time and not.
+
+  Only the committed positions are written, not the capacity. What is loaded
+  fills the cache before the prompt is looked at, so the generation's
+  existing prefix reuse keeps whatever the new prompt agrees with and re-reads
+  only the rest.
+
+  The bytes name the model they belong to, the shape of the cache, the
+  context capacity and the precision it is held in, and any mismatch is
+  refused rather than read. The model is identified by its validated shape
+  together with the size of its tensor data and a sample of its bytes: that
+  identifies a model file and is not meant to verify one, which the
+  documentation says rather than implies.
+
+  A saved context is untrusted input and every field is range checked --
+  including that no key or value is a not-a-number, which would poison every
+  later position. What cannot be checked is whether the contents mean
+  anything, and that is said plainly: loading a file is trusting whoever
+  wrote it with the conversation.
+
+  The engine produces and consumes bytes; the file is the caller's. That is
+  not a preference but a rule the checklist enforces -- the units that
+  interpret what a model says may not reach the filesystem, so that a
+  hostile model cannot cause a file to be read. The first version of this
+  opened the file inside the engine and the checklist caught it.
+
 - **Low-rank adapters: `--lora` and `--lora-scale`.** An adapter says what a
   fine-tune changed, as a pair of small matrices per weight whose product is
   the difference. Merging adds that difference into the weights before
@@ -1973,7 +2003,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 156 diagnostic
+- Localization through `messages`, with a catalog entry for all 158 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.
