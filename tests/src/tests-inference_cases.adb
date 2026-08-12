@@ -517,7 +517,7 @@ package body Tests.Inference_Cases is
            (Live, Under.Ready,
             [Model_Runner.Tokenizer.Token_Id (2),
              Model_Runner.Tokenizer.Token_Id (3)],
-            Logits, Flag'Unchecked_Access, Status);
+            Logits, Cancel => Flag'Unchecked_Access, Status => Status);
          Assert (Status.Code = E.Generation_Cancelled,
                  "a standing request did not stop the batched pass: "
                  & E.Error_Code'Image (Status.Code));

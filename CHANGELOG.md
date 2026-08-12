@@ -775,6 +775,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`embed` evaluates in batches.** It read its text a token at a time,
+  because that was the only path that left a hidden state behind for each
+  position. The batched path now writes every position's state when a caller
+  asks for one, so embedding a text costs what reading a prompt costs: the
+  kernel figures put a matrix product over thirty-two vectors at 1.87 times
+  the elements a second that one at a time manages, and a text to be embedded
+  is exactly that shape.
+
+  `--batch-size` is accepted by `embed` now, since it is the option that
+  controls what it does. It does not change the answer, and the test says so:
+  a batch of one, a batch of two and the default all have to agree. That is
+  the property that could have gone wrong quietly -- a batch that pooled the
+  wrong positions, or pooled the last batch instead of the last token, would
+  still produce a plausible vector of the right length.
+
 - **The grammar filter is 725 times faster.** It runs over the whole
   vocabulary at every step, and the fixtures this suite uses have sixteen
   tokens, so nothing in the tests would have shown what it cost on a real

@@ -460,7 +460,7 @@ package body Tests.CLI_Cases is
          Add (Source, "embed");
          Add (Source, Model);
          Add (Source, "--prompt");
-         Add (Source, "abc");
+         Add (Source, "abcabcabc");
          if Extra /= "" then
             Add (Source, Extra);
             if Value /= "" then
@@ -553,6 +553,35 @@ package body Tests.CLI_Cases is
                   & Natural'Image (Index));
             end loop;
          end;
+      end;
+
+      --  And how many tokens went through the weights at once is not
+      --  supposed to be visible in the answer. It is the one thing that
+      --  could go wrong quietly when the text stopped being evaluated a
+      --  token at a time: a batch that pooled the wrong positions, or
+      --  pooled the last batch instead of the last token, would still
+      --  produce a plausible vector of the right length.
+      declare
+         Split : constant Reals := Vector ("--batch-size", "2");
+      begin
+         Assert (Split.Count = Mean.Count,
+                 "the batch size changed how many components came out");
+         for Index in 1 .. Mean.Count loop
+            Assert (abs (Split.Values (Index) - Mean.Values (Index))
+                    < 1.0E-5,
+                    "the batch size changed the embedding at component"
+                    & Natural'Image (Index));
+         end loop;
+      end;
+
+      declare
+         One : constant Reals := Vector ("--batch-size", "1");
+      begin
+         for Index in 1 .. Mean.Count loop
+            Assert (abs (One.Values (Index) - Mean.Values (Index)) < 1.0E-5,
+                    "a batch of one and a batch of many disagree at "
+                    & "component" & Natural'Image (Index));
+         end loop;
       end;
    end Embedding_Reports_The_State;
 

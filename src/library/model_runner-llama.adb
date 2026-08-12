@@ -3026,6 +3026,7 @@ package body Model_Runner.Llama is
       Source : Model'Class;
       Tokens : Model_Runner.Tokenizer.Token_Array;
       Logits : out Real_Array;
+      States : T.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out E.Error_Info)
    is
@@ -3409,6 +3410,26 @@ package body Model_Runner.Llama is
 
       --  Only the last token's distribution is produced: the earlier tokens
       --  of a prompt are consumed to build context, not to be sampled from.
+      --  Every position's state, for a caller that pools over them. The
+      --  same normalization the last position gets, applied to each: what
+      --  makes an embedding of a text is what the model made of every
+      --  position of it, and only this path has them all in hand.
+      if States /= null
+        and then States.all'Length >= Count * Width
+      then
+         for Which in 0 .. Count - 1 loop
+            declare
+               Origin : constant Element_Count := Slot (Which, Width);
+            begin
+               K.RMS_Norm
+                 (Acts.all (Origin .. Origin + Width - 1),
+                  Source.Output_Norm.all, Settings.Epsilon,
+                  States.all (States.all'First + Origin
+                              .. States.all'First + Origin + Width - 1));
+            end;
+         end loop;
+      end if;
+
       declare
          Origin : constant Element_Count := Slot (Count - 1, Width);
       begin

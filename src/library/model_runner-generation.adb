@@ -460,7 +460,7 @@ package body Model_Runner.Generation is
             begin
                L.Evaluate_Batch
                  (Session, Source, Tokens.all (Index .. Last), Logits.all,
-                  Cancel, Status);
+                  Cancel => Cancel, Status => Status);
 
                if E.Is_Error (Status) then
                   if Status.Code = E.Generation_Cancelled then

@@ -169,8 +169,12 @@ that is a dot product only when both have length one.
 The prompt is read as written and no chat template is applied. A template
 turns a text into a turn of a conversation, and an embedding is of the text.
 
-The text is evaluated a token at a time rather than as a batch, because every
-position's state is wanted and only that path leaves one behind for each.
+The text is evaluated in batches, as a prompt is: a matrix product over
+thirty-two vectors moves 1.87 times the elements a second that one at a time
+does on this machine, and a text to be embedded is exactly that shape.
+Pooling needs every position's state, so the batched path is asked for them
+-- it is the only one that has them all in hand at once. `--batch-size` sets
+how many go through the weights together and does not change the answer.
 
 ### Streams
 

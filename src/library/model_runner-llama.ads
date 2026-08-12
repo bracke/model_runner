@@ -636,11 +636,16 @@ package Model_Runner.Llama is
    --  @param Status Success, Generation_Cancelled, Generation_Context_Exhausted,
    --    Tokenizer_Invalid_Token_Id, Tensor_Shape_Mismatch, Lifecycle_Invalid_State
    --    or Memory_Allocation_Failed.
+   --  @param States Receives the hidden state of every position of the
+   --    batch, Embedding elements each, or null to keep only the last
+   --    position's. Only a caller pooling over the positions of a text
+   --    wants them, and only that caller should pay for writing them out.
    procedure Evaluate_Batch
      (Item   : in out Session;
       Source : Model'Class;
       Tokens : Model_Runner.Tokenizer.Token_Array;
       Logits : out Real_Array;
+      States : Model_Runner.Tensors.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out Model_Runner.Errors.Error_Info);
 
