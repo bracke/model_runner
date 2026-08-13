@@ -8403,6 +8403,121 @@ package body Tests.CLI_Cases is
       end;
    end The_Speed_Tool_Runs_What_It_Publishes;
 
+   ------------------------------------------
+   -- Several_Prompts_Are_Several_Sequences --
+   ------------------------------------------
+
+   --  Several prompts from one loaded model each get their own answer, and
+   --  each is the answer that prompt gets alone.
+   --
+   --  The saving is the model: it is read once and answers many. What must
+   --  not happen is the second prompt continuing the first -- which is what
+   --  a session left as it was would do, and what nothing about the output
+   --  would show, because two answers concatenated look like two answers
+   --  either way.
+   procedure Several_Prompts_Are_Several_Sequences
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model : constant String := "obj/many-prompts-model.gguf";
+      Text  : constant String := "obj/many-prompts-text.txt";
+      Notes : constant String := "obj/many-prompts-notes.txt";
+
+      --  What the command wrote to standard output, less the terminator
+      --  Text_IO adds when it closes the file.
+      function Generated return String is
+         Whole : constant String := Text_Of (Text);
+      begin
+         if Whole'Length > 0
+           and then Whole (Whole'Last) = Character'Val (10)
+         then
+            return Whole (Whole'First .. Whole'Last - 1);
+         end if;
+         return Whole;
+      end Generated;
+
+      --  One run of the command, with however many prompts it is given.
+      procedure Answer (First, Second : String; Into : out Natural) is
+         Source : Fixed_Arguments;
+         Out_Handle, Err_Handle : File_Type;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, First);
+         if Second /= "" then
+            Add (Source, "--prompt");
+            Add (Source, Second);
+         end if;
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Add (Source, "--threads");
+         Add (Source, "1");
+         Add (Source, "--max-tokens");
+         Add (Source, "3");
+
+         Create (Out_Handle, Out_File, Text);
+         Create (Err_Handle, Out_File, Notes);
+         Set_Output (Out_Handle);
+         Set_Error (Err_Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Output (Standard_Output);
+               Set_Error (Standard_Error);
+               Close (Out_Handle);
+               Close (Err_Handle);
+               raise;
+         end;
+         Set_Output (Standard_Output);
+         Set_Error (Standard_Error);
+         Close (Out_Handle);
+         Close (Err_Handle);
+
+         Into := Status;
+      end Answer;
+
+      Status : Natural;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      Answer ("ab", "", Status);
+      Assert (Status = 0, "the first run failed:" & Natural'Image (Status));
+
+      declare
+         Alone_First : constant String := Generated;
+      begin
+         Answer ("aa", "", Status);
+         Assert (Status = 0,
+                 "the second run failed:" & Natural'Image (Status));
+
+         declare
+            Alone_Second : constant String := Generated;
+         begin
+            --  The two answers differ, or nothing below can tell a fresh
+            --  session from a continued one.
+            Assert (Alone_First /= Alone_Second,
+                    "the two prompts answer the same, so this fixture "
+                    & "cannot tell a reset session from a kept one");
+
+            Answer ("ab", "aa", Status);
+            Assert (Status = 0,
+                    "the run with two prompts failed:"
+                    & Natural'Image (Status));
+
+            Assert (Generated = Alone_First & Alone_Second,
+                    "two prompts in one run did not answer as they answer "
+                    & "alone: got <" & Generated & "> against <"
+                    & Alone_First & Alone_Second & ">");
+         end;
+      end;
+   end Several_Prompts_Are_Several_Sequences;
+
    -------------------------------------------------
    -- The_External_Runner_Runs_What_The_Command_Does --
    -------------------------------------------------
@@ -9398,6 +9513,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Streams_Are_Separate'Access,
          "each kind of output leaves by the stream the README says it does");
+      Register_Routine
+        (T, Several_Prompts_Are_Several_Sequences'Access,
+         "several prompts from one loaded model answer each on its own, "
+         & "not as a conversation");
       Register_Routine
         (T, The_External_Runner_Runs_What_The_Command_Does'Access,
          "the external-model runner generates what the command generates "

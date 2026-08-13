@@ -191,6 +191,12 @@ package Model_Runner.CLI.Options is
 
    type Text_Access is access String;
 
+   --  How many prompts one command may carry. A caller wanting more than
+   --  this is asking for a batch runner, which is a different program.
+   Max_Prompts : constant := 16;
+
+   type Prompt_List is array (1 .. Max_Prompts) of Text_Access;
+
    --  A fully validated command.
    --
    --  Owns the heap text it points at; release it with Release.
@@ -204,7 +210,16 @@ package Model_Runner.CLI.Options is
       Help_Topic : Model_Runner.Text.Bounded;
 
       Prompt_Kind : Prompt_Source := Prompt_Unset;
-      Prompt_Text : Text_Access := null;
+
+      --  The prompts, in the order they were given. Several are several
+      --  sequences from one loaded model: the model is read once and each
+      --  prompt gets its own context, which is the whole saving.
+      --
+      --  Prompt_Text is the first of them, kept because most of the program
+      --  wants one prompt and should not have to say which.
+      Prompts      : Prompt_List := [others => null];
+      Prompt_Count : Natural := 0;
+      Prompt_Text  : Text_Access := null;
       Prompt_Path : Model_Runner.Text.Bounded;
 
       System_Text : Text_Access := null;

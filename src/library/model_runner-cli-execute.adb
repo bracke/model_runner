@@ -1462,10 +1462,30 @@ package body Model_Runner.CLI.Execute is
             return;
          end if;
 
+         --  One sequence per prompt, from the one loaded model. Between
+         --  them the session goes back to nothing: each prompt is its own
+         --  conversation, and a second prompt continuing the first would be
+         --  a different program.
+         for Which in 1 .. Natural'Max (1, Item.Prompt_Count) loop
+
+         if Which > 1 then
+            L.Reset (Session);
+
+            --  Which prompt this is, on standard error, so that a reader of
+            --  the generated text can tell where one answer ends. Nothing
+            --  goes to standard output but what the model produced.
+            Pres.Put_Note
+              (Screen, "cli.note.next_prompt",
+               [Loc.Named ("index", T.Image (Long_Long_Integer (Which))),
+                Loc.Named
+                  ("total",
+                   T.Image (Long_Long_Integer (Item.Prompt_Count)))]);
+         end if;
+
          --  Resolve the prompt.
          case Item.Prompt_Kind is
             when Opt.Prompt_Inline =>
-               Prompt := new String'(Item.Prompt_Text.all);
+               Prompt := new String'(Item.Prompts (Which).all);
 
             when Opt.Prompt_File =>
                Read_File
@@ -1792,6 +1812,9 @@ package body Model_Runner.CLI.Execute is
                Pres.Put_Statistics (Screen, Outcome);
             end if;
          end if;
+
+         Free_Text (Prompt);
+         end loop;
 
          Status := E.Exit_Success;
          Cleanup;

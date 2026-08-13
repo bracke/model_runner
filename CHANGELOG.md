@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--prompt` is repeatable: several sequences from one loaded model.** The
+  model is read once and answers each prompt in turn, each with its own
+  context and its own statistics; standard error says which prompt is which,
+  so standard output stays nothing but generated text.
+
+  Between prompts the session goes back to nothing. A second prompt
+  continuing the first would be a different program, and nothing about the
+  output would show it -- two answers concatenated look the same either way
+  -- so the test compares a run of two prompts against the two runs of one,
+  and first checks that those two answer differently, without which it could
+  not tell a reset session from a kept one.
+
+  Refused together with `--save-session` or `--load-session`, which name one
+  conversation between them.
+
 - **`tests external-model --draft-model PATH`,** which runs a caller's own
   model again with a smaller one proposing for it and checks that the text is
   identical. That is the claim drafting makes, and a caller's own model is

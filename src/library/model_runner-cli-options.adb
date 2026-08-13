@@ -329,10 +329,23 @@ package body Model_Runner.CLI.Options is
 
    procedure Release (Item : in out Command) is
    begin
-      if Item.Prompt_Text /= null then
-         --  Prompt text may be sensitive; clear it before releasing.
+      --  Prompt text may be sensitive; clear it before releasing. The first
+      --  prompt is the same object Prompt_Text names, so that one is
+      --  released here and the name is only cleared.
+      for Index in 1 .. Item.Prompt_Count loop
+         if Item.Prompts (Index) /= null then
+            Item.Prompts (Index).all := [others => ' '];
+            Free_Text (Item.Prompts (Index));
+         end if;
+      end loop;
+      Item.Prompt_Count := 0;
+
+      if Item.Prompt_Text /= null and then Item.Prompt_Kind /= Prompt_Inline
+      then
          Item.Prompt_Text.all := [others => ' '];
          Free_Text (Item.Prompt_Text);
+      elsif Item.Prompt_Text /= null then
+         Item.Prompt_Text := null;
       end if;
       if Item.System_Text /= null then
          Item.System_Text.all := [others => ' '];
@@ -687,7 +700,7 @@ package body Model_Runner.CLI.Options is
       --  Track which options were seen so that a repeat is a usage error
       --  rather than a silent last-wins.
       type Option_Flag is
-        (Flag_Prompt, Flag_Prompt_File, Flag_System, Flag_System_File,
+        (Flag_Prompt_File, Flag_System, Flag_System_File,
          Flag_Max_Tokens, Flag_Context, Flag_Batch, Flag_Temperature,
          Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Repeat_Penalty,
          Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
@@ -936,19 +949,40 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Version;
 
                   elsif Name = "--prompt" then
-                     Mark (Flag_Prompt, Name, Good);
-                     if not Good then
-                        return;
-                     end if;
-                     Take_Value (Name, Value_Present, Value_First, Argument,
-                                 Result.Prompt_Text, Good);
-                     if not Good then
-                        return;
-                     end if;
-                     if Result.Prompt_Kind /= Prompt_Unset then
+                     --  Repeatable, unlike every other source of a prompt:
+                     --  several inline prompts are several sequences from
+                     --  one loaded model, which is what a model held in
+                     --  memory is for. A second --prompt-file or a prompt on
+                     --  standard input is still a conflict, because those
+                     --  name one text between them.
+                     if Result.Prompt_Kind /= Prompt_Unset
+                       and then Result.Prompt_Kind /= Prompt_Inline
+                     then
                         Fail (E.CLI_Conflicting_Prompt_Sources, Name);
                         return;
                      end if;
+
+                     if Result.Prompt_Count = Max_Prompts then
+                        Fail (E.CLI_Option_Out_Of_Range, Name);
+                        return;
+                     end if;
+
+                     declare
+                        Held : Text_Access := null;
+                     begin
+                        Take_Value (Name, Value_Present, Value_First,
+                                    Argument, Held, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        Result.Prompt_Count := Result.Prompt_Count + 1;
+                        Result.Prompts (Result.Prompt_Count) := Held;
+                        if Result.Prompt_Count = 1 then
+                           Result.Prompt_Text := Held;
+                        end if;
+                     end;
+
                      Result.Prompt_Kind := Prompt_Inline;
 
                   elsif Name = "--load-session" then
@@ -1837,6 +1871,25 @@ package body Model_Runner.CLI.Options is
         and then T.Is_Empty (Result.Model_Path)
       then
          Status := E.Make (E.CLI_Missing_Model_Path);
+         return;
+      end if;
+
+      --  Several prompts are several conversations, and a saved context is
+      --  one. Refused rather than resolved by taking the last: a caller who
+      --  asked for both has a belief about which conversation is saved, and
+      --  there is no answer that makes it right.
+      if Result.Prompt_Count > 1
+        and then (not T.Is_Empty (Result.Save_Session)
+                  or else not T.Is_Empty (Result.Load_Session))
+      then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--prompt more than once",
+                     E.Param_Identifier);
+         E.Add_Text
+           (Status, "other",
+            (if not T.Is_Empty (Result.Save_Session)
+             then "--save-session" else "--load-session"),
+            E.Param_Identifier);
          return;
       end if;
 
