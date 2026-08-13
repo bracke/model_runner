@@ -23,7 +23,7 @@ package body Tool_Commands is
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
      & " --backend --repeat-penalty --draft-model --draft-tokens --repeats ";
-   Opts_Benchmark : aliased constant String := " --seconds --rounds ";
+   Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway ";
    Opts_External  : aliased constant String :=
      " --model --prompt --max-tokens --threads --expect --repack --backend"
      & " --draft-model --draft-tokens ";
@@ -36,7 +36,7 @@ package body Tool_Commands is
      & " [--batch-size N] [--repack MODE] [--backend NAME]"
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
      & " [--repeats N]";
-   Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N]";
+   Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway]";
    Takes_External  : aliased constant String :=
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"
      & " [--expect TEXT] [--repack MODE] [--backend NAME]"
@@ -62,7 +62,8 @@ package body Tool_Commands is
    Says_Speed : aliased constant String :=
      "take the published speed figures again, on a model you have";
    Says_Benchmark : aliased constant String :=
-     "measure the kernels, medians of three rounds";
+     "measure the kernels; medians of three rounds, best of three "
+     & "for device ratios";
    Says_External : aliased constant String :=
      "validate a model you already have, and say what it produced";
    Says_Tokenize : aliased constant String :=

@@ -50,6 +50,7 @@ with Ada.Text_IO;
 
 with Expectations;
 with External_Model;
+with Benchmarks;
 with Speed_Run;
 with Tiny_Model;
 
@@ -8227,6 +8228,47 @@ package body Tests.CLI_Cases is
    --  run that did, so both are asked here; when the worker choice lived in
    --  one of them they could have disagreed.
 
+   ---------------------------------------------
+   -- A_Busy_Machine_Cannot_Publish_A_Figure --
+   ---------------------------------------------
+
+   --  `tests benchmark` refuses a figure taken on a busy machine.
+   --
+   --  The tool compares a device against a processor, and the two sides are
+   --  not equally exposed to whatever else is running: the processor side
+   --  competes with it and the device side mostly waits on a fence. So other
+   --  work moves the ratio, and a ratio that moves with the machine is a
+   --  figure about the machine. Every other guard here refuses rather than
+   --  warns, and this one now does too.
+   --
+   --  The bound is checked through Publishable rather than by running the
+   --  tool, because the suite cannot arrange for a busy machine: to see the
+   --  refusal it would have to load the host, and a test that loads the host
+   --  is a test that spoils every timing taken beside it.
+   --
+   --  Zero is the case worth naming. It is what the reader returns where the
+   --  host keeps no load average, so it means unknown -- and unknown has to
+   --  measure, or the tool would refuse to run everywhere that number is
+   --  absent.
+   procedure A_Busy_Machine_Cannot_Publish_A_Figure
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+   begin
+      Assert (Benchmarks.Publishable (0.0),
+              "a host that keeps no load average was refused a figure, "
+              & "which refuses every host that keeps none");
+      Assert (Benchmarks.Publishable (0.2),
+              "a quiet machine was refused a figure");
+      Assert (Benchmarks.Publishable (Benchmarks.Too_Busy),
+              "the bound itself was refused, so the bound is not the bound");
+      Assert (not Benchmarks.Publishable (Benchmarks.Too_Busy + 0.01),
+              "a load above the bound was allowed to publish a figure");
+      Assert (not Benchmarks.Publishable (8.0),
+              "a machine at a load of eight was allowed to publish a "
+              & "figure");
+   end A_Busy_Machine_Cannot_Publish_A_Figure;
+
    -----------------------------------------
    -- The_Speed_Tool_Reads_The_Machine --
    -----------------------------------------
@@ -9647,6 +9689,9 @@ package body Tests.CLI_Cases is
          "the external-model runner generates what the command generates "
          & "from the same inputs");
       Register_Routine
+        (T, A_Busy_Machine_Cannot_Publish_A_Figure'Access,
+         "a busy machine cannot publish a figure");
+      AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Speed_Tool_Reads_The_Machine'Access,
          "the load a figure carries is the load the host reports");
       Register_Routine

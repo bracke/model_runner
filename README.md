@@ -1325,23 +1325,44 @@ statistics say which of the three happened.
 
 Under the model, one product at a time, `tests benchmark` measures where that
 leaves each format. It prints the machine's load at both ends of its run --
-2.34 rising to 3.11 for the figures below -- and there is a bias in that
-worth naming: these are ratios of the device against the processor, taken
-while the measurement is itself occupying the processor. The device side
-competes for nothing the measurement wants; the processor side competes with
-it. So the ratios flatter the device by however busy the machine was, and
-they are quoted here as the shape of the answer rather than to three
-digits. A 512 by 2048 matrix, resident, against the serial
+1.36 rising to 2.96 for the figures below -- and **refuses to measure at all
+above a load of 1.5**, because a ratio of a device against a processor is not
+equally exposed to whatever else is running: the processor side competes with
+it and the device side mostly waits on a fence, so other work moves the ratio
+and a ratio that moves with the machine is a figure about the machine.
+`--anyway` measures regardless, for a reader who wants the shape of an answer
+rather than a figure to publish. For the same reason the device rows are the
+best of their rounds rather than the middle one -- the least interrupted
+round is the closest the two sides get to being measured on the same machine
+-- while every other figure here stays a median, being a whole-run time on
+one side only, where a middle round is what a caller would see.
+
+That is not a formality. Taking the figures again this way moved the
+single-vector rows and left the batched ones where they were:
+
+| Per pass | Before, at load 2.34-3.11 | Now, at 1.36-2.96 |
+| --- | --- | --- |
+| q8_0, one vector | 0.74 | 0.81 |
+| q4_0, one vector | 0.83 | 0.97 |
+| f32, one vector | 1.33 | 1.42 |
+| q8_0, eight vectors | 0.27 | 0.24 |
+| q8_0, thirty-two vectors | 0.104 | 0.105 |
+
+Which is what the bias predicted: the single-vector cases are the close ones,
+where a processor slowed by other work is most of the difference, and the
+batched cases are so far in the device's favour that the machine around them
+barely shows. The device was being flattered by up to a sixth exactly where
+the answer was in doubt. A 512 by 2048 matrix, resident, against the serial
 processor path -- the device's time as a fraction of it, so below one is
 faster there:
 
 | Per pass | Device time / processor time |
 | --- | --- |
-| q8_0, one vector | 0.74 |
-| q4_0, one vector | 0.83 |
-| f32, one vector | 1.33 |
-| q8_0, eight vectors | 0.27 |
-| q8_0, thirty-two vectors | 0.104 |
+| q8_0, one vector | 0.81 |
+| q4_0, one vector | 0.97 |
+| f32, one vector | 1.42 |
+| q8_0, eight vectors | 0.24 |
+| q8_0, thirty-two vectors | 0.105 |
 
 Binary32 is the one format the device is slower at, and that is the finding
 rather than a disappointment: it is four bytes a weight where q8_0 is one, so
@@ -1554,14 +1575,14 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.27 | Q3_K | 0.50 |
-| Q4_0 | 0.32 | F16 | 0.59 |
-| BF16 | 0.32 | Q2_K | 0.74 |
-| Q4_K | 0.38 | IQ4_XS | 0.92 |
-| Q6_K | 0.38 | Q5_1 | 1.08 |
-| Q8_0 | 0.38 | Q5_0 | 1.08 |
-| Q5_K | 0.41 | IQ4_NL | 1.37 |
-| Q4_1 | 0.47 | | |
+| F32 | 0.29 | Q3_K | 0.50 |
+| Q4_0 | 0.33 | F16 | 0.61 |
+| BF16 | 0.34 | Q2_K | 0.74 |
+| Q4_K | 0.39 | IQ4_XS | 0.96 |
+| Q6_K | 0.41 | Q5_0 | 1.07 |
+| Q8_0 | 0.41 | Q5_1 | 1.12 |
+| Q5_K | 0.43 | IQ4_NL | 1.45 |
+| Q4_1 | 0.45 | | |
 
 The two five-bit legacy formats are outliers, and the reason is where they
 keep the fifth bit: bit *j* of a thirty-two bit word rather than a fixed place

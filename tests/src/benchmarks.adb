@@ -1,3 +1,4 @@
+with Ada.Command_Line;
 with Ada.Real_Time;
 with Interfaces;
 with Ada.Text_IO;
@@ -151,6 +152,18 @@ package body Benchmarks is
    --  and enough to hide one that is. Taking the median here is the
    --  difference between a tool that answers the question and one that
    --  leaves the last step to whoever remembers it.
+   --  The fastest of the rounds, which is the least interrupted of them.
+   function Fastest (Values : Rate_Array) return Long_Float is
+      Best : Long_Float := 0.0;
+   begin
+      for Value of Values loop
+         if Value > Best then
+            Best := Value;
+         end if;
+      end loop;
+      return Best;
+   end Fastest;
+
    function Middle (Values : Rate_Array) return Long_Float is
       Sorted : Rate_Array := Values;
    begin
@@ -222,7 +235,11 @@ package body Benchmarks is
    -- Run --
    ---------
 
-   procedure Run (Seconds : Duration := 0.5; Rounds : Positive := 3) is
+   procedure Run
+     (Seconds : Duration := 0.5;
+      Rounds  : Positive := 3;
+      Anyway  : Boolean := False)
+   is
       package IO renames Ada.Text_IO;
       use type Ada.Real_Time.Time;
 
@@ -905,8 +922,24 @@ package body Benchmarks is
                Here (Pass) := Passes_Of (On_Device => False);
                There (Pass) := Passes_Of (On_Device => True);
             end loop;
-            Here_Rate := Middle (Here);
-            There_Rate := Middle (There);
+
+            --  The best round rather than the middle one, and this is the
+            --  one measurement here where that is the right choice.
+            --
+            --  A ratio of the device against the processor is not equally
+            --  exposed to a busy machine: measuring the processor competes
+            --  with whatever else is running, and measuring the device
+            --  mostly waits on a fence, so other work slows one side and
+            --  not the other. Taking the middle of the rounds carries that
+            --  bias into the figure; taking the best takes the round in
+            --  which each side was least interrupted, which is the closest
+            --  this can get to the two being measured on the same machine.
+            --
+            --  Everything else here stays a median, because everything else
+            --  is a whole-run wall time on one side only, where a middle
+            --  round is what a caller would actually see.
+            Here_Rate := Fastest (Here);
+            There_Rate := Fastest (There);
          end;
 
          if Here_Rate > 0.0 and then There_Rate > 0.0 then
@@ -1260,6 +1293,27 @@ package body Benchmarks is
       --  the one at the start by however much this did.
       Started_At : constant Long_Float := Host_Load.Now;
    begin
+      --  A busy machine cannot produce a figure worth publishing: the
+      --  processor side of every ratio below competes with whatever else is
+      --  running and the device side does not, so the answer would be about
+      --  the machine. Refused rather than warned about, and the caller who
+      --  wants it anyway says so.
+      if not Anyway and then not Publishable (Started_At) then
+         IO.Put_Line
+           (IO.Standard_Error,
+            "the machine is at a load of "
+            & Model_Runner.Text.Image (Started_At, 2)
+            & ", above the "
+            & Model_Runner.Text.Image (Long_Float (Too_Busy), 2)
+            & " a figure worth publishing needs; wait, or pass --anyway "
+            & "for the shape of the answer");
+
+         --  A failure, not a quiet nothing: a caller that asked for figures
+         --  and got none should hear about it from the exit status too.
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         return;
+      end if;
+
       IO.Put_Line ("kernel benchmarks, single task, "
                    & N.Element_Count'Image (Rows) & " x"
                    & N.Element_Count'Image (Columns) & " per pass;"

@@ -837,6 +837,19 @@ begin
                return Default;
          end Number;
 
+         --  A word on its own rather than a value, so it is looked for
+         --  across every argument including the last, which Option cannot
+         --  do because it reads the one after the name.
+         function Given (Name : String) return Boolean is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Given;
+
       begin
          --  Half a second a round when nothing is asked for, which is
          --  what the published figures were taken at; whole seconds when a
@@ -846,7 +859,8 @@ begin
               (if Option ("--seconds", "") = ""
                then 0.5
                else Duration (Number ("--seconds", 1))),
-            Rounds  => Number ("--rounds", 3));
+            Rounds  => Number ("--rounds", 3),
+            Anyway  => Given ("--anyway"));
       end;
 
    elsif Command = "package" then

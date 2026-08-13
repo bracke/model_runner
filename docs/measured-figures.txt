@@ -194,7 +194,40 @@
 # tensors and multiply them. Not re-measured: these two were taken again
 # three commits ago on this machine, and taking them again for a type
 # declaration would say what that run already says.
-kernels 659A79D4E78E7815 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+# 2026-08-13, the benchmark tool itself. Three of these groups take their
+# figures from `tests benchmark` and none of them listed the tool. The same
+# hole the speed_run note above describes, in the other measuring tool, and
+# it opened the same way: nobody thought of the thing doing the measuring as
+# a source. It closed on the change that made it matter -- the device rows
+# now take the best of their rounds rather than the middle one, which moved
+# three published ratios and would have moved them silently.
+#
+# Re-measured on a machine at 1.36 rather than the 2.34 of the previous run,
+# which the tool now insists on: it refuses to measure at all above a load of
+# 1.5. The five device ratios were republished and the single-vector rows
+# moved by up to a sixth while the batched rows did not, which is the bias
+# the README names, measured rather than argued. The row-product table was
+# republished from the same run; nothing in it moved by more than eight per
+# cent and the ordering is unchanged.
+#
+# The scaling group was not re-measured, and this is the reason. Its
+# fingerprint moved because its source list gained a file, not because any
+# source in it changed: benchmarks.adb is new to the list, and the only
+# change inside it since these figures were taken is which round the device
+# rows take. The scaling rows still take the median they always took, and
+# Fastest has no other caller. The refusal above runs before any timing and
+# the load reader runs outside every timed region.
+#
+# A pinned run was taken anyway, and it is worth recording that it read 10798
+# Me/s for q8_0 at eight shares against the published 12420, on a machine at
+# 1.38. That is thirteen per cent, in the direction a busy processor moves a
+# processor figure, and it is why the figures this group covers are not
+# replaced with it: they were taken under conditions this machine no longer
+# offers, and a worse measurement is not a newer one. What it does say is
+# that these figures predate the tool reporting a load, so the conditions
+# they were taken under are not recorded anywhere -- unlike every figure
+# taken from here on.
+kernels 0FBE78DC1ADD0533 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb
 
 # covers: the twelve-token figure, the worker-count and share-count
 # comparisons, and the batch-size table under "Speed". Re-measure all four
@@ -510,7 +543,7 @@ reference FE68C02FB2FEABE2 src/library/model_runner-backend-reference.adb src/li
 # The processor column moved more between measurements than the device
 # column did, again, which is the second time that has happened and is why
 # the caveat under the table now gives all three pairs rather than one.
-device 9D5ADEB533DE8EFD src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+device 2D55527E96F6A6AB src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -525,7 +558,7 @@ device 9D5ADEB533DE8EFD src/shaders/row_product.comp src/library/model_runner-sh
 drafting A39FB96440CD49BB src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
-scaling B5443E99EAAA8126 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb
+scaling FC71DC797AAD6688 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker
