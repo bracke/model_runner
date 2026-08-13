@@ -357,8 +357,18 @@ reference 1AD90B4FD348214C src/library/model_runner-backend-reference.adb src/li
 # processor figures by half of one, which is the machine rather than the
 # code and is now said in the README beside the table.
 #
-# covers: also the two-row drafting table under "Drafting", which is one run
-# of the published command with --draft-model and one without.
+# covers: also the drafting figures under "Drafting" -- the two-row table,
+# the per-token costs of the two models, and the 230 ms a check of five
+# positions takes, which is derived from them. All four come from the
+# published run with --draft-model and without, plus `tests speed` on each
+# model alone.
+#
+# 2026-08-13, the draft's worker pool. The draft session was opened without
+# one while the target had seven, so every proposal cost seven times what it
+# should and the published figure measured the arrangement rather than the
+# idea: twelve tokens went from 12.547 s to 3.880 s when the two shared a
+# pool. Re-measured and republished, and the break-even arithmetic under
+# "Drafting" is what came out of doing the subtraction properly.
 #
 # 2026-08-13, drafting. Evaluate_Batch grew a per-position logits parameter
 # and the decode loop grew a branch; both are on the measured path even with

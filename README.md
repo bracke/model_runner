@@ -1280,21 +1280,40 @@ are accepted, they cost one pass. What it costs is the draft model's own
 passes, one per proposal, and the output projection once per checked position
 rather than once per token.
 
-So a draft earns its keep only when it is much smaller than the model and
-usually right, and this machine has no such pair: the only two models here
-that number their tokens alike are two quantizations of the same
-1.1-billion-parameter model. Measured with the smaller of them drafting for
-the larger, four proposals at a time:
+So a draft earns its keep only when it is much faster than the model and
+usually right. Whether a particular one is can be worked out from three
+measurements, and this machine has them.
 
-| | Generation |
+TinyLlama-1.1B at eight bits generates twelve tokens in 1.128 s -- 94 ms a
+token. The same model at two bits, which is the only other file here that
+numbers its tokens alike, takes 2.217 s for the same twelve: 185 ms a token.
+It is a third of the size on disk and twice the cost to run, because what it
+saves in bytes it spends unpacking them. A smaller file is not a faster
+model, and that alone decides this pair.
+
+Drafting four at a time, the same run takes 3.880 s and has nine of sixteen
+proposals accepted -- four rounds, each of four draft passes and one check of
+five positions. Subtracting the draft's own 740 ms a round leaves 230 ms for
+the check. That is the number worth having: **five positions checked cost
+about 1.6 single tokens**, because a batch is one pass over the weights and
+the extra work is the output projection per position.
+
+So a round of K proposals costs `K × d + 230 ms` and produces `1 + a` tokens,
+against `(1 + a) × 94 ms` without a draft. With the acceptance measured here
+-- 2.25 of four -- drafting pays when the draft costs under 57 ms a token,
+which is a model roughly two and a half times faster than the one it drafts
+for. Even a draft that were never wrong would have to beat 119 ms, which is
+still faster than the target. That is the whole of the arrangement: the check
+is cheap, the draft is not, and a draft that is not much the faster model
+cannot win.
+
+| | Generation, twelve tokens |
 | --- | --- |
-| no draft | 10.39 tokens/s |
-| drafted by the same model at two bits | 0.98 tokens/s |
+| no draft | 1.128 s |
+| drafted by the same model at two bits | 3.880 s |
 
-with 9 of 16 proposals accepted. A draft the size of the model it drafts for
-costs exactly what it saves and then some, which is what that measures. The
-statistics report both numbers for every run with a draft, because they are
-the only ones that say whether a particular draft is worth having.
+The statistics report both counts for every run with a draft, because they
+are the only numbers that say whether a particular draft is worth having.
 
 Not with a grammar, and not above temperature zero. Both are refused rather
 than ignored, and the difference matters: a draft is a second model file, so

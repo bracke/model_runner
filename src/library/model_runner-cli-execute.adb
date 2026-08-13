@@ -1349,10 +1349,17 @@ package body Model_Runner.CLI.Execute is
                return;
             end if;
 
+            --  The same worker pool. A draft that runs serial while the
+              --  model it drafts for runs across seven workers is a draft
+              --  paying seven times what it should for every proposal, and
+              --  the run measures as though drafting were hopeless when
+              --  what was hopeless was the arrangement. The two never
+              --  evaluate at once -- a round proposes, then checks -- so
+              --  one pool serves both.
             L.Open
               (Draft_Session, Draft_Model, Item.Context_Size,
                Session_Bounds => Session_Bounds (Item),
-               Cache => Item.Cache, Status => Condition);
+               Workers => Team, Cache => Item.Cache, Status => Condition);
             if E.Is_Error (Condition) then
                Fail (Condition);
                return;

@@ -43,6 +43,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The draft model ran serial while the model it drafts for used the pool.**
+  The draft session was opened without workers, so every proposal cost seven
+  times what it should on this machine and the published figure measured the
+  arrangement rather than the idea. Twelve tokens went from 12.547 s to
+  3.880 s when the two shared a pool -- which they can, because a round
+  proposes and then checks and the two never evaluate at once.
+
+  What that made possible was the arithmetic the README now publishes: with
+  the draft's own cost subtracted, checking five positions takes 230 ms
+  against 94 ms for a single token, so a round of K proposals costs K draft
+  passes plus 230 ms and produces one more token than it had accepted. From
+  which: at the acceptance rate measured here a draft has to cost under 57 ms
+  a token to pay, against the target's 94.
+
+  And the finding that decides the pair on this machine: the two-bit
+  quantization is a third of the size of the eight-bit one and twice the cost
+  to run, 185 ms a token against 94, because what it saves in bytes it spends
+  unpacking them. A smaller file is not a faster model.
+
 - **A draft model was ignored above temperature zero, silently.** Drafting
   runs only at temperature zero and only without a grammar, and both were
   conditions that quietly turned it off -- the exact fault fixed for

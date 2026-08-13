@@ -1629,6 +1629,302 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Drafting_Produces_The_Same_Text;
 
+   ------------------------------------
+   -- Drafting_Runs_On_A_Device --
+   ------------------------------------
+
+   --  A drafted run on the device backend says what the device says without
+   --  a draft.
+   --
+   --  Checking proposals asks the engine for something nothing else asks
+   --  for: the logits of every position of a batch, which is the output
+   --  projection once per position rather than once per batch. On the
+   --  device that is a separate product per position through the same
+   --  resident matrix, and the comparison here is against the device's own
+   --  answer rather than the processor's -- what is being checked is the
+   --  drafting, not the arithmetic, and the two backends round differently
+   --  by design.
+   --
+   --  Skipped where there is no device.
+   procedure Drafting_Runs_On_A_Device
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Image : B.Byte_Array_Access;
+      Ready : Boolean;
+
+      Prompt : constant String := "abab";
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+
+         Target : aliased L.Model;
+         Draft  : aliased L.Model;
+
+         Status : E.Error_Info;
+
+         procedure Turn
+           (With_Draft : Boolean;
+            Text       : out Model_Runner.Bytes.Byte_Array_Access;
+            Length     : out Natural;
+            Accepted   : out Natural)
+         is
+            Live    : L.Session;
+            Second  : aliased L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+         begin
+            L.Open (Live, Target, Status => Local);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            if With_Draft then
+               L.Open (Second, Draft, Status => Local);
+               Assert (E.Is_Ok (Local), "the draft session did not open");
+            end if;
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 6;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 5;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Retain_Text := True;
+            Request.Draft_Tokens := (if With_Draft then 3 else 0);
+
+            Gen.Generate
+              (Target, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null,
+               Draft => (if With_Draft then Draft'Unchecked_Access else null),
+               Draft_Session =>
+                 (if With_Draft then Second'Unchecked_Access else null),
+               Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Text := Outcome.Text;
+            Length := Outcome.Text_Length;
+            Accepted := Outcome.Accepted;
+
+            Model_Runner.Stops.Close (Stop);
+            if With_Draft then
+               L.Close (Second);
+            end if;
+            L.Close (Live);
+         end Turn;
+
+         Plain_Text, Draft_Text : Model_Runner.Bytes.Byte_Array_Access;
+         Plain_Last, Draft_Last : Natural;
+         Ignored, Accepted      : Natural;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         L.Prepare
+           (Target, Item, Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status),
+                 "the device would not take the fixture: "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  The same model again as its own draft, which on a device is the
+         --  same resident matrices read twice.
+         L.Prepare
+           (Draft, Item, Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the draft would not prepare");
+
+         Turn (False, Plain_Text, Plain_Last, Ignored);
+         Turn (True, Draft_Text, Draft_Last, Accepted);
+
+         Assert (Plain_Last > 0, "the plain run produced nothing");
+         Assert (Draft_Last = Plain_Last
+                   and then B."="
+                     (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                      Draft_Text.all (1 .. B.Byte_Index (Draft_Last))),
+                 "a drafted run on the device said something else");
+         Assert (Accepted > 0,
+                 "no proposal was accepted, so the batch path was never "
+                 & "checked");
+
+         B.Free (Plain_Text);
+         B.Free (Draft_Text);
+
+         L.Close (Target, Status);
+         L.Close (Draft, Status);
+         Containers.Close (Item);
+      end;
+
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end Drafting_Runs_On_A_Device;
+
+   --------------------------------------------------
+   -- Drafting_Reports_The_Same_Probabilities --
+   --------------------------------------------------
+
+   --  Asking what the model made of each position gets the same answer with
+   --  a draft as without one.
+   --
+   --  A verified token was chosen from a particular distribution -- the
+   --  first of a round from what the round began with, the rest from the
+   --  batch's own rows -- and the obvious implementation reports whichever
+   --  distribution the round ended at, which is the right answer only for
+   --  the last token of each round. Nothing about the text would show it:
+   --  the tokens are correct either way and only the numbers beside them
+   --  are wrong.
+   procedure Drafting_Reports_The_Same_Probabilities
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+      package Sample renames Model_Runner.Sampling;
+
+      Room : constant := 32;
+
+      --  Somewhere to keep what was reported, so two runs can be compared.
+      type Ledger is limited new Gen.Explainer with record
+         Count  : Natural := 0;
+         Tokens : Vocab.Token_Array (1 .. Room) := [others => 0];
+         Values : N.Real_Array (0 .. Room - 1) := [others => 0.0];
+      end record;
+
+      overriding procedure Explain
+        (Item : in out Ledger; Report : Sample.Explanation);
+
+      overriding procedure Explain
+        (Item : in out Ledger; Report : Sample.Explanation) is
+      begin
+         if Item.Count < Room then
+            Item.Count := Item.Count + 1;
+            Item.Tokens (Item.Count) := Report.Chosen;
+            Item.Values (N.Element_Count (Item.Count) - 1) := Report.Log_Of;
+         end if;
+      end Explain;
+
+      Image : B.Byte_Array_Access;
+      Rough : B.Byte_Array_Access;
+
+      Prompt : constant String := "abab";
+   begin
+      Tiny_Model.Build (Image);
+      Tiny_Model.Build (Rough, Tiny_Model.Q4_0);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         Other : aliased constant B.Byte_Array := Rough.all;
+         Aside : aliased Harness (Other'Access);
+
+         procedure Turn (With_Draft : Boolean; Told : out Ledger) is
+            Live    : L.Session;
+            Second  : aliased L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+            Book    : aliased Ledger;
+         begin
+            L.Open (Live, Under.Ready, Status => Local);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            if With_Draft then
+               L.Open (Second, Aside.Ready, Status => Local);
+               Assert (E.Is_Ok (Local), "the draft session did not open");
+            end if;
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 8;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 3;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Logprobs := 3;
+            Request.Draft_Tokens := (if With_Draft then 4 else 0);
+
+            Gen.Generate
+              (Under.Ready, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null,
+               Draft =>
+                 (if With_Draft then Aside.Ready'Unchecked_Access else null),
+               Draft_Session =>
+                 (if With_Draft then Second'Unchecked_Access else null),
+               Reporter => Book'Unchecked_Access,
+               Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Told.Count := Book.Count;
+            Told.Tokens := Book.Tokens;
+            Told.Values := Book.Values;
+
+            Model_Runner.Stops.Close (Stop);
+            if With_Draft then
+               L.Close (Second);
+            end if;
+            L.Close (Live);
+         end Turn;
+
+         Plain, Drafted : Ledger;
+      begin
+         Start (Under);
+         Start (Aside);
+
+         Turn (False, Plain);
+         Turn (True, Drafted);
+
+         Assert (Plain.Count > 1,
+                 "the plain run reported" & Natural'Image (Plain.Count)
+                 & " positions, too few to compare");
+         Assert (Drafted.Count = Plain.Count,
+                 "the drafted run reported" & Natural'Image (Drafted.Count)
+                 & " positions against" & Natural'Image (Plain.Count));
+
+         for Index in 1 .. Plain.Count loop
+            Assert (Drafted.Tokens (Index) = Plain.Tokens (Index),
+                    "the drafted run reported another token at"
+                    & Natural'Image (Index));
+            Assert (abs (Drafted.Values (N.Element_Count (Index) - 1)
+                         - Plain.Values (N.Element_Count (Index) - 1))
+                    < 1.0E-6,
+                    "the drafted run reported a different probability at"
+                    & Natural'Image (Index) & ":"
+                    & N.Real'Image
+                        (Drafted.Values (N.Element_Count (Index) - 1))
+                    & " against"
+                    & N.Real'Image (Plain.Values (N.Element_Count (Index) - 1)));
+         end loop;
+      end;
+
+      B.Free (Image);
+      B.Free (Rough);
+   end Drafting_Reports_The_Same_Probabilities;
+
    -------------------------------------------
    -- Drafting_Survives_A_Draft_That_Errs --
    -------------------------------------------
@@ -4260,6 +4556,14 @@ package body Tests.Inference_Cases is
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
+      Register_Routine
+        (T, Drafting_Runs_On_A_Device'Access,
+         "a drafted run on the device backend says what the device says "
+         & "without a draft");
+      Register_Routine
+        (T, Drafting_Reports_The_Same_Probabilities'Access,
+         "asking what the model made of each position gets the same answer "
+         & "with a draft as without one");
       Register_Routine
         (T, Drafting_Survives_A_Draft_That_Errs'Access,
          "a draft that guesses wrong changes how long the run takes and not "
