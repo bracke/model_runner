@@ -37,6 +37,7 @@
 --  Task safety: run from one task.
 with Model_Runner.Backend;
 with Model_Runner.Llama;
+with Model_Runner.Numerics;
 
 package Speed_Run is
 
@@ -79,6 +80,12 @@ package Speed_Run is
    --    selects. The device figures were taken by hand before this existed,
    --    which is the same gap the reference-backend ratio had and the same
    --    answer: a figure that is a command can be taken again.
+   --  @param Penalty The repetition penalty, as --repeat-penalty selects.
+   --    Named because the default one changes what a long prompt produces:
+   --    with it, this model answers the long prompt with its
+   --    end-of-sequence token and generates nothing, which measures a
+   --    prompt and nothing else. A table about batching needs a token to
+   --    compare.
    --  @param Draft Path to a smaller model to propose tokens, or empty for
    --    none. The figures a draft produces are a comparison -- the same run
    --    with and without -- so this exists to make both halves of it one
@@ -95,6 +102,7 @@ package Speed_Run is
       Repack      : Model_Runner.Llama.Repack_Mode;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
+      Penalty     : Model_Runner.Numerics.Real := 1.1;
       Draft       : String := "";
       Draft_Tokens : Positive := 4;
       Repeats     : Positive;

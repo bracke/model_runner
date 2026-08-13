@@ -8403,6 +8403,116 @@ package body Tests.CLI_Cases is
       end;
    end The_Speed_Tool_Runs_What_It_Publishes;
 
+   -------------------------------------------------
+   -- The_External_Runner_Runs_What_The_Command_Does --
+   -------------------------------------------------
+
+   --  `tests external-model` generates what the command generates from the
+   --  same inputs.
+   --
+   --  It validates a caller's own model, so what it runs has to be what the
+   --  program runs -- a validation of something else validates nothing. It
+   --  samples greedily and seeds itself with forty-two, which is a choice
+   --  and not the command's default; this pins the correspondence by giving
+   --  the command those settings explicitly and comparing the text.
+   --
+   --  `tests benchmark` has no counterpart to this and needs none: it
+   --  measures kernels on synthetic tensors it builds itself, so there is no
+   --  command whose behaviour it could differ from.
+   procedure The_External_Runner_Runs_What_The_Command_Does
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model : constant String := "obj/external-agree-model.gguf";
+      Text  : constant String := "obj/external-agree-text.txt";
+      Notes : constant String := "obj/external-agree-notes.txt";
+
+      Prompt : constant String := "abab";
+      Tokens : constant := 4;
+
+      Report : External_Model.Report;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      External_Model.Run
+        (Path    => Model,
+         Prompt  => Prompt,
+         Tokens  => Tokens,
+         Threads => 1,
+         Result  => Report);
+
+      Assert (Report.Result = External_Model.Ran,
+              "the runner did not run the fixture: "
+              & External_Model.Summary (Report));
+
+      declare
+         Source : Fixed_Arguments;
+         Out_Handle, Err_Handle : File_Type;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, Prompt);
+         Add (Source, "--seed");
+         Add (Source, "42");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Add (Source, "--repeat-penalty");
+         Add (Source, "1");
+         Add (Source, "--repeat-window");
+         Add (Source, "0");
+         Add (Source, "--threads");
+         Add (Source, "1");
+         Add (Source, "--max-tokens");
+         Add (Source, "4");
+
+         Create (Out_Handle, Out_File, Text);
+         Create (Err_Handle, Out_File, Notes);
+         Set_Output (Out_Handle);
+         Set_Error (Err_Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Output (Standard_Output);
+               Set_Error (Standard_Error);
+               Close (Out_Handle);
+               Close (Err_Handle);
+               raise;
+         end;
+         Set_Output (Standard_Output);
+         Set_Error (Standard_Error);
+         Close (Out_Handle);
+         Close (Err_Handle);
+
+         Assert (Status = 0, "the command failed:" & Natural'Image (Status));
+      end;
+
+      declare
+         --  Less the terminator Text_IO writes when it closes a file whose
+         --  last line was left open.
+         function Generated return String is
+            Whole : constant String := Text_Of (Text);
+         begin
+            if Whole'Length > 0
+              and then Whole (Whole'Last) = Character'Val (10)
+            then
+               return Whole (Whole'First .. Whole'Last - 1);
+            end if;
+            return Whole;
+         end Generated;
+      begin
+         Assert (Speed_Run.Digest_Of (Generated) = Report.Digest,
+                 "the runner and the command generated different text: "
+                 & Speed_Run.Digest_Of (Generated) & " against "
+                 & Report.Digest);
+      end;
+   end The_External_Runner_Runs_What_The_Command_Does;
+
    procedure Runs_Report_Which_Backend_Ran
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -9288,6 +9398,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Streams_Are_Separate'Access,
          "each kind of output leaves by the stream the README says it does");
+      Register_Routine
+        (T, The_External_Runner_Runs_What_The_Command_Does'Access,
+         "the external-model runner generates what the command generates "
+         & "from the same inputs");
       Register_Routine
         (T, The_Speed_Tool_Runs_What_It_Publishes'Access,
          "the speed tool runs the command it publishes figures for");

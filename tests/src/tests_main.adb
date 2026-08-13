@@ -28,6 +28,7 @@ with Model_Runner.Limits;
 with Model_Runner.Text;
 with Model_Runner.Errors;
 with Model_Runner.Backend;
+with Model_Runner.Numerics;
 with Model_Runner.Llama;
 with Model_Runner.Platform;
 with Project_Tools.Files;
@@ -60,6 +61,16 @@ procedure Tests_Main is
    --
    --  One copy, because two commands take this option and two copies of a
    --  lookup is one place for them to disagree about what "device" means.
+   --  A real number as the options give it, falling back to the default
+   --  when it is not one.
+   function Real_Of (Word : String) return Model_Runner.Numerics.Real is
+   begin
+      return Model_Runner.Numerics.Real'Value (Word);
+   exception
+      when others =>
+         return 1.1;
+   end Real_Of;
+
    function Backend_Of (Word : String)
      return Model_Runner.Backend.Backend_Kind is
    begin
@@ -601,6 +612,8 @@ begin
             Threads => Number ("--threads", 4),
             Expect  => Option ("--expect", ""),
             Backend => Backend_Of (Option ("--backend", "cpu")),
+            Draft   => Option ("--draft-model", ""),
+            Draft_Tokens => Number ("--draft-tokens", 4),
             Repack  => Mode_Of (Option ("--repack", "none")),
             Result  => Result);
 
@@ -720,6 +733,7 @@ begin
             --  not have to guess whether it is a flag here.
             Repack      => Mode_Of (Option ("--repack", "none")),
             Backend     => Backend_Of (Option ("--backend", "cpu")),
+            Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
             Draft       => Option ("--draft-model", ""),
             Draft_Tokens => Number ("--draft-tokens", 4),
             Repeats     => Number ("--repeats", 3),

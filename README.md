@@ -831,7 +831,18 @@ Nothing is downloaded, and a missing file is a skip rather than a failure. See
 
 `--backend NAME` points it at any backend this build has, which is what makes
 it a validation of a backend on somebody's own model rather than of the
-processor path alone. A backend that does not partition rows is not asked
+processor path alone. `--draft-model PATH` runs the model again with that one
+proposing for it and checks that the text is identical, which is the claim
+drafting makes and the only place it can be checked against a model anybody
+cares about; the summary reports how many proposals were made and taken.
+
+What this runner generates is what the command generates from the same
+inputs, and a test holds that by running both and comparing a digest of the
+text. It samples greedily and seeds itself with forty-two, which is a choice
+rather than the command's default, so the test gives the command those
+settings explicitly. `tests benchmark` has no such counterpart and needs
+none: it measures kernels on synthetic tensors it builds itself, so there is
+no command it could differ from. A backend that does not partition rows is not asked
 whether the worker count changes its answer, and says so rather than
 reporting an unrun check as one that held; a machine with no device is a skip
 for the same reason a missing model is.
@@ -1002,19 +1013,21 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. The same run at
-fourteen threads takes 2.03 s of wall against 2.09 s and 17.2 s of processor
-time against 9.4 s: twice the energy for nothing, which is why the program
-chooses one worker per core rather than one per processor. The wall figures
-here include loading, which the split above excludes.
+fourteen threads takes 2.33 s of wall against 2.52 s at seven, and 17.6 s of
+processor time against 10.4 s: eight per cent of the wall for seventy per
+cent more energy, which is why the program chooses one worker per core rather
+than one per processor. The wall figures here include loading, which the
+split above excludes, and the processor figures come from the operating
+system's timing tool.
 
 A job is cut into one more piece than the pool has workers, because the task
 that submits it takes the last piece rather than waiting; the figures below
 count those pieces, and so does the benchmark. Eight of them is this machine
 fully occupied, since it has eight cores -- reported as sixteen processors,
-which is not the same thing. Eight shares take 2.09 s for 9.4 s of processor
-time and sixteen take 2.08 s for 17.5 s: the second worker on a core shares
-the first one's execution units, so it buys no wall and costs its own
-processor time. There are only 2015 matrix products in a run this size, so
+which is not the same thing. Eight shares take 2.52 s for 10.4 s of processor
+time and sixteen take 2.31 s for 17.6 s: the second worker on a core shares
+the first one's execution units, so it buys a twelfth of the wall and costs
+seventy per cent more processor time. There are only 2015 matrix products in a run this size, so
 handing each of them out costs milliseconds in total; what the pool does with
 them, however, mattered a great deal, and is the next paragraph.
 
@@ -1389,25 +1402,35 @@ behind, and another asserts it at the kernel level for every quantization
 format.
 
 `tests/fixtures/speed-prompt.txt` at the chosen worker count, `--raw`, which
-makes it 111 tokens: 110 of prompt and the beginning-of-text marker. The last
-column is a digest of the generated text, which is the point: `--batch-size`
-is a performance control and must not change what the model says.
+makes it 110 tokens: 109 of prompt and the beginning-of-text marker.
+
+There is no column of digests here any more, and the reason is worth writing
+down. There used to be one, identical down every row, standing for the claim
+that `--batch-size` is a performance control and must not change what the
+model says. It was measured through a tool that read this file including its
+final newline, and with that newline the model has something to say; without
+it -- which is what the command does -- this model answers the prompt with
+its end-of-sequence token and generates nothing at all. So the column would
+now be the digest of the empty string eight times, which stands for nothing.
+The claim it stood for is held by the conformance sweep instead, which
+compares batched evaluation against a token at a time over every format,
+every architecture and both evaluation paths.
 
 ```
 tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt.txt \
   --max-tokens 4 --batch-size N
 ```
 
-| `--batch-size` | prompt evaluation | rate | output |
-|---|---|---|---|
-| 1 (one token at a time) | 10.99 s | 10.1 tokens/s | `387aafefc4fbea29` |
-| 2 | 8.64 s | 12.8 tokens/s | `387aafefc4fbea29` |
-| 4 | 7.34 s | 15.1 tokens/s | `387aafefc4fbea29` |
-| 8 | 6.54 s | 17.0 tokens/s | `387aafefc4fbea29` |
-| 16 | 6.05 s | 18.4 tokens/s | `387aafefc4fbea29` |
-| 32 (default) | 5.81 s | 19.1 tokens/s | `387aafefc4fbea29` |
-| 64 | 5.70 s | 19.5 tokens/s | `387aafefc4fbea29` |
-| 128 (cap) | 5.44 s | 20.4 tokens/s | `387aafefc4fbea29` |
+| `--batch-size` | prompt evaluation | rate |
+|---|---|---|
+| 1 (one token at a time) | 16.15 s | 6.8 tokens/s |
+| 2 | 11.30 s | 9.7 tokens/s |
+| 4 | 9.76 s | 11.3 tokens/s |
+| 8 | 9.00 s | 12.2 tokens/s |
+| 16 | 6.42 s | 17.1 tokens/s |
+| 32 (default) | 6.25 s | 17.6 tokens/s |
+| 64 | 6.49 s | 16.9 tokens/s |
+| 128 (cap) | 6.59 s | 16.7 tokens/s |
 
 This table used to be measured through the chat template while the figure at
 the top of the section was measured raw, and neither said which. That is

@@ -16,6 +16,7 @@ with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
 
 with Expectations;
+with Speed_Run;
 
 package body External_Model is
 
@@ -85,6 +86,8 @@ package body External_Model is
       Expect  : String := "";
       Backend : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
+      Draft   : String := "";
+      Draft_Tokens : Positive := 4;
       Repack  : L.Repack_Mode := L.No_Repack;
       Result  : out Report)
    is
@@ -385,6 +388,7 @@ package body External_Model is
 
          Result.Generated := Count_1;
          Greedy_Last := Last_1;
+         Result.Digest := Speed_Run.Digest_Of (First (1 .. Last_1));
          if Last_1 > 0 then
             Greedy (1 .. Last_1) := First (1 .. Last_1);
          end if;
@@ -492,6 +496,105 @@ package body External_Model is
             end;
          end if;
       end;
+
+      --  And the same model again with a draft proposing for it, when one
+      --  was named. What this checks is the claim drafting makes: the text
+      --  is exactly the text of the run without a draft. Any difference is a
+      --  fault in the checking rather than a disagreement between two
+      --  models, because this model checks every proposal.
+      if Draft /= "" then
+         Result.Draft_Checked := True;
+
+         declare
+            Draft_Source    : Files.File_Source;
+            Draft_Container : Containers.Container;
+            Draft_Engine    : aliased L.Model;
+
+            Text  : String (1 .. Max_Captured) := [others => ' '];
+            Last  : Natural := 0;
+            Count : Natural := 0;
+            Fine  : Boolean := False;
+            Local : E.Error_Info;
+         begin
+            Files.Open (Draft_Source, Draft, Status => Local);
+
+            if E.Is_Ok (Local) then
+               Containers.Reader.Parse
+                 (Draft_Container, Draft_Source, Status => Local);
+            end if;
+
+            if E.Is_Ok (Local) then
+               L.Prepare
+                 (Draft_Engine, Draft_Container, Draft_Source,
+                  Threads => Threads, Backend => Backend, Status => Local);
+            end if;
+
+            if E.Is_Ok (Local) then
+               declare
+                  Session : L.Session;
+                  Second  : aliased L.Session;
+                  Stop    : Model_Runner.Stops.Set;
+                  Sink    : aliased Capture;
+                  Request : Gen.Request;
+                  Outcome : Gen.Result;
+               begin
+                  L.Open (Session, Engine, Status => Local);
+                  if E.Is_Ok (Local) then
+                     L.Open (Second, Draft_Engine, Status => Local);
+                  end if;
+
+                  if E.Is_Ok (Local) then
+                     Model_Runner.Stops.Open (Stop);
+                     Request.Max_Tokens := Tokens;
+                     Request.Sampling :=
+                       Model_Runner.Sampling.Greedy_Configuration;
+                     Request.Seed := 42;
+                     Request.Has_Seed := True;
+                     Request.Add_Beginning := True;
+                     Request.Draft_Tokens := Draft_Tokens;
+
+                     Gen.Generate
+                       (Engine, Session, Effective_Prompt, Request, Stop,
+                        null, Sink'Unchecked_Access, null, null, null, null,
+                        Draft => Draft_Engine'Unchecked_Access,
+                        Draft_Session => Second'Unchecked_Access,
+                        Outcome => Outcome);
+
+                     Last := Natural'Min (Sink.Used, Text'Length);
+                     if Last > 0 then
+                        Text (1 .. Last) := Sink.Data (1 .. Last);
+                     end if;
+                     Count := Outcome.Generated_Tokens;
+                     Fine := Outcome.Reason /= Gen.Runtime_Error;
+                     Result.Draft_Proposed := Outcome.Drafted;
+                     Result.Draft_Accepted := Outcome.Accepted;
+
+                     Model_Runner.Stops.Close (Stop);
+                     L.Close (Second);
+                     L.Close (Session);
+                     Gen.Release (Outcome);
+                  end if;
+               end;
+
+               L.Close (Draft_Engine, Local);
+               Containers.Close (Draft_Container);
+            end if;
+
+            Files.Close (Draft_Source);
+
+            Result.Draft_Match :=
+              Fine and then Count = Result.Generated
+              and then Last = Greedy_Last
+              and then Text (1 .. Last) = Greedy (1 .. Greedy_Last);
+
+            if not Result.Draft_Match then
+               Give_Up (Failed,
+                        "a drafted run produced different text from the "
+                        & "same run without a draft");
+               return;
+            end if;
+         end;
+      end if;
 
       --  Comparison against what a trusted reference runtime recorded.
       if Expected.Valid then
@@ -671,6 +774,11 @@ package body External_Model is
               & ", backend "
               & Model_Runner.Backend.Backend_Name (Item.Backend)
               & ", deterministic " & Boolean'Image (Item.Deterministic)
+              & (if not Item.Draft_Checked then ""
+                 else ", drafted text identical "
+                      & Boolean'Image (Item.Draft_Match)
+                      & ", proposed" & Natural'Image (Item.Draft_Proposed)
+                      & ", accepted" & Natural'Image (Item.Draft_Accepted))
               & (if Item.Thread_Checked
                  then ", thread-stable " & Boolean'Image (Item.Thread_Stable)
                  elsif not Item.Partitions

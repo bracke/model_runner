@@ -130,6 +130,7 @@ package body Speed_Run is
       Repack      : L.Repack_Mode;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
+      Penalty     : Model_Runner.Numerics.Real := 1.1;
       Draft       : String := "";
       Draft_Tokens : Positive := 4;
       Repeats     : Positive;
@@ -356,6 +357,7 @@ package body Speed_Run is
                   --  over sixty-four tokens now changes which tokens come
                   --  out.
                   Request.Sampling.Temperature := 0.0;
+                  Request.Sampling.Repeat_Penalty := Penalty;
                   Request.Seed := 1;
                   Request.Has_Seed := True;
                   Request.Add_Beginning := True;

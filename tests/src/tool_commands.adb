@@ -21,10 +21,11 @@ package body Tool_Commands is
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
-     & " --backend --draft-model --draft-tokens --repeats ";
+     & " --backend --repeat-penalty --draft-model --draft-tokens --repeats ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds ";
    Opts_External  : aliased constant String :=
-     " --model --prompt --max-tokens --threads --expect --repack --backend ";
+     " --model --prompt --max-tokens --threads --expect --repack --backend"
+     & " --draft-model --draft-tokens ";
    Opts_Tokenize  : aliased constant String := " --model --prompt ";
 
    Takes_Check     : aliased constant String := "[ROOT] [--repository]";
@@ -32,11 +33,13 @@ package body Tool_Commands is
    Takes_Speed     : aliased constant String :=
      "--model PATH [--prompt-file PATH] [--max-tokens N] [--threads N]"
      & " [--batch-size N] [--repack MODE] [--backend NAME]"
-     & " [--draft-model PATH] [--draft-tokens N] [--repeats N]";
+     & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
+     & " [--repeats N]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N]";
    Takes_External  : aliased constant String :=
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"
-     & " [--expect TEXT] [--repack MODE] [--backend NAME]";
+     & " [--expect TEXT] [--repack MODE] [--backend NAME]"
+     & " [--draft-model PATH] [--draft-tokens N]";
    Takes_Tokenize  : aliased constant String := "--model PATH --prompt TEXT";
    Takes_Docs      : aliased constant String := "[ROOT]";
    Takes_Shader    : aliased constant String :=

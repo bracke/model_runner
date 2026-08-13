@@ -7,6 +7,43 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests external-model --draft-model PATH`,** which runs a caller's own
+  model again with a smaller one proposing for it and checks that the text is
+  identical. That is the claim drafting makes, and a caller's own model is
+  the only place it can be checked against something anybody cares about. The
+  summary reports how many proposals were made and taken.
+
+- **A test that the external-model runner generates what the command
+  generates** from the same inputs, by comparing a digest of the text. It
+  samples greedily and seeds itself with forty-two, which is a choice rather
+  than the command's default, so the test gives the command those settings
+  explicitly rather than leaving the correspondence implied. `tests
+  benchmark` has no counterpart and needs none: it measures kernels on
+  synthetic tensors it builds itself.
+
+### Fixed
+
+- **Three of the four figures the engine group covers had not been
+  re-measured.** The twelve-token figure was re-taken when the measuring tool
+  was corrected; the worker-count and share-count comparisons and the
+  batch-size table were not, so that group's fingerprint said re-measured
+  while three of its figures still described the old prompt and the old
+  sampler. All three re-taken.
+
+  The batch-size table has no digest column any more. It had one, identical
+  down every row, standing for the claim that batch size cannot change what
+  the model says -- measured through a tool that read the prompt file
+  including its final newline. Without that newline this model answers the
+  prompt with its end-of-sequence token and generates nothing, so the column
+  would be the digest of the empty string eight times. The claim it stood for
+  is held by the conformance sweep, which compares batched evaluation against
+  a token at a time over every format and architecture.
+
+  `tests speed` takes a `--repeat-penalty` now. It was added on the theory
+  that the default penalty was what silenced the model; it was not -- the
+  trailing newline was -- but it is an option the command has and the tool
+  should be able to reproduce a run that uses it.
+
 - **`tests speed --draft-model PATH [--draft-tokens N]`.** The drafting
   figures were taken by hand, which is the thing this repository fixed for
   the reference-backend ratio and then again for the device. They are three

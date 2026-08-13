@@ -56,6 +56,15 @@ package External_Model is
       Repack_Checked : Boolean := False;
       Repack_Match   : Boolean := False;
 
+      --  Whether the model was run again with a draft proposing for it, and
+      --  whether that produced the same text. A drafted run that differs is
+      --  a fault in the checking, not a difference of opinion between two
+      --  models: every proposal is checked by this one.
+      Draft_Checked  : Boolean := False;
+      Draft_Match    : Boolean := False;
+      Draft_Proposed : Natural := 0;
+      Draft_Accepted : Natural := 0;
+
       --  Which backend ran it, and whether that backend partitions rows.
       --  A backend that does not cannot be asked whether the worker count
       --  changes its answer, and reporting an unrun check as a held one is
@@ -67,6 +76,11 @@ package External_Model is
       Tokens_Match  : Boolean := False;
       Greedy_Match  : Boolean := False;
       Text_Match    : Boolean := False;
+      --  A digest of the greedy text, in the same shape `tests speed`
+      --  prints, so that what this runner generated can be compared with
+      --  what the command generates from the same inputs.
+      Digest        : String (1 .. 16) := [others => '0'];
+
       Detail        : String (1 .. 256) := [others => ' '];
       Detail_Last   : Natural := 0;
    end record;
@@ -87,6 +101,12 @@ package External_Model is
    --    this runner exists to be pointed at a caller's own machine, and
    --    refusing there for want of hardware would make it a test that only
    --    passes in one place.
+   --  @param Draft Path to a smaller model to propose tokens for this one to
+   --    check, or empty for none. What it validates is the claim drafting
+   --    makes: that a drafted run produces exactly what the same run
+   --    produces without a draft. On a caller's own model, which is the only
+   --    place that claim can be checked against a model anybody cares about.
+   --  @param Draft_Tokens How many that model may propose at a time.
    --  @param Repack What to decode the weights into first. The conformance
    --    figures for repacking are taken on fixtures at most 256 wide and two
    --    deep; what rounding does to a model of a useful size is a question
@@ -102,6 +122,8 @@ package External_Model is
       Expect  : String := "";
       Backend : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
+      Draft   : String := "";
+      Draft_Tokens : Positive := 4;
       Repack  : Model_Runner.Llama.Repack_Mode :=
         Model_Runner.Llama.No_Repack;
       Result  : out Report);
