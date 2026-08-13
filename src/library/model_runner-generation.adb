@@ -175,6 +175,17 @@ package body Model_Runner.Generation is
       --  token but the last.
       Every  : T.Real_Array_Access := null;
       Opened : T.Real_Array_Access := null;
+
+      --  Somewhere for the draft's own distributions to go.
+      --
+      --  Its own, and not the target's buffer. Sharing that one was a fault
+      --  it took a draft that disagrees to find: the draft reads the prompt
+      --  too, and writing its logits over the target's meant the first token
+      --  of the run was sampled from the draft's distribution rather than
+      --  the model's. A draft that agrees with the model everywhere -- a
+      --  model drafting for itself, which is what the first test used --
+      --  cannot tell the two apart.
+      Aside : T.Real_Array_Access := null;
       Status       : E.Error_Info := E.Success;
       Closed       : Boolean := False;
       Started      : Model_Runner.Clocks.Nanoseconds := 0;
@@ -187,6 +198,7 @@ package body Model_Runner.Generation is
          T.Free (Logits);
          T.Free (Every);
          T.Free (Opened);
+         T.Free (Aside);
          B.Free (Pending);
          if Tokens /= null then
             Free_Tokens (Tokens);
@@ -359,11 +371,14 @@ package body Model_Runner.Generation is
            (N.Element_Count (Settings.Vocabulary)
             * N.Element_Count (Largest_Draft + 1), Every);
 
+         T.Allocate (N.Element_Count (Settings.Vocabulary), Aside);
+
          if Item.Logprobs > 0 then
             T.Allocate (N.Element_Count (Settings.Vocabulary), Opened);
          end if;
 
          if Proposed = null or else Verified = null or else Every = null
+           or else Aside = null
            or else (Item.Logprobs > 0 and then Opened = null)
          then
             Conclude (Runtime_Error, E.Make (E.Memory_Allocation_Failed));
@@ -554,15 +569,15 @@ package body Model_Runner.Generation is
                --  here; what matters is its context.
                if Drafting then
                   declare
-                     Aside : E.Error_Info;
+                     Local : E.Error_Info;
                   begin
                      L.Evaluate_Batch
                        (Draft_Session.all, Draft.all,
-                        Tokens.all (Index .. Last), Logits.all,
-                        Cancel => Cancel, Status => Aside);
+                        Tokens.all (Index .. Last), Aside.all,
+                        Cancel => Cancel, Status => Local);
 
-                     if E.Is_Error (Aside) then
-                        Conclude (Runtime_Error, Aside);
+                     if E.Is_Error (Local) then
+                        Conclude (Runtime_Error, Local);
                         exit Prefill_Loop;
                      end if;
                   end;
@@ -646,14 +661,14 @@ package body Model_Runner.Generation is
             for Step in 1 .. Largest_Draft loop
                L.Evaluate
                  (Draft_Session.all, Draft.all, Proposed.all (Count),
-                  Logits.all, Cancel, Local);
+                  Aside.all, Cancel, Local);
                if E.Is_Error (Local) then
                   Conclude (Runtime_Error, Local);
                   Failed := True;
                   return;
                end if;
 
-               S.Sample (Sampler, Logits.all, Guess, Local);
+               S.Sample (Sampler, Aside.all, Guess, Local);
                if E.Is_Error (Local) then
                   Conclude (Runtime_Error, Local);
                   Failed := True;
@@ -760,7 +775,7 @@ package body Model_Runner.Generation is
                begin
                   L.Evaluate
                     (Draft_Session.all, Draft.all, Verified.all (Step),
-                     Logits.all, Cancel, Local);
+                     Aside.all, Cancel, Local);
                   if E.Is_Error (Local) then
                      Conclude (Runtime_Error, Local);
                      Failed := True;

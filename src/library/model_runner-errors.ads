@@ -88,6 +88,7 @@ package Model_Runner.Errors is
       CLI_Interactive_Unavailable,
       CLI_Invalid_Environment_Value,
       CLI_Option_Not_For_Command,
+      CLI_Option_Combination,
 
       --  Host input and output.
       IO_Open_Failed,

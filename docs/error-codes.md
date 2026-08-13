@@ -38,6 +38,7 @@ ordinal is never reused, not because they might appear.
 | `MR-CLI-0018` | `error.cli.interactive_unavailable` | recovery_user_correctable | 2 | raised |
 | `MR-CLI-0019` | `error.cli.invalid_environment_value` | recovery_user_correctable | 2 | raised |
 | `MR-CLI-0020` | `error.cli.option_not_for_command` | recovery_user_correctable | 2 | raised |
+| `MR-CLI-0021` | `error.cli.option_combination` | recovery_user_correctable | 2 | raised |
 
 ## IO
 

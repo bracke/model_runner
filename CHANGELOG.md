@@ -43,6 +43,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A draft model was ignored above temperature zero, silently.** Drafting
+  runs only at temperature zero and only without a grammar, and both were
+  conditions that quietly turned it off -- the exact fault fixed for
+  `--device-memory` two days ago, reintroduced by the person who fixed it.
+  Worse here: the draft was loaded first, so the run paid for a second model
+  file and then never asked it anything. Both combinations are now refused
+  by name. `--draft-tokens` without a draft model is a note instead, because
+  nothing is loaded and nothing is wasted.
+
+- **A draft that disagreed changed the text.** The guarantee is that a
+  drafted run produces exactly what the same run produces without a draft,
+  and it did not: the draft reads the prompt too, and it was writing its
+  logits into the buffer the target's prefill had just filled -- so the first
+  token of the run was sampled from the draft's distribution rather than the
+  model's.
+
+  The test that existed could not find it. It had a model drafting for
+  itself, where the two distributions are the same one, so overwriting either
+  with the other changes nothing. The new test drafts with the same model
+  quantized: it agrees often and not always, which is the only fixture that
+  can tell a correct acceptance from a lucky one. It also asserts that some
+  proposals really were refused, without which it would be the first test
+  written twice.
+
 - **The same file could not be opened twice.** A model file is opened for
   reading, and the language's default for that is exclusive within one
   program, so naming one file as both the model and the draft failed with
@@ -2485,7 +2509,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 159 diagnostic
+- Localization through `messages`, with a catalog entry for all 160 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

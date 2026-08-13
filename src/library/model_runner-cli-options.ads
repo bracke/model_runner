@@ -261,6 +261,11 @@ package Model_Runner.CLI.Options is
       Draft_Path   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Draft_Tokens : Natural := 4;
 
+      --  Whether the caller named the count. A count without a draft model
+      --  is an option that cannot do anything, and saying so beats leaving
+      --  it to be discovered.
+      Draft_Tokens_Set : Boolean := False;
+
       Memory_Limit : Interfaces.Unsigned_64 := 0;
 
       --  Bytes of device memory the model's matrices may take, and whether

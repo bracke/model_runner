@@ -303,7 +303,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback |
 | CLI | `run`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]`, the last removing the system message when no text follows it, blank-line submission, no history written to disk. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 159 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 160 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes binary32, Q8_0 and Q4_0 from the bytes the file holds and takes a batch of eight vectors per invocation, so a quantized model needs no repacking and a prompt is one reading of the weights rather than one a token; the other twelve formats reach it through `--repack f32`. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
@@ -1296,11 +1296,18 @@ costs exactly what it saves and then some, which is what that measures. The
 statistics report both numbers for every run with a draft, because they are
 the only ones that say whether a particular draft is worth having.
 
-Not with a grammar, and not above temperature zero. Both are refusals of the
-same kind: above temperature zero, keeping the guarantee needs an acceptance
-test written against the sampler's own distribution, which this does not
-have, and a grammar constrains what may be produced in a way the proposals
-know nothing about.
+Not with a grammar, and not above temperature zero. Both are refused rather
+than ignored, and the difference matters: a draft is a second model file, so
+a run that accepts the option and then never asks the draft anything has
+spent the loading and the memory to produce exactly what it would have
+produced without it. `--draft-tokens` without a draft model is a note instead
+-- nothing was loaded, so nothing was wasted, and the only thing missing is
+the telling.
+
+The reason for the restrictions is the guarantee. Above temperature zero,
+keeping it needs an acceptance test written against the sampler's own
+distribution, which this does not have; a grammar constrains what may be
+produced in a way the proposals know nothing about.
 
 ### Repacking
 

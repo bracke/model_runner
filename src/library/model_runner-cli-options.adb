@@ -1456,6 +1456,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
+                     Result.Draft_Tokens_Set := True;
 
                   elsif Name = "--logprobs" then
                      declare
@@ -1837,6 +1838,33 @@ package body Model_Runner.CLI.Options is
       then
          Status := E.Make (E.CLI_Missing_Model_Path);
          return;
+      end if;
+
+      --  A draft model that cannot draft. Drafting runs only at temperature
+      --  zero and only without a grammar, and both of those are checked here
+      --  rather than shrugged off later: a draft is a second model file, and
+      --  a run that loads one and then never asks it anything has spent the
+      --  loading and the memory to do exactly what it would have done
+      --  without it. Silence there is worse than refusing, because the
+      --  refusal is the only thing that tells the caller their configuration
+      --  does not mean what they think.
+      if not T.Is_Empty (Result.Draft_Path) then
+         if Result.Sampling.Temperature /= 0.0 then
+            Status := E.Make (E.CLI_Option_Combination);
+            E.Add_Text (Status, "option", "--draft-model", E.Param_Identifier);
+            E.Add_Text (Status, "other", "--temperature above zero",
+                        E.Param_Identifier);
+            return;
+         end if;
+
+         if Result.Grammar_Text /= null
+           or else not T.Is_Empty (Result.Grammar_Path)
+         then
+            Status := E.Make (E.CLI_Option_Combination);
+            E.Add_Text (Status, "option", "--draft-model", E.Param_Identifier);
+            E.Add_Text (Status, "other", "--grammar", E.Param_Identifier);
+            return;
+         end if;
       end if;
 
       --  Raw mode has no conversation, so a system message has nowhere to go.

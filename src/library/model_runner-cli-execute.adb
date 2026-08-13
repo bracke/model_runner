@@ -1799,8 +1799,12 @@ package body Model_Runner.CLI.Execute is
       --  kind added to the enumeration stops this compiling until something
       --  here answers for it -- which is the only way a second backend can
       --  arrive without the flag that selects it quietly doing nothing.
-      --  An option that cannot do anything here says so rather than being
+      --  Options that cannot do anything here say so rather than being
       --  accepted and forgotten.
+      if Item.Draft_Tokens_Set and then T.Is_Empty (Item.Draft_Path) then
+         Pres.Put_Note (Screen, "cli.note.draft_tokens_unused");
+      end if;
+
       if Item.Device_Memory_Set
         and then Model_Runner.Backend."/=" (Item.Backend,
                                             Model_Runner.Backend.Backend_Device)

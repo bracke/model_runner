@@ -1960,6 +1960,20 @@ package body Tests.CLI_Cases is
       Expect (E.CLI_Conflicting_System_Sources,
               "run m.gguf --system a --system-file b");
       Expect (E.CLI_Raw_Mode_Conflict, "run m.gguf --raw --system a");
+
+      --  A draft model that cannot draft. Refused rather than ignored,
+      --  because a draft is a second model file and a run that loads one
+      --  and never asks it anything has paid for nothing.
+      Expect (E.CLI_Option_Combination,
+              "run m.gguf --prompt a --draft-model d.gguf --temperature 0.8");
+      Expect (E.CLI_Option_Combination,
+              "run m.gguf --prompt a --draft-model d.gguf --grammar root");
+
+      --  And the same options apart are fine, so neither refusal is the
+      --  parser objecting to one of them on its own.
+      Expect (E.No_Error, "run m.gguf --prompt a --temperature 0.8");
+      Expect (E.No_Error,
+              "run m.gguf --prompt a --draft-model d.gguf --temperature 0");
       Expect (E.CLI_Invalid_Color_Mode, "run m.gguf --color=mauve");
       Expect (E.CLI_Unexpected_Operand, "run m.gguf extra");
       Expect (E.Sampling_Invalid_Configuration, "run m.gguf --top-p 2");

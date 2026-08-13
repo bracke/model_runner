@@ -1629,6 +1629,135 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Drafting_Produces_The_Same_Text;
 
+   -------------------------------------------
+   -- Drafting_Survives_A_Draft_That_Errs --
+   -------------------------------------------
+
+   --  A draft that guesses wrong changes how long the run takes and not
+   --  what it says.
+   --
+   --  The test beside this one has a model drafting for itself, where every
+   --  proposal is accepted -- so it never exercises the half of the round
+   --  that matters when a draft is a different model: the mismatch, the
+   --  rewind of both sessions, and the next round starting from a position
+   --  neither of them ended at.
+   --
+   --  Here the draft is the same model quantized, which agrees with it often
+   --  and not always. What is held is that the text is still exactly the
+   --  text of the run with no draft at all, and that some proposals really
+   --  were refused -- without which this would be the first test again,
+   --  written twice.
+   procedure Drafting_Survives_A_Draft_That_Errs
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Image : B.Byte_Array_Access;
+      Rough : B.Byte_Array_Access;
+
+      Prompt : constant String := "abab";
+   begin
+      Tiny_Model.Build (Image);
+      Tiny_Model.Build (Rough, Tiny_Model.Q4_0);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         Other : aliased constant B.Byte_Array := Rough.all;
+         Aside : aliased Harness (Other'Access);
+
+         procedure Turn
+           (With_Draft : Boolean;
+            Text       : out Model_Runner.Bytes.Byte_Array_Access;
+            Length     : out Natural;
+            Proposed   : out Natural;
+            Accepted   : out Natural)
+         is
+            Live    : L.Session;
+            Second  : aliased L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+         begin
+            L.Open (Live, Under.Ready, Status => Local);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            if With_Draft then
+               L.Open (Second, Aside.Ready, Status => Local);
+               Assert (E.Is_Ok (Local), "the draft session did not open");
+            end if;
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 8;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 3;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Retain_Text := True;
+            Request.Draft_Tokens := (if With_Draft then 4 else 0);
+
+            Gen.Generate
+              (Under.Ready, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null,
+               Draft =>
+                 (if With_Draft then Aside.Ready'Unchecked_Access else null),
+               Draft_Session =>
+                 (if With_Draft then Second'Unchecked_Access else null),
+               Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Text := Outcome.Text;
+            Length := Outcome.Text_Length;
+            Proposed := Outcome.Drafted;
+            Accepted := Outcome.Accepted;
+
+            Model_Runner.Stops.Close (Stop);
+            if With_Draft then
+               L.Close (Second);
+            end if;
+            L.Close (Live);
+         end Turn;
+
+         Plain_Text, Draft_Text : Model_Runner.Bytes.Byte_Array_Access;
+         Plain_Last, Draft_Last : Natural;
+         Ignored_A, Ignored_B   : Natural;
+         Proposed, Accepted     : Natural;
+      begin
+         Start (Under);
+         Start (Aside);
+
+         Turn (False, Plain_Text, Plain_Last, Ignored_A, Ignored_B);
+         Turn (True, Draft_Text, Draft_Last, Proposed, Accepted);
+
+         Assert (Plain_Last > 0, "the plain run produced nothing");
+         Assert (Draft_Last = Plain_Last,
+                 "the drafted run produced" & Natural'Image (Draft_Last)
+                 & " bytes against" & Natural'Image (Plain_Last));
+         Assert (B."=" (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                        Draft_Text.all (1 .. B.Byte_Index (Draft_Last))),
+                 "a draft that guesses wrong changed the text");
+
+         Assert (Proposed > 0, "the drafted run proposed nothing");
+         Assert (Accepted < Proposed,
+                 "every one of" & Natural'Image (Proposed)
+                 & " proposals was accepted, so this fixture does not "
+                 & "exercise a draft that errs");
+
+         B.Free (Plain_Text);
+         B.Free (Draft_Text);
+      end;
+
+      B.Free (Image);
+      B.Free (Rough);
+   end Drafting_Survives_A_Draft_That_Errs;
+
    ----------
    -- Name --
    ----------
@@ -4131,6 +4260,10 @@ package body Tests.Inference_Cases is
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
+      Register_Routine
+        (T, Drafting_Survives_A_Draft_That_Errs'Access,
+         "a draft that guesses wrong changes how long the run takes and not "
+         & "what it says");
       Register_Routine
         (T, Rewind_Gives_Back_Positions'Access,
          "a session put back to an earlier position evaluates from there "
