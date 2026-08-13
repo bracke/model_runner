@@ -100,6 +100,17 @@ package Speed_Run is
       Repeats     : Positive;
       Result      : out Report);
 
+   --  The digest this tool prints, over any text.
+   --
+   --  Public so that a caller comparing this tool against the command it
+   --  reproduces can hash the command's output the same way. Two copies of a
+   --  hash are two hashes that can drift, and the whole point of such a
+   --  comparison is that nothing between them differs.
+   --
+   --  @param Text Generated text.
+   --  @return Sixteen hexadecimal digits.
+   function Digest_Of (Text : String) return String;
+
    --  One line describing what happened.
    --
    --  @param Item Report to describe.

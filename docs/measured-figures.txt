@@ -20,6 +20,13 @@
 # Format, one group per line:
 #   <name> <fingerprint> <source> [<source> ...]
 #
+# The measuring tool counts as a source. Every group whose figures come from
+# `tests speed` lists tests/src/speed_run.adb, because a change there changes
+# the figures as surely as a change to the engine does -- and did: the tool
+# read the prompt file differently from the command and sampled differently
+# from it, for as long as it had existed, and nothing here noticed because
+# nothing here was watching the thing doing the measuring.
+#
 # The "# covers:" line before a group says which published figures it stands
 # for, and the check prints it when that group fails. A group whose figures
 # are not named is a group nobody can answer: the reader learns that something
@@ -329,7 +336,7 @@ kernels 659A79D4E78E7815 src/library/model_runner-quantization.adb src/library/m
 # published 1.28, on a machine running three other agents at a load average
 # of 2.5 on eight cores. Not republished for that reason, and the generated
 # text is unchanged: the same output digest, 7784f071e5740782.
-engine 7EEFDDF1064E352C src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+engine 926E151995159591 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -338,7 +345,7 @@ engine 7EEFDDF1064E352C src/library/model_runner-llama.adb src/library/model_run
 # that was added.
 # 2026-08-12, the same two changes, and this group is a ratio between two
 # backends neither of which the memory check applies to.
-reference 1AD90B4FD348214C src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+reference 66B3DCE198F77A31 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
 # and the 111-token prompt, on both backends -- the claim that the two print
@@ -356,6 +363,27 @@ reference 1AD90B4FD348214C src/library/model_runner-backend-reference.adb src/li
 # --backend: the device figures moved by a hundredth of a second and the
 # processor figures by half of one, which is the machine rather than the
 # code and is now said in the README beside the table.
+#
+# 2026-08-13, the digest moved into a function the tests can call. The hash
+# is the same hash -- it was inline in the sink and is now a procedure both
+# the sink and a public Digest_Of use -- so nothing measured moved, and this
+# is a re-fingerprint without a re-measure for the reason the rule allows.
+# The figures below were all taken after the batch clamp and the failed-run
+# check, which are the only behavioural changes in that file today.
+#
+# 2026-08-13, a third difference, and the tool joins the sources. Measuring
+# with --backend reference produced "0 generated" in a millisecond and the
+# tool called it a run: it passed the asked-for batch size to a backend that
+# refuses batches, so every prefill failed, and nothing checked the outcome.
+# The command clamps the batch to one for such a backend and warns. The tool
+# does both now, and refuses to report a run that did not finish.
+#
+# Every figure the tool takes was re-measured after that, in one burst, with
+# the machine otherwise quiet -- load average from other work under one when
+# it started. And every group whose figures come from `tests speed` now lists
+# the tool among its sources, because three differences between the tool and
+# the command had gone unnoticed for as long as the tool existed and no
+# fingerprint here was watching the thing doing the measuring.
 #
 # 2026-08-13, what the tool was measuring. Two differences between `tests
 # speed` and the command it exists to reproduce, found by chasing a
@@ -417,7 +445,7 @@ reference 1AD90B4FD348214C src/library/model_runner-backend-reference.adb src/li
 # The processor column moved more between measurements than the device
 # column did, again, which is the second time that has happened and is why
 # the caveat under the table now gives all three pairs rather than one.
-device 034557FE2E9A218B src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+device 8D36DC2A3DAEB49A src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -429,7 +457,7 @@ device 034557FE2E9A218B src/shaders/row_product.comp src/library/model_runner-sh
 # the file the drafting loop is written in, so the loop could have been
 # rewritten without anything asking for a re-measure. A figure covered by a
 # group that does not name its own source is a figure covered by nothing.
-drafting 5856531BE4920653 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb
+drafting 2A138E283D9414F2 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling B5443E99EAAA8126 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

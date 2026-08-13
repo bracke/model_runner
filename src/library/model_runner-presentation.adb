@@ -132,9 +132,10 @@ package body Model_Runner.Presentation is
    --  commits and a full checklist run, because every check read the catalog
    --  the lines come from and none read the screen they land on.
    --
-   --  Generated text does not come through here. It goes to standard output
-   --  as raw bytes through a sink of its own, which is deliberate and stays
-   --  that way.
+   --  Generated text does not come through here. It goes out as raw bytes
+   --  through a sink of its own, which is deliberate and stays that way --
+   --  and that sink writes to Current_Output's stream for the same reason
+   --  this does.
    procedure Put_Line (Item : in out Console; Text : String) is
    begin
       Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Output, Text);
@@ -559,8 +560,17 @@ package body Model_Runner.Presentation is
       --  tracks a column and appends a line terminator when a partially
       --  written line is closed, which would append a newline the model never
       --  produced. Generated text is passed through byte for byte.
+      --
+      --  Through Current_Output's stream, which is the same file as
+      --  Standard_Output for this program -- it never redirects it -- and is
+      --  not the same file for a test, which can. It was Standard_Output,
+      --  and while it was, nothing could read what the program generated
+      --  without running it as a process: the one comparison worth making
+      --  between this command and the tool that publishes figures for it is
+      --  whether they produce the same text, and it could not be made.
+      --  Raw either way; only the file differs.
       String'Write
-        (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
+        (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Current_Output), Item);
       Closed := False;
    exception
       --  A broken pipe is an ordinary end, not a failure to report with a

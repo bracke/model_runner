@@ -18,7 +18,40 @@ Keep a Changelog and the project uses semantic versioning.
   now comes out of figures anybody can take again: 125 ms a token for the
   model, 159 for the draft, and 382 ms to check five positions.
 
+### Added
+
+- **A test that `tests speed` runs the command it publishes figures for.**
+  It compares the prompt token count, the generated token count and a digest
+  of the generated text between the tool and the same run as a command. Three
+  differences between them had gone unnoticed for as long as the tool
+  existed, and none of them was visible in a figure: a wall time is a
+  plausible number whatever run produced it.
+
+  Two things had to change to make the comparison possible. The digest is one
+  function now, called by the tool's own sink and by the test, rather than
+  two copies of a hash that could drift. And generated text goes out through
+  `Current_Output`'s stream rather than `Standard_Output`'s -- raw bytes
+  either way, the same file for this program, and a file a test can read.
+  Until that changed, nothing could see what the command generated without
+  running it as a separate process.
+
+  Every group whose figures come from `tests speed` now lists the tool among
+  its sources, so a change to the thing doing the measuring asks for a
+  re-measure the way a change to the engine does.
+
 ### Fixed
+
+- **`tests speed --backend reference` measured a failure and called it a
+  run.** It handed the asked-for batch size to a backend that refuses
+  batches, so every prefill failed; the command clamps the batch to one for
+  such a backend and warns. The report said "0 generated" in a millisecond
+  and counted itself a successful measurement. It clamps as the command does
+  now, and refuses to report a run that did not finish.
+
+  The reference-backend comparison is published from that command for the
+  first time, rather than by hand: four tokens, `cpu` 0.490 s of prompt and
+  0.574 s of generation against `reference` 6.463 s and 4.104 s. Ten times
+  the work, and the same digest from both.
 
 - **The drafting figures were covered by the wrong fingerprint group.** They
   hung off the `device` group, whose source list does not include

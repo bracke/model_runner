@@ -972,8 +972,8 @@ Named in the specification, absent here:
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself. From the six-token prompt in
-`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.42 s** --
-0.31 s evaluating the prompt and 1.13 s generating -- and 9.3 s of processor
+`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.82 s** --
+0.38 s evaluating the prompt and 1.45 s generating -- and 9.3 s of processor
 time, the median of three runs. Loading the model costs a further 0.6 s of
 wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
@@ -1120,25 +1120,34 @@ decision rather than an optimization.
 ### The reference backend
 
 `--backend reference` computes the same logits by different code, and the
-question a caller asks before running it is what that costs. On the machine
-and the model above, twelve tokens from the same short prompt, median of
-three runs: `cpu` spends 0.32 s evaluating the prompt and 1.05 s generating;
-`reference` spends 5.66 s and 11.34 s. That is **12.5 times** the work in
-total, 18 times on the prompt and 11 times on the generation. The prompt
-suffers more because that is where the batching goes: `cpu` shares one
-reading of the weights between the tokens of a batch and `reference` declines
-to, which is one of the things it exists to be without.
+question a caller asks before running it is what that costs. Both sides of
+the answer are one command now:
+
+```
+tests speed --model MODEL --backend cpu       --max-tokens 4
+tests speed --model MODEL --backend reference --max-tokens 4
+```
+
+Four tokens from the short prompt, medians of three: `cpu` spends 0.490 s
+evaluating the prompt and 0.574 s generating; `reference` spends 6.463 s and
+4.104 s. That is **ten times** the work in total, thirteen times on the
+prompt and seven times on the generation, and the two print the same digest.
+The prompt suffers more because that is where the batching goes: `cpu` shares
+one reading of the weights between the tokens of a batch and `reference`
+declines to, which is one of the things it exists to be without -- so the
+comparison hands it a batch size of one, as the command does.
+
+Four tokens rather than twelve, because ten times is a long time to wait for
+a figure whose shape is already clear at four.
 
 This number was published as forty times for as long as the backend has
-existed, taken by hand and never checked. Re-measuring it is what the
-fingerprint duty above asks for, and there was nothing to run: `tests
-benchmark` now measures the two against each other on synthetic tensors, so
-the algorithmic part of the ratio can be had without a model at all. Serial
-against serial -- no pool on either side -- it reports 2.3x for q8_0, 2.4x
-for q4_k and 3.1x for f32. The rest of the twelve is the worker pool and the
-batching, which is the honest way to read the figure: `reference` is between
-two and three times slower than the same loop written for speed, and the
-remaining factor is the parallelism it has none of.
+existed, taken by hand and never checked; then as twelve and a half, taken by
+hand again. `tests benchmark` measures the algorithmic part on synthetic
+tensors -- serial against serial, no pool on either side -- and reports 2.3x
+for q8_0, 2.4x for q4_k and 3.1x for f32. The rest of the ten is the worker
+pool and the batching, which is the honest way to read the figure:
+`reference` is between two and three times slower than the same loop written
+for speed, and the remaining factor is the parallelism it has none of.
 
 ### The device backend
 
@@ -1155,10 +1164,10 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 1.424 s | **1.324 s** |
-| -- evaluating the prompt | 0.314 s | 0.213 s |
-| -- generating | 1.128 s | 1.101 s |
-| 110-token prompt | 6.673 s | **4.221 s** |
+| 6-token prompt, 12 generated | 1.817 s | **1.213 s** |
+| -- evaluating the prompt | 0.379 s | 0.174 s |
+| -- generating | 1.448 s | 1.039 s |
+| 110-token prompt, nothing generated | 6.721 s | **3.824 s** |
 
 Both backends print the same digest of what they generated -- `7784f0` and
 `af63c7` for the two runs -- so this is the same text, not a faster answer to
@@ -1175,11 +1184,17 @@ close. Each pair was taken together, which is what makes the two columns
 comparable at all.
 
 The earlier pairs are not listed here any more, and the reason is that they
-were not comparable with these: until this was written the tool read the
-prompt file including its final newline, where the command drops it, so every
-figure it published described a seven-token prompt for a file the command
-tokenizes into six. The figures above are the first taken with the tool
-running what the command runs.
+were not comparable with these. Until this was written the tool differed from
+the command it publishes figures for in three ways: it read the prompt file
+including the final newline the command drops, it sampled with the greedy
+configuration where the command keeps its defaults, and it handed a batch
+size to backends that refuse batches. All three are fixed, a test now
+compares the two runs token for token and digest for digest, and the figures
+above are the first taken with the tool running what the command runs.
+
+They were taken in one burst with the machine otherwise quiet -- load average
+from other work under one when it started -- which is the closest to an idle
+machine these figures have had.
 
 Two things make that possible and neither is the device being fast.
 
@@ -1291,9 +1306,9 @@ tests speed --model MODEL --draft-model DRAFT --draft-tokens 4
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 1.128 s | 94 ms a token |
-| the same model at two bits | 2.464 s | 205 ms a token |
-| the first, drafted by the second | 4.920 s | 16 proposed, 9 accepted |
+| TinyLlama-1.1B at eight bits | 1.555 s | 130 ms a token |
+| the same model at two bits | 2.175 s | 181 ms a token |
+| the first, drafted by the second | 4.879 s | 16 proposed, 9 accepted |
 
 The two-bit file is a third of the size on disk and more than twice the cost
 to run, because what it saves in bytes it spends unpacking them. A smaller
@@ -1302,18 +1317,18 @@ more per token than the model it drafts for cannot win at any acceptance
 rate.
 
 The arithmetic, from the same three figures. Four rounds of four proposals
-cost 4.920 s, of which the draft's own sixteen passes are 16 × 205 ms =
-3.28 s, leaving 1.64 s for four checks -- **410 ms to check five positions**,
-against 94 ms for one token generated normally. A batch is one pass over the
+cost 4.879 s, of which the draft's own sixteen passes are 16 × 181 ms =
+2.90 s, leaving 1.98 s for four checks -- **495 ms to check five positions**,
+against 130 ms for one token generated normally. A batch is one pass over the
 weights and the extra work is the output projection per position, which is
 why five positions cost about four tokens rather than five.
 
-So a round of K proposals costs `K × d + 410 ms` and yields `1 + a` tokens,
-against `(1 + a) × 94 ms` without a draft. At the acceptance measured here,
-2.25 of four, that wants a draft under 26 ms a token -- about a quarter of
-the model's cost. Even a draft that were never wrong would have to beat
-14 ms, which is less than a seventh: with four proposals a round, the check
-alone already costs more than the four tokens it can save.
+So a round of K proposals costs `K × d + 495 ms` and yields `1 + a` tokens,
+against `(1 + a) × 130 ms` without a draft. At the acceptance measured here,
+2.25 of four, that wants a draft under 17 ms a token -- an eighth of the
+model's cost. With four proposals a round the check alone costs nearly as
+much as the four tokens it can save, so on this machine and at this
+acceptance rate no draft would pay.
 
 Not with a grammar, and not above temperature zero. Both are refused rather
 than ignored, and the difference matters: a draft is a second model file, so
@@ -1340,17 +1355,13 @@ twenty-three — so it can change what the model says, and is the faster of the
 two. A matrix already in the target format is left alone, and when nothing is
 left pointing into the file's own bytes they are released.
 
-Twelve tokens from the short prompt, generation only, medians of three.
-Taken before the tool was corrected to read that file as the command does, so
-they describe a prompt one token longer than the command's; the comparison
-between the three columns is what they are for and a token of prompt does not
-move it:
+Twelve tokens from the short prompt, generation only, medians of three:
 
 | weights | as stored | `f32` | `bf16` |
 |---|---|---|---|
-| Q8_0 | 1.06 s | 1.38 s | **0.98 s** |
-| Q4_K | 1.14 s | 1.44 s | **0.97 s** |
-| Q2_K | 1.65 s | 1.38 s | **1.02 s** |
+| Q8_0 | 1.68 s | 1.57 s | **1.40 s** |
+| Q4_K | 1.44 s | 1.55 s | **1.40 s** |
+| Q2_K | 2.19 s | 1.53 s | **1.30 s** |
 
 So `f32` is worth it only for Q2_K, and `bf16` is worth it everywhere: seven
 per cent on Q8_0, fifteen on Q4_K, thirty-eight on Q2_K, at half the memory

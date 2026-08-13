@@ -50,6 +50,7 @@ with Ada.Text_IO;
 
 with Expectations;
 with External_Model;
+with Speed_Run;
 with Tiny_Model;
 
 package body Tests.CLI_Cases is
@@ -8226,6 +8227,182 @@ package body Tests.CLI_Cases is
    --  run that did, so both are asked here; when the worker choice lived in
    --  one of them they could have disagreed.
 
+   ------------------------------------------
+   -- The_Speed_Tool_Runs_What_It_Publishes --
+   ------------------------------------------
+
+   --  `tests speed` runs the command it exists to reproduce.
+   --
+   --  It did not, in three ways at once, and every figure it published was
+   --  wrong about the run it described. It read the prompt file raw where
+   --  the command drops the file's final newline, so it measured a prompt a
+   --  token longer. It sampled with the greedy configuration where the
+   --  command sets only the temperature and keeps its defaults, penalty
+   --  included -- which changed which tokens came out, once penalties began
+   --  working at temperature zero. And it handed the asked-for batch size to
+   --  a backend that refuses batches, where the command clamps it to one.
+   --
+   --  None of that was visible in the figures: a wall time is a plausible
+   --  number whatever run produced it. What tells the two apart is the text
+   --  and the token counts, which is what this compares.
+   procedure The_Speed_Tool_Runs_What_It_Publishes
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model  : constant String := "obj/speed-agree-model.gguf";
+      Prompt : constant String := "obj/speed-agree-prompt.txt";
+      Text   : constant String := "obj/speed-agree-text.txt";
+      Notes  : constant String := "obj/speed-agree-notes.txt";
+
+      Tokens : constant := 4;
+
+      Report : Speed_Run.Report;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      --  With the trailing newline an editor would leave, because that is
+      --  the difference the command and the tool disagreed about.
+      declare
+         Handle : File_Type;
+      begin
+         Create (Handle, Out_File, Prompt);
+         Put_Line (Handle, "abab");
+         Close (Handle);
+      end;
+
+      Speed_Run.Run
+        (Path        => Model,
+         Prompt_Path => Prompt,
+         Tokens      => Tokens,
+         Threads     => 1,
+         Batch       => 32,
+         Repack      => Model_Runner.Llama.No_Repack,
+         Repeats     => 1,
+         Result      => Report);
+
+      Assert (Report.Ran,
+              "the tool would not measure the fixture: "
+              & Speed_Run.Summary (Report));
+
+      --  The same run as a command, with its own text kept apart from its
+      --  diagnostics so that the digest is over what was generated.
+      declare
+         Source : Fixed_Arguments;
+         Out_Handle, Err_Handle : File_Type;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt-file");
+         Add (Source, Prompt);
+         Add (Source, "--seed");
+         Add (Source, "1");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Add (Source, "--threads");
+         Add (Source, "1");
+         Add (Source, "--max-tokens");
+         Add (Source, "4");
+         Add (Source, "--show-stats");
+
+         Create (Out_Handle, Out_File, Text);
+         Create (Err_Handle, Out_File, Notes);
+         Set_Output (Out_Handle);
+         Set_Error (Err_Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Output (Standard_Output);
+               Set_Error (Standard_Error);
+               Close (Out_Handle);
+               Close (Err_Handle);
+               raise;
+         end;
+         Set_Output (Standard_Output);
+         Set_Error (Standard_Error);
+         Close (Out_Handle);
+         Close (Err_Handle);
+
+         Assert (Status = 0,
+                 "the command failed:" & Natural'Image (Status));
+      end;
+
+      declare
+         --  What the command generated, less the line terminator Text_IO
+         --  puts on when it closes a file whose last line was left open.
+         --  The sink writes raw bytes and never ends a line the model did
+         --  not end; the file it was captured into is closed by Text_IO,
+         --  which does.
+         function Generated return String is
+            Whole : constant String := Text_Of (Text);
+         begin
+            if Whole'Length > 0
+              and then Whole (Whole'Last) = Character'Val (10)
+            then
+               return Whole (Whole'First .. Whole'Last - 1);
+            end if;
+            return Whole;
+         end Generated;
+
+         Said : constant String := Generated;
+         Told : constant String := Text_Of (Notes);
+
+         --  The value of a labelled statistics line.
+         function Field (Label : String) return String is
+            From : Natural := Told'First;
+         begin
+            while From <= Told'Last loop
+               declare
+                  Stop : Natural := From;
+               begin
+                  while Stop <= Told'Last
+                    and then Told (Stop) /= Character'Val (10)
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  declare
+                     Line : constant String := Told (From .. Stop - 1);
+                     Head : constant String := "  " & Label;
+                  begin
+                     if Line'Length > Head'Length
+                       and then Line (Line'First .. Line'First + Head'Length - 1)
+                                = Head
+                     then
+                        return T.Trim
+                          (Line (Line'First + Head'Length .. Line'Last));
+                     end if;
+                  end;
+
+                  From := Stop + 1;
+               end;
+            end loop;
+            return "";
+         end Field;
+      begin
+         Assert (Field ("prompt tokens")
+                 = T.Trim (Natural'Image (Report.Prompt)),
+                 "the command read" & Field ("prompt tokens")
+                 & " prompt tokens and the tool read"
+                 & Natural'Image (Report.Prompt)
+                 & ", so they are not running the same prompt");
+
+         Assert (Field ("generated tokens")
+                 = T.Trim (Natural'Image (Report.Produced)),
+                 "the command generated" & Field ("generated tokens")
+                 & " tokens and the tool" & Natural'Image (Report.Produced));
+
+         Assert (Speed_Run.Digest_Of (Said) = Report.Digest,
+                 "the command and the tool generated different text: "
+                 & Speed_Run.Digest_Of (Said) & " against "
+                 & Report.Digest);
+      end;
+   end The_Speed_Tool_Runs_What_It_Publishes;
+
    procedure Runs_Report_Which_Backend_Ran
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -9111,6 +9288,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Streams_Are_Separate'Access,
          "each kind of output leaves by the stream the README says it does");
+      Register_Routine
+        (T, The_Speed_Tool_Runs_What_It_Publishes'Access,
+         "the speed tool runs the command it publishes figures for");
       Register_Routine
         (T, Runs_Report_Which_Backend_Ran'Access,
          "a run and an inspection both say which backend answers and with "

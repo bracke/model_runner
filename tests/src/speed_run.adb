@@ -43,15 +43,42 @@ package body Speed_Run is
    overriding procedure Flush (Self : in out Discard; Closed : out Boolean);
    overriding function Is_Closed (Self : Discard) return Boolean;
 
+   --  The hash itself, so that the sink and the public digest below cannot
+   --  drift apart.
+   procedure Absorb (Into : in out Interfaces.Unsigned_64; Item : String) is
+   begin
+      for Index in Item'Range loop
+         Into :=
+           (Into xor Interfaces.Unsigned_64
+                       (Character'Pos (Item (Index))))
+           * 16#0000_0100_0000_01B3#;
+      end loop;
+   end Absorb;
+
+   --  Sixteen hexadecimal digits, most significant first.
+   function Shown (Value : Interfaces.Unsigned_64) return String is
+      Figures : constant String := "0123456789abcdef";
+      Room    : String (1 .. 16) := [others => '0'];
+      Left    : Interfaces.Unsigned_64 := Value;
+   begin
+      for Place in reverse Room'Range loop
+         Room (Place) := Figures (Figures'First + Natural (Left mod 16));
+         Left := Left / 16;
+      end loop;
+      return Room;
+   end Shown;
+
+   function Digest_Of (Text : String) return String is
+      Held : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+   begin
+      Absorb (Held, Text);
+      return Shown (Held);
+   end Digest_Of;
+
    overriding procedure Write
      (Self : in out Discard; Item : String; Closed : out Boolean) is
    begin
-      for Index in Item'Range loop
-         Self.Hash :=
-           (Self.Hash xor Interfaces.Unsigned_64
-                            (Character'Pos (Item (Index))))
-           * 16#0000_0100_0000_01B3#;
-      end loop;
+      Absorb (Self.Hash, Item);
       Closed := False;
    end Write;
 
@@ -306,7 +333,16 @@ package body Speed_Run is
 
                   Model_Runner.Stops.Open (Stop);
                   Request.Max_Tokens := Tokens;
-                  Request.Batch_Size := Batch;
+
+                  --  As the command sets it: a backend that does not batch
+                  --  gets one, whatever was asked for. Passing the asked-for
+                  --  size to a backend that refuses batches makes every
+                  --  prefill fail, which is what happened here -- and the
+                  --  report said "0 generated" and called itself a
+                  --  measurement.
+                  Request.Batch_Size :=
+                    (if L.Capability (Engine).Supports_Batched
+                     then Batch else 1);
                   --  What the published command asks for, which is the
                   --  defaults with the temperature set to zero -- not the
                   --  greedy configuration, which also turns off the
@@ -353,19 +389,28 @@ package body Speed_Run is
                        / Long_Float
                            (Model_Runner.Clocks.Nanoseconds_Per_Second));
 
-                  --  Sixteen hexadecimal digits, most significant first.
-                  declare
-                     Figures : constant String := "0123456789abcdef";
-                     Left    : Interfaces.Unsigned_64 := Sink.Hash;
-                  begin
-                     for Place in reverse Result.Digest'Range loop
-                        Result.Digest (Place) :=
-                          Figures
-                            (Figures'First
-                             + Natural (Left mod 16));
-                        Left := Left / 16;
-                     end loop;
-                  end;
+                  Result.Digest := Shown (Sink.Hash);
+
+                  --  A run that did not finish is not a figure. This
+                  --  reported the wall time of a failure as though it were
+                  --  the wall time of a run, and a reader comparing a
+                  --  backend that failed against one that worked would have
+                  --  read it as the fastest thing here.
+                  if Gen."/=" (Outcome.Reason, Gen.Maximum_Tokens)
+                    and then Gen."/=" (Outcome.Reason, Gen.End_Of_Sequence)
+                    and then Gen."/=" (Outcome.Reason, Gen.Stop_Token)
+                    and then Gen."/=" (Outcome.Reason, Gen.Stop_String)
+                  then
+                     Say ("the run did not finish: "
+                          & E.Error_Code'Image (Outcome.Error.Code));
+                     Model_Runner.Stops.Close (Stop);
+                     if Drafting then
+                        L.Close (Draft_Session);
+                     end if;
+                     L.Close (Session);
+                     Gen.Release (Outcome);
+                     exit;
+                  end if;
 
                   Result.Prompt := Outcome.Prompt_Tokens;
                   Result.Produced := Outcome.Generated_Tokens;
