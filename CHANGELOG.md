@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--json-schema` and `--json-schema-file`: a schema becomes a grammar.**
+  It reads `type`, `properties` with `required`, `items`, `enum` and `const`,
+  and refuses every other keyword by name. Ignoring one would produce a
+  grammar that allows more than the schema does -- a constraint that quietly
+  is not one -- and the first version of this did exactly that until the test
+  for it was written.
+
+  Objects come out closed and ordered, which is narrower than the schema:
+  JSON leaves member order free, and allowing every order would grow the
+  grammar as the factorial of the property count. Everything it accepts the
+  schema accepts and not the reverse, and that direction is written down
+  where a reader meets it.
+
+  The tests run the grammars rather than reading them -- a converter that
+  writes plausible text is what a string comparison would pass. That found
+  the fault worth recording: the rule for what may appear inside a JSON
+  string was written with one backslash too many, so instead of excluding the
+  control characters it excluded the letters `x`, `f`, the digits `0` and `1`
+  and the dash, and let raw newlines through. A model under that grammar
+  produced strings no JSON reader would take.
+
+  `tests schema SCHEMA` prints what a schema becomes, which is how the
+  grammar gets read without running a model -- and how that fault was found.
+
 - **Adapters stack, and come off again.** `--lora` is repeatable and the
   adapters are merged in the order given; `--lora-scale` pairs with them
   positionally. A merge adds a difference to the weights, so a second lands
@@ -2673,7 +2697,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 160 diagnostic
+- Localization through `messages`, with a catalog entry for all 161 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

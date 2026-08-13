@@ -171,6 +171,7 @@ package Model_Runner.Errors is
       Grammar_Nesting_Too_Deep,
       Grammar_Too_Ambiguous,
       Grammar_Rejected_Every_Token,
+      Grammar_Schema_Unsupported,
 
       --  Architecture profile.
       Arch_Missing_Identifier,

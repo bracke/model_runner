@@ -13,6 +13,7 @@ package body Tool_Commands is
    Name_Fixtures       : aliased constant String := "fixtures";
    Name_Package        : aliased constant String := "package";
    Name_Pristine       : aliased constant String := "pristine";
+   Name_Schema         : aliased constant String := "schema";
 
    Nothing : aliased constant String := "";
 
@@ -47,6 +48,7 @@ package body Tool_Commands is
    Takes_Fixtures  : aliased constant String := "[DIR]";
    Takes_Package   : aliased constant String := "[ROOT] [INTO]";
    Takes_Pristine  : aliased constant String := "[ROOT]";
+   Takes_Schema    : aliased constant String := "SCHEMA";
 
    Says_Test : aliased constant String :=
      "run the mandatory suite";
@@ -73,10 +75,12 @@ package body Tool_Commands is
      "write the committed test fixtures";
    Says_Package : aliased constant String :=
      "assemble the distributable archive from what is already built";
+   Says_Schema : aliased constant String :=
+     "write the grammar a JSON schema becomes";
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
 
-   Held : constant array (1 .. 13) of Command :=
+   Held : constant array (1 .. 14) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -102,6 +106,8 @@ package body Tool_Commands is
       (Name_Package'Access, Takes_Package'Access, Says_Package'Access,
        Opts_None'Access),
       (Name_Pristine'Access, Takes_Pristine'Access, Says_Pristine'Access,
+       Opts_None'Access),
+      (Name_Schema'Access, Takes_Schema'Access, Says_Schema'Access,
        Opts_None'Access)];
 
    -----------

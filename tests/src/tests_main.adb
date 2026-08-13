@@ -30,6 +30,7 @@ with Model_Runner.Errors;
 with Model_Runner.Backend;
 with Model_Runner.Numerics;
 with Model_Runner.Llama;
+with Model_Runner.Schema;
 with Model_Runner.Platform;
 with Project_Tools.Files;
 with Project_Tools.Text;
@@ -646,6 +647,40 @@ begin
                "could not write the error-code reference");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
+      end;
+
+   elsif Command = "schema" then
+      --  A schema, as the grammar it becomes. For seeing what a schema
+      --  turns into without running a model, which is how the grammar it
+      --  produces gets read at all.
+      declare
+         Text : constant String :=
+           (if Ada.Command_Line.Argument_Count >= 2
+            then Ada.Command_Line.Argument (2) else "");
+
+         Room   : String (1 .. Model_Runner.Schema.Max_Grammar_Bytes);
+         Last   : Natural;
+         Status : Model_Runner.Errors.Error_Info;
+      begin
+         if Text = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, "usage: tests schema SCHEMA");
+            Ada.Command_Line.Set_Exit_Status (2);
+            return;
+         end if;
+
+         Model_Runner.Schema.To_Grammar (Text, Room, Last, Status);
+
+         if Model_Runner.Errors.Is_Error (Status) then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "refused: "
+               & Model_Runner.Errors.Error_Code'Image (Status.Code));
+            Ada.Command_Line.Set_Exit_Status (1);
+            return;
+         end if;
+
+         Ada.Text_IO.Put_Line (Room (1 .. Last));
       end;
 
    elsif Command = "shader" then

@@ -160,6 +160,33 @@ as is half a pair, because half a difference is not a smaller difference.
 
 ### Constrained output
 
+
+`--json-schema TEXT` and `--json-schema-file PATH` take a JSON schema and
+turn it into a grammar before anything is generated, so a caller with a
+schema does not have to hand-write GBNF and then keep the two in step. It
+reads `type`, `properties` with `required`, `items`, `enum` and `const`, and
+refuses every other keyword by name rather than ignoring it -- a keyword
+ignored produces a grammar that allows more than the schema does, which is a
+constraint that quietly is not one.
+
+Objects come out closed and ordered: exactly the properties named, in the
+order named. JSON leaves member order free and a grammar that allowed every
+order would grow as the factorial of the property count, so what this
+produces is narrower than the schema. Everything it accepts the schema
+accepts, and not the reverse; that is the honest direction for a constraint
+to err in and it is written where a reader will meet it.
+
+`tests schema SCHEMA` prints the grammar a schema becomes, which is how the
+output gets read without running a model.
+
+```
+$ model_runner run MODEL --raw --prompt "Describe Paris: " --max-tokens 24 \
+    --temperature 0 --json-schema '{"type":"object","properties":{
+      "city":{"type":"string"},"population":{"type":"integer"},
+      "capital":{"type":"boolean"}}}'
+{"city":"Paris","population":100000,"capital":true}
+```
+
 `--grammar` holds the generated text to a grammar. At each step every token
 whose text cannot continue the grammar is removed from the distribution
 before anything is sampled, so what comes out is text the grammar accepts --
@@ -318,11 +345,11 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback |
 | CLI | `run`, `embed`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection. `--prompt` is repeatable: several prompts are several sequences from one loaded model, each with its own context and its own statistics, and standard error says which is which so that standard output stays nothing but generated text. It is refused together with a saved or restored context, which names one conversation |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]`, the last removing the system message when no text follows it, blank-line submission, no history written to disk. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 160 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 161 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes binary32, Q8_0 and Q4_0 from the bytes the file holds and takes a batch of eight vectors per invocation, so a quantized model needs no repacking and a prompt is one reading of the weights rather than one a token; the other twelve formats reach it through `--repack f32`. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
-| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests tokenize`, `tests docs`, `tests shader`, `tests fixtures`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
+| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests tokenize`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
 ## Building and testing

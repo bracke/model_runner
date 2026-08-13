@@ -136,6 +136,7 @@ ordinal is never reused, not because they might appear.
 | `MR-GRAM-0005` | `error.grammar.nesting_too_deep` | recovery_none | 2 | raised |
 | `MR-GRAM-0006` | `error.grammar.too_ambiguous` | recovery_none | 2 | raised |
 | `MR-GRAM-0007` | `error.grammar.rejected_every_token` | recovery_none | 2 | raised |
+| `MR-GRAM-0008` | `error.grammar.schema_unsupported` | recovery_none | 2 | raised |
 
 ## ARCH
 

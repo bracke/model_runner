@@ -28,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 62) of Registry_Row :=
+   Registry : constant array (1 .. 64) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -52,6 +52,10 @@ package body Model_Runner.CLI.Options is
        Text ("lora")),
       (Text ("--lora-scale"), [Command_Run => True, others => False],
        Text ("lora_scale")),
+      (Text ("--json-schema"), [Command_Run => True, others => False],
+       Text ("json_schema")),
+      (Text ("--json-schema-file"), [Command_Run => True, others => False],
+       Text ("json_schema_file")),
       (Text ("--grammar"), [Command_Run => True, others => False],
        Text ("grammar")),
       (Text ("--grammar-file"), [Command_Run => True, others => False],
@@ -332,6 +336,11 @@ package body Model_Runner.CLI.Options is
       --  Prompt text may be sensitive; clear it before releasing. The first
       --  prompt is the same object Prompt_Text names, so that one is
       --  released here and the name is only cleared.
+      if Item.Schema_Text /= null then
+         Item.Schema_Text.all := [others => ' '];
+         Free_Text (Item.Schema_Text);
+      end if;
+
       for Index in 1 .. Item.Prompt_Count loop
          if Item.Prompts (Index) /= null then
             Item.Prompts (Index).all := [others => ' '];
@@ -721,6 +730,7 @@ package body Model_Runner.CLI.Options is
 
          Flag_Grammar,
          Flag_Grammar_File,
+         Flag_Schema, Flag_Schema_File,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
@@ -1053,6 +1063,24 @@ package body Model_Runner.CLI.Options is
                            Result.Adapter_Scale := Value;
                         end if;
                      end;
+
+                  elsif Name = "--json-schema" then
+                     Mark (Flag_Schema, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Result.Schema_Text, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--json-schema-file" then
+                     Bounded_Value
+                       (Flag_Schema_File, Result.Schema_Path, Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--grammar" then
                      Mark (Flag_Grammar, Name, Good);
@@ -1913,6 +1941,31 @@ package body Model_Runner.CLI.Options is
         and then T.Is_Empty (Result.Model_Path)
       then
          Status := E.Make (E.CLI_Missing_Model_Path);
+         return;
+      end if;
+
+      --  A schema and a grammar are two answers to one question. Refused
+      --  rather than resolved by precedence: a schema becomes a grammar, so
+      --  a caller naming both has written two constraints and can only have
+      --  meant one.
+      if (Result.Schema_Text /= null
+          or else not T.Is_Empty (Result.Schema_Path))
+        and then (Result.Grammar_Text /= null
+                  or else not T.Is_Empty (Result.Grammar_Path))
+      then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--json-schema", E.Param_Identifier);
+         E.Add_Text (Status, "other", "--grammar", E.Param_Identifier);
+         return;
+      end if;
+
+      if Result.Schema_Text /= null
+        and then not T.Is_Empty (Result.Schema_Path)
+      then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--json-schema", E.Param_Identifier);
+         E.Add_Text
+           (Status, "other", "--json-schema-file", E.Param_Identifier);
          return;
       end if;
 

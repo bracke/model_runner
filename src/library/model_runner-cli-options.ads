@@ -356,6 +356,12 @@ package Model_Runner.CLI.Options is
       Adapter_Path  : Model_Runner.Text.Bounded;
       Adapter_Scale : Model_Runner.Numerics.Real := 1.0;
 
+      --  A JSON schema, which becomes a grammar before anything is
+      --  generated. Held apart from the grammar so that a caller naming both
+      --  is refused rather than silently given one of them.
+      Schema_Text : Text_Access := null;
+      Schema_Path : Model_Runner.Text.Bounded;
+
       Grammar_Text : Text_Access := null;
       Grammar_Path : Model_Runner.Text.Bounded;
 

@@ -20,6 +20,7 @@ with Model_Runner.Quantization;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Grammar;
+with Model_Runner.Schema;
 with Model_Runner.Limits;
 with Model_Runner.Llama;
 with Model_Runner.Memory;
@@ -1376,6 +1377,50 @@ package body Model_Runner.CLI.Execute is
             end if;
 
             Draft_Ready := True;
+         end if;
+
+         --  A schema is a grammar written in another notation, so it
+         --  becomes one here and everything below treats it as one. The
+         --  parser has already refused a caller who named both.
+         if Item.Schema_Text /= null
+           or else not T.Is_Empty (Item.Schema_Path)
+         then
+            declare
+               Text : Opt.Text_Access := null;
+
+               Written : String (1 .. Model_Runner.Schema.Max_Grammar_Bytes);
+               Last    : Natural;
+            begin
+               if Item.Schema_Text /= null then
+                  Text := new String'(Item.Schema_Text.all);
+               else
+                  Read_File
+                    (T.To_String (Item.Schema_Path),
+                     Model_Runner.Schema.Max_Schema_Bytes, Text, Condition);
+                  if E.Is_Error (Condition) then
+                     Fail (Condition);
+                     return;
+                  end if;
+               end if;
+
+               Model_Runner.Schema.To_Grammar
+                 (Text.all, Written, Last, Condition);
+               Free_Text (Text);
+
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               Model_Runner.Grammar.Compile
+                 (Rules, Written (1 .. Last), Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               Rules_Ready := True;
+            end;
          end if;
 
          --  The grammar, before anything is generated. A grammar that will

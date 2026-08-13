@@ -2,6 +2,7 @@ with AUnit.Assertions; use AUnit.Assertions;
 
 with Model_Runner.Errors;
 with Model_Runner.Grammar;
+with Model_Runner.Schema;
 
 package body Tests.Grammar_Cases is
 
@@ -321,9 +322,145 @@ package body Tests.Grammar_Cases is
       G.Close (Item);
    end Matching_Follows_The_Text;
 
+   -----------------------------------------
+   -- Schemas_Become_Grammars_That_Hold --
+   -----------------------------------------
+
+   --  A JSON schema becomes a grammar that compiles, accepts what the schema
+   --  describes, and refuses what it does not.
+   --
+   --  The grammar is checked by running it rather than by reading it: a
+   --  converter that writes plausible text is exactly what a test comparing
+   --  strings would pass. Each schema below is compiled and then fed the
+   --  answers it should take and the answers it should not.
+   procedure Schemas_Become_Grammars_That_Hold
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Sch renames Model_Runner.Schema;
+
+      procedure Check
+        (Schema : String;
+         Text   : String;
+         Wanted : Boolean;
+         Why    : String)
+      is
+         Room   : String (1 .. Sch.Max_Grammar_Bytes);
+         Last   : Natural;
+         Status : E.Error_Info;
+
+         Item  : G.Compiled;
+         State : G.Matcher;
+
+         Taken : Boolean := True;
+      begin
+         Sch.To_Grammar (Schema, Room, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "the schema was refused: "
+                 & E.Error_Code'Image (Status.Code) & " -- " & Why);
+
+         G.Compile (Item, Room (1 .. Last), Status);
+         Assert (E.Is_Ok (Status),
+                 "the grammar a schema produced would not compile: "
+                 & E.Error_Code'Image (Status.Code) & " -- " & Why);
+
+         G.Start (Item, State, Status);
+         Assert (E.Is_Ok (Status), "the matcher would not start");
+
+         for Index in Text'Range loop
+            if not G.Accepts (Item, State, Text (Index .. Index)) then
+               Taken := False;
+               exit;
+            end if;
+
+            G.Advance (Item, State, Text (Index .. Index), Status);
+            exit when E.Is_Error (Status);
+         end loop;
+
+         if Taken then
+            Taken := G.Is_Complete (Item, State);
+         end if;
+
+         Assert (Taken = Wanted,
+                 (if Wanted then "the grammar refused "
+                  else "the grammar took ")
+                 & """" & Text & """: " & Why);
+
+         G.Close (Item);
+      end Check;
+
+      procedure Refuses (Schema : String; Why : String) is
+         Room   : String (1 .. Sch.Max_Grammar_Bytes);
+         Last   : Natural;
+         Status : E.Error_Info;
+      begin
+         Sch.To_Grammar (Schema, Room, Last, Status);
+         Assert (Status.Code = E.Grammar_Schema_Unsupported,
+                 "a schema that cannot be expressed was accepted: " & Why);
+      end Refuses;
+   begin
+      Check ("{""type"":""integer""}", "-12", True, "an integer");
+      Check ("{""type"":""integer""}", "1.5", False, "not an integer");
+      Check ("{""type"":""boolean""}", "true", True, "a boolean");
+      Check ("{""type"":""boolean""}", "yes", False, "not a boolean");
+      Check ("{""type"":""null""}", "null", True, "null");
+
+      --  Strings, and what may not be inside one. A raw control character is
+      --  the case worth holding: JSON forbids it, and a set written a
+      --  backslash wrong lets it through while excluding letters instead --
+      --  which is what the first version of this converter did.
+      Check ("{""type"":""string""}", """ab""", True, "a string");
+      Check ("{""type"":""string""}", """a" & Character'Val (10) & "b""",
+             False, "a newline inside a string");
+      Check ("{""type"":""string""}", """a\nb""", True,
+             "an escaped newline inside a string");
+      Check ("{""type"":""string""}", """a\qb""", False,
+             "an escape JSON does not have");
+
+      Check ("{""type"":""object"",""properties"":"
+             & "{""a"":{""type"":""integer""},""b"":{""type"":""boolean""}}}",
+             "{""a"":1,""b"":true}", True, "an object of two properties");
+      Check ("{""type"":""object"",""properties"":"
+             & "{""a"":{""type"":""integer""},""b"":{""type"":""boolean""}}}",
+             "{""a"":1}", False, "an object missing a property");
+      Check ("{""type"":""object"",""properties"":"
+             & "{""a"":{""type"":""integer""}}}",
+             "{""a"":1,""c"":2}", False, "an object with one too many");
+
+      Check ("{""type"":""array"",""items"":{""type"":""integer""}}",
+             "[]", True, "an empty array");
+      Check ("{""type"":""array"",""items"":{""type"":""integer""}}",
+             "[1,2,3]", True, "an array of three");
+      Check ("{""type"":""array"",""items"":{""type"":""integer""}}",
+             "[1,]", False, "a trailing comma");
+
+      Check ("{""enum"":[""yes"",""no""]}", """yes""", True, "a choice");
+      Check ("{""enum"":[""yes"",""no""]}", """maybe""", False,
+             "not one of the choices");
+      Check ("{""const"":42}", "42", True, "a fixed value");
+      Check ("{""const"":42}", "43", False, "not the fixed value");
+
+      Check ("{""type"":""object"",""properties"":{""xs"":"
+             & "{""type"":""array"",""items"":{""type"":""integer""}}}}",
+             "{""xs"":[1,2]}", True, "an array inside an object");
+
+      --  And what it will not pretend to express.
+      Refuses ("{""type"":""object"",""properties"":{""a"":"
+               & "{""type"":""integer""}},""additionalProperties"":true}",
+               "additionalProperties");
+      Refuses ("{""type"":""integer"",""minimum"":3}", "minimum");
+      Refuses ("{""oneOf"":[{""type"":""integer""}]}", "oneOf");
+      Refuses ("{""type"":""object""}", "an object with no properties");
+   end Schemas_Become_Grammars_That_Hold;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Schemas_Become_Grammars_That_Hold'Access,
+         "a JSON schema becomes a grammar that takes what the schema "
+         & "describes and refuses what it does not");
       Register_Routine
         (T, Notation_Means_What_It_Says'Access,
          "each construct of the notation means what it says");
