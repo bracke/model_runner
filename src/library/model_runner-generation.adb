@@ -635,10 +635,48 @@ package body Model_Runner.Generation is
            (Produced_Here : out Natural;
             Failed        : out Boolean)
          is
-            Before : constant Natural := L.Position (Session);
+            Before : Natural := L.Position (Session);
             Count  : Natural := 0;
             Local  : E.Error_Info;
             Guess  : Token_Id;
+
+            --  Drop the oldest positions from both sessions at once, when
+            --  the caller asked for that. Both, because the draft is only
+            --  useful while it is looking at what the target is looking at:
+            --  shifting one and not the other leaves it proposing from a
+            --  context the target does not have.
+            --
+            --  The single-token path had this and the round did not, so
+            --  --context-shift did nothing at all in company with
+            --  --draft-model -- an option that works alone and stops
+            --  working beside another, which is the third time that shape
+            --  of fault has been made here.
+            procedure Make_Room (Ok : out Boolean) is
+               Moved : E.Error_Info;
+            begin
+               Ok := False;
+               if Item.Context_Shift = 0 then
+                  return;
+               end if;
+
+               L.Shift
+                 (Session, Source, Item.Context_Keep, Item.Context_Shift,
+                  Moved);
+               if E.Is_Error (Moved) then
+                  return;
+               end if;
+
+               L.Shift
+                 (Draft_Session.all, Draft.all, Item.Context_Keep,
+                  Item.Context_Shift, Moved);
+               if E.Is_Error (Moved) then
+                  return;
+               end if;
+
+               Outcome.Shifted := Outcome.Shifted + 1;
+               Before := L.Position (Session);
+               Ok := True;
+            end Make_Room;
          begin
             Produced_Here := 0;
             Failed := False;
@@ -668,6 +706,14 @@ package body Model_Runner.Generation is
                L.Evaluate
                  (Draft_Session.all, Draft.all, Proposed.all (Count),
                   Aside.all, Cancel, Local);
+
+               --  A draft that has run out of room stops proposing rather
+               --  than stopping the run: what it has proposed so far is
+               --  still worth checking, and the target's own room is dealt
+               --  with below.
+               exit when E.Is_Error (Local)
+                 and then Local.Code = E.Generation_Context_Exhausted;
+
                if E.Is_Error (Local) then
                   Conclude (Runtime_Error, Local);
                   Failed := True;
@@ -694,6 +740,26 @@ package body Model_Runner.Generation is
             L.Evaluate_Batch
               (Session, Source, Proposed.all (1 .. Count), Logits.all,
                Every => Every, Cancel => Cancel, Status => Local);
+
+            --  Out of room: drop the oldest and read them again. Once, as
+            --  on the single-token path -- a batch that still will not fit
+            --  after a shift ends the run as it would have.
+            if E.Is_Error (Local)
+              and then Local.Code = E.Generation_Context_Exhausted
+            then
+               declare
+                  Room : Boolean;
+               begin
+                  Make_Room (Room);
+                  if Room then
+                     L.Evaluate_Batch
+                       (Session, Source, Proposed.all (1 .. Count),
+                        Logits.all, Every => Every, Cancel => Cancel,
+                        Status => Local);
+                  end if;
+               end;
+            end if;
+
             if E.Is_Error (Local) then
                if Local.Code = E.Generation_Cancelled then
                   Conclude (Cancelled);

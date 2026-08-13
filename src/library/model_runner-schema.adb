@@ -470,6 +470,60 @@ package body Model_Runner.Schema is
          end loop;
 
          Put (" ""}""");
+
+         --  Every name the schema requires has to be one it describes. A
+         --  required name that no property matches is a demand the grammar
+         --  cannot carry -- there is nothing to make mandatory -- and
+         --  ignoring it produces a grammar that quietly does not require
+         --  what the schema says it does.
+         declare
+            At_List     : Natural;
+            Failed_Here : Boolean;
+            Walk        : Reader;
+         begin
+            Find_Member (Text, From, "required", At_List, Failed_Here);
+            if not Failed_Here and then At_List /= 0 then
+               Walk := (At_Char => At_List, others => <>);
+               Skip_Blanks (Text, Walk);
+               if Walk.At_Char <= Text'Last
+                 and then Text (Walk.At_Char) = '['
+               then
+                  Walk.At_Char := Walk.At_Char + 1;
+
+                  loop
+                     Skip_Blanks (Text, Walk);
+                     exit when Walk.At_Char > Text'Last;
+                     exit when Text (Walk.At_Char) = ']';
+
+                     declare
+                        First, Last_At : Natural;
+                        At_Property    : Natural;
+                        Missing        : Boolean;
+                     begin
+                        Read_String (Text, Walk, First, Last_At);
+                        exit when Walk.Failed;
+
+                        Find_Member
+                          (Text, At_Props, Text (First .. Last_At),
+                           At_Property, Missing);
+
+                        if Missing or else At_Property = 0 then
+                           Refuse
+                             ("a required property that is not described");
+                           return;
+                        end if;
+
+                        Skip_Blanks (Text, Walk);
+                        if Walk.At_Char <= Text'Last
+                          and then Text (Walk.At_Char) = ','
+                        then
+                           Walk.At_Char := Walk.At_Char + 1;
+                        end if;
+                     end;
+                  end loop;
+               end if;
+            end if;
+         end;
       end Object_Shape;
 
       procedure Array_Shape (From : Natural; Depth : Natural) is

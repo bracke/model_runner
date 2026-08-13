@@ -54,6 +54,18 @@ package Speed_Run is
 
       Digest    : String (1 .. 16) := [others => '0'];
 
+      --  What the machine was doing while this was measured: the load
+      --  average, before the first run and after the last.
+      --
+      --  Recorded because it decides the figure. The processor column of
+      --  every comparison here has moved by forty per cent between
+      --  otherwise identical runs, and the only way anybody could tell one
+      --  measurement from another was prose written beside it by hand. A
+      --  figure that carries its own conditions can be compared with
+      --  another; one that does not has to be believed.
+      Load_Before : Long_Float := 0.0;
+      Load_After  : Long_Float := 0.0;
+
       --  What a draft model proposed and how much of it was taken, for a
       --  measurement with one. Both zero without.
       Drafted   : Natural := 0;

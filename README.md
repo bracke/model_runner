@@ -1359,7 +1359,11 @@ rather than once per token.
 
 So a draft earns its keep only when it is much faster than the model and
 usually right. Whether a particular one is can be worked out from three
-measurements, and `tests speed` takes all three:
+measurements, and `tests speed` takes all three. Its summary ends with the machine's load
+average before and after the run, because the processor side of every
+comparison here has moved by forty per cent between otherwise identical
+measurements and a figure that carries its own conditions can be compared
+with another:
 
 ```
 tests speed --model MODEL
@@ -1444,7 +1448,10 @@ second is written.
 ### A context that rolls
 
 `--context-shift N` says what to do when the context fills: drop the oldest
-N positions, slide the rest down, and carry on. `--context-keep N` says how
+N positions, slide the rest down, and carry on. It applies to a drafted run
+as well, where both the model's context and the draft's are shifted together
+-- a draft proposing from a context the model no longer has proposes badly,
+which costs speed rather than correctness and would go unnoticed. `--context-keep N` says how
 many at the front to leave in place -- the beginning-of-text marker, by
 default. Without it a run that fills its context ends there, which is where
 it ended before this existed.

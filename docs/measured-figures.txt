@@ -336,7 +336,7 @@ kernels 659A79D4E78E7815 src/library/model_runner-quantization.adb src/library/m
 # published 1.28, on a machine running three other agents at a load average
 # of 2.5 on eight cores. Not republished for that reason, and the generated
 # text is unchanged: the same output digest, 7784f071e5740782.
-engine 48CB4FD44B0F1E12 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 6BF27B7A4BC19E5C src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -345,7 +345,7 @@ engine 48CB4FD44B0F1E12 src/library/model_runner-llama.adb src/library/model_run
 # that was added.
 # 2026-08-12, the same two changes, and this group is a ratio between two
 # backends neither of which the memory check applies to.
-reference 46C8140B96B4FACA src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 587B75CC6CBCBD64 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
 # and the 111-token prompt, on both backends -- the claim that the two print
@@ -363,6 +363,21 @@ reference 46C8140B96B4FACA src/library/model_runner-backend-reference.adb src/li
 # --backend: the device figures moved by a hundredth of a second and the
 # processor figures by half of one, which is the machine rather than the
 # code and is now said in the README beside the table.
+#
+# 2026-08-13, the shift on the drafting path, and the tool now reads the
+# load. Not re-measured, and the reason is the rule's own: both changes are
+# off the path these figures walk. The drafting round gained a branch that
+# fires when the context is exhausted, which none of these runs does -- they
+# use a context of two thousand and generate twelve tokens -- and the load
+# is read once before the first run and once after the last, outside every
+# timed region.
+#
+# The machine is at a load of 2.8 as this is written, where the figures
+# above were taken at 0.9, so re-measuring now would publish the difference
+# between two machines-states as though it were a difference in the code.
+# Which is the whole reason the tool now reports the load: from the next
+# measurement onwards a figure carries the conditions it was taken under,
+# and nobody has to take my word for which afternoon it came from.
 #
 # 2026-08-13, the rolling context. Apply_Rotary gained a way to turn a
 # rotation back, which is a branch inside the innermost loop of the hot path,
@@ -467,7 +482,7 @@ reference 46C8140B96B4FACA src/library/model_runner-backend-reference.adb src/li
 # The processor column moved more between measurements than the device
 # column did, again, which is the second time that has happened and is why
 # the caveat under the table now gives all three pairs rather than one.
-device EF500D1094339057 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+device 2ED6C4D4D242303D src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -479,7 +494,7 @@ device EF500D1094339057 src/shaders/row_product.comp src/library/model_runner-sh
 # the file the drafting loop is written in, so the loop could have been
 # rewritten without anything asking for a re-measure. A figure covered by a
 # group that does not name its own source is a figure covered by nothing.
-drafting 5C10803028CFF794 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting CB6E30D36CAE50CF src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling B5443E99EAAA8126 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb

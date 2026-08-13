@@ -98,6 +98,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **`--context-shift` did nothing beside `--draft-model`.** The shift lived
+  on the single-token path only, so a drafted run met the full context in the
+  round's batch and ended there. Two options that each worked alone and one
+  of which quietly stopped working in company -- the third time that shape of
+  fault has been made here, and the reason the test for it asserts the token
+  count rather than that nothing crashed.
+
+  Both sessions shift together now. A draft proposing from a context the
+  model no longer has proposes badly, which costs speed rather than
+  correctness and would therefore go unnoticed.
+
+- **A `required` name that no property describes was ignored.** The schema
+  said a member was mandatory, nothing in the grammar made it so, and nothing
+  said anything. Refused now, by name.
+
+### Added
+
+- **`tests speed` reports the machine's load, before and after.** The
+  processor side of every comparison here has moved by forty per cent between
+  otherwise identical measurements, and until now the only thing telling one
+  measurement from another was prose written beside it by hand. A figure that
+  carries its own conditions can be compared with another; one that does not
+  has to be believed.
+
+- **A test that a shifted context survives being written out and read back.**
+  A saved context carries the positions it was written with, and after a
+  shift those are not the positions the tokens were first evaluated at.
+  Neither a snapshot that recorded the old ones nor a restore that put them
+  back would raise anything.
+
 - **`required` was read and then ignored.** The schema converter accepted the
   keyword and made every named property mandatory, while the package's own
   specification said a property not required is optional. One of the two was

@@ -1630,6 +1630,91 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Drafting_Produces_The_Same_Text;
 
+   ------------------------------------------
+   -- Drafting_Shifts_When_The_Room_Runs_Out --
+   ------------------------------------------
+
+   --  A drafted run drops its oldest positions when the context fills, as a
+   --  run without a draft does.
+   --
+   --  The shift lived on the single-token path only, so --context-shift did
+   --  nothing at all beside --draft-model: the round's batch met the full
+   --  context and ended the run. Two options that each worked alone and one
+   --  of which quietly stopped working in company.
+   --
+   --  Both sessions are shifted together, because a draft proposing from a
+   --  context the target no longer has proposes badly -- which costs speed
+   --  and not correctness, and would therefore go unnoticed.
+   procedure Drafting_Shifts_When_The_Room_Runs_Out
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Image : B.Byte_Array_Access;
+
+      Prompt : constant String := "abab";
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         Live    : L.Session;
+         Second  : aliased L.Session;
+         Request : Gen.Request;
+         Stop    : Model_Runner.Stops.Set;
+         Outcome : Gen.Result;
+         Status  : E.Error_Info;
+      begin
+         Start (Under);
+
+         L.Open (Live, Under.Ready, 16, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         L.Open (Second, Under.Ready, 16, Status => Status);
+         Assert (E.Is_Ok (Status), "the draft session did not open");
+
+         Model_Runner.Stops.Open (Stop);
+         Request.Max_Tokens := 24;
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+         Request.Seed := 1;
+         Request.Has_Seed := True;
+         Request.Add_Beginning := True;
+         Request.Draft_Tokens := 3;
+         Request.Context_Shift := 6;
+         Request.Context_Keep := 1;
+
+         Gen.Generate
+           (Under.Ready, Live, Prompt, Request, Stop, null, null,
+            null, null, null, null,
+            Draft => Under.Ready'Unchecked_Access,
+            Draft_Session => Second'Unchecked_Access,
+            Outcome => Outcome);
+
+         Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                 "the run failed: "
+                 & E.Error_Code'Image (Outcome.Error.Code));
+         Assert (not Gen."=" (Outcome.Reason, Gen.Context_Full),
+                 "a drafted run ended for want of room with --context-shift "
+                 & "asked for");
+         Assert (Outcome.Generated_Tokens = 24,
+                 "a drafted rolling run produced"
+                 & Natural'Image (Outcome.Generated_Tokens)
+                 & " tokens of twenty-four");
+         Assert (Outcome.Shifted > 0,
+                 "a drafted run past its context never dropped anything");
+
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Second);
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end Drafting_Shifts_When_The_Room_Runs_Out;
+
    ------------------------------------
    -- Drafting_Runs_On_A_Device --
    ------------------------------------
@@ -2252,6 +2337,98 @@ package body Tests.Inference_Cases is
 
       B.Free (Image);
    end Adapters_Stack_And_Come_Off_Again;
+
+   -------------------------------------------
+   -- A_Shifted_Context_Saves_And_Restores --
+   -------------------------------------------
+
+   --  A context that has been shifted can be written out and read back, and
+   --  answers the same afterwards.
+   --
+   --  A saved context carries the positions it was written with. After a
+   --  shift those are not the positions the tokens were first evaluated at,
+   --  and a snapshot that recorded the old ones -- or a restore that put
+   --  them back where they were -- would give a session whose cache and
+   --  whose history disagreed. Neither would raise anything.
+   procedure A_Shifted_Context_Saves_And_Restores
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+
+      Whole : constant array (1 .. 9) of Vocab.Token_Id :=
+        [4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+      Next : constant Vocab.Token_Id := 6;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         Straight, Restored : Logit_Vector := [others => 0.0];
+         Status : E.Error_Info;
+
+         Room : B.Byte_Array_Access;
+      begin
+         Start (Under);
+
+         --  Shift, then continue -- and keep the context as it stood
+         --  before that continuation.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            for Token of Whole loop
+               L.Evaluate (Live, Under.Ready, Token, Straight,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed");
+            end loop;
+
+            L.Shift (Live, Under.Ready, 1, 4, Status);
+            Assert (E.Is_Ok (Status), "the shift was refused");
+
+            L.Snapshot (Live, Under.Ready, Room, Status);
+            Assert (E.Is_Ok (Status),
+                    "a shifted context would not be written out: "
+                    & E.Error_Code'Image (Status.Code));
+
+            L.Evaluate (Live, Under.Ready, Next, Straight, Status => Status);
+            Assert (E.Is_Ok (Status), "the continuation failed");
+            L.Close (Live);
+         end;
+
+         --  The same continuation, from the context read back.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            L.Adopt (Live, Under.Ready, Room.all, Status);
+            Assert (E.Is_Ok (Status),
+                    "a shifted context would not be read back: "
+                    & E.Error_Code'Image (Status.Code));
+
+            L.Evaluate (Live, Under.Ready, Next, Restored, Status => Status);
+            Assert (E.Is_Ok (Status), "the continuation failed");
+            L.Close (Live);
+         end;
+
+         B.Free (Room);
+
+         for Index in Straight'Range loop
+            Assert (Straight (Index) = Restored (Index),
+                    "a shifted context read back answers differently at"
+                    & N.Element_Count'Image (Index));
+         end loop;
+      end;
+
+      B.Free (Image);
+   end A_Shifted_Context_Saves_And_Restores;
 
    ---------------------------------------
    -- Shifting_Moves_The_Positions --
@@ -4836,12 +5013,20 @@ package body Tests.Inference_Cases is
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
       Register_Routine
+        (T, A_Shifted_Context_Saves_And_Restores'Access,
+         "a context that has been shifted can be written out and read back "
+         & "and answers the same afterwards");
+      Register_Routine
         (T, Shifting_Moves_The_Positions'Access,
          "dropping the oldest positions renumbers what is left and lets the "
          & "run go on");
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, Drafting_Shifts_When_The_Room_Runs_Out'Access,
+         "a drafted run drops its oldest positions when the context fills, "
+         & "as a run without a draft does");
       Register_Routine
         (T, Drafting_Runs_On_A_Device'Access,
          "a drafted run on the device backend says what the device says "
