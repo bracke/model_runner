@@ -971,9 +971,9 @@ Named in the specification, absent here:
 
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
-chooses for itself. From the seven-token prompt in
-`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.28 s** --
-0.26 s evaluating the prompt and 1.02 s generating -- and 9.3 s of processor
+chooses for itself. From the six-token prompt in
+`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.42 s** --
+0.31 s evaluating the prompt and 1.13 s generating -- and 9.3 s of processor
 time, the median of three runs. Loading the model costs a further 0.6 s of
 wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
@@ -1155,11 +1155,10 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 7-token prompt, 12 generated | 1.610 s | 1.795 s |
-| -- evaluating the prompt | 0.401 s | 0.216 s |
-| -- generating | 1.208 s | 1.597 s |
-| 111-token prompt, 1 generated | 6.633 s | **3.846 s** |
-| -- evaluating the prompt | 6.515 s | 3.696 s |
+| 6-token prompt, 12 generated | 1.424 s | **1.324 s** |
+| -- evaluating the prompt | 0.314 s | 0.213 s |
+| -- generating | 1.128 s | 1.101 s |
+| 110-token prompt | 6.673 s | **4.221 s** |
 
 Both backends print the same digest of what they generated -- `7784f0` and
 `af63c7` for the two runs -- so this is the same text, not a faster answer to
@@ -1167,20 +1166,20 @@ a different question.
 
 Read the left column with the caveat it deserves. This machine had other work
 on it, and the two columns are not equally hurt by that: the processor column
-competes for the cores it is using and the device column does not. Taken
-seven times over two days, the seven-token run measured 1.727, 2.167, 1.723,
-1.640, 1.499, 1.583 and 1.610 s on the processor against 1.345, 1.214, 1.287,
-1.292, 1.288, 1.299 and 1.795 on the device. Six of those seven device
-figures sit within three per cent of each other and the seventh is half a
-second above all of them, on the run where the processor was also slow: that
-is the machine, not a change, and it is the one pair here where the device
-loses the short run. The long run has never been close, and
-the quiet-machine figure for the processor -- published at the top of this
-section -- is 1.28 s. So the device's advantage on the short run is real but
-smaller than any one pair suggests, and on the long run it is comfortable at
-every measurement. Each pair was taken together, which is what makes the two
-columns comparable at all; none of them was taken on a quiet machine, which
-is what keeps the left column from being compared with the figure above.
+competes for the cores it is using and the device column does not. Over eight
+pairs taken across two days the processor's short run ranged from 1.42 to
+2.17 s and the device's from 1.21 to 1.80, with the device below the
+processor in seven of the eight. So its advantage on the short run is real
+and smaller than any single pair suggests; on the long run it has never been
+close. Each pair was taken together, which is what makes the two columns
+comparable at all.
+
+The earlier pairs are not listed here any more, and the reason is that they
+were not comparable with these: until this was written the tool read the
+prompt file including its final newline, where the command drops it, so every
+figure it published described a seven-token prompt for a file the command
+tokenizes into six. The figures above are the first taken with the tool
+running what the command runs.
 
 Two things make that possible and neither is the device being fast.
 
@@ -1292,37 +1291,29 @@ tests speed --model MODEL --draft-model DRAFT --draft-tokens 4
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 1.498 s | 125 ms a token |
-| the same model at two bits | 1.907 s | 159 ms a token |
-| the first, drafted by the second | 5.094 s | 20 proposed, 11 accepted |
+| TinyLlama-1.1B at eight bits | 1.128 s | 94 ms a token |
+| the same model at two bits | 2.464 s | 205 ms a token |
+| the first, drafted by the second | 4.920 s | 16 proposed, 9 accepted |
 
-The two-bit file is a third of the size on disk and a quarter again more
-expensive to run, because what it saves in bytes it spends unpacking them. A
-smaller file is not a faster model, and that alone decides this pair: a draft
-that costs more per token than the model it drafts for cannot win at any
-acceptance rate.
+The two-bit file is a third of the size on disk and more than twice the cost
+to run, because what it saves in bytes it spends unpacking them. A smaller
+file is not a faster model, and that alone decides this pair: a draft costing
+more per token than the model it drafts for cannot win at any acceptance
+rate.
 
-The arithmetic, from the same three figures. Five rounds of four proposals
-cost 5.094 s, of which the draft's own twenty passes are 20 × 159 ms = 3.18 s,
-leaving 1.91 s for five checks -- **382 ms to check five positions**, against
-125 ms for one token generated normally. A batch is one pass over the weights
-and the extra work is the output projection per position, which is why five
-positions cost about three tokens rather than five.
+The arithmetic, from the same three figures. Four rounds of four proposals
+cost 4.920 s, of which the draft's own sixteen passes are 16 × 205 ms =
+3.28 s, leaving 1.64 s for four checks -- **410 ms to check five positions**,
+against 94 ms for one token generated normally. A batch is one pass over the
+weights and the extra work is the output projection per position, which is
+why five positions cost about four tokens rather than five.
 
-So a round of K proposals costs `K × d + 382 ms` and yields `1 + a` tokens,
-against `(1 + a) × 125 ms` without a draft. At the acceptance measured here,
-2.2 of four, that wants a draft under 45 ms a token -- about a third of the
-model's cost. Even a draft that were never wrong would have to beat 61 ms.
-
-One thing this section cannot yet explain. The same run through the command
-rather than through `tests speed` reports the same text and the same digest
-but a different number of proposals -- sixteen against twenty for twelve
-tokens, thirty-six against twenty-eight for twenty-four, with the accepted
-count agreeing at seventeen in the second pair. Two harnesses that agree
-about the answer and disagree about how many guesses it took mean one of them
-is arranging the run differently from the other, and which is not yet known.
-The figures above are the tool's, because the tool is the one anybody else
-can run.
+So a round of K proposals costs `K × d + 410 ms` and yields `1 + a` tokens,
+against `(1 + a) × 94 ms` without a draft. At the acceptance measured here,
+2.25 of four, that wants a draft under 26 ms a token -- about a quarter of
+the model's cost. Even a draft that were never wrong would have to beat
+14 ms, which is less than a seventh: with four proposals a round, the check
+alone already costs more than the four tokens it can save.
 
 Not with a grammar, and not above temperature zero. Both are refused rather
 than ignored, and the difference matters: a draft is a second model file, so
@@ -1349,7 +1340,11 @@ twenty-three — so it can change what the model says, and is the faster of the
 two. A matrix already in the target format is left alone, and when nothing is
 left pointing into the file's own bytes they are released.
 
-Twelve tokens from the seven-token prompt, generation only, medians of three:
+Twelve tokens from the short prompt, generation only, medians of three.
+Taken before the tool was corrected to read that file as the command does, so
+they describe a prompt one token longer than the command's; the comparison
+between the three columns is what they are for and a token of prompt does not
+move it:
 
 | weights | as stored | `f32` | `bf16` |
 |---|---|---|---|

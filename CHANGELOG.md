@@ -27,18 +27,31 @@ Keep a Changelog and the project uses semantic versioning.
   without anything asking for a re-measure. Drafting has its own group now,
   and that file is in it.
 
-### Known
+### Fixed
 
-- **Two harnesses disagree about how many proposals a drafted run makes.**
-  The same model, draft, prompt and token count through `model_runner run`
-  and through `tests speed` produce the same text and the same digest, and
-  report different proposal counts: sixteen against twenty for twelve tokens,
-  thirty-six against twenty-eight for twenty-four, with the accepted count
-  agreeing at seventeen in the second pair. Neither is producing wrong text
-  -- the target checks every proposal -- but one of them is arranging the run
-  differently from the other, and which is not yet known. Said here rather
-  than left for a reader to notice, and the published figures are the tool's,
-  because the tool is the one anybody else can run.
+- **`tests speed` was measuring a different run from the command it
+  reproduces.** Two differences, both found by chasing the proposal-count
+  disagreement recorded here yesterday; the tool was the one arranging the
+  run differently.
+
+  It read the prompt file raw. The command reads a prompt file line by line
+  and puts the separators back between the lines, so the file's final newline
+  -- which an editor wrote and nobody typed -- never reaches the model. Every
+  figure this tool has published therefore described a seven-token prompt for
+  a file the command tokenizes into six.
+
+  And it sampled with the greedy configuration, which turns off the
+  repetition penalty and the filters as well as the temperature. The
+  published command sets `--temperature 0` and keeps everything else at its
+  default, including a penalty of 1.1 over sixty-four tokens. That difference
+  was harmless for as long as penalties did nothing at temperature zero, and
+  stopped being harmless the day they started working -- three commits ago.
+
+  Both fixed, and every figure the tool publishes re-measured. The two
+  harnesses now agree token for token: sixteen proposals and nine accepted,
+  either way. The headline twelve-token figure is 1.42 s where it was 1.28,
+  most of which is the machine and some of which is the extra work the
+  default penalty asks for.
 
 - **`--draft-model PATH` and `--draft-tokens N`: a smaller model proposes,
   the real one checks.** The draft says what it would produce next, several

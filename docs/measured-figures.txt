@@ -357,6 +357,26 @@ reference 1AD90B4FD348214C src/library/model_runner-backend-reference.adb src/li
 # processor figures by half of one, which is the machine rather than the
 # code and is now said in the README beside the table.
 #
+# 2026-08-13, what the tool was measuring. Two differences between `tests
+# speed` and the command it exists to reproduce, found by chasing a
+# disagreement about how many proposals a drafted run makes.
+#
+# The tool read the prompt file raw; the command reads it line by line and
+# puts the separators back between the lines, so the file's final newline
+# never reaches the model. Every figure this tool has published described a
+# seven-token prompt for a file the command tokenizes into six.
+#
+# And the tool sampled with the greedy configuration, which turns off the
+# repetition penalty and the filters; the published command sets only
+# --temperature 0 and keeps the defaults, a penalty of 1.1 over sixty-four
+# tokens among them. That was harmless while penalties did nothing at
+# temperature zero and stopped being harmless the day they started working.
+#
+# Both are fixed and everything the tool publishes was re-measured. The two
+# harnesses now agree token for token: sixteen proposals and nine accepted,
+# either way. Figures taken before this describe a slightly different run and
+# are not comparable with these; where any survive in the README they say so.
+#
 # 2026-08-13, the draft's worker pool. The draft session was opened without
 # one while the target had seven, so every proposal cost seven times what it
 # should and the published figure measured the arrangement rather than the

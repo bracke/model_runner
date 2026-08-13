@@ -10,7 +10,6 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Output;
-with Model_Runner.Sampling;
 with Model_Runner.Stops;
 with Model_Runner.Text;
 
@@ -150,8 +149,31 @@ package body Speed_Run is
       end if;
 
       declare
-         Prompt : constant String :=
-           Project_Tools.Files.Read_Raw_File (Prompt_Path);
+         --  As the command reads it, which means without the file's final
+         --  line separator.
+         --
+         --  The command reads a prompt file line by line and puts the
+         --  separators back between the lines, so a file written by an
+         --  editor -- which ends in a newline nobody typed as part of the
+         --  prompt -- reaches the model without it. Reading the same file
+         --  raw here made this tool measure a prompt one token longer than
+         --  the command's, which is how the README came to publish "the
+         --  seven-token prompt" for a file the command tokenizes into six.
+         --  A tool that exists so the figures are a command has to read
+         --  what the command reads.
+         function As_Commanded return String is
+            Whole : constant String :=
+              Project_Tools.Files.Read_Raw_File (Prompt_Path);
+         begin
+            if Whole'Length > 0
+              and then Whole (Whole'Last) = ASCII.LF
+            then
+               return Whole (Whole'First .. Whole'Last - 1);
+            end if;
+            return Whole;
+         end As_Commanded;
+
+         Prompt : constant String := As_Commanded;
 
          Started : Ada.Real_Time.Time;
       begin
@@ -285,8 +307,19 @@ package body Speed_Run is
                   Model_Runner.Stops.Open (Stop);
                   Request.Max_Tokens := Tokens;
                   Request.Batch_Size := Batch;
-                  Request.Sampling :=
-                    Model_Runner.Sampling.Greedy_Configuration;
+                  --  What the published command asks for, which is the
+                  --  defaults with the temperature set to zero -- not the
+                  --  greedy configuration, which also turns off the
+                  --  repetition penalty and the filters.
+                  --
+                  --  It was the greedy configuration, and that measured a
+                  --  different sampler from the command this tool exists to
+                  --  reproduce. Harmless while penalties did nothing at
+                  --  temperature zero; not harmless since they started
+                  --  working, because the command's default penalty of 1.1
+                  --  over sixty-four tokens now changes which tokens come
+                  --  out.
+                  Request.Sampling.Temperature := 0.0;
                   Request.Seed := 1;
                   Request.Has_Seed := True;
                   Request.Add_Beginning := True;
