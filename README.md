@@ -1282,38 +1282,47 @@ rather than once per token.
 
 So a draft earns its keep only when it is much faster than the model and
 usually right. Whether a particular one is can be worked out from three
-measurements, and this machine has them.
+measurements, and `tests speed` takes all three:
 
-TinyLlama-1.1B at eight bits generates twelve tokens in 1.128 s -- 94 ms a
-token. The same model at two bits, which is the only other file here that
-numbers its tokens alike, takes 2.217 s for the same twelve: 185 ms a token.
-It is a third of the size on disk and twice the cost to run, because what it
-saves in bytes it spends unpacking them. A smaller file is not a faster
-model, and that alone decides this pair.
+```
+tests speed --model MODEL
+tests speed --model DRAFT
+tests speed --model MODEL --draft-model DRAFT --draft-tokens 4
+```
 
-Drafting four at a time, the same run takes 3.880 s and has nine of sixteen
-proposals accepted -- four rounds, each of four draft passes and one check of
-five positions. Subtracting the draft's own 740 ms a round leaves 230 ms for
-the check. That is the number worth having: **five positions checked cost
-about 1.6 single tokens**, because a batch is one pass over the weights and
-the extra work is the output projection per position.
+| | Twelve tokens | |
+| --- | --- | --- |
+| TinyLlama-1.1B at eight bits | 1.498 s | 125 ms a token |
+| the same model at two bits | 1.907 s | 159 ms a token |
+| the first, drafted by the second | 5.094 s | 20 proposed, 11 accepted |
 
-So a round of K proposals costs `K × d + 230 ms` and produces `1 + a` tokens,
-against `(1 + a) × 94 ms` without a draft. With the acceptance measured here
--- 2.25 of four -- drafting pays when the draft costs under 57 ms a token,
-which is a model roughly two and a half times faster than the one it drafts
-for. Even a draft that were never wrong would have to beat 119 ms, which is
-still faster than the target. That is the whole of the arrangement: the check
-is cheap, the draft is not, and a draft that is not much the faster model
-cannot win.
+The two-bit file is a third of the size on disk and a quarter again more
+expensive to run, because what it saves in bytes it spends unpacking them. A
+smaller file is not a faster model, and that alone decides this pair: a draft
+that costs more per token than the model it drafts for cannot win at any
+acceptance rate.
 
-| | Generation, twelve tokens |
-| --- | --- |
-| no draft | 1.128 s |
-| drafted by the same model at two bits | 3.880 s |
+The arithmetic, from the same three figures. Five rounds of four proposals
+cost 5.094 s, of which the draft's own twenty passes are 20 × 159 ms = 3.18 s,
+leaving 1.91 s for five checks -- **382 ms to check five positions**, against
+125 ms for one token generated normally. A batch is one pass over the weights
+and the extra work is the output projection per position, which is why five
+positions cost about three tokens rather than five.
 
-The statistics report both counts for every run with a draft, because they
-are the only numbers that say whether a particular draft is worth having.
+So a round of K proposals costs `K × d + 382 ms` and yields `1 + a` tokens,
+against `(1 + a) × 125 ms` without a draft. At the acceptance measured here,
+2.2 of four, that wants a draft under 45 ms a token -- about a third of the
+model's cost. Even a draft that were never wrong would have to beat 61 ms.
+
+One thing this section cannot yet explain. The same run through the command
+rather than through `tests speed` reports the same text and the same digest
+but a different number of proposals -- sixteen against twenty for twelve
+tokens, thirty-six against twenty-eight for twenty-four, with the accepted
+count agreeing at seventeen in the second pair. Two harnesses that agree
+about the answer and disagree about how many guesses it took mean one of them
+is arranging the run differently from the other, and which is not yet known.
+The figures above are the tool's, because the tool is the one anybody else
+can run.
 
 Not with a grammar, and not above temperature zero. Both are refused rather
 than ignored, and the difference matters: a draft is a second model file, so

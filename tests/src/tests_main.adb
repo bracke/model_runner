@@ -720,6 +720,8 @@ begin
             --  not have to guess whether it is a flag here.
             Repack      => Mode_Of (Option ("--repack", "none")),
             Backend     => Backend_Of (Option ("--backend", "cpu")),
+            Draft       => Option ("--draft-model", ""),
+            Draft_Tokens => Number ("--draft-tokens", 4),
             Repeats     => Number ("--repeats", 3),
             Result      => Result);
 

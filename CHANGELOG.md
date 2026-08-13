@@ -7,6 +7,39 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests speed --draft-model PATH [--draft-tokens N]`.** The drafting
+  figures were taken by hand, which is the thing this repository fixed for
+  the reference-backend ratio and then again for the device. They are three
+  runs of one command now -- the model, the draft, and the model with the
+  draft -- and the summary line reports how many tokens were proposed and
+  accepted.
+
+  Re-measured through it and republished. The arithmetic under "Drafting"
+  now comes out of figures anybody can take again: 125 ms a token for the
+  model, 159 for the draft, and 382 ms to check five positions.
+
+### Fixed
+
+- **The drafting figures were covered by the wrong fingerprint group.** They
+  hung off the `device` group, whose source list does not include
+  `model_runner-generation.adb` -- the file the drafting loop is written in,
+  and which was in no group at all. The loop could have been rewritten
+  without anything asking for a re-measure. Drafting has its own group now,
+  and that file is in it.
+
+### Known
+
+- **Two harnesses disagree about how many proposals a drafted run makes.**
+  The same model, draft, prompt and token count through `model_runner run`
+  and through `tests speed` produce the same text and the same digest, and
+  report different proposal counts: sixteen against twenty for twelve tokens,
+  thirty-six against twenty-eight for twenty-four, with the accepted count
+  agreeing at seventeen in the second pair. Neither is producing wrong text
+  -- the target checks every proposal -- but one of them is arranging the run
+  differently from the other, and which is not yet known. Said here rather
+  than left for a reader to notice, and the published figures are the tool's,
+  because the tool is the one anybody else can run.
+
 - **`--draft-model PATH` and `--draft-tokens N`: a smaller model proposes,
   the real one checks.** The draft says what it would produce next, several
   tokens at a time; the model reads all of them in one pass over its weights

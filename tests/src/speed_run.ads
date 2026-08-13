@@ -53,6 +53,11 @@ package Speed_Run is
 
       Digest    : String (1 .. 16) := [others => '0'];
 
+      --  What a draft model proposed and how much of it was taken, for a
+      --  measurement with one. Both zero without.
+      Drafted   : Natural := 0;
+      Accepted  : Natural := 0;
+
       Wall      : Duration := 0.0;
       Evaluate  : Duration := 0.0;
       Generate  : Duration := 0.0;
@@ -74,6 +79,11 @@ package Speed_Run is
    --    selects. The device figures were taken by hand before this existed,
    --    which is the same gap the reference-backend ratio had and the same
    --    answer: a figure that is a command can be taken again.
+   --  @param Draft Path to a smaller model to propose tokens, or empty for
+   --    none. The figures a draft produces are a comparison -- the same run
+   --    with and without -- so this exists to make both halves of it one
+   --    command rather than two hand-taken numbers.
+   --  @param Draft_Tokens How many that model may propose at a time.
    --  @param Repeats How many times to run, for the median.
    --  @param Result What it measured.
    procedure Run
@@ -85,6 +95,8 @@ package Speed_Run is
       Repack      : Model_Runner.Llama.Repack_Mode;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
+      Draft       : String := "";
+      Draft_Tokens : Positive := 4;
       Repeats     : Positive;
       Result      : out Report);
 

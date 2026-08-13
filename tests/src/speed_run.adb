@@ -104,6 +104,8 @@ package body Speed_Run is
       Repack      : L.Repack_Mode;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
+      Draft       : String := "";
+      Draft_Tokens : Positive := 4;
       Repeats     : Positive;
       Result      : out Report)
    is
@@ -122,6 +124,12 @@ package body Speed_Run is
       Container : Containers.Container;
       Engine    : L.Model;
       Status    : E.Error_Info;
+
+      --  The draft, when one was named. Loaded exactly as the model is.
+      Draft_Source    : Files.File_Source;
+      Draft_Container : Containers.Container;
+      Draft_Engine    : aliased L.Model;
+      Drafting        : Boolean := False;
 
       Walls     : Duration_Array (1 .. Repeats) := [others => 0.0];
       Evaluates : Duration_Array (1 .. Repeats) := [others => 0.0];
@@ -196,6 +204,49 @@ package body Speed_Run is
          Result.Load :=
            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
 
+         --  And a draft, when one was named. The figures it produces are a
+         --  comparison, so both halves belong to one command: this is the
+         --  same run with --draft-model and without it.
+         if Draft /= "" then
+            if not Ada.Directories.Exists (Draft) then
+               Say ("no draft model at that path; nothing measured");
+               L.Close (Engine, Status);
+               Containers.Close (Container);
+               Files.Close (Source);
+               return;
+            end if;
+
+            Files.Open (Draft_Source, Draft, Status => Status);
+            if E.Is_Error (Status) then
+               Say ("the draft would not open: "
+                    & E.Error_Code'Image (Status.Code));
+               L.Close (Engine, Status);
+               Containers.Close (Container);
+               Files.Close (Source);
+               return;
+            end if;
+
+            Containers.Reader.Parse
+              (Draft_Container, Draft_Source, Status => Status);
+            if E.Is_Error (Status) then
+               Say ("the draft would not parse: "
+                    & E.Error_Code'Image (Status.Code));
+               return;
+            end if;
+
+            L.Prepare
+              (Draft_Engine, Draft_Container, Draft_Source,
+               Repack => Repack, Backend => Backend,
+               Threads => Threads, Status => Status);
+            if E.Is_Error (Status) then
+               Say ("the draft would not prepare: "
+                    & E.Error_Code'Image (Status.Code));
+               return;
+            end if;
+
+            Drafting := True;
+         end if;
+
          declare
             --  The engine reports its own split between evaluating the
             --  prompt and generating, but only when it is given a clock to
@@ -215,6 +266,7 @@ package body Speed_Run is
             for Pass in 1 .. Repeats loop
                declare
                   Session : L.Session;
+                  Draft_Session : aliased L.Session;
                   Stop    : Model_Runner.Stops.Set;
                   Sink    : aliased Discard;
                   Request : Gen.Request;
@@ -224,6 +276,12 @@ package body Speed_Run is
                   L.Open (Session, Engine, Workers => Where, Status => Local);
                   exit when E.Is_Error (Local);
 
+                  if Drafting then
+                     L.Open (Draft_Session, Draft_Engine, Workers => Where,
+                             Status => Local);
+                     exit when E.Is_Error (Local);
+                  end if;
+
                   Model_Runner.Stops.Open (Stop);
                   Request.Max_Tokens := Tokens;
                   Request.Batch_Size := Batch;
@@ -232,12 +290,21 @@ package body Speed_Run is
                   Request.Seed := 1;
                   Request.Has_Seed := True;
                   Request.Add_Beginning := True;
+                  Request.Draft_Tokens :=
+                    (if Drafting then Draft_Tokens else 0);
 
                   Started := Ada.Real_Time.Clock;
                   Gen.Generate
                     (Engine, Session, Prompt, Request, Stop, null,
                      Sink'Unchecked_Access, null, Timer'Unchecked_Access,
-                     null, null, Outcome => Outcome);
+                     null, null,
+                     Draft =>
+                       (if Drafting then Draft_Engine'Unchecked_Access
+                        else null),
+                     Draft_Session =>
+                       (if Drafting then Draft_Session'Unchecked_Access
+                        else null),
+                     Outcome => Outcome);
                   Walls (Pass) :=
                     Ada.Real_Time.To_Duration
                       (Ada.Real_Time.Clock - Started);
@@ -269,9 +336,14 @@ package body Speed_Run is
 
                   Result.Prompt := Outcome.Prompt_Tokens;
                   Result.Produced := Outcome.Generated_Tokens;
+                  Result.Drafted := Outcome.Drafted;
+                  Result.Accepted := Outcome.Accepted;
                   Result.Runs := Pass;
 
                   Model_Runner.Stops.Close (Stop);
+                  if Drafting then
+                     L.Close (Draft_Session);
+                  end if;
                   L.Close (Session);
                   Gen.Release (Outcome);
                end;
@@ -283,6 +355,12 @@ package body Speed_Run is
          L.Close (Engine, Status);
          Containers.Close (Container);
          Files.Close (Source);
+
+         if Drafting then
+            L.Close (Draft_Engine, Status);
+            Containers.Close (Draft_Container);
+            Files.Close (Draft_Source);
+         end if;
       end;
 
       if Result.Runs = Repeats then
@@ -314,7 +392,10 @@ package body Speed_Run is
         & Seconds (Item.Wall) & " wall -- "
         & Seconds (Item.Evaluate) & " evaluating the prompt and "
         & Seconds (Item.Generate) & " generating; loading took "
-        & Seconds (Item.Load) & "; output " & Item.Digest;
+        & Seconds (Item.Load) & "; output " & Item.Digest
+        & (if Item.Drafted = 0 then ""
+           else ", proposed" & Natural'Image (Item.Drafted)
+                & " accepted" & Natural'Image (Item.Accepted));
    end Summary;
 
 end Speed_Run;
