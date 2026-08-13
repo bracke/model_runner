@@ -718,8 +718,7 @@ package body Model_Runner.CLI.Options is
          Flag_Pooling,
          Flag_Load_Session,
          Flag_Save_Session,
-         Flag_Adapter,
-         Flag_Adapter_Scale,
+
          Flag_Grammar,
          Flag_Grammar_File,
          Flag_Threads, Flag_Backend);
@@ -1000,17 +999,60 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--lora" then
-                     Bounded_Value (Flag_Adapter, Result.Adapter_Path, Good);
+                     --  Repeatable: adapters stack, in the order given.
+                     if Result.Adapter_Count = Max_Adapters then
+                        Fail (E.CLI_Option_Out_Of_Range, Name);
+                        return;
+                     end if;
+
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Held, Good);
                      if not Good then
                         return;
                      end if;
 
+                     Result.Adapter_Count := Result.Adapter_Count + 1;
+                     Result.Adapters (Result.Adapter_Count) :=
+                       T.To_Bounded (Held.all);
+                     if Result.Adapter_Count = 1 then
+                        Result.Adapter_Path :=
+                          Result.Adapters (1);
+                     end if;
+                     Free_Text (Held);
+
                   elsif Name = "--lora-scale" then
-                     Real_Value (Flag_Adapter_Scale, Result.Adapter_Scale,
-                                 Good);
-                     if not Good then
+                     --  The Nth scale belongs to the Nth adapter. One scale
+                     --  and one adapter is the common case and reads the
+                     --  same either way.
+                     if Result.Scale_Count = Max_Adapters then
+                        Fail (E.CLI_Option_Out_Of_Range, Name);
                         return;
                      end if;
+
+                     declare
+                        Value  : Model_Runner.Numerics.Real;
+                        Parsed : Boolean;
+                     begin
+                        Take_Value (Name, Value_Present, Value_First,
+                                    Argument, Held, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        To_Real (Held.all, Value, Parsed);
+                        if not Parsed then
+                           Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                           Free_Text (Held);
+                           return;
+                        end if;
+                        Free_Text (Held);
+
+                        Result.Scale_Count := Result.Scale_Count + 1;
+                        Result.Adapter_Scales (Result.Scale_Count) := Value;
+                        if Result.Scale_Count = 1 then
+                           Result.Adapter_Scale := Value;
+                        end if;
+                     end;
 
                   elsif Name = "--grammar" then
                      Mark (Flag_Grammar, Name, Good);

@@ -197,6 +197,12 @@ package Model_Runner.CLI.Options is
 
    type Prompt_List is array (1 .. Max_Prompts) of Text_Access;
 
+   --  How many adapters one command may stack.
+   Max_Adapters : constant := 8;
+
+   type Adapter_List is
+     array (1 .. Max_Adapters) of Model_Runner.Text.Bounded;
+
    --  A fully validated command.
    --
    --  Owns the heap text it points at; release it with Release.
@@ -333,6 +339,20 @@ package Model_Runner.CLI.Options is
       Load_Session : Model_Runner.Text.Bounded;
       Save_Session : Model_Runner.Text.Bounded;
 
+      --  The adapters, in the order they were given, and what to multiply
+      --  each one's difference by. They are merged in that order, which is
+      --  the order they were trained to be applied in; a merge is an
+      --  addition, so a later one does not undo an earlier one -- and a
+      --  scale of minus one does exactly that, which is how an adapter comes
+      --  off again.
+      Adapters       : Adapter_List := [others => Model_Runner.Text.Empty];
+      Adapter_Scales : Model_Runner.Numerics.Real_List (1 .. Max_Adapters) :=
+        [others => 1.0];
+      Adapter_Count  : Natural := 0;
+      Scale_Count    : Natural := 0;
+
+      --  The first of them, kept because the parts of the program that ask
+      --  whether there is an adapter at all should not have to count.
       Adapter_Path  : Model_Runner.Text.Bounded;
       Adapter_Scale : Model_Runner.Numerics.Real := 1.0;
 

@@ -1281,13 +1281,23 @@ package body Model_Runner.CLI.Execute is
          --  generated. A merge is not a second set of weights carried
          --  alongside: what it costs is the load, and evaluation costs what
          --  it cost before.
-         if not T.Is_Empty (Item.Adapter_Path) then
+         --  Every adapter, in the order it was given. A merge is an
+         --  addition, so they stack; a scale of minus one subtracts, which
+         --  is how one comes off again.
+         for Which in 1 .. Item.Adapter_Count loop
             declare
                From   : Files.File_Source;
                Second : Containers.Container;
+
+               --  The Nth scale belongs to the Nth adapter, and an adapter
+               --  named without one is the adapter as it was trained.
+               Scale : constant Model_Runner.Numerics.Real :=
+                 (if Which <= Item.Scale_Count
+                  then Item.Adapter_Scales (Which)
+                  else 1.0);
             begin
                Files.Open
-                 (From, T.To_String (Item.Adapter_Path),
+                 (From, T.To_String (Item.Adapters (Which)),
                   Status => Condition);
                if E.Is_Error (Condition) then
                   Fail (Condition);
@@ -1302,7 +1312,7 @@ package body Model_Runner.CLI.Execute is
                end if;
 
                L.Merge_Adapter
-                 (Prepared, Second, From, Item.Adapter_Scale, Condition);
+                 (Prepared, Second, From, Scale, Condition);
 
                Containers.Close (Second);
                Files.Close (From);
@@ -1312,7 +1322,7 @@ package body Model_Runner.CLI.Execute is
                   return;
                end if;
             end;
-         end if;
+         end loop;
 
          L.Open
            (Session, Prepared, Item.Context_Size,

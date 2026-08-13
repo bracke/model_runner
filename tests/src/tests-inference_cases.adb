@@ -41,6 +41,7 @@ package body Tests.Inference_Cases is
    use type Model_Runner.Errors.Error_Code;
    use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.Numerics.Real;
+   use type Model_Runner.Numerics.Wide_Real;
    use type Model_Runner.Tokenizer.Token_Id;
    use type Model_Runner.Tokenizer.Model_Kind;
 
@@ -2053,6 +2054,204 @@ package body Tests.Inference_Cases is
       B.Free (Image);
       B.Free (Rough);
    end Drafting_Survives_A_Draft_That_Errs;
+
+   --------------------------------------
+   -- Adapters_Stack_And_Come_Off_Again --
+   --------------------------------------
+
+   --  Adapters add, so they stack; and a scale of minus one subtracts, so
+   --  one comes off again.
+   --
+   --  Both follow from what a merge is -- the weights gain the adapter's
+   --  difference times a scale -- and neither was written down or checked.
+   --  What is held here is the arithmetic: merging twice moves the logits
+   --  twice as far as merging once, and merging with plus one and then minus
+   --  one puts them back where they started.
+   --
+   --  Back to within rounding rather than exactly. A binary32 weight that
+   --  has had a number added and subtracted is not the bit pattern it began
+   --  with, and a test demanding it would be asserting something about the
+   --  arithmetic nobody promised.
+   procedure Adapters_Stack_And_Come_Off_Again
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image   : B.Byte_Array_Access;
+      Adapter : constant String := "obj/stacking-adapter.gguf";
+
+      Prompt : constant array (1 .. 3) of Vocab.Token_Id := [4, 5, 6];
+
+      --  Logits after merging the adapter How_Many times at that scale.
+      procedure Reading
+        (How_Many : Natural;
+         Scale    : N.Real;
+         Result   : out Logit_Vector)
+      is
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Ready  : L.Model;
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Result := [others => 0.0];
+
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         L.Prepare
+           (Ready, Parsed, Source, Repack => L.To_F32, Status => Status);
+         Assert (E.Is_Ok (Status), "the model did not prepare");
+
+         for Round in 1 .. How_Many loop
+            declare
+               From   : Model_Runner.Byte_Sources.Files.File_Source;
+               Second : Containers.Container;
+               Local  : E.Error_Info;
+            begin
+               Model_Runner.Byte_Sources.Files.Open
+                 (From, Adapter, Status => Local);
+               Assert (E.Is_Ok (Local), "the adapter did not open");
+
+               Containers.Reader.Parse (Second, From, Status => Local);
+               Assert (E.Is_Ok (Local), "the adapter did not parse");
+
+               L.Merge_Adapter (Ready, Second, From, Scale, Local);
+               Assert (E.Is_Ok (Local),
+                       "merge" & Natural'Image (Round) & " was refused: "
+                       & E.Error_Code'Image (Local.Code));
+
+               Containers.Close (Second);
+               Model_Runner.Byte_Sources.Files.Close (From);
+            end;
+         end loop;
+
+         L.Open (Live, Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Ready, Token, Result, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation failed");
+         end loop;
+
+         L.Close (Live);
+         L.Close (Ready, Status);
+         Containers.Close (Parsed);
+      end Reading;
+
+      Plain, Once, Twice : Logit_Vector;
+
+      --  What a merge moved, summed over the vocabulary.
+      function Distance (Left, Right : Logit_Vector) return N.Wide_Real is
+         Total : N.Wide_Real := 0.0;
+      begin
+         for Index in Left'Range loop
+            Total := Total + abs (N.Wide_Real (Left (Index))
+                                  - N.Wide_Real (Right (Index)));
+         end loop;
+         return Total;
+      end Distance;
+   begin
+      Tiny_Model.Build (Image);
+      Tiny_Model.Write_Adapter (Adapter);
+
+      Reading (0, 1.0, Plain);
+      Reading (1, 1.0, Once);
+      Reading (2, 1.0, Twice);
+
+      declare
+         Moved : constant N.Wide_Real := Distance (Plain, Once);
+         Again : constant N.Wide_Real := Distance (Once, Twice);
+      begin
+         Assert (Moved > 1.0E-4,
+                 "merging an adapter changed nothing, so this fixture "
+                 & "cannot say what stacking does");
+
+         --  The second merge moves the logits about as far as the first.
+         --  Not exactly as far: the model is not linear in its weights, and
+         --  what is held is that a second adapter is applied at all rather
+         --  than replacing or being swallowed by the first.
+         Assert (Again > Moved * 0.5,
+                 "a second merge moved the logits by"
+                 & N.Wide_Real'Image (Again) & " against"
+                 & N.Wide_Real'Image (Moved) & " for the first, so it was "
+                 & "not applied on top of it");
+      end;
+
+      --  And off again.
+      declare
+         Restored : Logit_Vector;
+         Session  : L.Session;
+         pragma Unreferenced (Session);
+      begin
+         --  Plus one and then minus one, in one model.
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Ready  : L.Model;
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            L.Prepare
+              (Ready, Parsed, Source, Repack => L.To_F32, Status => Status);
+            Assert (E.Is_Ok (Status), "the model did not prepare");
+
+            for Scale of N.Real_List'(1.0, -1.0) loop
+               declare
+                  From   : Model_Runner.Byte_Sources.Files.File_Source;
+                  Second : Containers.Container;
+                  Local  : E.Error_Info;
+               begin
+                  Model_Runner.Byte_Sources.Files.Open
+                    (From, Adapter, Status => Local);
+                  Assert (E.Is_Ok (Local), "the adapter did not open");
+
+                  Containers.Reader.Parse (Second, From, Status => Local);
+                  Assert (E.Is_Ok (Local), "the adapter did not parse");
+
+                  L.Merge_Adapter (Ready, Second, From, Scale, Local);
+                  Assert (E.Is_Ok (Local),
+                          "a merge at scale" & N.Real'Image (Scale)
+                          & " was refused: "
+                          & E.Error_Code'Image (Local.Code));
+
+                  Containers.Close (Second);
+                  Model_Runner.Byte_Sources.Files.Close (From);
+               end;
+            end loop;
+
+            L.Open (Live, Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            Restored := [others => 0.0];
+            for Token of Prompt loop
+               L.Evaluate (Live, Ready, Token, Restored, Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed");
+            end loop;
+
+            L.Close (Live);
+            L.Close (Ready, Status);
+            Containers.Close (Parsed);
+         end;
+
+         Assert (Distance (Plain, Restored) < Distance (Plain, Once) * 0.01,
+                 "merging at minus one did not take the adapter off: the "
+                 & "logits are"
+                 & N.Wide_Real'Image (Distance (Plain, Restored))
+                 & " from the plain model against"
+                 & N.Wide_Real'Image (Distance (Plain, Once))
+                 & " with the adapter on");
+      end;
+
+      B.Free (Image);
+   end Adapters_Stack_And_Come_Off_Again;
 
    ----------
    -- Name --
@@ -4556,6 +4755,9 @@ package body Tests.Inference_Cases is
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
+      Register_Routine
+        (T, Adapters_Stack_And_Come_Off_Again'Access,
+         "adapters stack, and a scale of minus one takes one off again");
       Register_Routine
         (T, Drafting_Runs_On_A_Device'Access,
          "a drafted run on the device backend says what the device says "

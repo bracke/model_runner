@@ -113,6 +113,21 @@ conversation.
 
 ### Adapters
 
+
+`--lora` is repeatable and the adapters stack, in the order given: a merge
+adds a difference to the weights, so a second one lands on top of the first
+rather than replacing it. `--lora-scale` pairs with them positionally -- the
+Nth scale belongs to the Nth adapter, and an adapter named without one is the
+adapter as it was trained.
+
+A scale of minus one subtracts, which is how an adapter comes off again:
+naming the same file twice at plus one and minus one leaves the weights where
+they started, to within what binary32 rounding does to a number added and
+taken away. Both claims are held by a test that measures how far the logits
+move -- a second merge moves them about as far again as the first, and plus
+one followed by minus one puts them back within a hundredth of that
+distance.
+
 `--lora PATH` merges a low-rank adapter into the weights before anything is
 generated. An adapter says what a fine-tune changed, as a pair of small
 matrices per weight it touches whose product is the difference; merging adds

@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Adapters stack, and come off again.** `--lora` is repeatable and the
+  adapters are merged in the order given; `--lora-scale` pairs with them
+  positionally. A merge adds a difference to the weights, so a second lands
+  on top of the first -- and a scale of minus one subtracts, which is how one
+  is removed.
+
+  Both followed from what a merge already was and neither was written down or
+  checked. The test measures how far the logits move: a second merge moves
+  them about as far again as the first, and plus one followed by minus one
+  puts them back within a hundredth of that distance. Within rounding rather
+  than exactly, because a binary32 weight that has had a number added and
+  subtracted is not the bit pattern it began with, and demanding that would
+  assert something nobody promised.
+
 - **`--prompt` is repeatable: several sequences from one loaded model.** The
   model is read once and answers each prompt in turn, each with its own
   context and its own statistics; standard error says which prompt is which,
