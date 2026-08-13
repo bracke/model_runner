@@ -169,6 +169,14 @@ refuses every other keyword by name rather than ignoring it -- a keyword
 ignored produces a grammar that allows more than the schema does, which is a
 constraint that quietly is not one.
 
+A property the schema does not require may be absent; one it requires may
+not. A schema that names no `required` list requires everything it names,
+which is not what JSON Schema says -- there, absent means optional -- and is
+the narrow direction this errs in throughout. The first property named must
+be one the schema requires: a first property that may be absent makes the
+comma before the second conditional on it, and expressing that needs an
+alternative for every place the object might start.
+
 Objects come out closed and ordered: exactly the properties named, in the
 order named. JSON leaves member order free and a grammar that allowed every
 order would grow as the factorial of the property count, so what this

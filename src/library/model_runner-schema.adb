@@ -324,7 +324,57 @@ package body Model_Runner.Schema is
          end if;
       end Plain;
 
-      --  An object: exactly the properties named, in the order named.
+      --  Whether a name appears in the object's required list. A schema
+      --  with no required list requires everything it names, which is not
+      --  what JSON Schema says -- there, absent means optional -- but is
+      --  the safe direction and is stated in the specification.
+      function Is_Required (From : Natural; Name : String) return Boolean is
+         At_List : Natural;
+         Failed  : Boolean;
+         Item    : Reader;
+      begin
+         Find_Member (Text, From, "required", At_List, Failed);
+         if Failed or else At_List = 0 then
+            return True;
+         end if;
+
+         Item := (At_Char => At_List, others => <>);
+         Skip_Blanks (Text, Item);
+         if Item.At_Char > Text'Last or else Text (Item.At_Char) /= '[' then
+            return True;
+         end if;
+         Item.At_Char := Item.At_Char + 1;
+
+         loop
+            Skip_Blanks (Text, Item);
+            exit when Item.At_Char > Text'Last;
+            exit when Text (Item.At_Char) = ']';
+
+            declare
+               First, Last_At : Natural;
+            begin
+               Read_String (Text, Item, First, Last_At);
+               exit when Item.Failed;
+
+               if Text (First .. Last_At) = Name then
+                  return True;
+               end if;
+
+               Skip_Blanks (Text, Item);
+               if Item.At_Char <= Text'Last
+                 and then Text (Item.At_Char) = ','
+               then
+                  Item.At_Char := Item.At_Char + 1;
+               end if;
+            end;
+         end loop;
+
+         return False;
+      end Is_Required;
+
+      --  An object: exactly the properties named, in the order named. A
+      --  property the schema does not require may be absent, with the
+      --  comma that would precede it.
       procedure Object_Shape (From : Natural; Depth : Natural) is
          At_Props : Natural;
          Failed   : Boolean;
@@ -381,15 +431,34 @@ package body Model_Runner.Schema is
                   return;
                end if;
 
-               if Count > 0 then
-                  Put (" "","" ");
-               end if;
-               Count := Count + 1;
-
-               Put ("""\""");
-               Put (Text (Key_First .. Key_Last));
-               Put ("\"":"" ");
-               Shape (Value_First, Depth + 1);
+               declare
+                  Wanted : constant Boolean :=
+                    Is_Required (From, Text (Key_First .. Key_Last));
+               begin
+                  --  The first property carries no comma, and one that
+                  --  may be absent would make the comma before the
+                  --  second conditional on it -- which needs an
+                  --  alternative for every place the object might
+                  --  start. Refused rather than approximated.
+                  if Count = 0 and then not Wanted then
+                     Refuse ("an optional first property");
+                     return;
+                  end if;
+               
+                  if Count > 0 then
+                     Put (" ("","" ");
+                  end if;
+                  Count := Count + 1;
+               
+                  Put ("""\""");
+                  Put (Text (Key_First .. Key_Last));
+                  Put ("\"":"" ");
+                  Shape (Value_First, Depth + 1);
+               
+                  if Count > 1 then
+                     Put ((if Wanted then ")" else ")?"));
+                  end if;
+               end;
 
                Skip_Blanks (Text, Item);
                if Item.At_Char <= Text'Last

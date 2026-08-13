@@ -12,7 +12,11 @@ with Model_Runner.Errors;
 --
 --    type          object, array, string, number, integer, boolean, null,
 --                  or a list of those, which becomes alternatives
---    properties    with required; a property not required is optional
+--    properties    with required; a property the schema does not require
+--                  may be absent, and a schema naming no required list
+--                  requires everything -- which is not what JSON Schema
+--                  says, where absent means optional, and is the narrow
+--                  direction this errs in throughout
 --    items         the shape of every element of an array
 --    enum          a choice between literal values
 --    const         a single literal value
@@ -24,6 +28,10 @@ with Model_Runner.Errors;
 --  grammar by hand.
 --
 --  Objects are closed: exactly the properties named, in the order named.
+--  The first property named must be one the schema requires, because a
+--  first property that may be absent makes the comma before the second
+--  conditional on it, and expressing that needs an alternative for every
+--  place the object might start.
 --  JSON says an object's members are unordered and a schema does not fix
 --  their order, so a grammar that allowed every order would be a grammar
 --  whose size grows as the factorial of the property count. What this

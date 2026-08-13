@@ -98,6 +98,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **`required` was read and then ignored.** The schema converter accepted the
+  keyword and made every named property mandatory, while the package's own
+  specification said a property not required is optional. One of the two was
+  a lie and it was the specification -- the behaviour was at least narrow
+  rather than loose, which is the direction stated everywhere else, but
+  nothing said so.
+
+  A property the schema does not require is now written as one that may be
+  absent, with the comma that would precede it. A schema naming no `required`
+  list still requires everything, which is not what JSON Schema says and is
+  now written down as the narrow choice it is. A first property that may be
+  absent is refused: it makes the comma before the second conditional on it,
+  which needs an alternative for every place the object might start.
+
+### Added
+
+- **A test for `--context-shift` through the command.** It checks both
+  halves: that the run is refused without the option, because the prompt and
+  the tokens asked for do not fit -- which is the refusal the option lifts --
+  and that with it the run finishes and reports its drops.
+
+  And that the text is right as far as it can be: the same run in a context
+  large enough to need no drop produces the same tokens up to where the small
+  one first drops. Without that half the test would pass on a shift that
+  scrambled the context, because a run producing nonsense produces it
+  fluently.
+
 - **Three of the four figures the engine group covers had not been
   re-measured.** The twelve-token figure was re-taken when the measuring tool
   was corrected; the worker-count and share-count comparisons and the

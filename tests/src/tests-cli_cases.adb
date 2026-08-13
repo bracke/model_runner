@@ -8378,6 +8378,143 @@ package body Tests.CLI_Cases is
       end;
    end The_Speed_Tool_Runs_What_It_Publishes;
 
+   ---------------------------------------------
+   -- A_Rolling_Context_Outlives_Its_Room --
+   ---------------------------------------------
+
+   --  A run asked to drop its oldest positions outlives the context, and
+   --  what it says before the first drop is what it would have said with
+   --  room to spare.
+   --
+   --  Two halves. Without the option the run is refused before it starts,
+   --  because the prompt and the tokens asked for do not fit -- that
+   --  refusal is what the option exists to lift. With it the run finishes
+   --  and reports the drops.
+   --
+   --  And the text: the same run in a context large enough to need no drop
+   --  produces the same tokens up to where the small one first drops. After
+   --  that they diverge, and should -- one of them has forgotten the
+   --  beginning -- so the comparison stops there. Without this half the
+   --  test would pass on a shift that scrambled the context, because a run
+   --  that produces nonsense produces it fluently.
+   procedure A_Rolling_Context_Outlives_Its_Room
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model : constant String := "obj/rolling-model.gguf";
+      Notes : constant String := "obj/rolling-notes.txt";
+
+      Prompt : constant String := "ab";
+
+      --  Run with the given context and shift, keeping what it wrote.
+      procedure Attempt
+        (Room    : String;
+         Shift   : String;
+         Status  : out Natural)
+      is
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, Prompt);
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Add (Source, "--threads");
+         Add (Source, "1");
+         Add (Source, "--max-tokens");
+         Add (Source, "20");
+         Add (Source, "--context-size");
+         Add (Source, Room);
+         if Shift /= "" then
+            Add (Source, "--context-shift");
+            Add (Source, Shift);
+         end if;
+         Add (Source, "--show-stats");
+
+         Create (Handle, Out_File, Notes);
+         Set_Error (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Handle);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+      end Attempt;
+
+      Status : Natural;
+   begin
+      --  The model declares room for sixty-four; the runs below ask for
+      --  sixteen of it and for all of it, which is how one of them has to
+      --  drop and the other does not.
+      Tiny_Model.Write (Model, Room => 64);
+
+      --  Without the option: refused before anything is generated.
+      Attempt ("16", "", Status);
+      Assert (Status /= 0,
+              "a run that cannot fit was accepted without --context-shift");
+
+      --  With it: finished, and it says how often it dropped.
+      Attempt ("16", "6", Status);
+      Assert (Status = 0,
+              "a rolling run failed:" & Natural'Image (Status));
+
+      declare
+         Told : constant String := Text_Of (Notes);
+         Small : constant String := Last_Output;
+
+         function Holds (Whole, Part : String) return Boolean is
+         begin
+            if Part'Length > Whole'Length then
+               return False;
+            end if;
+            for Start in Whole'First .. Whole'Last - Part'Length + 1 loop
+               if Whole (Start .. Start + Part'Length - 1) = Part then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Holds;
+      begin
+         Assert (Holds (Told, "context shifts"),
+                 "a run that dropped positions did not report it");
+
+         --  The same run with room to spare, for as far as the two can
+         --  agree.
+         Attempt ("64", "", Status);
+         Assert (Status = 0,
+                 "the run with room failed:" & Natural'Image (Status));
+
+         declare
+            Large : constant String := Last_Output;
+
+            --  The small context holds sixteen positions and the prompt
+            --  takes three, so the first drop comes after about thirteen
+            --  tokens. Compared over ten, which is inside that and outside
+            --  nothing.
+            Room : constant Natural :=
+              Natural'Min (10, Natural'Min (Small'Length, Large'Length));
+         begin
+            Assert (Room > 0, "neither run produced anything");
+            Assert (Small (Small'First .. Small'First + Room - 1)
+                    = Large (Large'First .. Large'First + Room - 1),
+                    "a rolling run said something else before it had "
+                    & "dropped anything: <"
+                    & Small (Small'First .. Small'First + Room - 1)
+                    & "> against <"
+                    & Large (Large'First .. Large'First + Room - 1) & ">");
+         end;
+      end;
+   end A_Rolling_Context_Outlives_Its_Room;
+
    ------------------------------------------
    -- Several_Prompts_Are_Several_Sequences --
    ------------------------------------------
@@ -9413,6 +9550,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Streams_Are_Separate'Access,
          "each kind of output leaves by the stream the README says it does");
+      Register_Routine
+        (T, A_Rolling_Context_Outlives_Its_Room'Access,
+         "a run asked to drop its oldest positions outlives the context and "
+         & "says the same things before the first drop");
       Register_Routine
         (T, Several_Prompts_Are_Several_Sequences'Access,
          "several prompts from one loaded model answer each on its own, "

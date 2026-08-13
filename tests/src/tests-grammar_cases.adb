@@ -445,7 +445,27 @@ package body Tests.Grammar_Cases is
              & "{""type"":""array"",""items"":{""type"":""integer""}}}}",
              "{""xs"":[1,2]}", True, "an array inside an object");
 
+      --  Required and optional. A property the schema does not require may
+      --  be absent; one it does may not; and a schema that says nothing
+      --  requires everything, which is the narrow direction.
+      Check ("{""type"":""object"",""properties"":"
+             & "{""a"":{""type"":""integer""},""b"":{""type"":""integer""}},"
+             & """required"":[""a""]}",
+             "{""a"":1}", True, "an optional property left out");
+      Check ("{""type"":""object"",""properties"":"
+             & "{""a"":{""type"":""integer""},""b"":{""type"":""integer""}},"
+             & """required"":[""a"",""b""]}",
+             "{""a"":1}", False, "a required property left out");
+      Check ("{""type"":""object"",""properties"":"
+             & "{""a"":{""type"":""integer""},""b"":{""type"":""integer""}}}",
+             "{""a"":1}", False,
+             "a property left out of a schema that requires nothing by "
+             & "saying nothing");
+
       --  And what it will not pretend to express.
+      Refuses ("{""type"":""object"",""properties"":"
+               & "{""a"":{""type"":""integer""}},""required"":[]}",
+               "an optional first property");
       Refuses ("{""type"":""object"",""properties"":{""a"":"
                & "{""type"":""integer""}},""additionalProperties"":true}",
                "additionalProperties");
