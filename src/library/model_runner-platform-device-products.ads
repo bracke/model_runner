@@ -40,10 +40,31 @@ package Model_Runner.Platform.Device.Products is
    --  command buffer, not several submissions.
    Batch_Group : constant := 8;
 
-   --  How a matrix's bytes are packed. The device decodes these itself; a
-   --  format not named here reaches it only by being repacked into one that
-   --  is, which is four bytes a weight and the caller's decision.
-   type Weight_Packing is (Values_F32, Packed_Q8_0, Packed_Q4_0);
+   --  How a matrix's bytes are packed. The device decodes every one of these
+   --  itself, which is every format this program reads: nothing has to be
+   --  repacked to reach a device any more, and repacking is what it always
+   --  was -- four bytes a weight, and the caller's decision.
+   --
+   --  The order is the definition. The shader is given Weight_Packing'Pos
+   --  and switches on it, so its constants are a copy of this list and
+   --  reordering here silently changes what every branch there decodes. The
+   --  conformance sweep multiplies a matrix in each of these on the device
+   --  and against the reference transformer, which is what would catch it.
+   type Weight_Packing is
+     (Values_F32, Values_F16, Values_BF16,
+      Packed_Q4_0, Packed_Q4_1, Packed_Q5_0, Packed_Q5_1, Packed_Q8_0,
+      Packed_IQ4_NL,
+      Packed_Q2_K, Packed_Q3_K, Packed_Q4_K, Packed_Q5_K, Packed_Q6_K,
+      Packed_IQ4_XS);
+
+   --  The packings whose blocks hold two hundred and fifty-six elements
+   --  rather than thirty-two. A row in one of these is a whole number of
+   --  super-blocks, so a width that is not a multiple of 256 is refused
+   --  rather than rounded.
+   --  The super-block formats are kept together for this: IQ4_XS shares its
+   --  levels with IQ4_NL and its shape with the k-quants, and it is the shape
+   --  that decides what a width has to be.
+   subtype Super_Packing is Weight_Packing range Packed_Q2_K .. Packed_IQ4_XS;
 
    --  What holds a device's pipeline for the product.
    type Engine is limited private;
@@ -227,6 +248,25 @@ private
       Buffer : System.Address := System.Null_Address;
       Memory : System.Address := System.Null_Address;
       Bytes  : Interfaces.Unsigned_64 := 0;
+
+      --  What was uploaded, not just how much of it. An address and a byte
+      --  count do not name a matrix: a twelve by two hundred and fifty-six
+      --  matrix of half-precision values and one of brain floats are the
+      --  same length at the same place and decode to different numbers, and
+      --  so are a twelve by two hundred and fifty-six and a six by five
+      --  hundred and twelve of the same format.
+      --
+      --  Found by a test that ran every format in turn through storage of
+      --  the same size: the allocator handed back the address it had just
+      --  taken, and the device answered the second format with the first
+      --  one's weights. What is still not covered, and cannot be from here,
+      --  is a caller that frees a matrix and puts another of exactly this
+      --  shape and format at the same address. In this program the weights
+      --  live as long as the model does, so that does not arise; a caller
+      --  for whom it would has to say so by passing a null key.
+      Packing : Weight_Packing := Values_F32;
+      Rows    : Natural := 0;
+      Columns : Natural := 0;
 
       --  When this was last multiplied by, as a count of products. What
       --  makes the one given back the one least recently wanted, rather

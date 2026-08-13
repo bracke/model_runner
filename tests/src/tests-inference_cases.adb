@@ -1,3 +1,5 @@
+with Ada.Text_IO;
+
 with AUnit.Assertions;
 
 with Model_Runner.Bytes;
@@ -1092,20 +1094,29 @@ package body Tests.Inference_Cases is
               & ", worst relative" & Long_Float'Image (Result.Worst_Rel));
    end Matches_Independent_Reference;
 
-   -------------------------------------------
-   -- Device_Refuses_A_Model_It_Cannot_Read --
-   -------------------------------------------
+   ----------------------------------------
+   -- Device_Reads_A_Model_In_Any_Format --
+   ----------------------------------------
 
-   --  A model in a format a backend cannot read is refused while it loads,
-   --  by name, and the refusal reads as a sentence.
+   --  A model in any format the program reads loads on the device.
    --
-   --  This is the path a user takes to that refusal: the device shader
-   --  decodes three of the fifteen formats and the loader asks about every
-   --  tensor, so a Q4_1 model on --backend device stops here rather than in
-   --  the middle of a token. Nothing else in the suite reaches the code --
-   --  until a backend existed that reads some formats and not others, no
-   --  caller could ask one to refuse a format the program itself decodes.
-   procedure Device_Refuses_A_Model_It_Cannot_Read
+   --  This test used to say the opposite, and the opposite was true: the
+   --  shader decoded three of the fifteen formats, so a Q4_1 model on
+   --  --backend device was refused while it loaded, naming the tensor and
+   --  the format, and reaching a device at all meant --repack f32 -- a pass
+   --  over the whole model and four bytes a weight afterwards, which for a
+   --  four-bit model is eight times what it was quantized to. The shader now
+   --  has a branch per format, so the refusal is gone and what is checked
+   --  here is that it is gone: the same fixture that was refused loads.
+   --
+   --  The loader's refusal is still written, and still right -- a format
+   --  added to the program and not to the shader must stop here rather than
+   --  in the middle of a token. Nothing can reach it from outside any more,
+   --  because a view can only hold a format the program decodes and the
+   --  device now decodes all of those. What holds the two lists together is
+   --  the test that compares Describe against Is_Supported, and beneath it
+   --  the one that multiplies a matrix in every format on both backends.
+   procedure Device_Reads_A_Model_In_Any_Format
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
@@ -1113,22 +1124,6 @@ package body Tests.Inference_Cases is
 
       Words : Model_Runner.Localization.Catalog;
 
-      --  Whether one text holds another, which is all this needs of the
-      --  rendered sentence: that it names what it is about.
-      function Names (Whole, Part : String) return Boolean is
-      begin
-         if Part'Length > Whole'Length then
-            return False;
-         end if;
-
-         for Start in Whole'First .. Whole'Last - Part'Length + 1 loop
-            if Whole (Start .. Start + Part'Length - 1) = Part then
-               return True;
-            end if;
-         end loop;
-
-         return False;
-      end Names;
    begin
       Model_Runner.Localization.Open
         (Words, Model_Runner.Platform.Catalog_Path, "en");
@@ -1156,26 +1151,38 @@ package body Tests.Inference_Cases is
                  & "it");
          L.Close (Model, Status);
 
-         --  The device does not, and says which tensor and which format.
+         --  And so does the device, without being asked to repack anything.
+         --  A machine with no device refuses for want of one, which is a
+         --  different code and is not what this is about.
          L.Prepare
            (Model, Item, Source,
             Backend => Model_Runner.Backend.Backend_Device,
             Status  => Status);
-         Assert (Status.Code = E.Backend_Unsupported_Format,
-                 "a q4_1 model on the device backend was not refused as an "
-                 & "unsupported format: "
-                 & E.Error_Code'Image (Status.Code));
 
+         if Status.Code = E.Backend_No_Device then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device read a q4_1 model here");
+         else
+            Assert (E.Is_Ok (Status),
+                    "a q4_1 model was refused by the device backend, which "
+                    & "now decodes it: " & E.Error_Code'Image (Status.Code));
+         end if;
+
+         --  And the two lists that have to agree do. Said here as well as in
+         --  the backend's own test because this is the level a user meets it
+         --  at: a format the loader lets through and the shader has no
+         --  branch for is a model that runs and answers wrongly.
          declare
-            Shown : constant String :=
-              Model_Runner.Localization.Describe (Words, Status);
+            Said : constant Model_Runner.Backend.Capabilities :=
+              Model_Runner.Backend.Device.Describe;
          begin
-            Assert (Shown'Length > 0 and then Shown (Shown'First) /= '<',
-                    "the refusal did not render: " & Shown);
-            Assert (Names (Shown, "Q4_1"),
-                    "the refusal does not name the format: " & Shown);
-            Assert (Names (Shown, "device"),
-                    "the refusal does not name the backend: " & Shown);
+            for Format in Model_Runner.GGUF.Tensor_Type loop
+               Assert (Model_Runner.Backend.Supports (Said, Format)
+                       = Model_Runner.GGUF.Is_Supported (Format),
+                       "the device backend and the program disagree about "
+                       & Model_Runner.GGUF.Type_Name (Format));
+            end loop;
          end;
 
          L.Close (Model, Status);
@@ -1184,7 +1191,7 @@ package body Tests.Inference_Cases is
 
       Model_Runner.Localization.Close (Words);
       B.Free (Image);
-   end Device_Refuses_A_Model_It_Cannot_Read;
+   end Device_Reads_A_Model_In_Any_Format;
 
    ---------------------------------------------
    -- Device_Says_When_A_Model_Will_Not_Fit --
@@ -5056,9 +5063,9 @@ package body Tests.Inference_Cases is
          "a model whose matrices are larger than the device will hold is "
          & "refused while it loads, with both numbers");
       Register_Routine
-        (T, Device_Refuses_A_Model_It_Cannot_Read'Access,
-         "a model in a format the device backend cannot read is refused "
-         & "while it loads, naming the tensor and the format");
+        (T, Device_Reads_A_Model_In_Any_Format'Access,
+         "a model in any format the program reads loads on the device, "
+         & "without being repacked first");
    end Register_Tests;
 
 end Tests.Inference_Cases;

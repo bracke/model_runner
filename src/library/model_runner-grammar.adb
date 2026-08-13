@@ -1224,29 +1224,29 @@ package body Model_Runner.Grammar is
          Here.Count := State.Count;
          Here.Stacks (1 .. State.Count) := State.Stacks (1 .. State.Count);
 
-      while At_Byte <= Text'Last loop
-         declare
-            Value  : Natural;
-            Length : Natural;
-         begin
-            Model_Runner.UTF8.Decode_First
-              (Text (At_Byte .. Text'Last), Value, Length);
-            if Length = 0 then
-               return False;
-            end if;
+         while At_Byte <= Text'Last loop
+            declare
+               Value  : Natural;
+               Length : Natural;
+            begin
+               Model_Runner.UTF8.Decode_First
+                 (Text (At_Byte .. Text'Last), Value, Length);
+               if Length = 0 then
+                  return False;
+               end if;
 
-            Step (Item, Here, Code_Point (Value), Next, Ok);
-            if not Ok or else Next.Count = 0 then
-               return False;
-            end if;
+               Step (Item, Here, Code_Point (Value), Next, Ok);
+               if not Ok or else Next.Count = 0 then
+                  return False;
+               end if;
 
-            Here.Count := Next.Count;
-            Here.Stacks (1 .. Next.Count) := Next.Stacks (1 .. Next.Count);
-            At_Byte := At_Byte + Length;
-         end;
-      end loop;
+               Here.Count := Next.Count;
+               Here.Stacks (1 .. Next.Count) := Next.Stacks (1 .. Next.Count);
+               At_Byte := At_Byte + Length;
+            end;
+         end loop;
 
-      return Here.Count > 0;
+         return Here.Count > 0;
       end;
    end Accepts;
 

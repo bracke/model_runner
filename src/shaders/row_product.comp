@@ -13,11 +13,20 @@
 //  eight vectors is eight times less of it. A batch longer than GROUP is
 //  several dispatches, each told which vector it starts at.
 //
-//  A format. A weight is either a binary32 value or a block of packed bits
-//  with a scale, and unpacking is a handful of arithmetic where reading the
-//  matrix again is a pass over the whole model. So the weights are bound as
-//  plain words and decoded here, which is what lets a quantized model reach
-//  a device without four bytes a weight being made for it first.
+//  A format. A weight is either a floating-point value or a block of packed
+//  bits with a scale, and unpacking is a handful of arithmetic where reading
+//  the matrix again is a pass over the whole model. So the weights are bound
+//  as plain words and decoded here, which is what lets a quantized model
+//  reach a device without four bytes a weight being made for it first.
+//
+//  Every format this program reads is decoded here -- all fifteen, the same
+//  set Model_Runner.GGUF.Is_Supported names. It used to be three, and the
+//  other twelve reached a device only by being repacked into one of them
+//  first: a pass over the whole model at load, and four bytes a weight
+//  afterwards for anything repacked to binary32. A format the shader cannot
+//  read is a format the loader must refuse or convert, so the list here and
+//  the list in Backend.Device.Describe are the same list, and the test that
+//  compares them fails when they are not.
 //
 //  The accumulation is in binary32, which is what a device offers without
 //  asking for an extension. The processor's own kernels accumulate a row in
@@ -45,8 +54,11 @@ layout(push_constant) uniform Shape {
     uint count;
     uint first;
 
-    //  0 binary32, 1 q8_0, 2 q4_0. The host refuses anything else before it
-    //  gets here, so there is no fourth case to be wrong about.
+    //  Which format the weights are in. The numbering is
+    //  Weight_Packing'Pos, so the Ada enumeration is the definition and
+    //  the constants below are the copy -- they are in its order for that
+    //  reason. The host refuses anything outside the range before it gets
+    //  here, so the last branch needs no test of its own.
     uint format;
 
     //  Where the matrix begins within the weight buffer. Zero when the host
@@ -57,34 +69,120 @@ layout(push_constant) uniform Shape {
     uint base;
 } shape;
 
+const uint FMT_F32    = 0u;
+const uint FMT_F16    = 1u;
+const uint FMT_BF16   = 2u;
+const uint FMT_Q4_0   = 3u;
+const uint FMT_Q4_1   = 4u;
+const uint FMT_Q5_0   = 5u;
+const uint FMT_Q5_1   = 6u;
+const uint FMT_Q8_0   = 7u;
+const uint FMT_IQ4_NL = 8u;
+const uint FMT_Q2_K   = 9u;
+const uint FMT_Q3_K   = 10u;
+const uint FMT_Q4_K   = 11u;
+const uint FMT_Q5_K   = 12u;
+const uint FMT_Q6_K   = 13u;
+const uint FMT_IQ4_XS = 14u;
+
 //  Vectors carried at once by one invocation. A constant, so that the loops
 //  over it unroll and the accumulators stay in registers; making it the
 //  batch length instead would put them in memory and give back what the
 //  batching just bought.
 const uint GROUP = 8u;
 
-//  One byte of the weights. Blocks are 34 and 18 bytes long, so a block
+//  The sixteen levels a non-linear four-bit quant may take. A nibble in
+//  IQ4_NL and IQ4_XS is not a number but an index into this, and the table
+//  belongs to the format rather than to any file.
+const int LEVELS[16] = int[16](-127, -104, -83, -65, -49, -35, -22, -10,
+                                  1,   13,  25,  38,  53,  69,  89, 113);
+
+//  Where each of this invocation's vectors begins, and what it has
+//  accumulated. Both are at file scope so that the accumulation below can be
+//  a function rather than fifteen copies of the same three lines: a GLSL
+//  parameter of array type is copied at every call, and copying eight
+//  offsets per element would cost more than the decoding does.
+uint from[GROUP];
+float sum[GROUP];
+
+//  One weight against every vector in the batch.
+void accumulate(uint col, float weight) {
+    for (uint k = 0u; k < GROUP; ++k) {
+        sum[k] += weight * x[from[k] + col];
+    }
+}
+
+//  One byte of the weights. Blocks are 18 to 210 bytes long, so a block
 //  boundary is not a word boundary and reading a word at a time would need
 //  every offset to be a special case.
 uint byte_at(uint at) {
     return (w[at >> 2u] >> ((at & 3u) * 8u)) & 255u;
 }
 
-//  The scale in front of a block, which every packed format writes as a
-//  binary16 value.
-float scale_at(uint at) {
+//  One byte read as a signed number, which is how Q8_0 keeps a quant and
+//  Q6_K keeps a sub-block scale.
+int signed_at(uint at) {
+    int value = int(byte_at(at));
+    return value > 127 ? value - 256 : value;
+}
+
+//  A half-precision number, which is how every packed format writes a scale
+//  and how F16 writes a weight.
+float half_at(uint at) {
     return unpackHalf2x16(byte_at(at) | (byte_at(at + 1u) << 8u)).x;
 }
 
 //  Bytes one row takes, which is what says where the next row starts.
 uint row_bytes() {
-    if (shape.format == 0u) {
-        return shape.columns * 4u;
+    switch (shape.format) {
+        case FMT_F32:  return shape.columns * 4u;
+        case FMT_F16:
+        case FMT_BF16: return shape.columns * 2u;
+
+        case FMT_Q4_0:
+        case FMT_IQ4_NL: return (shape.columns / 32u) * 18u;
+        case FMT_Q4_1:   return (shape.columns / 32u) * 20u;
+        case FMT_Q5_0:   return (shape.columns / 32u) * 22u;
+        case FMT_Q5_1:   return (shape.columns / 32u) * 24u;
+        case FMT_Q8_0:   return (shape.columns / 32u) * 34u;
+
+        case FMT_Q2_K:   return (shape.columns / 256u) * 84u;
+        case FMT_Q3_K:   return (shape.columns / 256u) * 110u;
+        case FMT_Q4_K:   return (shape.columns / 256u) * 144u;
+        case FMT_Q5_K:   return (shape.columns / 256u) * 176u;
+        case FMT_Q6_K:   return (shape.columns / 256u) * 210u;
+        default:         return (shape.columns / 256u) * 136u;
     }
-    if (shape.format == 1u) {
-        return (shape.columns / 32u) * 34u;
+}
+
+//  The six-bit scale and minimum a Q4_K or Q5_K sub-block carries. Twelve
+//  bytes hold sixteen six-bit numbers: the first four pairs whole in a byte
+//  each, the last four split, four bits in one byte and two in the top of
+//  another that a lower sub-block is already using.
+void sub_block_scale(uint at, uint index, out uint factor, out uint lowest) {
+    if (index < 4u) {
+        factor = byte_at(at + index) & 63u;
+        lowest = byte_at(at + index + 4u) & 63u;
+    } else {
+        factor = (byte_at(at + index + 4u) & 15u)
+                 | ((byte_at(at + index - 4u) >> 6u) << 4u);
+        lowest = (byte_at(at + index + 4u) >> 4u)
+                 | ((byte_at(at + index) >> 6u) << 4u);
     }
-    return (shape.columns / 32u) * 18u;
+}
+
+//  A Q3_K sub-block scale: four low bits in one of the first eight bytes and
+//  two high bits in one of the last four, made signed by subtracting
+//  thirty-two.
+int q3k_scale(uint at, uint which) {
+    uint group = which / 4u;
+    uint place = which % 4u;
+
+    uint low_byte = byte_at(at + (group % 2u == 0u ? place : place + 4u));
+    uint low = group < 2u ? (low_byte & 15u) : (low_byte >> 4u);
+    uint top = (byte_at(at + place + 8u) >> (2u * group)) & 3u;
+
+    return int(low) + 16 * int(top) - 32;
 }
 
 void main() {
@@ -93,70 +191,400 @@ void main() {
         return;
     }
 
-    //  Where each of this invocation's vectors begins. The ones past the end
-    //  of the batch read the last real vector rather than reading nothing:
-    //  the loops below have to have a constant trip count to unroll, and a
-    //  result nobody writes out is cheaper than a branch every element.
-    uint from[GROUP];
+    //  The ones past the end of the batch read the last real vector rather
+    //  than reading nothing: the loops below have to have a constant trip
+    //  count to unroll, and a result nobody writes out is cheaper than a
+    //  branch every element.
     for (uint k = 0u; k < GROUP; ++k) {
         from[k] = min(shape.first + k, shape.count - 1u) * shape.columns;
-    }
-
-    float sum[GROUP];
-    for (uint k = 0u; k < GROUP; ++k) {
         sum[k] = 0.0;
     }
 
     uint base = shape.base + row * row_bytes();
 
-    if (shape.format == 0u) {
+    if (shape.format == FMT_F32) {
         //  Words rather than bytes, which the base allows because both the
         //  alignment a device asks of a host pointer and the alignment this
         //  backend asks of a tensor are multiples of four.
         uint at = base >> 2u;
 
         for (uint col = 0u; col < shape.columns; ++col) {
-            float weight = uintBitsToFloat(w[at + col]);
-            for (uint k = 0u; k < GROUP; ++k) {
-                sum[k] += weight * x[from[k] + col];
-            }
+            accumulate(col, uintBitsToFloat(w[at + col]));
         }
-    } else if (shape.format == 1u) {
+    } else if (shape.format == FMT_F16) {
+        for (uint col = 0u; col < shape.columns; ++col) {
+            accumulate(col, half_at(base + col * 2u));
+        }
+    } else if (shape.format == FMT_BF16) {
+        //  The top half of a binary32: the same sign and the same eight
+        //  exponent bits, with the mantissa cut to seven. Widening it is a
+        //  shift and nothing else -- no exponent to rebias, and no case for
+        //  infinity or not-a-number, because those patterns are already
+        //  where binary32 keeps them.
+        for (uint col = 0u; col < shape.columns; ++col) {
+            uint at = base + col * 2u;
+            uint bits = (byte_at(at) | (byte_at(at + 1u) << 8u)) << 16u;
+            accumulate(col, uintBitsToFloat(bits));
+        }
+    } else if (shape.format == FMT_Q8_0) {
         //  Thirty-two signed bytes behind one scale.
         uint blocks = shape.columns / 32u;
 
         for (uint b = 0u; b < blocks; ++b) {
             uint at = base + b * 34u;
-            float scale = scale_at(at);
+            float scale = half_at(at);
             uint col = b * 32u;
 
             for (uint j = 0u; j < 32u; ++j) {
-                int packed = int(byte_at(at + 2u + j));
-                float weight = scale * float(packed > 127 ? packed - 256
-                                                          : packed);
-                for (uint k = 0u; k < GROUP; ++k) {
-                    sum[k] += weight * x[from[k] + col + j];
-                }
+                accumulate(col + j, scale * float(signed_at(at + 2u + j)));
             }
         }
-    } else {
+    } else if (shape.format == FMT_Q4_0) {
         //  Thirty-two nibbles behind one scale, the low half of each byte
-        //  belonging to element j and the high half to element j + 16.
+        //  belonging to element j and the high half to element j + 16, and
+        //  centred by taking eight away.
         uint blocks = shape.columns / 32u;
 
         for (uint b = 0u; b < blocks; ++b) {
             uint at = base + b * 18u;
-            float scale = scale_at(at);
+            float scale = half_at(at);
             uint col = b * 32u;
 
             for (uint j = 0u; j < 16u; ++j) {
                 uint packed = byte_at(at + 2u + j);
-                float low  = scale * (float(packed & 15u) - 8.0);
-                float high = scale * (float(packed >> 4u) - 8.0);
+                accumulate(col + j, scale * (float(packed & 15u) - 8.0));
+                accumulate(col + j + 16u, scale * (float(packed >> 4u) - 8.0));
+            }
+        }
+    } else if (shape.format == FMT_Q4_1) {
+        //  As Q4_0, with a minimum of its own instead of a fixed bias of
+        //  eight: a nibble is scaled and then lifted rather than centred.
+        uint blocks = shape.columns / 32u;
 
-                for (uint k = 0u; k < GROUP; ++k) {
-                    sum[k] += low  * x[from[k] + col + j];
-                    sum[k] += high * x[from[k] + col + j + 16u];
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 20u;
+            float scale = half_at(at);
+            float lowest = half_at(at + 2u);
+            uint col = b * 32u;
+
+            for (uint j = 0u; j < 16u; ++j) {
+                uint packed = byte_at(at + 4u + j);
+                accumulate(col + j, scale * float(packed & 15u) + lowest);
+                accumulate(col + j + 16u,
+                           scale * float(packed >> 4u) + lowest);
+            }
+        }
+    } else if (shape.format == FMT_Q5_0 || shape.format == FMT_Q5_1) {
+        //  A fifth bit for each element, held apart from the nibbles in four
+        //  bytes read as one number: bit j belongs to element j and bit
+        //  j + 16 to element j + 16. The two formats differ only in what
+        //  happens once it is restored -- Q5_0 centres the result by taking
+        //  sixteen away, as Q4_0 takes eight, and Q5_1 carries a minimum
+        //  instead, as Q4_1 does.
+        bool centred = shape.format == FMT_Q5_0;
+        uint stride = centred ? 22u : 24u;
+        uint fifths_at = centred ? 2u : 4u;
+        uint quants_at = centred ? 6u : 8u;
+        float bias = centred ? 16.0 : 0.0;
+
+        uint blocks = shape.columns / 32u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * stride;
+            float scale = half_at(at);
+            float lowest = centred ? 0.0 : half_at(at + 2u);
+            uint col = b * 32u;
+
+            uint fifths = byte_at(at + fifths_at)
+                          | (byte_at(at + fifths_at + 1u) << 8u)
+                          | (byte_at(at + fifths_at + 2u) << 16u)
+                          | (byte_at(at + fifths_at + 3u) << 24u);
+
+            for (uint j = 0u; j < 16u; ++j) {
+                uint packed = byte_at(at + quants_at + j);
+                float low = float((packed & 15u) + ((fifths >> j) & 1u) * 16u);
+                float high = float((packed >> 4u)
+                                   + ((fifths >> (j + 16u)) & 1u) * 16u);
+
+                accumulate(col + j, scale * (low - bias) + lowest);
+                accumulate(col + j + 16u, scale * (high - bias) + lowest);
+            }
+        }
+    } else if (shape.format == FMT_IQ4_NL) {
+        //  Laid out exactly as Q4_0 lays its nibbles. What differs is what a
+        //  nibble means: an index into the level table rather than a number
+        //  to centre on eight.
+        uint blocks = shape.columns / 32u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 18u;
+            float scale = half_at(at);
+            uint col = b * 32u;
+
+            for (uint j = 0u; j < 16u; ++j) {
+                uint packed = byte_at(at + 2u + j);
+                accumulate(col + j, scale * float(LEVELS[packed & 15u]));
+                accumulate(col + j + 16u, scale * float(LEVELS[packed >> 4u]));
+            }
+        }
+    } else if (shape.format == FMT_Q2_K) {
+        //  Sixteen bytes of packed scales, then sixty-four bytes of quants at
+        //  two bits each, then the two half-precision factors. Every element
+        //  is one of four levels, so the format leans harder on its scales
+        //  than any other: sixteen sub-blocks of sixteen elements, each with
+        //  a four-bit scale and a four-bit minimum sharing one byte.
+        uint blocks = shape.columns / 256u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 84u;
+            uint quants = at + 16u;
+            float d = half_at(at + 80u);
+            float dmin = half_at(at + 82u);
+            uint col0 = b * 256u;
+
+            for (uint side = 0u; side < 2u; ++side) {
+                for (uint group = 0u; group < 4u; ++group) {
+                    for (uint upper = 0u; upper < 2u; ++upper) {
+                        //  The scales are consumed in the order the
+                        //  sub-blocks are written, which is why this is a
+                        //  running index rather than an offset computed from
+                        //  the element number.
+                        uint which = side * 8u + group * 2u + upper;
+                        uint packed = byte_at(at + which);
+
+                        float factor = d * float(packed & 15u);
+                        float lowest = dmin * float(packed >> 4u);
+
+                        uint at_byte = quants + side * 32u + upper * 16u;
+                        uint into = col0 + side * 128u + group * 32u
+                                    + upper * 16u;
+                        uint shift = 2u * group;
+
+                        for (uint L = 0u; L < 16u; ++L) {
+                            uint q = (byte_at(at_byte + L) >> shift) & 3u;
+                            accumulate(into + L, factor * float(q) - lowest);
+                        }
+                    }
+                }
+            }
+        }
+    } else if (shape.format == FMT_Q3_K) {
+        //  Three bits an element, in two pieces. The low two are packed four
+        //  to a byte as in the two-bit format; the third lives in a mask of
+        //  thirty-two bytes shared by the whole block, and it is the bit's
+        //  absence that lowers the value: set leaves the two low bits alone,
+        //  clear takes four away, which is what makes the range minus four
+        //  to three rather than zero to seven.
+        uint blocks = shape.columns / 256u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 110u;
+            uint quants = at + 32u;
+            uint scales = at + 96u;
+            float d = half_at(at + 108u);
+            uint col0 = b * 256u;
+
+            for (uint side = 0u; side < 2u; ++side) {
+                for (uint group = 0u; group < 4u; ++group) {
+                    for (uint upper = 0u; upper < 2u; ++upper) {
+                        uint which = side * 8u + group * 2u + upper;
+                        float factor = d * float(q3k_scale(scales, which));
+
+                        uint at_byte = quants + side * 32u + upper * 16u;
+                        uint mask_at = at + upper * 16u;
+                        uint into = col0 + side * 128u + group * 32u
+                                    + upper * 16u;
+                        uint shift = 2u * group;
+
+                        //  One bit of the mask serves one sub-block group,
+                        //  and the bit advances across the whole block
+                        //  rather than restarting at its middle.
+                        uint bit = 1u << (side * 4u + group);
+
+                        for (uint L = 0u; L < 16u; ++L) {
+                            int low =
+                              int((byte_at(at_byte + L) >> shift) & 3u);
+                            bool lifted = (byte_at(mask_at + L) & bit) != 0u;
+                            accumulate(into + L,
+                                       factor * float(lifted ? low : low - 4));
+                        }
+                    }
+                }
+            }
+        }
+    } else if (shape.format == FMT_Q4_K) {
+        //  Eight sub-blocks of thirty-two elements, processed in pairs that
+        //  share the same thirty-two packed bytes: the low nibbles form the
+        //  first sub-block and the high nibbles the second.
+        uint blocks = shape.columns / 256u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 144u;
+            float d = half_at(at);
+            float dmin = half_at(at + 2u);
+            uint scales = at + 4u;
+            uint quants = at + 16u;
+            uint col0 = b * 256u;
+
+            for (uint group = 0u; group < 4u; ++group) {
+                uint at_byte = quants + group * 32u;
+                uint sub = group * 2u;
+
+                uint f1, m1, f2, m2;
+                sub_block_scale(scales, sub, f1, m1);
+                sub_block_scale(scales, sub + 1u, f2, m2);
+
+                //  A sub-block's scale and offset are the same for all
+                //  thirty-two of its elements, so they are formed once here
+                //  rather than in the loop.
+                float scale_1 = d * float(f1);
+                float scale_2 = d * float(f2);
+                float offset_1 = dmin * float(m1);
+                float offset_2 = dmin * float(m2);
+
+                uint into = col0 + group * 64u;
+
+                for (uint L = 0u; L < 32u; ++L) {
+                    uint packed = byte_at(at_byte + L);
+                    accumulate(into + L,
+                               scale_1 * float(packed & 15u) - offset_1);
+                    accumulate(into + 32u + L,
+                               scale_2 * float(packed >> 4u) - offset_2);
+                }
+            }
+        }
+    } else if (shape.format == FMT_Q5_K) {
+        //  As Q4_K plus thirty-two bytes carrying the fifth bit of each
+        //  quant, two bits of each byte serving one pair of sub-blocks.
+        uint blocks = shape.columns / 256u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 176u;
+            float d = half_at(at);
+            float dmin = half_at(at + 2u);
+            uint scales = at + 4u;
+            uint high = at + 16u;
+            uint quants = at + 48u;
+            uint col0 = b * 256u;
+
+            for (uint group = 0u; group < 4u; ++group) {
+                uint at_byte = quants + group * 32u;
+                uint sub = group * 2u;
+
+                uint f1, m1, f2, m2;
+                sub_block_scale(scales, sub, f1, m1);
+                sub_block_scale(scales, sub + 1u, f2, m2);
+
+                float scale_1 = d * float(f1);
+                float scale_2 = d * float(f2);
+                float offset_1 = dmin * float(m1);
+                float offset_2 = dmin * float(m2);
+
+                uint mask_low = 1u << (2u * group);
+                uint mask_high = 2u << (2u * group);
+                uint into = col0 + group * 64u;
+
+                for (uint L = 0u; L < 32u; ++L) {
+                    uint packed = byte_at(at_byte + L);
+                    uint fifth = byte_at(high + L);
+
+                    float low = float((packed & 15u)
+                                      + ((fifth & mask_low) != 0u ? 16u : 0u));
+                    float up = float((packed >> 4u)
+                                     + ((fifth & mask_high) != 0u ? 16u : 0u));
+
+                    accumulate(into + L, scale_1 * low - offset_1);
+                    accumulate(into + 32u + L, scale_2 * up - offset_2);
+                }
+            }
+        }
+    } else if (shape.format == FMT_Q6_K) {
+        //  Two halves of 128 elements. Within a half, each of the thirty-two
+        //  positions contributes four elements whose two high bits come from
+        //  one byte of the high-bit array, and each of the four has a signed
+        //  sub-block scale of its own.
+        uint blocks = shape.columns / 256u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 210u;
+            float d = half_at(at + 208u);
+            uint col0 = b * 256u;
+
+            for (uint side = 0u; side < 2u; ++side) {
+                uint low_half = at + side * 64u;
+                uint high_half = at + 128u + side * 32u;
+                uint scale_half = at + 192u + side * 8u;
+                uint out_half = col0 + side * 128u;
+
+                for (uint sub = 0u; sub < 2u; ++sub) {
+                    uint low_run = low_half + sub * 16u;
+                    uint high_run = high_half + sub * 16u;
+                    uint out_run = out_half + sub * 16u;
+
+                    float scale_1 = d * float(signed_at(scale_half + sub));
+                    float scale_2 =
+                      d * float(signed_at(scale_half + sub + 2u));
+                    float scale_3 =
+                      d * float(signed_at(scale_half + sub + 4u));
+                    float scale_4 =
+                      d * float(signed_at(scale_half + sub + 6u));
+
+                    for (uint L = 0u; L < 16u; ++L) {
+                        uint first = byte_at(low_run + L);
+                        uint second = byte_at(low_run + 32u + L);
+                        uint top = byte_at(high_run + L);
+
+                        accumulate(out_run + L,
+                                   scale_1 * (float((first & 15u)
+                                                    + 16u * (top & 3u))
+                                              - 32.0));
+                        accumulate(out_run + 32u + L,
+                                   scale_2 * (float((second & 15u)
+                                                    + 16u * ((top >> 2u) & 3u))
+                                              - 32.0));
+                        accumulate(out_run + 64u + L,
+                                   scale_3 * (float((first >> 4u)
+                                                    + 16u * ((top >> 4u) & 3u))
+                                              - 32.0));
+                        accumulate(out_run + 96u + L,
+                                   scale_4 * (float((second >> 4u)
+                                                    + 16u * ((top >> 6u) & 3u))
+                                              - 32.0));
+                    }
+                }
+            }
+        }
+    } else {
+        //  IQ4_XS: the non-linear levels over a super-block. Eight
+        //  sub-blocks of thirty-two, one half-precision scale for the whole
+        //  block and a six-bit scale for each sub-block -- four bits in a
+        //  nibble of the scale bytes and two in the shared word, signed by
+        //  taking thirty-two away.
+        uint blocks = shape.columns / 256u;
+
+        for (uint b = 0u; b < blocks; ++b) {
+            uint at = base + b * 136u;
+            float d = half_at(at);
+            uint high = byte_at(at + 2u) | (byte_at(at + 3u) << 8u);
+            uint low = at + 4u;
+            uint quants = at + 8u;
+            uint col0 = b * 256u;
+
+            for (uint sub = 0u; sub < 8u; ++sub) {
+                uint nibble = sub % 2u == 0u
+                              ? (byte_at(low + sub / 2u) & 15u)
+                              : (byte_at(low + sub / 2u) >> 4u);
+                uint upper = (high >> (2u * sub)) & 3u;
+                float step = d * (float(nibble + 16u * upper) - 32.0);
+
+                uint at_byte = quants + sub * 16u;
+                uint into = col0 + sub * 32u;
+
+                for (uint j = 0u; j < 16u; ++j) {
+                    uint packed = byte_at(at_byte + j);
+                    accumulate(into + j, step * float(LEVELS[packed & 15u]));
+                    accumulate(into + j + 16u,
+                               step * float(LEVELS[packed >> 4u]));
                 }
             }
         }

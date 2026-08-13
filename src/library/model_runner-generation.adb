@@ -875,295 +875,294 @@ package body Model_Runner.Generation is
             Produced_Here := Verified_Count;
          end Draft_Round;
       begin
+         --  Decode loop.
+            Started := Model_Runner.Clocks.Read (Time);
 
-      --  Decode loop.
-      Started := Model_Runner.Clocks.Read (Time);
+         if not Finished then
+            P.Publish (Observer, P.Generation_Progress (P.Generation_Started));
+            L.Enter (Session, L.Generating);
 
-      if not Finished then
-         P.Publish (Observer, P.Generation_Progress (P.Generation_Started));
-         L.Enter (Session, L.Generating);
+            Decode_Loop :
+            for Produced in 1 .. Item.Max_Tokens loop
+               declare
+                  Token : Token_Id;
+               begin
+                  if C.Is_Cancelled (Cancel) then
+                     Conclude (Cancelled);
+                     exit Decode_Loop;
+                  end if;
 
-         Decode_Loop :
-         for Produced in 1 .. Item.Max_Tokens loop
-            declare
-               Token : Token_Id;
-            begin
-               if C.Is_Cancelled (Cancel) then
-                  Conclude (Cancelled);
-                  exit Decode_Loop;
-               end if;
+                  --  What the grammar allows next, if there is one. Every token
+                  --  whose text cannot continue it leaves the distribution
+                  --  before anything is sampled, which is what makes this a
+                  --  constraint rather than a request: the tokens that would
+                  --  break the shape are not there to be chosen.
+                  --
+                  --  The end token goes with them until the grammar may end, so
+                  --  a run cannot stop half way through what it was asked for.
+                  if Rules /= null then
+                     S.Release_Step_Mask (Sampler);
 
-               --  What the grammar allows next, if there is one. Every token
-               --  whose text cannot continue it leaves the distribution
-               --  before anything is sampled, which is what makes this a
-               --  constraint rather than a request: the tokens that would
-               --  break the shape are not there to be chosen.
-               --
-               --  The end token goes with them until the grammar may end, so
-               --  a run cannot stop half way through what it was asked for.
-               if Rules /= null then
-                  S.Release_Step_Mask (Sampler);
+                     declare
+                        Allowed : Natural := 0;
+                     begin
+                        for Candidate in 0 .. Settings.Vocabulary - 1 loop
+                           declare
+                              Which : constant Token_Id := Token_Id (Candidate);
+                           begin
+                              if Which = Vocab.End_Token (Words.all) then
+                                 if Model_Runner.Grammar.Is_Complete
+                                      (Rules.all, Shape)
+                                 then
+                                    Allowed := Allowed + 1;
+                                 else
+                                    S.Forbid_For_Step (Sampler, Which);
+                                 end if;
 
-                  declare
-                     Allowed : Natural := 0;
-                  begin
-                     for Candidate in 0 .. Settings.Vocabulary - 1 loop
-                        declare
-                           Which : constant Token_Id := Token_Id (Candidate);
-                        begin
-                           if Which = Vocab.End_Token (Words.all) then
-                              if Model_Runner.Grammar.Is_Complete
-                                   (Rules.all, Shape)
+                              elsif Vocab.Decode_Token (Words.all, Which) = ""
+                              then
+                                 --  A token that contributes no text cannot
+                                 --  advance a grammar, and allowing it would
+                                 --  let a run produce it forever while the
+                                 --  grammar stayed where it was. The end token
+                                 --  is the one exception and it is above.
+                                 S.Forbid_For_Step (Sampler, Which);
+
+                              elsif Model_Runner.Grammar.Accepts
+                                      (Rules.all, Shape,
+                                       Vocab.Decode_Token (Words.all, Which))
                               then
                                  Allowed := Allowed + 1;
                               else
                                  S.Forbid_For_Step (Sampler, Which);
                               end if;
+                           end;
+                        end loop;
 
-                           elsif Vocab.Decode_Token (Words.all, Which) = ""
-                           then
-                              --  A token that contributes no text cannot
-                              --  advance a grammar, and allowing it would
-                              --  let a run produce it forever while the
-                              --  grammar stayed where it was. The end token
-                              --  is the one exception and it is above.
-                              S.Forbid_For_Step (Sampler, Which);
-
-                           elsif Model_Runner.Grammar.Accepts
-                                   (Rules.all, Shape,
-                                    Vocab.Decode_Token (Words.all, Which))
-                           then
-                              Allowed := Allowed + 1;
-                           else
-                              S.Forbid_For_Step (Sampler, Which);
-                           end if;
-                        end;
-                     end loop;
-
-                     if Allowed = 0 then
-                        Conclude
-                          (Runtime_Error,
-                           E.Make (E.Grammar_Rejected_Every_Token));
-                        exit Decode_Loop;
-                     end if;
-                  end;
-               end if;
-
-               --  Where the next token comes from. Without a draft it is
-               --  sampled from the logits the last evaluation produced.
-               --  With one it comes from a round of proposals the target has
-               --  already checked, and the session is already past it -- so
-               --  the commit at the bottom of this loop is skipped for it.
-               if Drafting then
-                  if Verified_At >= Verified_Count then
-                     declare
-                        Made : Natural;
-                        Gave : Boolean;
-                     begin
-                        Draft_Round (Made, Gave);
-                        exit Decode_Loop when Gave;
+                        if Allowed = 0 then
+                           Conclude
+                             (Runtime_Error,
+                              E.Make (E.Grammar_Rejected_Every_Token));
+                           exit Decode_Loop;
+                        end if;
                      end;
                   end if;
 
-                  Verified_At := Verified_At + 1;
-                  Token := Verified.all (Verified_At);
-               else
-                  S.Sample (Sampler, Logits.all, Token, Status);
-                  if E.Is_Error (Status) then
-                     Conclude (Runtime_Error, Status);
-                     exit Decode_Loop;
-                  end if;
-               end if;
-
-               --  What the model made of this position, when somebody asked.
-               --  After the choice rather than instead of it: the report says
-               --  what was chosen as well as what was likely, and the two are
-               --  not always the same token.
-               if Reporter /= null and then Item.Logprobs > 0 then
-                  declare
-                     Report : S.Explanation;
-                     Told   : E.Error_Info;
-
-                     --  Which distribution this token was chosen from. Not
-                     --  the current one when a round produced it: the first
-                     --  of a round came from what the round began with and
-                     --  the rest from the batch's own rows, and the current
-                     --  one describes the position after all of them.
-                     Row : constant N.Element_Count :=
-                       (if Drafting and then Verified_At > 1
-                        then N.Element_Count (Verified_At - 2)
-                             * N.Element_Count (Settings.Vocabulary)
-                        else 0);
-                  begin
-                     if not Drafting then
-                        S.Explain
-                          (Sampler, Logits.all, Token, Item.Logprobs, Report,
-                           Told);
-                     elsif Verified_At = 1 then
-                        S.Explain
-                          (Sampler, Opened.all, Token, Item.Logprobs, Report,
-                           Told);
-                     else
-                        S.Explain
-                          (Sampler,
-                           Every.all (Every.all'First + Row
-                                      .. Every.all'First + Row
-                                         + N.Element_Count
-                                             (Settings.Vocabulary) - 1),
-                           Token, Item.Logprobs, Report, Told);
+                  --  Where the next token comes from. Without a draft it is
+                  --  sampled from the logits the last evaluation produced.
+                  --  With one it comes from a round of proposals the target has
+                  --  already checked, and the session is already past it -- so
+                  --  the commit at the bottom of this loop is skipped for it.
+                  if Drafting then
+                     if Verified_At >= Verified_Count then
+                        declare
+                           Made : Natural;
+                           Gave : Boolean;
+                        begin
+                           Draft_Round (Made, Gave);
+                           exit Decode_Loop when Gave;
+                        end;
                      end if;
 
-                     if E.Is_Ok (Told) then
-                        Reporter.all.Explain (Report);
-                     end if;
-                  end;
-               end if;
-
-               --  Token-level stop conditions, before any text is produced, so
-               --  that no byte of a stop token reaches the output.
-               if Token = Vocab.End_Token (Words.all) then
-                  Conclude (End_Of_Sequence);
-                  exit Decode_Loop;
-               end if;
-
-               if Model_Runner.Stops.Is_Stop_Token (Stop_Set, Token) then
-                  Conclude (Stop_Token);
-                  exit Decode_Loop;
-               end if;
-
-               --  And through the grammar, which now expects what follows
-               --  this token rather than what followed the one before it.
-               if Rules /= null then
-                  Model_Runner.Grammar.Advance
-                    (Rules.all, Shape,
-                     Vocab.Decode_Token (Words.all, Token), Status);
-                  if E.Is_Error (Status) then
-                     Conclude (Runtime_Error, Status);
-                     exit Decode_Loop;
-                  end if;
-               end if;
-
-               --  Commit the token to the session, unless a round already
-               --  did: a verified token is in the target's context by the
-               --  time it reaches here, and evaluating it again would put it
-               --  there twice.
-               S.Record_Token (Sampler, Token);
-
-               if Drafting then
-                  Status := E.Success;
-               else
-                  L.Evaluate
-                    (Session, Source, Token, Logits.all, Cancel, Status);
-               end if;
-
-               --  A context that has filled, when the caller asked for the
-               --  oldest to be dropped rather than the run to end. Tried
-               --  once: if the token still will not go in after the shift,
-               --  the run ends as it would have.
-               if E.Is_Error (Status)
-                 and then Status.Code = E.Generation_Context_Exhausted
-                 and then Item.Context_Shift > 0
-               then
-                  declare
-                     Moved : E.Error_Info;
-                  begin
-                     L.Shift
-                       (Session, Source, Item.Context_Keep,
-                        Item.Context_Shift, Moved);
-
-                     if E.Is_Ok (Moved) then
-                        Outcome.Shifted := Outcome.Shifted + 1;
-                        L.Evaluate
-                          (Session, Source, Token, Logits.all, Cancel,
-                           Status);
-                     end if;
-                  end;
-               end if;
-
-               if E.Is_Error (Status) then
-                  if Status.Code = E.Generation_Cancelled then
-                     Conclude (Cancelled);
-                  elsif Status.Code = E.Generation_Context_Exhausted then
-                     Conclude (Context_Full);
+                     Verified_At := Verified_At + 1;
+                     Token := Verified.all (Verified_At);
                   else
-                     Conclude (Runtime_Error, Status);
+                     S.Sample (Sampler, Logits.all, Token, Status);
+                     if E.Is_Error (Status) then
+                        Conclude (Runtime_Error, Status);
+                        exit Decode_Loop;
+                     end if;
                   end if;
-                  exit Decode_Loop;
-               end if;
 
-               Outcome.Generated_Tokens := Produced;
-               P.Publish
-                 (Observer,
-                  P.Generation_Progress
-                    (P.Token_Produced, Interfaces.Unsigned_64 (Produced),
-                     Interfaces.Unsigned_64 (Item.Max_Tokens)));
+                  --  What the model made of this position, when somebody asked.
+                  --  After the choice rather than instead of it: the report says
+                  --  what was chosen as well as what was likely, and the two are
+                  --  not always the same token.
+                  if Reporter /= null and then Item.Logprobs > 0 then
+                     declare
+                        Report : S.Explanation;
+                        Told   : E.Error_Info;
 
-               --  Decode, holding back bytes that a stop string could still
-               --  complete. The incremental decoder never returns a partial
-               --  UTF-8 sequence.
-               declare
-                  Fragment : constant String :=
-                    Vocab.Push (Decoder, Words.all, Token);
-               begin
-                  if Pending_Used + Fragment'Length
-                    > Natural (Pending.all'Length)
+                        --  Which distribution this token was chosen from. Not
+                        --  the current one when a round produced it: the first
+                        --  of a round came from what the round began with and
+                        --  the rest from the batch's own rows, and the current
+                        --  one describes the position after all of them.
+                        Row : constant N.Element_Count :=
+                          (if Drafting and then Verified_At > 1
+                           then N.Element_Count (Verified_At - 2)
+                                * N.Element_Count (Settings.Vocabulary)
+                           else 0);
+                     begin
+                        if not Drafting then
+                           S.Explain
+                             (Sampler, Logits.all, Token, Item.Logprobs, Report,
+                              Told);
+                        elsif Verified_At = 1 then
+                           S.Explain
+                             (Sampler, Opened.all, Token, Item.Logprobs, Report,
+                              Told);
+                        else
+                           S.Explain
+                             (Sampler,
+                              Every.all (Every.all'First + Row
+                                         .. Every.all'First + Row
+                                            + N.Element_Count
+                                                (Settings.Vocabulary) - 1),
+                              Token, Item.Logprobs, Report, Told);
+                        end if;
+
+                        if E.Is_Ok (Told) then
+                           Reporter.all.Explain (Report);
+                        end if;
+                     end;
+                  end if;
+
+                  --  Token-level stop conditions, before any text is produced, so
+                  --  that no byte of a stop token reaches the output.
+                  if Token = Vocab.End_Token (Words.all) then
+                     Conclude (End_Of_Sequence);
+                     exit Decode_Loop;
+                  end if;
+
+                  if Model_Runner.Stops.Is_Stop_Token (Stop_Set, Token) then
+                     Conclude (Stop_Token);
+                     exit Decode_Loop;
+                  end if;
+
+                  --  And through the grammar, which now expects what follows
+                  --  this token rather than what followed the one before it.
+                  if Rules /= null then
+                     Model_Runner.Grammar.Advance
+                       (Rules.all, Shape,
+                        Vocab.Decode_Token (Words.all, Token), Status);
+                     if E.Is_Error (Status) then
+                        Conclude (Runtime_Error, Status);
+                        exit Decode_Loop;
+                     end if;
+                  end if;
+
+                  --  Commit the token to the session, unless a round already
+                  --  did: a verified token is in the target's context by the
+                  --  time it reaches here, and evaluating it again would put it
+                  --  there twice.
+                  S.Record_Token (Sampler, Token);
+
+                  if Drafting then
+                     Status := E.Success;
+                  else
+                     L.Evaluate
+                       (Session, Source, Token, Logits.all, Cancel, Status);
+                  end if;
+
+                  --  A context that has filled, when the caller asked for the
+                  --  oldest to be dropped rather than the run to end. Tried
+                  --  once: if the token still will not go in after the shift,
+                  --  the run ends as it would have.
+                  if E.Is_Error (Status)
+                    and then Status.Code = E.Generation_Context_Exhausted
+                    and then Item.Context_Shift > 0
                   then
-                     Conclude
-                       (Runtime_Error, E.Make (E.Internal_Invariant_Violated));
+                     declare
+                        Moved : E.Error_Info;
+                     begin
+                        L.Shift
+                          (Session, Source, Item.Context_Keep,
+                           Item.Context_Shift, Moved);
+
+                        if E.Is_Ok (Moved) then
+                           Outcome.Shifted := Outcome.Shifted + 1;
+                           L.Evaluate
+                             (Session, Source, Token, Logits.all, Cancel,
+                              Status);
+                        end if;
+                     end;
+                  end if;
+
+                  if E.Is_Error (Status) then
+                     if Status.Code = E.Generation_Cancelled then
+                        Conclude (Cancelled);
+                     elsif Status.Code = E.Generation_Context_Exhausted then
+                        Conclude (Context_Full);
+                     else
+                        Conclude (Runtime_Error, Status);
+                     end if;
                      exit Decode_Loop;
                   end if;
 
-                  if Fragment'Length > 0 then
-                     Pending.all
-                       (B.Byte_Count (Pending_Used) + 1
-                        .. B.Byte_Count (Pending_Used + Fragment'Length)) :=
-                       B.To_Bytes (Fragment);
-                     Pending_Used := Pending_Used + Fragment'Length;
+                  Outcome.Generated_Tokens := Produced;
+                  P.Publish
+                    (Observer,
+                     P.Generation_Progress
+                       (P.Token_Produced, Interfaces.Unsigned_64 (Produced),
+                        Interfaces.Unsigned_64 (Item.Max_Tokens)));
+
+                  --  Decode, holding back bytes that a stop string could still
+                  --  complete. The incremental decoder never returns a partial
+                  --  UTF-8 sequence.
+                  declare
+                     Fragment : constant String :=
+                       Vocab.Push (Decoder, Words.all, Token);
+                  begin
+                     if Pending_Used + Fragment'Length
+                       > Natural (Pending.all'Length)
+                     then
+                        Conclude
+                          (Runtime_Error, E.Make (E.Internal_Invariant_Violated));
+                        exit Decode_Loop;
+                     end if;
+
+                     if Fragment'Length > 0 then
+                        Pending.all
+                          (B.Byte_Count (Pending_Used) + 1
+                           .. B.Byte_Count (Pending_Used + Fragment'Length)) :=
+                          B.To_Bytes (Fragment);
+                        Pending_Used := Pending_Used + Fragment'Length;
+                     end if;
+                  end;
+
+                  --  Stop strings, matched across token boundaries.
+                  declare
+                     First  : Natural;
+                     Length : Natural;
+                  begin
+                     Model_Runner.Stops.Scan
+                       (Stop_Set, Pending_Text, First, Length);
+
+                     if First /= 0 then
+                        --  Release the text before the stop string and no byte of
+                        --  the stop string itself.
+                        Emit (Pending_Text (1 .. First - 1));
+                        Pending_Used := 0;
+                        Conclude ((if Closed then Output_Closed else Stop_String));
+                        exit Decode_Loop;
+                     end if;
+                  end;
+
+                  --  Release everything that can no longer begin a stop string.
+                  declare
+                     Held : constant Natural :=
+                       Natural'Min (Pending_Used, Natural'Max (Longest - 1, 0));
+                     Free : constant Natural := Pending_Used - Held;
+                  begin
+                     if Free > 0 then
+                        Emit (Pending_Text (1 .. Free));
+                        Consume (Free);
+                     end if;
+                  end;
+
+                  if Closed then
+                     Conclude (Output_Closed);
+                     exit Decode_Loop;
                   end if;
-               end;
 
-               --  Stop strings, matched across token boundaries.
-               declare
-                  First  : Natural;
-                  Length : Natural;
-               begin
-                  Model_Runner.Stops.Scan
-                    (Stop_Set, Pending_Text, First, Length);
-
-                  if First /= 0 then
-                     --  Release the text before the stop string and no byte of
-                     --  the stop string itself.
-                     Emit (Pending_Text (1 .. First - 1));
-                     Pending_Used := 0;
-                     Conclude ((if Closed then Output_Closed else Stop_String));
+                  if Produced = Item.Max_Tokens then
+                     Conclude (Maximum_Tokens);
                      exit Decode_Loop;
                   end if;
                end;
-
-               --  Release everything that can no longer begin a stop string.
-               declare
-                  Held : constant Natural :=
-                    Natural'Min (Pending_Used, Natural'Max (Longest - 1, 0));
-                  Free : constant Natural := Pending_Used - Held;
-               begin
-                  if Free > 0 then
-                     Emit (Pending_Text (1 .. Free));
-                     Consume (Free);
-                  end if;
-               end;
-
-               if Closed then
-                  Conclude (Output_Closed);
-                  exit Decode_Loop;
-               end if;
-
-               if Produced = Item.Max_Tokens then
-                  Conclude (Maximum_Tokens);
-                  exit Decode_Loop;
-               end if;
-            end;
-         end loop Decode_Loop;
-      end if;
+            end loop Decode_Loop;
+         end if;
       end;
 
       --  Flush the safely decodable remainder, but only when the run ended for

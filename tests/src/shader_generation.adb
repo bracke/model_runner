@@ -205,13 +205,26 @@ package body Shader_Generation is
                end if;
 
                Ada.Text_IO.Put (Handle, Text);
-               if Index < Words then
-                  Ada.Text_IO.Put (Handle, ", ");
-               end if;
 
+               --  The separator goes before the next word rather than after
+               --  this one when the line ends here, because a comma and a
+               --  space at the end of a line is a trailing space, and the
+               --  gate refuses a build that leaves style warnings behind.
+               --
+               --  It wrote them for as long as it had existed -- five
+               --  hundred and seventeen of them in the file it produces --
+               --  and nothing said so, because a warning is only reported
+               --  when a unit is compiled and this one had not been since
+               --  the switch was turned on.
                Column := Column + 1;
                if Column = 5 then
                   Column := 0;
+               end if;
+
+               if Index < Words and then Column /= 0 then
+                  Ada.Text_IO.Put (Handle, ", ");
+               elsif Index < Words then
+                  Ada.Text_IO.Put (Handle, ",");
                end if;
             end;
          end loop;

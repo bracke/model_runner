@@ -2353,7 +2353,7 @@ package body Model_Runner.Llama is
          if E.Is_Error (Status) then
             Release;
             return;
-        end if;
+         end if;
       end;
 
       for Index in Item.Layers.all'Range loop

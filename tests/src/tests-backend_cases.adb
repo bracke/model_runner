@@ -370,21 +370,26 @@ package body Tests.Backend_Cases is
       Assert (Model_Runner.Backend.Backend_Name (Said.Kind) = "device",
               "wrong backend name");
 
-      --  The three the shader has a branch for.
-      Assert (Model_Runner.Backend.Supports (Said, G.Type_F32), "F32");
-      Assert (Model_Runner.Backend.Supports (Said, G.Type_Q8_0), "Q8_0");
-      Assert (Model_Runner.Backend.Supports (Said, G.Type_Q4_0), "Q4_0");
-
-      --  And nothing else, which is the half that matters: every other
-      --  format reaches a device by being repacked, and claiming one here
-      --  would take a model past the loader's check and into the shader,
-      --  which would read its bytes as something they are not.
+      --  Every format the program reads, and nothing else. The shader used
+      --  to decode three of the fifteen and now decodes all of them, so the
+      --  two halves of this are the same statement said twice: what is
+      --  claimed must be supported, and what is supported must be claimed.
+      --
+      --  The second half is the one that matters. A format claimed here and
+      --  not decoded takes a model past the loader's check and into the
+      --  shader, which reads its bytes as something they are not -- a wrong
+      --  answer rather than a refusal, and nothing downstream can tell.
+      --  Q8_1 and Q8_K are the two the parser recognizes and no kernel in
+      --  this program decodes; they are refused before any backend is asked.
       for Format in G.Tensor_Type loop
-         if Format not in G.Type_F32 | G.Type_Q8_0 | G.Type_Q4_0 then
-            Assert (not Model_Runner.Backend.Supports (Said, Format),
-                    "the device backend claims " & G.Type_Name (Format)
-                    & ", which the shader has no branch for");
-         end if;
+         Assert (Model_Runner.Backend.Supports (Said, Format)
+                 = G.Is_Supported (Format),
+                 "the device backend "
+                 & (if Model_Runner.Backend.Supports (Said, Format)
+                    then "claims " & G.Type_Name (Format)
+                         & ", which this program does not read"
+                    else "disclaims " & G.Type_Name (Format)
+                         & ", which the shader has a branch for"));
       end loop;
 
       Assert (Said.Supports_Matrix_Vector,
@@ -438,6 +443,10 @@ package body Tests.Backend_Cases is
       Vector : T.Real_Array_Access;
       Room   : T.Real_Array_Access;
 
+      --  A vector as wide as the packed matrix below, which the two-element
+      --  one is not.
+      Wide_Vector : T.Real_Array_Access;
+
       Was_Open : constant Boolean := Model_Runner.Backend.Device.Is_Ready;
    begin
       Model_Runner.Localization.Open
@@ -480,21 +489,34 @@ package body Tests.Backend_Cases is
                Packed : B.Byte_Array_Access;
                Other  : T.View;
             begin
-               --  A format with no branch in the shader. Q4_1 is decoded by
-               --  every other backend, which is what makes it the right one
-               --  to ask about: the refusal has to come from this backend
-               --  rather than from the program not knowing the format.
+               --  A packed format the shader used to have no branch
+               --  for. This case asserted the refusal: Q4_1 was decoded by
+               --  every other backend and not by this one, so a caller met
+               --  Backend_Capability_Missing here. The shader now has a
+               --  branch per format, so the same call has to succeed, and
+               --  that is what is checked -- the refusal it replaced cannot
+               --  be reached from outside at all any more, because a view
+               --  will not hold a format the program does not decode and
+               --  the device decodes every format it does.
+               --
+               --  Whether the answer is right is the per-format test's
+               --  business; what this holds is that the request is taken.
                B.Allocate (40, Packed);
                Packed.all := [others => 0];
                T.Make (G.Type_Q4_1, 2, 32, Packed, 0, Other, Status);
                Assert (E.Is_Ok (Status), "packed view could not be built");
 
+               --  Wide enough for the matrix, because a request whose
+               --  shapes do not match is refused for that first and would
+               --  say nothing about the format.
+               T.Allocate (32, Wide_Vector);
                Model_Runner.Backend.Device.Dispatch
-                 (Other, Vector, Room, Status);
-               Assert (Status.Code = E.Backend_Capability_Missing,
-                       "a format the shader cannot read was not refused");
-               Reads (Status, "a format the shader cannot read");
+                 (Other, Wide_Vector, Room, Status);
+               Assert (E.Is_Ok (Status),
+                       "a packed matrix the shader now decodes was refused: "
+                       & E.Error_Code'Image (Status.Code));
 
+               T.Free (Wide_Vector);
                B.Free (Packed);
             end;
 
@@ -543,6 +565,203 @@ package body Tests.Backend_Cases is
          Model_Runner.Backend.Device.Close;
       end if;
    end Device_Refuses_What_It_Must;
+
+   ---------------------------------------
+   -- Device_Decodes_Every_Format_It_Claims --
+   ---------------------------------------
+
+   --  Every format the shader decodes, against the processor's own decoder.
+   --
+   --  The shader carries a branch per format and each was written from the
+   --  Ada decoder in Model_Runner.Quantization -- fifteen transcriptions of
+   --  bit layouts, where a shift by the wrong amount, a sub-block scale read
+   --  from the wrong byte or a level table off by one produces an answer
+   --  that is merely wrong. Nothing downstream can tell a slightly wrong
+   --  weight from a right one, so the check has to be here, at the one place
+   --  the two decoders can be pointed at the same bytes.
+   --
+   --  Against the CPU backend rather than against stated values, because
+   --  what is being checked is that the two agree: the values a format can
+   --  hold are the format's business, and both sides are asked for the same
+   --  ones.
+   --
+   --  Both widths matter. A batch of one and a batch of ten take different
+   --  paths through the shader -- the second runs it twice with a different
+   --  first vector -- and a decode that ignored the base offset would pass
+   --  the first and fail the second.
+   procedure Device_Decodes_Every_Format_It_Claims
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Ready : Boolean;
+
+      --  A whole number of super-blocks, which the k-quants need and the
+      --  thirty-two element formats are happy with.
+      Wide : constant N.Element_Count := 256;
+      Tall : constant N.Element_Count := 12;
+
+      Batch : constant := 10;
+
+      Status : E.Error_Info;
+
+      --  What a format is called, what encodes it, and nothing else: the
+      --  loop below is the same for all fifteen.
+      type Case_Kind is (Kind_F32, Kind_F16, Kind_BF16,
+                         Kind_Q4_0, Kind_Q4_1, Kind_Q5_0, Kind_Q5_1,
+                         Kind_Q8_0, Kind_IQ4_NL,
+                         Kind_Q2_K, Kind_Q3_K, Kind_Q4_K, Kind_Q5_K,
+                         Kind_Q6_K, Kind_IQ4_XS);
+
+      function Format_Of (Which : Case_Kind) return G.Tensor_Type
+      is (case Which is
+             when Kind_F32    => G.Type_F32,
+             when Kind_F16    => G.Type_F16,
+             when Kind_BF16   => G.Type_BF16,
+             when Kind_Q4_0   => G.Type_Q4_0,
+             when Kind_Q4_1   => G.Type_Q4_1,
+             when Kind_Q5_0   => G.Type_Q5_0,
+             when Kind_Q5_1   => G.Type_Q5_1,
+             when Kind_Q8_0   => G.Type_Q8_0,
+             when Kind_IQ4_NL => G.Type_IQ4_NL,
+             when Kind_Q2_K   => G.Type_Q2_K,
+             when Kind_Q3_K   => G.Type_Q3_K,
+             when Kind_Q4_K   => G.Type_Q4_K,
+             when Kind_Q5_K   => G.Type_Q5_K,
+             when Kind_Q6_K   => G.Type_Q6_K,
+             when Kind_IQ4_XS => G.Type_IQ4_XS);
+
+      function Encoded (Which : Case_Kind; Values : N.Real_Array)
+                        return B.Byte_Array
+      is (case Which is
+             when Kind_F32    => Fixtures.Encode_F32 (Values),
+             when Kind_F16    => Fixtures.Encode_F16 (Values),
+             when Kind_BF16   => Fixtures.Encode_BF16 (Values),
+             when Kind_Q4_0   => Fixtures.Encode_Q4_0 (Values),
+             when Kind_Q4_1   => Fixtures.Encode_Q4_1 (Values),
+             when Kind_Q5_0   => Fixtures.Encode_Q5_0 (Values),
+             when Kind_Q5_1   => Fixtures.Encode_Q5_1 (Values),
+             when Kind_Q8_0   => Fixtures.Encode_Q8_0 (Values),
+             when Kind_IQ4_NL => Fixtures.Encode_IQ4_NL (Values),
+             when Kind_Q2_K   => Fixtures.Encode_Q2_K (Values),
+             when Kind_Q3_K   => Fixtures.Encode_Q3_K (Values),
+             when Kind_Q4_K   => Fixtures.Encode_Q4_K (Values),
+             when Kind_Q5_K   => Fixtures.Encode_Q5_K (Values),
+             when Kind_Q6_K   => Fixtures.Encode_Q6_K (Values),
+             when Kind_IQ4_XS => Fixtures.Encode_IQ4_XS (Values));
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device decoded anything here");
+         return;
+      end if;
+
+      for Which in Case_Kind loop
+         declare
+            Name : constant String := G.Type_Name (Format_Of (Which));
+
+            Values : N.Real_Array (0 .. Wide * Tall - 1);
+
+            Storage : B.Byte_Array_Access;
+            Weight  : T.View;
+
+            Vectors : T.Real_Array_Access;
+            There   : T.Real_Array_Access;
+            Here    : T.Real_Array_Access;
+         begin
+            --  A ramp that turns over rather than a constant: a constant
+            --  matrix comes out right under a decoder that reads the same
+            --  wrong byte for every element, which is the fixture that
+            --  cannot fail.
+            for Index in Values'Range loop
+               Values (Index) :=
+                 N.Real (Integer (Index) mod 61) * 0.031 - 0.9;
+            end loop;
+
+            declare
+               Bytes : constant B.Byte_Array := Encoded (Which, Values);
+            begin
+               B.Allocate (Bytes'Length, Storage);
+               Storage.all := Bytes;
+            end;
+
+            T.Make (Format_Of (Which), Tall, Wide, Storage, 0, Weight,
+                    Status);
+            Assert (E.Is_Ok (Status),
+                    "a weight view in " & Name & " could not be built");
+
+            T.Allocate (Wide * Batch, Vectors);
+            T.Allocate (Tall * Batch, There);
+            T.Allocate (Tall * Batch, Here);
+
+            for Index in Vectors.all'Range loop
+               Vectors.all (Index) :=
+                 N.Real (Integer (Index) mod 29) * 0.07 - 1.0;
+            end loop;
+
+            --  One vector, then the whole batch, on each backend.
+            for Count in 1 .. 2 loop
+               declare
+                  Many : constant Positive :=
+                    (if Count = 1 then 1 else Batch);
+                  Room : constant N.Element_Count :=
+                    Tall * N.Element_Count (Many);
+               begin
+                  if Many = 1 then
+                     Model_Runner.Backend.Device.Dispatch
+                       (Weight, Vectors, There, Status);
+                     Assert (E.Is_Ok (Status),
+                             "the device refused " & Name & ": "
+                             & E.Error_Code'Image (Status.Code));
+                     Model_Runner.Backend.CPU.Dispatch
+                       (null, Weight, Vectors, Here, Status);
+                  else
+                     Model_Runner.Backend.Device.Dispatch_Batch
+                       (Weight, Vectors, N.Element_Count (Many), There,
+                        Status);
+                     Assert (E.Is_Ok (Status),
+                             "the device refused a batch of " & Name & ": "
+                             & E.Error_Code'Image (Status.Code));
+                     Model_Runner.Backend.CPU.Dispatch_Batch
+                       (null, Weight, Vectors,
+                        N.Element_Count (Many), Here, Status);
+                  end if;
+
+                  Assert (E.Is_Ok (Status),
+                          "the processor refused " & Name & ": "
+                          & E.Error_Code'Image (Status.Code));
+
+                  for Index in 0 .. Room - 1 loop
+                     --  The device accumulates in binary32 and the processor
+                     --  in binary64, so the two are held to a tolerance
+                     --  rather than to each other's bits. The gap this
+                     --  catches is a misread layout, which is not small.
+                     Assert (abs (There.all (Index) - Here.all (Index))
+                             < 1.0E-3,
+                             "the device decoded " & Name
+                             & " differently from the processor at "
+                             & N.Element_Count'Image (Index)
+                             & " with" & Positive'Image (Many)
+                             & " vectors:"
+                             & N.Real'Image (There.all (Index))
+                             & " against" & N.Real'Image (Here.all (Index)));
+                  end loop;
+               end;
+            end loop;
+
+            T.Free (Vectors);
+            T.Free (There);
+            T.Free (Here);
+            B.Free (Storage);
+         end;
+      end loop;
+
+      Model_Runner.Backend.Device.Close;
+   end Device_Decodes_Every_Format_It_Claims;
 
    ------------------------------------------
    -- Device_Gives_Back_What_It_Cannot_Hold --
@@ -1075,6 +1294,9 @@ package body Tests.Backend_Cases is
          "a device asked to read the weights where they lie gives the same "
          & "answers as one handed a copy");
       Register_Routine
+        (T, Device_Decodes_Every_Format_It_Claims'Access,
+         "the device decodes every format it claims, as the processor does");
+      AUnit.Test_Cases.Registration.Register_Routine
         (T, Device_Gives_Back_What_It_Cannot_Hold'Access,
          "a device with less memory than the matrices need gives back the "
          & "one wanted longest ago and keeps computing");

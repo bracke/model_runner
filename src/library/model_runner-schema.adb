@@ -444,17 +444,17 @@ package body Model_Runner.Schema is
                      Refuse ("an optional first property");
                      return;
                   end if;
-               
+
                   if Count > 0 then
                      Put (" ("","" ");
                   end if;
                   Count := Count + 1;
-               
+
                   Put ("""\""");
                   Put (Text (Key_First .. Key_Last));
                   Put ("\"":"" ");
                   Shape (Value_First, Depth + 1);
-               
+
                   if Count > 1 then
                      Put ((if Wanted then ")" else ")?"));
                   end if;

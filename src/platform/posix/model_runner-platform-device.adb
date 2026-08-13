@@ -521,7 +521,6 @@ package body Model_Runner.Platform.Device is
       return Index <= Item.Used and then Item.Discrete (Index);
    end Is_Discrete;
 
-
    ---------------------------------------------------------------------------
    --  An open device
    ---------------------------------------------------------------------------

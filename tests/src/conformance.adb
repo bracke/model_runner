@@ -87,12 +87,26 @@ package body Conformance is
       --  format, backend and repack mode on its own.
       type Model_Shape is (Plain, Windowed, Mixed, Stretched, Apart);
 
-      --  The formats the device reads without being repacked into one. The
-      --  backend states them; this states them again rather than reading
+      --  The formats the device reads without being repacked into one, which
+      --  since the shader gained the other twelve branches is all of them.
+      --  The backend states them; this states them again rather than reading
       --  them, because a fixture has to be written in each and the writer
       --  takes a name.
-      Device_Formats : constant array (1 .. 3) of Tiny_Model.Weight_Format :=
-        [Tiny_Model.F32, Tiny_Model.Q8_0, Tiny_Model.Q4_0];
+      --
+      --  This crossing is what holds the shader to the decoder it copies.
+      --  Every branch there was written from the Ada one and could have been
+      --  written wrong -- a shift by the wrong amount, a sub-block scale
+      --  read from the wrong byte, a level table off by one -- and none of
+      --  those shows up as anything but a slightly wrong answer. Here each
+      --  format runs a whole model on the device against the independent
+      --  reference transformer, so a branch that decodes almost correctly
+      --  fails.
+      Device_Formats : constant array (1 .. 15) of Tiny_Model.Weight_Format :=
+        [Tiny_Model.F32, Tiny_Model.F16, Tiny_Model.BF16,
+         Tiny_Model.Q4_0, Tiny_Model.Q4_1, Tiny_Model.Q5_0, Tiny_Model.Q5_1,
+         Tiny_Model.Q8_0, Tiny_Model.IQ4_NL,
+         Tiny_Model.Q2_K, Tiny_Model.Q3_K, Tiny_Model.Q4_K, Tiny_Model.Q5_K,
+         Tiny_Model.Q6_K, Tiny_Model.IQ4_XS];
 
       Swept : constant array (1 .. 2) of Model_Runner.Backend.Backend_Kind :=
         [Model_Runner.Backend.Backend_CPU,

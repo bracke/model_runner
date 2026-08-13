@@ -715,7 +715,6 @@ package body Model_Runner.Sampling is
 
    function Bias_Count (Item : Sampler) return Natural is (Item.Bias_Used);
 
-
    -------------
    -- Explain --
    -------------

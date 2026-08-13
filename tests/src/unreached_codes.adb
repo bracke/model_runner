@@ -38,20 +38,29 @@ package body Unreached_Codes is
          --  the backend refusing a caller that ignored them, and no caller
          --  here can.
          --
-         --  Two others came off this list when a backend arrived that reads
-         --  three formats out of fifteen. Until then no backend refused a
-         --  format the program could decode, so nothing could ask one to --
-         --  which is the shape of every entry here, and worth noticing when
-         --  one stops holding.
+         --  Two others came off this list when a backend arrived that read
+         --  three formats out of fifteen, and both went back on when the
+         --  shader learnt the other twelve. That is the shape of every entry
+         --  here: a code is unreachable until some part of the program can
+         --  be asked to produce it, and it stops being reachable again when
+         --  that part stops being able to. Worth noticing in both
+         --  directions, which is why this list is checked both ways.
             | E.Backend_Worker_Failed
 
-         --  No compute device on the machine. Reachable only where there is
-         --  none, and this machine has one: a test that demanded the absence
-         --  would be a test that passes by being run somewhere else. What is
-         --  tested is the other half -- that the refusal renders as a
-         --  sentence -- because the reason this code exists at all is that
-         --  the borrowed one did not.
-            | E.Backend_No_Device
+         --  A model in a format the chosen backend cannot read, refused
+         --  while it loads. The device was the one backend that read some
+         --  formats and not others, and now it reads all fifteen -- so
+         --  reaching this needs a model in a format the program decodes and
+         --  a backend that does not, and there is no such pair. The check is
+         --  still written, because the next format added to the program will
+         --  make one until the shader is taught it too.
+            | E.Backend_Unsupported_Format
+
+         --  The same refusal at the level of a single product rather than a
+         --  model, and unreachable for the same reason. A view cannot be
+         --  built in a format the program does not decode, and every format
+         --  it decodes the shader now decodes as well.
+            | E.Backend_Capability_Missing
 
          --  A distribution that is not one. Sampling refuses non-finite
          --  logits before it normalizes, so the state this names is one the

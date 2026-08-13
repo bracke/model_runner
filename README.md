@@ -356,7 +356,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Localization | Every application-authored string through `messages`; 161 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
-| Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes binary32, Q8_0 and Q4_0 from the bytes the file holds and takes a batch of eight vectors per invocation, so a quantized model needs no repacking and a prompt is one reading of the weights rather than one a token; the other twelve formats reach it through `--repack f32`. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
+| Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
 | Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests tokenize`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
@@ -703,8 +703,8 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 7929, logits compared 108864,
-             worst absolute 2.14340155850756E-05,
+conformance: sequences 8145, logits compared 112320,
+             worst absolute 2.24055356401465E-05,
              worst relative 5.39566401500295E-03,
              rounded logits compared 10800,
              rounded worst absolute 1.36861269753309E-01,
@@ -729,17 +729,19 @@ the two sides. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothin
 outside it.
 
 The device backend is compared separately rather than crossed with the rest,
-because it reads three of those fifteen formats -- binary32, Q8_0 and Q4_0 --
-and the other twelve reach it only through `--repack f32`. Crossing it would
-compare the repacking twelve times over rather than the device once. It runs
-each of the three architectures in each of its three formats, through both
-evaluation paths, against the same independent implementation; on a machine
-with no device it runs nothing and says so by the count. Its arithmetic is
+and it is compared in all fifteen formats: the shader has a branch for each,
+so each is a transcription of a bit layout that could be wrong on its own.
+That is what this crossing is for. A shift by the wrong amount, a sub-block
+scale read from the wrong byte or a level table off by one produces an answer
+that is merely wrong, and nothing downstream can tell a slightly wrong weight
+from a right one. It runs each of the three architectures in each of the
+fifteen formats, through both evaluation paths, against the same independent
+implementation; on a machine with no device it runs nothing and says so by
+the count. Its arithmetic is
 where the worst relative figure above comes from -- the shader accumulates a
 row in binary32 where the processor's kernels accumulate in binary64 and
 round once -- and it is a relative figure on a logit near zero: the worst
-absolute difference is unchanged at 2.1e-05, which is under the absolute
-floor.
+absolute difference is 2.2e-05, which is under the absolute floor.
 
 The reference runs once for each fixture and sequence rather than once for
 each comparison. It reads the file and the tokens and nothing else -- it does
@@ -774,7 +776,7 @@ reference, worst absolute over this sweep:
 against a lossy tolerance of 0.3. The two expert rows are what separate the
 mixture's two causes: running every expert leaves no choice to flip, so 0.330
 is what the shares alone cost, and the rest of the way to 0.509 is the route
-changing. The exact repacking modes agree everywhere in that table -- 2.1e-05
+changing. The exact repacking modes agree everywhere in that table -- 2.2e-05
 at a window of three and on the mixture, against 3.5e-06 dense -- so none of
 this says the window or the routing is wrong, and all of it says what
 `--repack bf16` costs on those models. Comparing them in the sweep would mean
@@ -789,7 +791,7 @@ f32`, which is exact and costs memory instead.
 
 The cached figures are `--kv-cache f16`, which stores what a session has
 committed as binary16 rather than binary32: half the memory for the context,
-and **0.0327** worst absolute on these fixtures against 2.1e-05 for the exact
+and **0.0327** worst absolute on these fixtures against 2.2e-05 for the exact
 cache. That is measured with and without a sliding window; without one it is
 0.0218, and a window raises it for the reason a window raises everything
 lossy here -- it sharpens the softmax, so a rounded value moves a logit
@@ -1227,14 +1229,21 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 1.817 s | **1.213 s** |
-| -- evaluating the prompt | 0.379 s | 0.174 s |
-| -- generating | 1.448 s | 1.039 s |
-| 110-token prompt, nothing generated | 6.721 s | **3.824 s** |
+| 6-token prompt, 12 generated | 1.777 s | **1.262 s** |
+| -- evaluating the prompt | 0.355 s | 0.174 s |
+| -- generating | 1.398 s | 1.062 s |
+| 110-token prompt, nothing generated | 6.295 s | **2.504 s** |
 
-Both backends print the same digest of what they generated -- `7784f0` and
-`af63c7` for the two runs -- so this is the same text, not a faster answer to
-a different question.
+Both backends print the same digest of what they generated -- `5abff916` for
+the short run and `cbf29ce4` for the long one -- so this is the same text,
+not a faster answer to a different question.
+
+The long run moved from 3.824 s to 2.504 s when the shader was given a branch
+for every format, which was not the point of that change and is not claimed
+as its result: these were taken at a load of 1.6 and the earlier pair at a
+higher one, and the loads are the first thing to suspect. What the pair does
+say is that the shader did not get slower for carrying fifteen branches
+instead of three, which was the risk worth measuring.
 
 Read the left column with the caveat it deserves. This machine had other work
 on it, and the two columns are not equally hurt by that: the processor column
@@ -1257,7 +1266,7 @@ above are the first taken with the tool running what the command runs.
 
 Every figure in this section now carries the load average the tool read
 before and after taking it, which is what `tests speed` prints at the end of
-its summary. These were taken starting from a load of 0.4; the pairs are
+its summary. These were taken starting from a load of 1.0; the pairs are
 adjacent, which is what makes the two columns comparable.
 
 Read those numbers knowing what they include: the tool is itself the work, so
@@ -1267,14 +1276,16 @@ came before them, not in what else the machine was doing.
 
 Two things make that possible and neither is the device being fast.
 
-The shader decodes the weights itself. Q8_0 and Q4_0 are read from the bytes
-the file holds, block scale and all, so a quantized model goes to the device
-as it is stored: a gigabyte for this model rather than the four that
-`--repack f32` would make of it. The other twelve formats have no branch in
-the shader and reach a device only by being repacked, which is four bytes a
-weight and the caller's decision. What decoding costs on a device is a
-handful of arithmetic per element; what not decoding costs is a pass over the
-whole model per token.
+The shader decodes the weights itself, in every format the program reads.
+They are read from the bytes the file holds, block scale and all, so a
+quantized model goes to the device as it is stored: a gigabyte for this model
+rather than the four that `--repack f32` would make of it. It decoded three
+of the fifteen until recently and the other twelve reached a device only by
+being repacked -- a pass over the whole model at load, and four bytes a
+weight afterwards, which for a four-bit model is eight times what it was
+quantized down to. What decoding costs on a device is a handful of arithmetic
+per element; what not decoding costs is a pass over the whole model per
+token.
 
 The shader takes a batch. One invocation carries eight vectors and reads each
 weight once for all of them, so a prompt is one reading of the model rather
@@ -1313,9 +1324,9 @@ what it was written expecting. The same model and prompt, three ways:
 
 | Where the weights are | Generation |
 | --- | --- |
-| copied to the device, all of them | 9.95 tokens/s |
-| a fifth copied, the rest uploaded again as wanted | 2.59 tokens/s |
-| read where they lie, none copied | 0.80 tokens/s |
+| copied to the device, all of them | 11.53 tokens/s |
+| a fifth copied, the rest uploaded again as wanted | 2.22 tokens/s |
+| read where they lie, none copied | 0.78 tokens/s |
 
 So giving matrices back and uploading them again beats reading the host's
 memory by three to one, and reading where they lie is worth asking for only
@@ -1325,7 +1336,7 @@ statistics say which of the three happened.
 
 Under the model, one product at a time, `tests benchmark` measures where that
 leaves each format. It prints the machine's load at both ends of its run --
-1.36 rising to 2.96 for the figures below -- and **refuses to measure at all
+1.29 rising to 2.63 for the figures below -- and **refuses to measure at all
 above a load of 1.5**, because a ratio of a device against a processor is not
 equally exposed to whatever else is running: the processor side competes with
 it and the device side mostly waits on a fence, so other work moves the ratio
@@ -1340,13 +1351,13 @@ one side only, where a middle round is what a caller would see.
 That is not a formality. Taking the figures again this way moved the
 single-vector rows and left the batched ones where they were:
 
-| Per pass | Before, at load 2.34-3.11 | Now, at 1.36-2.96 |
+| Per pass | Before, at load 2.34-3.11 | Now, at 1.29-2.63 |
 | --- | --- | --- |
-| q8_0, one vector | 0.74 | 0.81 |
-| q4_0, one vector | 0.83 | 0.97 |
-| f32, one vector | 1.33 | 1.42 |
-| q8_0, eight vectors | 0.27 | 0.24 |
-| q8_0, thirty-two vectors | 0.104 | 0.105 |
+| q8_0, one vector | 0.74 | 0.77 |
+| q4_0, one vector | 0.83 | 0.96 |
+| f32, one vector | 1.33 | 1.49 |
+| q8_0, eight vectors | 0.27 | 0.25 |
+| q8_0, thirty-two vectors | 0.104 | 0.104 |
 
 Which is what the bias predicted: the single-vector cases are the close ones,
 where a processor slowed by other work is most of the difference, and the
@@ -1358,11 +1369,11 @@ faster there:
 
 | Per pass | Device time / processor time |
 | --- | --- |
-| q8_0, one vector | 0.81 |
-| q4_0, one vector | 0.97 |
-| f32, one vector | 1.42 |
-| q8_0, eight vectors | 0.24 |
-| q8_0, thirty-two vectors | 0.105 |
+| q8_0, one vector | 0.77 |
+| q4_0, one vector | 0.96 |
+| f32, one vector | 1.49 |
+| q8_0, eight vectors | 0.25 |
+| q8_0, thirty-two vectors | 0.104 |
 
 Binary32 is the one format the device is slower at, and that is the finding
 rather than a disappointment: it is four bytes a weight where q8_0 is one, so
@@ -1576,12 +1587,12 @@ engine supports:
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
 | F32 | 0.29 | Q3_K | 0.50 |
-| Q4_0 | 0.33 | F16 | 0.61 |
-| BF16 | 0.34 | Q2_K | 0.74 |
-| Q4_K | 0.39 | IQ4_XS | 0.96 |
-| Q6_K | 0.41 | Q5_0 | 1.07 |
-| Q8_0 | 0.41 | Q5_1 | 1.12 |
-| Q5_K | 0.43 | IQ4_NL | 1.45 |
+| Q4_0 | 0.33 | F16 | 0.59 |
+| BF16 | 0.33 | Q2_K | 0.74 |
+| Q4_K | 0.39 | IQ4_XS | 0.95 |
+| Q6_K | 0.40 | Q5_0 | 1.08 |
+| Q8_0 | 0.40 | Q5_1 | 1.12 |
+| Q5_K | 0.43 | IQ4_NL | 1.44 |
 | Q4_1 | 0.45 | | |
 
 The two five-bit legacy formats are outliers, and the reason is where they

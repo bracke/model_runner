@@ -7,6 +7,55 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device shader decodes every format the program reads.** It decoded
+  three of the fifteen -- binary32, Q8_0 and Q4_0 -- and the other twelve
+  reached a device only through `--repack f32`: a pass over the whole model
+  at load, and four bytes a weight afterwards, which for a four-bit model is
+  eight times what it was quantized down to. It now has a branch for each of
+  F16, BF16, Q4_1, Q5_0, Q5_1, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL and
+  IQ4_XS as well, decoding the bytes the file holds. No model needs repacking
+  to reach a device any more.
+
+  Each branch is a transcription of a bit layout from the processor's own
+  decoder, and a transcription can be wrong in a way nothing downstream can
+  see: a shift by the wrong amount or a sub-block scale read from the wrong
+  byte gives an answer that is merely slightly wrong. Two checks hold them.
+  A new test multiplies a matrix in every one of the fifteen formats on both
+  backends and compares, at one vector and at ten; and the conformance sweep,
+  which crossed the device in three formats, now crosses it in all fifteen --
+  8145 sequences, 112320 logits, nothing outside tolerance.
+
+  Measured: the four rows of the two-backend table and the five per-format
+  ratios were taken again. Fifteen branches did not cost what three did; the
+  ratios are within a few per cent of the run before.
+
+  Two refusals became unreachable and went back on the unreached list with
+  that as their reason. A model in a format the backend cannot read cannot be
+  built any more, because a view will not hold a format the program does not
+  decode and the device decodes all of those.
+
+### Fixed
+
+- **A device kept one matrix under another's name.** A resident matrix was
+  identified by where it lay and how many bytes it took, and that does not
+  name a matrix: two formats of the same width are the same length, and so
+  are two shapes with the same number of elements. Storage freed and taken
+  again at the same address was answered with the first matrix's weights.
+  The format and the shape are compared now as well.
+
+  Found by the new per-format test, which ran fifteen formats through
+  same-sized storage in turn and got the previous format's answer for the
+  one that followed it.
+
+- **The shader generator wrote trailing spaces,** five hundred and seventeen
+  of them into the file it produces, and had done since it was written. The
+  gate refuses a build that leaves style warnings behind and had never seen
+  these: a warning is reported when a unit is compiled, and that unit had not
+  been since the switch was turned on. Regenerating the shader recompiled it
+  and the whole set appeared at once -- along with thirty more in six library
+  bodies where blocks had drifted three columns left of where they belong.
+  All fixed.
+
 - **`tests benchmark` reports the load as well,** at both ends of its run,
   and its five device ratios were taken again for it. One reader serves all
   the tools that publish timings now, rather than a copy each.

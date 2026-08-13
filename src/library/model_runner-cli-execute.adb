@@ -1523,354 +1523,356 @@ package body Model_Runner.CLI.Execute is
          --  a different program.
          for Which in 1 .. Natural'Max (1, Item.Prompt_Count) loop
 
-         if Which > 1 then
-            L.Reset (Session);
+            if Which > 1 then
+               L.Reset (Session);
 
-            --  Which prompt this is, on standard error, so that a reader of
-            --  the generated text can tell where one answer ends. Nothing
-            --  goes to standard output but what the model produced.
-            Pres.Put_Note
-              (Screen, "cli.note.next_prompt",
-               [Loc.Named ("index", T.Image (Long_Long_Integer (Which))),
-                Loc.Named
-                  ("total",
-                   T.Image (Long_Long_Integer (Item.Prompt_Count)))]);
-         end if;
+               --  Which prompt this is, on standard error, so that a reader of
+               --  the generated text can tell where one answer ends. Nothing
+               --  goes to standard output but what the model produced.
+               Pres.Put_Note
+                 (Screen, "cli.note.next_prompt",
+                  [Loc.Named ("index", T.Image (Long_Long_Integer (Which))),
+                   Loc.Named
+                     ("total",
+                      T.Image (Long_Long_Integer (Item.Prompt_Count)))]);
+            end if;
 
-         --  Resolve the prompt.
-         case Item.Prompt_Kind is
-            when Opt.Prompt_Inline =>
-               Prompt := new String'(Item.Prompts (Which).all);
+            --  Resolve the prompt.
+            case Item.Prompt_Kind is
+               when Opt.Prompt_Inline =>
+                  Prompt := new String'(Item.Prompts (Which).all);
 
-            when Opt.Prompt_File =>
-               Read_File
-                 (T.To_String (Item.Prompt_Path),
-                  Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes,
-                  Prompt, Condition);
-               if E.Is_Error (Condition) then
-                  Fail (Condition);
-                  return;
-               end if;
-
-            when others =>
-               Read_Standard_Input
-                 (Pres.Message_Value (Screen, "cli.label.standard_input"),
-                  Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes,
-                  Prompt, Condition);
-               if E.Is_Error (Condition) then
-                  Fail (Condition);
-                  return;
-               end if;
-         end case;
-
-         if Prompt = null or else Prompt.all'Length = 0 then
-            Fail (E.Make (E.CLI_No_Prompt_Available));
-            return;
-         end if;
-
-         if not Model_Runner.UTF8.Is_Valid (Prompt.all) then
-            Fail (E.Make (E.IO_Invalid_UTF8));
-            return;
-         end if;
-
-         --  Build the text that will actually be tokenized. Raw mode sends the
-         --  prompt unchanged; conversation mode renders it through the model's
-         --  own template and fails rather than guessing when that is unusable.
-         declare
-            Rendered : Opt.Text_Access := null;
-
-            procedure Release_Rendered is
-            begin
-               Free_Text (Rendered);
-            end Release_Rendered;
-         begin
-            if Item.Raw then
-               Rendered := new String'(Prompt.all);
-            else
-               if not L.Template_Ready (Prepared) then
-                  Fail (L.Template_Condition (Prepared));
-                  return;
-               end if;
-
-               declare
-                  Messages : Conv.History;
-                  --  The render buffer is bounded by the session limit and is
-                  --  allocated rather than declared: the limit is large enough
-                  --  that a stack object of that size would not fit.
-                  Buffer   : Opt.Text_Access :=
-                    new String
-                      (1 .. Model_Runner.Limits.Default_Session_Limits
-                              .Max_Rendered_Bytes);
-                  Last     : Natural;
-                  Words    : constant access constant Vocab.Vocabulary :=
-                    L.Vocabulary (Prepared);
-               begin
-                  Conv.Open (Messages, Status => Condition);
+               when Opt.Prompt_File =>
+                  Read_File
+                    (T.To_String (Item.Prompt_Path),
+                     Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes,
+                     Prompt, Condition);
                   if E.Is_Error (Condition) then
                      Fail (Condition);
                      return;
                   end if;
 
-                  if Item.Has_System then
-                     declare
-                        System_Text : Opt.Text_Access := null;
-                     begin
-                        null;
-                        if Item.System_Text /= null then
-                           System_Text := new String'(Item.System_Text.all);
-                        else
-                           Read_File
-                             (T.To_String (Item.System_Path),
-                              Model_Runner.Limits.Default_Session_Limits
-                                .Max_Prompt_Bytes,
-                              System_Text, Condition);
+               when others =>
+                  Read_Standard_Input
+                    (Pres.Message_Value (Screen, "cli.label.standard_input"),
+                     Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes,
+                     Prompt, Condition);
+                  if E.Is_Error (Condition) then
+                     Fail (Condition);
+                     return;
+                  end if;
+            end case;
+
+            if Prompt = null or else Prompt.all'Length = 0 then
+               Fail (E.Make (E.CLI_No_Prompt_Available));
+               return;
+            end if;
+
+            if not Model_Runner.UTF8.Is_Valid (Prompt.all) then
+               Fail (E.Make (E.IO_Invalid_UTF8));
+               return;
+            end if;
+
+            --  Build the text that will actually be tokenized. Raw mode sends the
+            --  prompt unchanged; conversation mode renders it through the model's
+            --  own template and fails rather than guessing when that is unusable.
+            declare
+               Rendered : Opt.Text_Access := null;
+
+               procedure Release_Rendered is
+               begin
+                  Free_Text (Rendered);
+               end Release_Rendered;
+            begin
+               if Item.Raw then
+                  Rendered := new String'(Prompt.all);
+               else
+                  if not L.Template_Ready (Prepared) then
+                     Fail (L.Template_Condition (Prepared));
+                     return;
+                  end if;
+
+                  declare
+                     Messages : Conv.History;
+                     --  The render buffer is bounded by the session limit and is
+                     --  allocated rather than declared: the limit is large enough
+                     --  that a stack object of that size would not fit.
+                     Buffer   : Opt.Text_Access :=
+                       new String
+                         (1 .. Model_Runner.Limits.Default_Session_Limits
+                                 .Max_Rendered_Bytes);
+                     Last     : Natural;
+                     Words    : constant access constant Vocab.Vocabulary :=
+                       L.Vocabulary (Prepared);
+                  begin
+                     Conv.Open (Messages, Status => Condition);
+                     if E.Is_Error (Condition) then
+                        Fail (Condition);
+                        return;
+                     end if;
+
+                     if Item.Has_System then
+                        declare
+                           System_Text : Opt.Text_Access := null;
+                        begin
+                           null;
+                           if Item.System_Text /= null then
+                              System_Text := new String'(Item.System_Text.all);
+                           else
+                              Read_File
+                                (T.To_String (Item.System_Path),
+                                 Model_Runner.Limits.Default_Session_Limits
+                                   .Max_Prompt_Bytes,
+                                 System_Text, Condition);
+                              if E.Is_Error (Condition) then
+                                 Conv.Close (Messages);
+                                 Fail (Condition);
+                                 return;
+                              end if;
+                           end if;
+
+                           Conv.Append
+                             (Messages, Conv.System_Role, System_Text.all, Condition);
+                           Free_Text (System_Text);
                            if E.Is_Error (Condition) then
+                              Free_Text (Buffer);
                               Conv.Close (Messages);
                               Fail (Condition);
                               return;
                            end if;
-                        end if;
+                        end;
+                     end if;
 
-                        Conv.Append
-                          (Messages, Conv.System_Role, System_Text.all, Condition);
-                        Free_Text (System_Text);
-                        if E.Is_Error (Condition) then
-                           Free_Text (Buffer);
-                           Conv.Close (Messages);
-                           Fail (Condition);
-                           return;
-                        end if;
-                     end;
-                  end if;
+                     Conv.Append (Messages, Conv.User_Role, Prompt.all, Condition);
+                     if E.Is_Error (Condition) then
+                        Free_Text (Buffer);
+                        Conv.Close (Messages);
+                        Fail (Condition);
+                        return;
+                     end if;
 
-                  Conv.Append (Messages, Conv.User_Role, Prompt.all, Condition);
-                  if E.Is_Error (Condition) then
-                     Free_Text (Buffer);
+                     Model_Runner.Templates.Render
+                       (L.Template (Prepared).all, Messages,
+                        Vocab.Token_Text (Words.all, Vocab.Beginning_Token (Words.all)),
+                        Vocab.Token_Text (Words.all, Vocab.End_Token (Words.all)),
+                        True, Buffer.all, Last, Condition);
                      Conv.Close (Messages);
+
+                     if E.Is_Error (Condition) then
+                        Free_Text (Buffer);
+                        Fail (Condition);
+                        return;
+                     end if;
+
+                     Rendered := new String'(Buffer.all (1 .. Last));
+                     Free_Text (Buffer);
+
+                     --  Said here because here is where it happens. Generation is
+                     --  handed a prompt that is already rendered and never sees
+                     --  the conversation it came from, so the stage it declares
+                     --  for this could only ever be published by its caller --
+                     --  and was published by nobody.
+                     Model_Runner.Progress.Publish
+                       (Reporter'Unchecked_Access,
+                        Model_Runner.Progress.Generation_Progress
+                          (Model_Runner.Progress.Prompt_Rendered,
+                           Interfaces.Unsigned_64 (Last)));
+                  end;
+               end if;
+
+               --  Stop conditions.
+               Model_Runner.Stops.Open (Stop_Set);
+               for Index in 1 .. Item.Stop_Count loop
+                  Model_Runner.Stops.Add_String
+                    (Stop_Set, T.To_String (Item.Stop_Strings (Index)), Condition);
+                  if E.Is_Error (Condition) then
+                     Release_Rendered;
+                     Fail (Condition);
+                     return;
+                  end if;
+               end loop;
+
+               for Index in 1 .. Item.Stop_Token_Count loop
+                  Model_Runner.Stops.Add_Token
+                    (Stop_Set, Vocab.Token_Id (Item.Stop_Tokens (Index)), Condition);
+                  if E.Is_Error (Condition) then
+                     Release_Rendered;
+                     Fail (Condition);
+                     return;
+                  end if;
+               end loop;
+
+               --  A rendered conversation already carries the beginning token, so
+               --  the tokenizer must not add a second one.
+               declare
+                  Request : Gen.Request;
+               begin
+                  Request.Max_Tokens := Item.Max_Tokens;
+                  for Index in 1 .. Item.Bias_Count loop
+                     Request.Bias_Tokens (Index) :=
+                       Model_Runner.Tokenizer.Token_Id
+                         (Item.Bias_Tokens (Index));
+                     Request.Bias_Amounts (Index) := Item.Bias_Amounts (Index);
+                  end loop;
+
+                  Request.Bias_Count := Item.Bias_Count;
+                  Request.Logprobs := Item.Logprobs;
+                  Request.Context_Shift := Item.Context_Shift;
+                  Request.Context_Keep := Item.Context_Keep;
+                  Request.Draft_Tokens :=
+                    (if Draft_Ready then Item.Draft_Tokens else 0);
+
+                  Request.Sampling := Item.Sampling;
+                  Request.Seed := Item.Seed;
+                  Request.Has_Seed := Item.Has_Seed;
+                  --  A backend that does not batch is asked for one token at
+                  --  a time rather than refused. The capability decides the
+                  --  request instead of failing it, which is what a capability
+                  --  is for; --batch-size is a performance control and this is
+                  --  the performance the chosen backend has.
+                  Request.Batch_Size :=
+                    (if L.Capability (Prepared).Supports_Batched
+                     then Item.Batch_Size
+                     else 1);
+
+                  if not L.Capability (Prepared).Supports_Batched
+                    and then Item.Batch_Size /= 1
+                    and then Item.Level = Opt.Verbose
+                  then
+                     Pres.Warn
+                       (Screen, "warning.backend_no_batching",
+                        [Loc.Named
+                           ("value",
+                            Model_Runner.Backend.Backend_Name
+                              (L.Capability (Prepared).Kind))]);
+                  end if;
+                  Request.Retain_Text := False;
+
+                  --  Who puts the beginning token in front.
+                  --
+                  --  With --raw there is no template, so nothing else can: the
+                  --  request asks for one and the vocabulary decides whether it
+                  --  wants one, which Generation checks.
+                  --
+                  --  With a template the template does it. It is handed the
+                  --  beginning token's own text and writes it where the model
+                  --  expects it, which for some models is not the front -- and
+                  --  the tokenizer turns that spelling back into the one token
+                  --  it stands for. Asking here as well would put two in front
+                  --  of a model that wants one, and a marker that model did not
+                  --  ask for moves a logit by nearly two.
+                  --
+                  --  What follows from that: a model whose template writes no
+                  --  beginning token gets none, whatever its add_bos_token
+                  --  says. That is the template's answer and this defers to it,
+                  --  because the template is the part that knows where in the
+                  --  rendered text the token belongs.
+                  Request.Add_Beginning := Item.Raw;
+
+                  --  Keep what the restored cache and the prompt agree on. The
+                  --  session already holds a conversation; this is what makes
+                  --  restoring it worth anything, and where they diverge the
+                  --  engine resets and reads the prompt as it would have.
+                  Request.Reuse_Committed_Prefix :=
+                    not T.Is_Empty (Item.Load_Session);
+
+                  Gen.Generate
+                    (Source   => Prepared,
+                     Session  => Session,
+                     Prompt   => Rendered.all,
+                     Item     => Request,
+                     Stop_Set => Stop_Set,
+                     Rules    =>
+                       (if Rules_Ready then Rules'Unchecked_Access else null),
+                     Sink     => Sink'Unchecked_Access,
+                     Observer => Reporter'Unchecked_Access,
+                     Time     => Clock'Unchecked_Access,
+                     Seeds    => Seeds'Unchecked_Access,
+                     Cancel   => Cancel'Unchecked_Access,
+                     Draft    =>
+                       (if Draft_Ready then Draft_Model'Unchecked_Access
+                        else null),
+                     Draft_Session =>
+                       (if Draft_Ready then Draft_Session'Unchecked_Access
+                        else null),
+                     Reporter =>
+                       (if Item.Logprobs > 0
+                        then Told'Unchecked_Access
+                        else null),
+                     Outcome  => Outcome);
+               end;
+
+               Release_Rendered;
+            end;
+
+            if Outcome.Reason = Gen.Runtime_Error then
+               Fail (Outcome.Error);
+               return;
+            end if;
+
+            --  A run the reader interrupted did not succeed, and said so with
+            --  a zero. Cancelled is not Runtime_Error, so it fell through to
+            --  Exit_Success and a script around this program was told the
+            --  generation had finished normally -- while `help` promises "7
+            --  cancelled" and the error table maps MR-GEN-0006 to seven.
+            --
+            --  Reported through the same path as any other refusal, so the
+            --  status is the table's answer rather than a second one written
+            --  here. Cancellation during loading already came out this way;
+            --  only cancellation during generation did not.
+            if Outcome.Reason = Gen.Cancelled then
+               Fail (E.Make (E.Generation_Cancelled));
+               return;
+            end if;
+
+            --  And the context out, when it was asked for. After the run
+            --  rather than before it, because what is worth saving is the
+            --  prompt and the reply together: the next run continues from
+            --  where this one stopped.
+            if not T.Is_Empty (Item.Save_Session) then
+               declare
+                  Room : Model_Runner.Bytes.Byte_Array_Access;
+               begin
+                  L.Snapshot (Session, Prepared, Room, Condition);
+                  if E.Is_Error (Condition) then
                      Fail (Condition);
                      return;
                   end if;
 
-                  Model_Runner.Templates.Render
-                    (L.Template (Prepared).all, Messages,
-                     Vocab.Token_Text (Words.all, Vocab.Beginning_Token (Words.all)),
-                     Vocab.Token_Text (Words.all, Vocab.End_Token (Words.all)),
-                     True, Buffer.all, Last, Condition);
-                  Conv.Close (Messages);
+                  Write_File
+                    (T.To_String (Item.Save_Session), Room.all, Condition);
+                  Model_Runner.Bytes.Free (Room);
 
                   if E.Is_Error (Condition) then
-                     Free_Text (Buffer);
                      Fail (Condition);
                      return;
                   end if;
-
-                  Rendered := new String'(Buffer.all (1 .. Last));
-                  Free_Text (Buffer);
-
-                  --  Said here because here is where it happens. Generation is
-                  --  handed a prompt that is already rendered and never sees
-                  --  the conversation it came from, so the stage it declares
-                  --  for this could only ever be published by its caller --
-                  --  and was published by nobody.
-                  Model_Runner.Progress.Publish
-                    (Reporter'Unchecked_Access,
-                     Model_Runner.Progress.Generation_Progress
-                       (Model_Runner.Progress.Prompt_Rendered,
-                        Interfaces.Unsigned_64 (Last)));
                end;
             end if;
 
-            --  Stop conditions.
-            Model_Runner.Stops.Open (Stop_Set);
-            for Index in 1 .. Item.Stop_Count loop
-               Model_Runner.Stops.Add_String
-                 (Stop_Set, T.To_String (Item.Stop_Strings (Index)), Condition);
-               if E.Is_Error (Condition) then
-                  Release_Rendered;
-                  Fail (Condition);
-                  return;
-               end if;
-            end loop;
-
-            for Index in 1 .. Item.Stop_Token_Count loop
-               Model_Runner.Stops.Add_Token
-                 (Stop_Set, Vocab.Token_Id (Item.Stop_Tokens (Index)), Condition);
-               if E.Is_Error (Condition) then
-                  Release_Rendered;
-                  Fail (Condition);
-                  return;
-               end if;
-            end loop;
-
-            --  A rendered conversation already carries the beginning token, so
-            --  the tokenizer must not add a second one.
-            declare
-               Request : Gen.Request;
-            begin
-               Request.Max_Tokens := Item.Max_Tokens;
-               for Index in 1 .. Item.Bias_Count loop
-               Request.Bias_Tokens (Index) :=
-                 Model_Runner.Tokenizer.Token_Id (Item.Bias_Tokens (Index));
-               Request.Bias_Amounts (Index) := Item.Bias_Amounts (Index);
-            end loop;
-            Request.Bias_Count := Item.Bias_Count;
-            Request.Logprobs := Item.Logprobs;
-            Request.Context_Shift := Item.Context_Shift;
-            Request.Context_Keep := Item.Context_Keep;
-            Request.Draft_Tokens :=
-              (if Draft_Ready then Item.Draft_Tokens else 0);
-
-            Request.Sampling := Item.Sampling;
-               Request.Seed := Item.Seed;
-               Request.Has_Seed := Item.Has_Seed;
-               --  A backend that does not batch is asked for one token at
-               --  a time rather than refused. The capability decides the
-               --  request instead of failing it, which is what a capability
-               --  is for; --batch-size is a performance control and this is
-               --  the performance the chosen backend has.
-               Request.Batch_Size :=
-                 (if L.Capability (Prepared).Supports_Batched
-                  then Item.Batch_Size
-                  else 1);
-
-               if not L.Capability (Prepared).Supports_Batched
-                 and then Item.Batch_Size /= 1
-                 and then Item.Level = Opt.Verbose
-               then
-                  Pres.Warn
-                    (Screen, "warning.backend_no_batching",
-                     [Loc.Named
-                        ("value",
-                         Model_Runner.Backend.Backend_Name
-                           (L.Capability (Prepared).Kind))]);
-               end if;
-               Request.Retain_Text := False;
-
-               --  Who puts the beginning token in front.
-               --
-               --  With --raw there is no template, so nothing else can: the
-               --  request asks for one and the vocabulary decides whether it
-               --  wants one, which Generation checks.
-               --
-               --  With a template the template does it. It is handed the
-               --  beginning token's own text and writes it where the model
-               --  expects it, which for some models is not the front -- and
-               --  the tokenizer turns that spelling back into the one token
-               --  it stands for. Asking here as well would put two in front
-               --  of a model that wants one, and a marker that model did not
-               --  ask for moves a logit by nearly two.
-               --
-               --  What follows from that: a model whose template writes no
-               --  beginning token gets none, whatever its add_bos_token
-               --  says. That is the template's answer and this defers to it,
-               --  because the template is the part that knows where in the
-               --  rendered text the token belongs.
-               Request.Add_Beginning := Item.Raw;
-
-               --  Keep what the restored cache and the prompt agree on. The
-               --  session already holds a conversation; this is what makes
-               --  restoring it worth anything, and where they diverge the
-               --  engine resets and reads the prompt as it would have.
-               Request.Reuse_Committed_Prefix :=
-                 not T.Is_Empty (Item.Load_Session);
-
-               Gen.Generate
-                 (Source   => Prepared,
-                  Session  => Session,
-                  Prompt   => Rendered.all,
-                  Item     => Request,
-                  Stop_Set => Stop_Set,
-                  Rules    =>
-                    (if Rules_Ready then Rules'Unchecked_Access else null),
-                  Sink     => Sink'Unchecked_Access,
-                  Observer => Reporter'Unchecked_Access,
-                  Time     => Clock'Unchecked_Access,
-                  Seeds    => Seeds'Unchecked_Access,
-                  Cancel   => Cancel'Unchecked_Access,
-                  Draft    =>
-                    (if Draft_Ready then Draft_Model'Unchecked_Access
-                     else null),
-                  Draft_Session =>
-                    (if Draft_Ready then Draft_Session'Unchecked_Access
-                     else null),
-                  Reporter =>
-                    (if Item.Logprobs > 0
-                     then Told'Unchecked_Access
-                     else null),
-                  Outcome  => Outcome);
-            end;
-
-            Release_Rendered;
-         end;
-
-         if Outcome.Reason = Gen.Runtime_Error then
-            Fail (Outcome.Error);
-            return;
-         end if;
-
-         --  A run the reader interrupted did not succeed, and said so with
-         --  a zero. Cancelled is not Runtime_Error, so it fell through to
-         --  Exit_Success and a script around this program was told the
-         --  generation had finished normally -- while `help` promises "7
-         --  cancelled" and the error table maps MR-GEN-0006 to seven.
-         --
-         --  Reported through the same path as any other refusal, so the
-         --  status is the table's answer rather than a second one written
-         --  here. Cancellation during loading already came out this way;
-         --  only cancellation during generation did not.
-         if Outcome.Reason = Gen.Cancelled then
-            Fail (E.Make (E.Generation_Cancelled));
-            return;
-         end if;
-
-         --  And the context out, when it was asked for. After the run
-         --  rather than before it, because what is worth saving is the
-         --  prompt and the reply together: the next run continues from
-         --  where this one stopped.
-         if not T.Is_Empty (Item.Save_Session) then
-            declare
-               Room : Model_Runner.Bytes.Byte_Array_Access;
-            begin
-               L.Snapshot (Session, Prepared, Room, Condition);
-               if E.Is_Error (Condition) then
-                  Fail (Condition);
-                  return;
-               end if;
-
-               Write_File
-                 (T.To_String (Item.Save_Session), Room.all, Condition);
-               Model_Runner.Bytes.Free (Room);
-
-               if E.Is_Error (Condition) then
-                  Fail (Condition);
-                  return;
-               end if;
-            end;
-         end if;
-
-         --  Statistics go to standard error, so a redirected standard output
-         --  still contains only generated text.
-         if Item.Show_Stats
-           or else (not Item.Stats_Set and then Item.Level = Opt.Verbose)
-         then
-            --  With what the device did, when a device did it.
-            if Model_Runner.Backend."=" (Item.Backend,
-                                          Model_Runner.Backend.Backend_Device)
+            --  Statistics go to standard error, so a redirected standard output
+            --  still contains only generated text.
+            if Item.Show_Stats
+              or else (not Item.Stats_Set and then Item.Level = Opt.Verbose)
             then
-               Pres.Put_Statistics
-                 (Screen, Outcome,
-                  Device         => Model_Runner.Backend.Device.Name,
-                  Resident       => Model_Runner.Backend.Device.Resident,
-                  Imported       => Model_Runner.Backend.Device.Imported,
-                  Resident_Bytes =>
-                    Model_Runner.Backend.Device.Resident_Bytes,
-                  Given_Back     => Model_Runner.Backend.Device.Given_Back);
-            else
-               Pres.Put_Statistics (Screen, Outcome);
+               --  With what the device did, when a device did it.
+               if Model_Runner.Backend."=" (Item.Backend,
+                                             Model_Runner.Backend.Backend_Device)
+               then
+                  Pres.Put_Statistics
+                    (Screen, Outcome,
+                     Device         => Model_Runner.Backend.Device.Name,
+                     Resident       => Model_Runner.Backend.Device.Resident,
+                     Imported       => Model_Runner.Backend.Device.Imported,
+                     Resident_Bytes =>
+                       Model_Runner.Backend.Device.Resident_Bytes,
+                     Given_Back     => Model_Runner.Backend.Device.Given_Back);
+               else
+                  Pres.Put_Statistics (Screen, Outcome);
+               end if;
             end if;
-         end if;
 
-         Free_Text (Prompt);
+            Free_Text (Prompt);
          end loop;
 
          Status := E.Exit_Success;

@@ -41,16 +41,20 @@ package body Model_Runner.Backend.Device is
    begin
       Result.Kind := Backend_Device;
 
-      --  The formats the shader decodes for itself. Everything else this
-      --  program reads is packed bits with a scale in a layout of its own,
-      --  and each of those is a branch in the shader and a fixture to check
-      --  it against; these two are the ones a model on this machine is
-      --  actually written in. The rest reach a device through --repack f32,
-      --  at four bytes a weight.
+      --  Every format the shader decodes for itself, which is every format
+      --  this program reads. It was three, and the other twelve reached a
+      --  device only through --repack f32: a pass over the whole model at
+      --  load and four bytes a weight afterwards, which for a k-quant model
+      --  is four times the memory it was quantized to avoid.
+      --
+      --  Read from Is_Supported rather than listed here, because a list here
+      --  is a second copy of one: the two lists that have to agree are the
+      --  shader's branches and this, and the test that compares them
+      --  multiplies a matrix in each format on the device.
       Result.Formats := [others => False];
-      Result.Formats (Model_Runner.GGUF.Type_F32) := True;
-      Result.Formats (Model_Runner.GGUF.Type_Q8_0) := True;
-      Result.Formats (Model_Runner.GGUF.Type_Q4_0) := True;
+      for Format in Model_Runner.GGUF.Tensor_Type loop
+         Result.Formats (Format) := Model_Runner.GGUF.Is_Supported (Format);
+      end loop;
 
       --  A packed row begins at a block boundary and a block is not four
       --  bytes long, so what the shader needs from the storage is that a
@@ -193,15 +197,43 @@ package body Model_Runner.Backend.Device is
       Packing := Products.Values_F32;
       Known := True;
 
+      --  One arm per format the shader decodes, which is every format this
+      --  program reads. The others in Tensor_Type are the ones the parser
+      --  recognizes and nothing here decodes -- Q8_1, Q8_K -- and a model in
+      --  one of those is refused before it reaches a backend at all.
       case Weight.Format is
-         when Model_Runner.GGUF.Type_F32 =>
+         when Model_Runner.GGUF.Type_F32     =>
             Packing := Products.Values_F32;
+         when Model_Runner.GGUF.Type_F16     =>
+            Packing := Products.Values_F16;
+         when Model_Runner.GGUF.Type_BF16    =>
+            Packing := Products.Values_BF16;
 
-         when Model_Runner.GGUF.Type_Q8_0 =>
-            Packing := Products.Packed_Q8_0;
-
-         when Model_Runner.GGUF.Type_Q4_0 =>
+         when Model_Runner.GGUF.Type_Q4_0    =>
             Packing := Products.Packed_Q4_0;
+         when Model_Runner.GGUF.Type_Q4_1    =>
+            Packing := Products.Packed_Q4_1;
+         when Model_Runner.GGUF.Type_Q5_0    =>
+            Packing := Products.Packed_Q5_0;
+         when Model_Runner.GGUF.Type_Q5_1    =>
+            Packing := Products.Packed_Q5_1;
+         when Model_Runner.GGUF.Type_Q8_0    =>
+            Packing := Products.Packed_Q8_0;
+         when Model_Runner.GGUF.Type_IQ4_NL  =>
+            Packing := Products.Packed_IQ4_NL;
+
+         when Model_Runner.GGUF.Type_Q2_K    =>
+            Packing := Products.Packed_Q2_K;
+         when Model_Runner.GGUF.Type_Q3_K    =>
+            Packing := Products.Packed_Q3_K;
+         when Model_Runner.GGUF.Type_Q4_K    =>
+            Packing := Products.Packed_Q4_K;
+         when Model_Runner.GGUF.Type_Q5_K    =>
+            Packing := Products.Packed_Q5_K;
+         when Model_Runner.GGUF.Type_Q6_K    =>
+            Packing := Products.Packed_Q6_K;
+         when Model_Runner.GGUF.Type_IQ4_XS  =>
+            Packing := Products.Packed_IQ4_XS;
 
          when others =>
             Known := False;

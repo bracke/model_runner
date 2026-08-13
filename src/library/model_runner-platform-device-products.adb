@@ -326,7 +326,6 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-
    ---------------------------------------------------------------------------
    --  Entry points
    ---------------------------------------------------------------------------
@@ -1215,7 +1214,8 @@ package body Model_Runner.Platform.Device.Products is
       Item.Kept (Oldest) := Item.Kept (Item.Used);
       Item.Kept (Item.Used) :=
         (Key => Null_Handle, Buffer => Null_Handle, Memory => Null_Handle,
-         Bytes => 0, Used_At => 0, Base => 0, Own => False);
+         Bytes => 0, Used_At => 0, Packing => Values_F32,
+         Rows => 0, Columns => 0, Base => 0, Own => False);
       Item.Used := Item.Used - 1;
 
       Gone := True;
@@ -1247,23 +1247,44 @@ package body Model_Runner.Platform.Device.Products is
 
    function Row_Bytes
      (Packing : Weight_Packing; Columns : Natural)
-      return Interfaces.Unsigned_64 is
+      return Interfaces.Unsigned_64
+   is
+      --  Bytes a block takes, in the order Weight_Packing declares. A table
+      --  rather than a case, because the shader's row_bytes is the same
+      --  table and two lists side by side are easier to compare than two
+      --  shapes of code.
+      Block : constant array (Weight_Packing) of Interfaces.Unsigned_64 :=
+        [Values_F32    => 4,
+         Values_F16    => 2,
+         Values_BF16   => 2,
+         Packed_Q4_0   => 18,
+         Packed_Q4_1   => 20,
+         Packed_Q5_0   => 22,
+         Packed_Q5_1   => 24,
+         Packed_Q8_0   => 34,
+         Packed_IQ4_NL => 18,
+         Packed_Q2_K   => 84,
+         Packed_Q3_K   => 110,
+         Packed_Q4_K   => 144,
+         Packed_Q5_K   => 176,
+         Packed_Q6_K   => 210,
+         Packed_IQ4_XS => 136];
+
+      Per : constant Natural :=
+        (case Packing is
+            when Values_F32 | Values_F16 | Values_BF16 => 1,
+            when Super_Packing                         => 256,
+            when others                                => 32);
    begin
-      case Packing is
-         when Values_F32 =>
-            return Interfaces.Unsigned_64 (Columns) * 4;
+      --  A row is a whole number of blocks. A width that is not says the
+      --  caller and the file disagree about the matrix, which is not a thing
+      --  to round: zero refuses the product rather than computing one from
+      --  bytes that mean something else.
+      if Columns mod Per /= 0 then
+         return 0;
+      end if;
 
-         when Packed_Q8_0 | Packed_Q4_0 =>
-            --  A block is thirty-two elements and a row is a whole number of
-            --  them. A width that is not says the caller and the file
-            --  disagree about the matrix, which is not a thing to round.
-            if Columns mod 32 /= 0 then
-               return 0;
-            end if;
-
-            return Interfaces.Unsigned_64 (Columns / 32)
-                   * (if Packing = Packed_Q8_0 then 34 else 18);
-      end case;
+      return Interfaces.Unsigned_64 (Columns / Per) * Block (Packing);
    end Row_Bytes;
 
    ---------------
@@ -1336,16 +1357,21 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      --  Is it already there? A matrix is what it is and where it is: the
-      --  same address with a different length is a different matrix, and
-      --  the length is checked so that a caller reusing storage cannot be
-      --  handed somebody else's weights.
+      --  Is it already there? A matrix is what it is, what shape it is, and
+      --  where it is. Every part of that is compared, because a caller that
+      --  reuses storage would otherwise be handed somebody else's weights --
+      --  and the byte count alone does not tell two matrices apart: two
+      --  formats of the same width are the same length, and so are two
+      --  shapes with the same number of elements.
       Item.Clock := Item.Clock + 1;
 
       if Key /= System.Null_Address then
          for Index in 1 .. Item.Used loop
             if Item.Kept (Index).Key = Key
               and then Item.Kept (Index).Bytes = Weight_Bytes
+              and then Item.Kept (Index).Packing = Packing
+              and then Item.Kept (Index).Rows = Rows
+              and then Item.Kept (Index).Columns = Columns
             then
                Weight_Buffer := Item.Kept (Index).Buffer;
                Weight_Memory := Item.Kept (Index).Memory;
@@ -1444,6 +1470,7 @@ package body Model_Runner.Platform.Device.Products is
             Item.Kept (Item.Used) :=
               (Key => Key, Buffer => Weight_Buffer, Memory => Weight_Memory,
                Bytes => Weight_Bytes, Used_At => Item.Clock,
+               Packing => Packing, Rows => Rows, Columns => Columns,
                Base => Weight_Base, Own => Weight_Own);
 
             if Weight_Own then
