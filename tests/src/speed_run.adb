@@ -1,5 +1,6 @@
 with Ada.Directories;
-with Ada.Text_IO;
+
+with Host_Load;
 with Interfaces;
 with Ada.Real_Time;
 
@@ -118,38 +119,6 @@ package body Speed_Run is
       return Sorted (Sorted'First + Sorted'Length / 2);
    end Middle;
 
-   --  What the host says it is busy with, over the last minute. Zero where
-   --  the host does not say, which is every host but this family of them --
-   --  and a zero is honest there: the figure is unknown, not quiet.
-   function Load_Now return Long_Float is
-      Handle : Ada.Text_IO.File_Type;
-   begin
-      if not Ada.Directories.Exists ("/proc/loadavg") then
-         return 0.0;
-      end if;
-
-      Ada.Text_IO.Open (Handle, Ada.Text_IO.In_File, "/proc/loadavg");
-
-      declare
-         Line : constant String := Ada.Text_IO.Get_Line (Handle);
-         Stop : Natural := Line'First;
-      begin
-         Ada.Text_IO.Close (Handle);
-
-         while Stop <= Line'Last and then Line (Stop) /= ' ' loop
-            Stop := Stop + 1;
-         end loop;
-
-         return Long_Float'Value (Line (Line'First .. Stop - 1));
-      end;
-   exception
-      when others =>
-         if Ada.Text_IO.Is_Open (Handle) then
-            Ada.Text_IO.Close (Handle);
-         end if;
-         return 0.0;
-   end Load_Now;
-
    ---------
    -- Run --
    ---------
@@ -196,7 +165,7 @@ package body Speed_Run is
       Generates : Duration_Array (1 .. Repeats) := [others => 0.0];
    begin
       Result := (others => <>);
-      Result.Load_Before := Load_Now;
+      Result.Load_Before := Host_Load.Now;
 
       if Path = "" or else not Ada.Directories.Exists (Path) then
          Result.Missing := True;
@@ -477,7 +446,7 @@ package body Speed_Run is
          end if;
       end;
 
-      Result.Load_After := Load_Now;
+      Result.Load_After := Host_Load.Now;
 
       if Result.Runs = Repeats then
          Result.Ran := True;

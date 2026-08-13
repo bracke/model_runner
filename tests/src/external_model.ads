@@ -135,6 +135,13 @@ package External_Model is
    function Detail_Text (Item : Report) return String
    is (Item.Detail (1 .. Item.Detail_Last));
 
+   --  No load average here, unlike the tools that publish timings. This
+   --  reports counts and answers -- whether the text matched, whether the
+   --  worker count changed it -- and none of them depends on what else the
+   --  machine was doing. A line that carried a load would also be a line
+   --  that differs between two runs of the same check, which is exactly what
+   --  the published transcripts are compared against.
+   --
    --  The one-line summary of a run, as the runner prints it.
    --
    --  Here rather than at the call site because the README publishes it, and

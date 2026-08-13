@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests benchmark` reports the load as well,** at both ends of its run,
+  and its five device ratios were taken again for it. One reader serves all
+  the tools that publish timings now, rather than a copy each.
+
+  Printing the load named a bias that was there all along and is now in the
+  README: these are ratios of the device against the processor, taken while
+  the measurement is itself occupying the processor. The device side competes
+  for nothing the measurement wants and the processor side competes with it,
+  so the ratios flatter the device by however busy the machine was.
+
+  `tests external-model` does not report a load, and now says why: it
+  publishes counts and answers rather than timings, and a line that carried a
+  load would differ between two runs of the same check -- which is what the
+  published transcripts are compared against. Adding it there broke that
+  comparison, which is how the asymmetry got its reason instead of staying an
+  oversight.
+
 - **Every published figure now carries the load it was taken under.** The
   whole set was re-measured for it: the twelve-token figure, the device pair,
   the reference comparison and the drafting trio, starting from a load of

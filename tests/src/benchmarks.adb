@@ -8,6 +8,8 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
+with Host_Load;
+with Model_Runner.Text;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
@@ -1251,10 +1253,18 @@ package body Benchmarks is
          B.Free (Data);
       end Measure_Decode;
 
+      --  What the machine was doing when this started, so that a ratio
+      --  published from it carries the conditions it was taken under. The
+      --  same reader every other tool here uses, and the same caution: this
+      --  run is itself the work, so the figure at the end is higher than
+      --  the one at the start by however much this did.
+      Started_At : constant Long_Float := Host_Load.Now;
    begin
       IO.Put_Line ("kernel benchmarks, single task, "
                    & N.Element_Count'Image (Rows) & " x"
-                   & N.Element_Count'Image (Columns) & " per pass");
+                   & N.Element_Count'Image (Columns) & " per pass;"
+                   & " load "
+                   & Model_Runner.Text.Image (Started_At, 2));
       IO.New_Line;
 
       IO.Put_Line ("row dot product");
@@ -1352,6 +1362,12 @@ package body Benchmarks is
       Measure_Decode ("q5_k Decode_Block", G.Type_Q5_K);
       Measure_Decode ("q6_k Decode_Block", G.Type_Q6_K);
       Measure_Decode ("f32  Decode_Block", G.Type_F32);
+
+      IO.New_Line;
+      IO.Put_Line
+        ("load " & Model_Runner.Text.Image (Started_At, 2) & " to "
+         & Model_Runner.Text.Image (Host_Load.Now, 2)
+         & " -- most of the rise is this run");
    end Run;
 
 end Benchmarks;

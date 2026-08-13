@@ -1324,17 +1324,24 @@ parameter model at eight bits is fourteen gigabytes against seven. The
 statistics say which of the three happened.
 
 Under the model, one product at a time, `tests benchmark` measures where that
-leaves each format. A 512 by 2048 matrix, resident, against the serial
+leaves each format. It prints the machine's load at both ends of its run --
+2.34 rising to 3.11 for the figures below -- and there is a bias in that
+worth naming: these are ratios of the device against the processor, taken
+while the measurement is itself occupying the processor. The device side
+competes for nothing the measurement wants; the processor side competes with
+it. So the ratios flatter the device by however busy the machine was, and
+they are quoted here as the shape of the answer rather than to three
+digits. A 512 by 2048 matrix, resident, against the serial
 processor path -- the device's time as a fraction of it, so below one is
 faster there:
 
 | Per pass | Device time / processor time |
 | --- | --- |
-| q8_0, one vector | 0.78 |
-| q4_0, one vector | 0.85 |
-| f32, one vector | 1.41 |
-| q8_0, eight vectors | 0.25 |
-| q8_0, thirty-two vectors | 0.107 |
+| q8_0, one vector | 0.74 |
+| q4_0, one vector | 0.83 |
+| f32, one vector | 1.33 |
+| q8_0, eight vectors | 0.27 |
+| q8_0, thirty-two vectors | 0.104 |
 
 Binary32 is the one format the device is slower at, and that is the finding
 rather than a disappointment: it is four bytes a weight where q8_0 is one, so
