@@ -8227,6 +8227,90 @@ package body Tests.CLI_Cases is
    --  run that did, so both are asked here; when the worker choice lived in
    --  one of them they could have disagreed.
 
+   -----------------------------------------
+   -- The_Speed_Tool_Reads_The_Machine --
+   -----------------------------------------
+
+   --  The load a figure carries is the load the host reports.
+   --
+   --  It is read where the host keeps it and falls back to zero where there
+   --  is no such place -- and a zero reads as a quiet machine to anybody
+   --  looking at a published figure. So on a host that does have one, a zero
+   --  is a fault and this says so; on a host that does not, the fallback is
+   --  what is checked instead.
+   --
+   --  Compared against the file rather than against a constant, because the
+   --  load is whatever it is: what can be held is that the tool read the
+   --  same thing this test can read a moment later, within how far a
+   --  one-minute average moves in a moment.
+   procedure The_Speed_Tool_Reads_The_Machine
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Report : Speed_Run.Report;
+
+      Where : constant String := "/proc/loadavg";
+
+      --  What the host says, now.
+      function Said return Long_Float is
+         Handle : File_Type;
+      begin
+         Open (Handle, In_File, Where);
+
+         declare
+            Line : constant String := Get_Line (Handle);
+            Stop : Natural := Line'First;
+         begin
+            Close (Handle);
+            while Stop <= Line'Last and then Line (Stop) /= ' ' loop
+               Stop := Stop + 1;
+            end loop;
+            return Long_Float'Value (Line (Line'First .. Stop - 1));
+         end;
+      exception
+         when others =>
+            if Is_Open (Handle) then
+               Close (Handle);
+            end if;
+            return -1.0;
+      end Said;
+   begin
+      --  A run with no model measures nothing and still reads the machine,
+      --  which is what makes this cheap.
+      Speed_Run.Run
+        (Path        => "",
+         Prompt_Path => "",
+         Tokens      => 1,
+         Threads     => 1,
+         Batch       => 1,
+         Repack      => Model_Runner.Llama.No_Repack,
+         Repeats     => 1,
+         Result      => Report);
+
+      if Ada.Directories.Exists (Where) then
+         declare
+            Now : constant Long_Float := Said;
+         begin
+            Assert (Now >= 0.0,
+                    "this host keeps a load average and the test could not "
+                    & "read it");
+            Assert (Report.Load_Before > 0.0,
+                    "the tool reported a load of zero on a host that keeps "
+                    & "one, which reads as a quiet machine to anybody "
+                    & "looking at a figure");
+            Assert (abs (Report.Load_Before - Now) < 2.0,
+                    "the tool read a load of"
+                    & Long_Float'Image (Report.Load_Before)
+                    & " where the host says" & Long_Float'Image (Now));
+         end;
+      else
+         Assert (Report.Load_Before = 0.0,
+                 "a host with no load average was reported as having one");
+      end if;
+   end The_Speed_Tool_Reads_The_Machine;
+
    ------------------------------------------
    -- The_Speed_Tool_Runs_What_It_Publishes --
    ------------------------------------------
@@ -9562,6 +9646,9 @@ package body Tests.CLI_Cases is
         (T, The_External_Runner_Runs_What_The_Command_Does'Access,
          "the external-model runner generates what the command generates "
          & "from the same inputs");
+      Register_Routine
+        (T, The_Speed_Tool_Reads_The_Machine'Access,
+         "the load a figure carries is the load the host reports");
       Register_Routine
         (T, The_Speed_Tool_Runs_What_It_Publishes'Access,
          "the speed tool runs the command it publishes figures for");

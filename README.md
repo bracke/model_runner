@@ -1033,8 +1033,8 @@ Named in the specification, absent here:
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself. From the six-token prompt in
-`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.47 s** --
-0.29 s evaluating the prompt and 1.16 s generating -- and 9.3 s of processor
+`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.37 s** --
+0.27 s evaluating the prompt and 1.10 s generating -- and 9.3 s of processor
 time, the median of three runs. Loading the model costs a further 0.6 s of
 wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
@@ -1191,10 +1191,10 @@ tests speed --model MODEL --backend cpu       --max-tokens 4
 tests speed --model MODEL --backend reference --max-tokens 4
 ```
 
-Four tokens from the short prompt, medians of three: `cpu` spends 0.319 s
-evaluating the prompt and 0.388 s generating; `reference` spends 5.790 s and
-3.806 s. That is **thirteen times** the work in total, eighteen times on the
-prompt and ten times on the generation, and the two print the same digest.
+Four tokens from the short prompt, medians of three: `cpu` spends 0.336 s
+evaluating the prompt and 0.415 s generating; `reference` spends 5.902 s and
+3.933 s. That is **thirteen times** the work in total, eighteen times on the
+prompt and nine times on the generation, and the two print the same digest.
 The prompt suffers more because that is where the batching goes: `cpu` shares
 one reading of the weights between the tokens of a batch and `reference`
 declines to, which is one of the things it exists to be without -- so the
@@ -1255,9 +1255,15 @@ size to backends that refuse batches. All three are fixed, a test now
 compares the two runs token for token and digest for digest, and the figures
 above are the first taken with the tool running what the command runs.
 
-They were taken in one burst with the machine otherwise quiet -- load average
-from other work under one when it started -- which is the closest to an idle
-machine these figures have had.
+Every figure in this section now carries the load average the tool read
+before and after taking it, which is what `tests speed` prints at the end of
+its summary. These were taken starting from a load of 0.4; the pairs are
+adjacent, which is what makes the two columns comparable.
+
+Read those numbers knowing what they include: the tool is itself the work, so
+a run of measurements raises the load it reports. A figure taken at 0.4 and
+one taken at 3.0 in the same burst differ mostly in how many measurements
+came before them, not in what else the machine was doing.
 
 Two things make that possible and neither is the device being fast.
 
@@ -1373,9 +1379,9 @@ tests speed --model MODEL --draft-model DRAFT --draft-tokens 4
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 1.161 s | 97 ms a token |
-| the same model at two bits | 1.873 s | 156 ms a token |
-| the first, drafted by the second | 4.131 s | 16 proposed, 9 accepted |
+| TinyLlama-1.1B at eight bits | 1.279 s | 107 ms a token |
+| the same model at two bits | 1.884 s | 157 ms a token |
+| the first, drafted by the second | 4.094 s | 16 proposed, 9 accepted |
 
 The two-bit file is a third of the size on disk and more than twice the cost
 to run, because what it saves in bytes it spends unpacking them. A smaller
@@ -1384,15 +1390,15 @@ more per token than the model it drafts for cannot win at any acceptance
 rate.
 
 The arithmetic, from the same three figures. Four rounds of four proposals
-cost 4.131 s, of which the draft's own sixteen passes are 16 × 156 ms =
-2.50 s, leaving 1.63 s for four checks -- **408 ms to check five positions**,
-against 97 ms for one token generated normally. A batch is one pass over the
+cost 4.094 s, of which the draft's own sixteen passes are 16 × 157 ms =
+2.51 s, leaving 1.58 s for four checks -- **396 ms to check five positions**,
+against 107 ms for one token generated normally. A batch is one pass over the
 weights and the extra work is the output projection per position, which is
 why five positions cost about four tokens rather than five.
 
-So a round of K proposals costs `K × d + 408 ms` and yields `1 + a` tokens,
-against `(1 + a) × 97 ms` without a draft. At the acceptance measured here,
-2.25 of four, that wants a draft under 24 ms a token -- a quarter of the
+So a round of K proposals costs `K × d + 396 ms` and yields `1 + a` tokens,
+against `(1 + a) × 107 ms` without a draft. At the acceptance measured here,
+2.25 of four, that wants a draft under 32 ms a token -- under a third of the
 model's cost. With four proposals a round the check alone costs nearly as
 much as the four tokens it can save, so on this machine and at this
 acceptance rate no draft would pay.

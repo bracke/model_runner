@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Every published figure now carries the load it was taken under.** The
+  whole set was re-measured for it: the twelve-token figure, the device pair,
+  the reference comparison and the drafting trio, starting from a load of
+  0.4.
+
+  With one thing worth knowing about the number, which is now written beside
+  the table: the tool is itself the work, so a run of measurements raises the
+  load it reports. A figure taken at 0.4 and one taken at 3.0 in the same
+  burst differ mostly in how many measurements came before them. The pairs
+  that are compared with each other were taken adjacently, and the drafting
+  trio waited for the load to fall back under one, because its arithmetic
+  subtracts one run from another.
+
+- **A test that the load a figure carries is the load the host reports.** It
+  falls back to zero where a host keeps no load average, and a zero reads as
+  a quiet machine to anybody looking at a published figure -- so on a host
+  that does keep one, a zero is a fault and the test says so. Checked by
+  making the reader take the fallback and watching it fail.
+
 - **`--context-shift N`: a context that rolls.** When the context fills, the
   oldest N positions are dropped, the rest slide down, and the run carries
   on; `--context-keep N` says how many at the front stay. Without it a run

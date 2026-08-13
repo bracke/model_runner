@@ -364,6 +364,14 @@ reference 587B75CC6CBCBD64 src/library/model_runner-backend-reference.adb src/li
 # processor figures by half of one, which is the machine rather than the
 # code and is now said in the README beside the table.
 #
+# 2026-08-14, everything re-measured so that the figures carry the load they
+# were taken under, which is the first set that does. Started from a load of
+# 0.4 and rose through the burst -- the tool is itself the work, so a run of
+# measurements raises the load it reports, and the README says so beside the
+# table. The pairs that are compared with each other were taken adjacently,
+# and the drafting trio was taken after waiting for the load to fall back
+# under one, because the arithmetic under it subtracts one run from another.
+#
 # 2026-08-13, the shift on the drafting path, and the tool now reads the
 # load. Not re-measured, and the reason is the rule's own: both changes are
 # off the path these figures walk. The drafting round gained a branch that
