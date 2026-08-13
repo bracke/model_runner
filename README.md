@@ -1025,8 +1025,8 @@ Named in the specification, absent here:
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself. From the six-token prompt in
-`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.82 s** --
-0.38 s evaluating the prompt and 1.45 s generating -- and 9.3 s of processor
+`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.47 s** --
+0.29 s evaluating the prompt and 1.16 s generating -- and 9.3 s of processor
 time, the median of three runs. Loading the model costs a further 0.6 s of
 wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
@@ -1055,9 +1055,9 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. The same run at
-fourteen threads takes 2.33 s of wall against 2.52 s at seven, and 17.6 s of
-processor time against 10.4 s: eight per cent of the wall for seventy per
-cent more energy, which is why the program chooses one worker per core rather
+fourteen threads takes 2.29 s of wall against 2.43 s at seven, and 17.3 s of
+processor time against 10.1 s: six per cent of the wall for seventy per cent
+more energy, which is why the program chooses one worker per core rather
 than one per processor. The wall figures here include loading, which the
 split above excludes, and the processor figures come from the operating
 system's timing tool.
@@ -1066,10 +1066,10 @@ A job is cut into one more piece than the pool has workers, because the task
 that submits it takes the last piece rather than waiting; the figures below
 count those pieces, and so does the benchmark. Eight of them is this machine
 fully occupied, since it has eight cores -- reported as sixteen processors,
-which is not the same thing. Eight shares take 2.52 s for 10.4 s of processor
-time and sixteen take 2.31 s for 17.6 s: the second worker on a core shares
-the first one's execution units, so it buys a twelfth of the wall and costs
-seventy per cent more processor time. There are only 2015 matrix products in a run this size, so
+which is not the same thing. Eight shares take 2.43 s for 10.1 s of processor
+time and sixteen take 2.26 s for 17.5 s: the second worker on a core shares
+the first one's execution units, so it buys a fourteenth of the wall and
+costs seventy per cent more processor time. There are only 2015 matrix products in a run this size, so
 handing each of them out costs milliseconds in total; what the pool does with
 them, however, mattered a great deal, and is the next paragraph.
 
@@ -1183,10 +1183,10 @@ tests speed --model MODEL --backend cpu       --max-tokens 4
 tests speed --model MODEL --backend reference --max-tokens 4
 ```
 
-Four tokens from the short prompt, medians of three: `cpu` spends 0.490 s
-evaluating the prompt and 0.574 s generating; `reference` spends 6.463 s and
-4.104 s. That is **ten times** the work in total, thirteen times on the
-prompt and seven times on the generation, and the two print the same digest.
+Four tokens from the short prompt, medians of three: `cpu` spends 0.319 s
+evaluating the prompt and 0.388 s generating; `reference` spends 5.790 s and
+3.806 s. That is **thirteen times** the work in total, eighteen times on the
+prompt and ten times on the generation, and the two print the same digest.
 The prompt suffers more because that is where the batching goes: `cpu` shares
 one reading of the weights between the tokens of a batch and `reference`
 declines to, which is one of the things it exists to be without -- so the
@@ -1199,7 +1199,7 @@ This number was published as forty times for as long as the backend has
 existed, taken by hand and never checked; then as twelve and a half, taken by
 hand again. `tests benchmark` measures the algorithmic part on synthetic
 tensors -- serial against serial, no pool on either side -- and reports 2.3x
-for q8_0, 2.4x for q4_k and 3.1x for f32. The rest of the ten is the worker
+for q8_0, 2.4x for q4_k and 3.1x for f32. The rest of the thirteen is the worker
 pool and the batching, which is the honest way to read the figure:
 `reference` is between two and three times slower than the same loop written
 for speed, and the remaining factor is the parallelism it has none of.
@@ -1317,10 +1317,10 @@ faster there:
 | Per pass | Device time / processor time |
 | --- | --- |
 | q8_0, one vector | 0.78 |
-| q4_0, one vector | 0.97 |
-| f32, one vector | 1.37 |
-| q8_0, eight vectors | 0.23 |
-| q8_0, thirty-two vectors | 0.101 |
+| q4_0, one vector | 0.85 |
+| f32, one vector | 1.41 |
+| q8_0, eight vectors | 0.25 |
+| q8_0, thirty-two vectors | 0.107 |
 
 Binary32 is the one format the device is slower at, and that is the finding
 rather than a disappointment: it is four bytes a weight where q8_0 is one, so
@@ -1361,9 +1361,9 @@ tests speed --model MODEL --draft-model DRAFT --draft-tokens 4
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 1.555 s | 130 ms a token |
-| the same model at two bits | 2.175 s | 181 ms a token |
-| the first, drafted by the second | 4.879 s | 16 proposed, 9 accepted |
+| TinyLlama-1.1B at eight bits | 1.161 s | 97 ms a token |
+| the same model at two bits | 1.873 s | 156 ms a token |
+| the first, drafted by the second | 4.131 s | 16 proposed, 9 accepted |
 
 The two-bit file is a third of the size on disk and more than twice the cost
 to run, because what it saves in bytes it spends unpacking them. A smaller
@@ -1372,15 +1372,15 @@ more per token than the model it drafts for cannot win at any acceptance
 rate.
 
 The arithmetic, from the same three figures. Four rounds of four proposals
-cost 4.879 s, of which the draft's own sixteen passes are 16 × 181 ms =
-2.90 s, leaving 1.98 s for four checks -- **495 ms to check five positions**,
-against 130 ms for one token generated normally. A batch is one pass over the
+cost 4.131 s, of which the draft's own sixteen passes are 16 × 156 ms =
+2.50 s, leaving 1.63 s for four checks -- **408 ms to check five positions**,
+against 97 ms for one token generated normally. A batch is one pass over the
 weights and the extra work is the output projection per position, which is
 why five positions cost about four tokens rather than five.
 
-So a round of K proposals costs `K × d + 495 ms` and yields `1 + a` tokens,
-against `(1 + a) × 130 ms` without a draft. At the acceptance measured here,
-2.25 of four, that wants a draft under 17 ms a token -- an eighth of the
+So a round of K proposals costs `K × d + 408 ms` and yields `1 + a` tokens,
+against `(1 + a) × 97 ms` without a draft. At the acceptance measured here,
+2.25 of four, that wants a draft under 24 ms a token -- a quarter of the
 model's cost. With four proposals a round the check alone costs nearly as
 much as the four tokens it can save, so on this machine and at this
 acceptance rate no draft would pay.
@@ -1433,6 +1433,35 @@ became three for a one-gigabyte model. `inspect` reports the peak the copy
 needs, which is the file and the copy at once, because both exist while the
 second is written.
 
+### A context that rolls
+
+`--context-shift N` says what to do when the context fills: drop the oldest
+N positions, slide the rest down, and carry on. `--context-keep N` says how
+many at the front to leave in place -- the beginning-of-text marker, by
+default. Without it a run that fills its context ends there, which is where
+it ended before this existed.
+
+The keys move with the text. A key was rotated for the position it was
+written at, so each moved key is turned back by the angle those N positions
+stand for; without that the cache would describe positions the text no longer
+has, and a model reading it produces fluent text about nothing in particular
+and no error at all. That identity -- turning back by N is rotating N
+earlier -- is held at the kernel level for every pairing and every stretch,
+because it is the one place the fault would be silent. Writing that test
+found two wrong versions of it: one that applied the stretch's attenuation
+twice and one that divided it out.
+
+What a shift loses is more than the tokens it drops. The keys and values that
+stay were computed while the dropped tokens were still there; moving them
+renumbers their positions without recomputing them. So a rolling context is
+an approximation of the same text read afresh, not an equivalent -- a good
+one, which is why every runtime that offers this offers this, and still an
+approximation. The exact alternative is to re-read what is kept, which costs
+a prefill; neither happens on its own, because which one a run wants is the
+caller's to say.
+
+`--show-stats` reports how many times it happened.
+
 ### Batched prefill
 
 A prompt is evaluated in batches: every token in a batch shares one pass over
@@ -1465,14 +1494,14 @@ tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt.txt \
 
 | `--batch-size` | prompt evaluation | rate |
 |---|---|---|
-| 1 (one token at a time) | 16.15 s | 6.8 tokens/s |
-| 2 | 11.30 s | 9.7 tokens/s |
-| 4 | 9.76 s | 11.3 tokens/s |
-| 8 | 9.00 s | 12.2 tokens/s |
-| 16 | 6.42 s | 17.1 tokens/s |
-| 32 (default) | 6.25 s | 17.6 tokens/s |
-| 64 | 6.49 s | 16.9 tokens/s |
-| 128 (cap) | 6.59 s | 16.7 tokens/s |
+| 1 (one token at a time) | 12.24 s | 9.0 tokens/s |
+| 2 | 9.20 s | 12.0 tokens/s |
+| 4 | 7.71 s | 14.3 tokens/s |
+| 8 | 7.02 s | 15.7 tokens/s |
+| 16 | 6.25 s | 17.6 tokens/s |
+| 32 (default) | 6.06 s | 18.2 tokens/s |
+| 64 | 5.82 s | 18.9 tokens/s |
+| 128 (cap) | 5.62 s | 19.6 tokens/s |
 
 This table used to be measured through the chat template while the figure at
 the top of the section was measured raw, and neither said which. That is

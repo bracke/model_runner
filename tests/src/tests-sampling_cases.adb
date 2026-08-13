@@ -1766,6 +1766,81 @@ package body Tests.Sampling_Cases is
       end;
    end Explanation_Describes_The_Model;
 
+   ---------------------------------
+   -- Rotation_Undoes_A_Shift --
+   ---------------------------------
+
+   --  Rotating at a position and then turning back by N is rotating at N
+   --  positions earlier.
+   --
+   --  That identity is what lets a context drop its oldest tokens: the keys
+   --  that stay were rotated for where they were, and moving them down needs
+   --  them turned back by exactly the angle those positions stand for. If it
+   --  were not exact the cache would describe positions the text no longer
+   --  has, and a model reading that produces fluent text and no error --
+   --  which is the failure that has to be caught here, because nothing
+   --  downstream can catch it.
+   --
+   --  Held for every pairing and every stretch, because the angle is a
+   --  different function of the position in each.
+   procedure Rotation_Undoes_A_Shift
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package K renames Model_Runner.Kernels;
+
+      Heads     : constant N.Element_Count := 2;
+      Head_Size : constant N.Element_Count := 8;
+      Rotary    : constant N.Element_Count := 8;
+
+      Where : constant := 11;
+      Back  : constant := 4;
+
+      Stretches : constant array (1 .. 3) of K.Rotary_Scaling :=
+        [(Kind => K.Unscaled, others => <>),
+         (Kind => K.Linear, Frequency => 0.5, others => <>),
+         (Kind => K.Yarn, Frequency => 0.5, Original => 2048,
+          Attenuation => 1.1, others => <>)];
+   begin
+      for Pairing in K.Rotary_Pairing loop
+         for Stretch of Stretches loop
+            declare
+               Moved, Direct : N.Real_Array (0 .. Heads * Head_Size - 1);
+            begin
+               for Index in Moved'Range loop
+                  Moved (Index) :=
+                    N.Real (Index mod 5) * 0.25 - 0.5;
+               end loop;
+               Direct := Moved;
+
+               --  Rotated where it was, then turned back.
+               K.Apply_Rotary
+                 (Moved, Heads, Head_Size, Rotary, Where, 10000.0, Stretch,
+                  Pairing => Pairing);
+               K.Apply_Rotary
+                 (Moved, Heads, Head_Size, Rotary, Back, 10000.0, Stretch,
+                  Pairing => Pairing, Backwards => True);
+
+               --  Rotated where it now is.
+               K.Apply_Rotary
+                 (Direct, Heads, Head_Size, Rotary, Where - Back, 10000.0,
+                  Stretch, Pairing => Pairing);
+
+               for Index in Moved'Range loop
+                  Assert (abs (Moved (Index) - Direct (Index)) < 1.0E-5,
+                          "turning back by" & Natural'Image (Back)
+                          & " is not the same as rotating"
+                          & Natural'Image (Back) & " earlier, at"
+                          & N.Element_Count'Image (Index) & ": "
+                          & N.Real'Image (Moved (Index)) & " against "
+                          & N.Real'Image (Direct (Index)));
+               end loop;
+            end;
+         end loop;
+      end loop;
+   end Rotation_Undoes_A_Shift;
+
    ----------
    -- Name --
    ----------
@@ -2387,6 +2462,10 @@ package body Tests.Sampling_Cases is
         (T, Explanation_Describes_The_Model'Access,
          "an explanation reports the model's own distribution, in order, "
          & "and changes nothing about what is sampled");
+      Register_Routine
+        (T, Rotation_Undoes_A_Shift'Access,
+         "turning a rotated vector back by N positions is the same as "
+         & "having rotated it at N positions earlier");
       Register_Routine
         (T, Rotary_Pairings_Differ'Access,
          "the two rotary pairings rotate different elements");

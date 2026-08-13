@@ -92,6 +92,24 @@ package Model_Runner.Generation is
       --  is above zero, whether or not it is among the alternatives.
       Logprobs : Natural := 0;
 
+      --  How many of the oldest positions to drop when the context fills,
+      --  or zero to stop there instead.
+      --
+      --  A run that stops for want of room has stopped for want of room and
+      --  not for want of anything to say. With this set, the session drops
+      --  that many positions after the ones kept below, slides the rest
+      --  down, and carries on -- so a long run costs the beginning of its
+      --  own context rather than ending.
+      --
+      --  What it loses is what it drops. The model cannot attend to those
+      --  tokens again and a question about them is answered from what is
+      --  left, which is why this is off unless a caller asks for it.
+      Context_Shift : Natural := 0;
+
+      --  How many positions at the front to keep when shifting: the
+      --  beginning-of-text marker, and whatever else must not go.
+      Context_Keep : Natural := 1;
+
       --  How many tokens a draft model may propose at a time, or zero for no
       --  drafting. Reached only when Generate is given a draft model and a
       --  session on it.
@@ -174,6 +192,11 @@ package Model_Runner.Generation is
       --  and buys nothing, and the two are indistinguishable from the text.
       Drafted          : Natural := 0;
       Accepted         : Natural := 0;
+
+      --  How many times the context was shifted to make room. Zero for a run
+      --  that never filled it, and the number of times the beginning of the
+      --  conversation was dropped for one that did.
+      Shifted          : Natural := 0;
       Text             : Model_Runner.Bytes.Byte_Array_Access := null;
       Text_Length      : Natural := 0;
       Error            : Model_Runner.Errors.Error_Info;

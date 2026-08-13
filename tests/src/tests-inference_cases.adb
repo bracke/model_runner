@@ -2253,6 +2253,86 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Adapters_Stack_And_Come_Off_Again;
 
+   ---------------------------------------
+   -- Shifting_Moves_The_Positions --
+   ---------------------------------------
+
+   --  Dropping the oldest positions renumbers what is left and lets the run
+   --  go on.
+   --
+   --  What is checked here is the bookkeeping: the position, the history,
+   --  and that generation continues from the shifted cache with finite
+   --  logits. What is deliberately not checked is that a shifted context
+   --  equals the same remaining tokens read afresh, because it does not:
+   --  the keys and values that stay were computed while the dropped tokens
+   --  were still there, and moving them renumbers their positions without
+   --  recomputing them. The first version of this test asserted that
+   --  equality and failed by half a logit, which is the approximation
+   --  showing rather than a fault.
+   --
+   --  The part that would be a fault -- the rotation that renumbers a key --
+   --  is exact, and is held at the kernel level where it can be.
+   procedure Shifting_Moves_The_Positions
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+
+      Whole : constant array (1 .. 9) of Vocab.Token_Id :=
+        [4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+      Keep : constant := 1;
+      Drop : constant := 4;
+
+      Next : constant Vocab.Token_Id := 6;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         Logits : Logit_Vector := [others => 0.0];
+         Status : E.Error_Info;
+
+         Live : L.Session;
+      begin
+         Start (Under);
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         for Token of Whole loop
+            L.Evaluate (Live, Under.Ready, Token, Logits, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation failed");
+         end loop;
+
+         L.Shift (Live, Under.Ready, Keep, Drop, Status);
+         Assert (E.Is_Ok (Status),
+                 "the shift was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = Whole'Length - Drop,
+                 "the shift left" & Natural'Image (L.Position (Live))
+                 & " positions, not"
+                 & Natural'Image (Whole'Length - Drop));
+
+         --  And the run goes on from there.
+         L.Evaluate (Live, Under.Ready, Next, Logits, Status => Status);
+         Assert (E.Is_Ok (Status), "the continuation failed");
+         Assert (Model_Runner.Kernels.All_Finite (Logits),
+                 "a shifted context produced logits that are not numbers");
+
+         --  Dropping more than there is is refused rather than clamped.
+         L.Shift (Live, Under.Ready, 0, 1_000, Status);
+         Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                 "dropping more positions than exist was accepted");
+
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end Shifting_Moves_The_Positions;
+
    ----------
    -- Name --
    ----------
@@ -4755,6 +4835,10 @@ package body Tests.Inference_Cases is
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
+      Register_Routine
+        (T, Shifting_Moves_The_Positions'Access,
+         "dropping the oldest positions renumbers what is left and lets the "
+         & "run go on");
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");

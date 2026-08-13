@@ -132,10 +132,9 @@ package body Model_Runner.Presentation is
    --  commits and a full checklist run, because every check read the catalog
    --  the lines come from and none read the screen they land on.
    --
-   --  Generated text does not come through here. It goes out as raw bytes
-   --  through a sink of its own, which is deliberate and stays that way --
-   --  and that sink writes to Current_Output's stream for the same reason
-   --  this does.
+   --  Generated text does not come through here. It goes to standard output
+   --  as raw bytes through a sink of its own, which is deliberate and stays
+   --  that way.
    procedure Put_Line (Item : in out Console; Text : String) is
    begin
       Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Output, Text);
@@ -466,6 +465,12 @@ package body Model_Runner.Presentation is
       --  What a draft model proposed and how much of it was taken, for a
       --  run that had one. The only number that says whether the draft was
       --  worth its own passes.
+      if Outcome.Shifted > 0 then
+         Put_Field
+           (Item, "statistics.shifted",
+            T.Image (Long_Long_Integer (Outcome.Shifted)), Diagnostic);
+      end if;
+
       if Outcome.Drafted > 0 then
          Put_Field
            (Item, "statistics.drafted",
@@ -561,16 +566,14 @@ package body Model_Runner.Presentation is
       --  written line is closed, which would append a newline the model never
       --  produced. Generated text is passed through byte for byte.
       --
-      --  Through Current_Output's stream, which is the same file as
-      --  Standard_Output for this program -- it never redirects it -- and is
-      --  not the same file for a test, which can. It was Standard_Output,
-      --  and while it was, nothing could read what the program generated
-      --  without running it as a process: the one comparison worth making
-      --  between this command and the tool that publishes figures for it is
-      --  whether they produce the same text, and it could not be made.
-      --  Raw either way; only the file differs.
+      --  Standard_Output rather than Current_Output, which is where this
+      --  briefly went. A test that wants this text redirects the file
+      --  descriptor instead -- there is a capture in the suite that does --
+      --  and sending it through Current_Output puts it in the middle of
+      --  whatever else a test was capturing there, which is how a layout
+      --  check came to read " a Statistics" as a line.
       String'Write
-        (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Current_Output), Item);
+        (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
       Closed := False;
    exception
       --  A broken pipe is an ordinary end, not a failure to report with a

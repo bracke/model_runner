@@ -28,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 64) of Registry_Row :=
+   Registry : constant array (1 .. 66) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -102,6 +102,10 @@ package body Model_Runner.CLI.Options is
       (Text ("--stop-token"), [Command_Run => True, others => False], Text ("stop_token")),
       (Text ("--logit-bias"),
        [Command_Run => True, others => False], Text ("logit_bias")),
+      (Text ("--context-shift"),
+       [Command_Run => True, others => False], Text ("context_shift")),
+      (Text ("--context-keep"),
+       [Command_Run => True, others => False], Text ("context_keep")),
       (Text ("--logprobs"),
        [Command_Run => True, others => False], Text ("logprobs")),
       (Text ("--draft-model"),
@@ -731,6 +735,7 @@ package body Model_Runner.CLI.Options is
          Flag_Grammar,
          Flag_Grammar_File,
          Flag_Schema, Flag_Schema_File,
+         Flag_Context_Shift, Flag_Context_Keep,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
@@ -1561,6 +1566,20 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Draft_Tokens_Set := True;
+
+                  elsif Name = "--context-shift" then
+                     Natural_Value (Flag_Context_Shift, 0, 100_000,
+                                    Result.Context_Shift, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--context-keep" then
+                     Natural_Value (Flag_Context_Keep, 0, 100_000,
+                                    Result.Context_Keep, Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--logprobs" then
                      declare

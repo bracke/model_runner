@@ -751,6 +751,54 @@ package Model_Runner.Llama is
    --  @return The fingerprint, or zero before preparation.
    function Fingerprint (Item : Model) return Interfaces.Unsigned_64;
 
+   --  Drop the oldest positions and slide the rest down.
+   --
+   --  What it is for is a context that has filled. A run that stops there
+   --  has stopped for want of room rather than for want of anything to say,
+   --  and the usual answer is to forget the beginning of the conversation:
+   --  the first Keep positions stay -- a beginning-of-text marker and
+   --  whatever else the caller must not lose -- the Drop after them go, and
+   --  everything later moves down to close the gap.
+   --
+   --  The keys move with it. A key was rotated for the position it was
+   --  written at, and its new position is Drop earlier, so each moved key is
+   --  turned back by the angle Drop stands for. Values carry no position and
+   --  are copied as they are. Without that turn the cache would describe
+   --  positions the text no longer has, and the model would attend to a
+   --  conversation whose words had moved but whose places had not -- which
+   --  produces fluent text about nothing in particular, and no error.
+   --
+   --  What this loses is more than what it drops, and the difference is
+   --  worth stating. The keys and values that stay were computed while the
+   --  dropped tokens were still there: every one of them is the model's
+   --  reading of its position in a context that included them. Moving them
+   --  down renumbers their positions; it does not recompute them. So a
+   --  shifted context is not the context the same remaining tokens would
+   --  have produced on their own, and this is an approximation rather than
+   --  an equivalence -- a good one in practice, which is why every runtime
+   --  that offers a rolling context offers this one, and still an
+   --  approximation.
+   --
+   --  The alternative is to re-read the retained tokens, which is exact and
+   --  costs a prefill. Nothing here does that automatically either: which
+   --  of the two a caller wants depends on what the run is for, and both
+   --  are the caller's to choose.
+   --
+   --  @param Item Session to shift.
+   --  @param Source The model it was opened on, for the rotation the keys
+   --    have to be turned back by.
+   --  @param Keep How many positions at the front to leave in place.
+   --  @param Drop How many to remove after those.
+   --  @param Status Success, Lifecycle_Invalid_State when the session is not
+   --    open, or Tensor_Shape_Mismatch when Keep and Drop do not fit inside
+   --    what is committed.
+   procedure Shift
+     (Item   : in out Session;
+      Source : Model'Class;
+      Keep   : Natural;
+      Drop   : Positive;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Give back the last few committed positions.
    --
    --  What it is for is checking: a caller that evaluated several tokens on

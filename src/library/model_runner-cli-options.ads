@@ -277,6 +277,11 @@ package Model_Runner.CLI.Options is
       --  for none.
       Logprobs : Natural := 0;
 
+      --  How many of the oldest positions to drop when the context fills,
+      --  and how many at the front to keep when that happens.
+      Context_Shift : Natural := 0;
+      Context_Keep  : Natural := 1;
+
       --  A smaller model to propose tokens for the real one to check, and
       --  how many it may propose at a time.
       Draft_Path   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;

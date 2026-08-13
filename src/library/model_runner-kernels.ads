@@ -157,6 +157,14 @@ package Model_Runner.Kernels is
    --    first element, or an empty array when the model carries none. A
    --    wrong length is ignored rather than applied part way.
    --  @param Pairing Which elements of a head are rotated against which.
+   --  @param Backwards Rotate the other way, by the same angle.
+   --
+   --    What it is for is moving a key that was rotated at one position to
+   --    another: the angle is linear in the position, so undoing a shift of
+   --    N positions is a rotation by the angle N stands for, the other way
+   --    round. A context that drops its oldest tokens and slides the rest
+   --    down needs exactly that, and without it the keys would describe
+   --    positions the text no longer has.
    procedure Apply_Rotary
      (Vector          : in out Real_Array;
       Heads           : Element_Count;
@@ -166,7 +174,8 @@ package Model_Runner.Kernels is
       Base            : Wide_Real;
       Scaling         : Rotary_Scaling := No_Scaling;
       Factors         : Real_Array := No_Factors;
-      Pairing         : Rotary_Pairing := Interleaved);
+      Pairing         : Rotary_Pairing := Interleaved;
+      Backwards       : Boolean := False);
 
    --  Report whether every element is finite.
    --

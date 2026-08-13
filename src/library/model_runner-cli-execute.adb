@@ -1715,6 +1715,8 @@ package body Model_Runner.CLI.Execute is
             end loop;
             Request.Bias_Count := Item.Bias_Count;
             Request.Logprobs := Item.Logprobs;
+            Request.Context_Shift := Item.Context_Shift;
+            Request.Context_Keep := Item.Context_Keep;
             Request.Draft_Tokens :=
               (if Draft_Ready then Item.Draft_Tokens else 0);
 

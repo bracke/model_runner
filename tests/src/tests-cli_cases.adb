@@ -8253,10 +8253,7 @@ package body Tests.CLI_Cases is
 
       Model  : constant String := "obj/speed-agree-model.gguf";
       Prompt : constant String := "obj/speed-agree-prompt.txt";
-      Text   : constant String := "obj/speed-agree-text.txt";
       Notes  : constant String := "obj/speed-agree-notes.txt";
-
-      Tokens : constant := 4;
 
       Report : Speed_Run.Report;
    begin
@@ -8275,7 +8272,7 @@ package body Tests.CLI_Cases is
       Speed_Run.Run
         (Path        => Model,
          Prompt_Path => Prompt,
-         Tokens      => Tokens,
+         Tokens      => 4,
          Threads     => 1,
          Batch       => 32,
          Repack      => Model_Runner.Llama.No_Repack,
@@ -8286,11 +8283,13 @@ package body Tests.CLI_Cases is
               "the tool would not measure the fixture: "
               & Speed_Run.Summary (Report));
 
-      --  The same run as a command, with its own text kept apart from its
-      --  diagnostics so that the digest is over what was generated.
+      --  The same run as a command. Its generated text is caught by the
+      --  suite's own capture, which redirects the file descriptor rather
+      --  than Text_IO -- which is where that text actually goes -- and its
+      --  statistics are caught separately.
       declare
          Source : Fixed_Arguments;
-         Out_Handle, Err_Handle : File_Type;
+         Handle : File_Type;
          Status : Natural;
       begin
          Add (Source, "run");
@@ -8308,47 +8307,23 @@ package body Tests.CLI_Cases is
          Add (Source, "4");
          Add (Source, "--show-stats");
 
-         Create (Out_Handle, Out_File, Text);
-         Create (Err_Handle, Out_File, Notes);
-         Set_Output (Out_Handle);
-         Set_Error (Err_Handle);
+         Create (Handle, Out_File, Notes);
+         Set_Error (Handle);
          begin
             Ran (Source, Status);
          exception
             when others =>
-               Set_Output (Standard_Output);
                Set_Error (Standard_Error);
-               Close (Out_Handle);
-               Close (Err_Handle);
+               Close (Handle);
                raise;
          end;
-         Set_Output (Standard_Output);
          Set_Error (Standard_Error);
-         Close (Out_Handle);
-         Close (Err_Handle);
+         Close (Handle);
 
-         Assert (Status = 0,
-                 "the command failed:" & Natural'Image (Status));
+         Assert (Status = 0, "the command failed:" & Natural'Image (Status));
       end;
 
       declare
-         --  What the command generated, less the line terminator Text_IO
-         --  puts on when it closes a file whose last line was left open.
-         --  The sink writes raw bytes and never ends a line the model did
-         --  not end; the file it was captured into is closed by Text_IO,
-         --  which does.
-         function Generated return String is
-            Whole : constant String := Text_Of (Text);
-         begin
-            if Whole'Length > 0
-              and then Whole (Whole'Last) = Character'Val (10)
-            then
-               return Whole (Whole'First .. Whole'Last - 1);
-            end if;
-            return Whole;
-         end Generated;
-
-         Said : constant String := Generated;
          Told : constant String := Text_Of (Notes);
 
          --  The value of a labelled statistics line.
@@ -8386,19 +8361,19 @@ package body Tests.CLI_Cases is
       begin
          Assert (Field ("prompt tokens")
                  = T.Trim (Natural'Image (Report.Prompt)),
-                 "the command read" & Field ("prompt tokens")
+                 "the command read " & Field ("prompt tokens")
                  & " prompt tokens and the tool read"
                  & Natural'Image (Report.Prompt)
                  & ", so they are not running the same prompt");
 
          Assert (Field ("generated tokens")
                  = T.Trim (Natural'Image (Report.Produced)),
-                 "the command generated" & Field ("generated tokens")
+                 "the command generated " & Field ("generated tokens")
                  & " tokens and the tool" & Natural'Image (Report.Produced));
 
-         Assert (Speed_Run.Digest_Of (Said) = Report.Digest,
+         Assert (Speed_Run.Digest_Of (Last_Output) = Report.Digest,
                  "the command and the tool generated different text: "
-                 & Speed_Run.Digest_Of (Said) & " against "
+                 & Speed_Run.Digest_Of (Last_Output) & " against "
                  & Report.Digest);
       end;
    end The_Speed_Tool_Runs_What_It_Publishes;
@@ -8419,30 +8394,12 @@ package body Tests.CLI_Cases is
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T2);
-      use Ada.Text_IO;
 
       Model : constant String := "obj/many-prompts-model.gguf";
-      Text  : constant String := "obj/many-prompts-text.txt";
-      Notes : constant String := "obj/many-prompts-notes.txt";
-
-      --  What the command wrote to standard output, less the terminator
-      --  Text_IO adds when it closes the file.
-      function Generated return String is
-         Whole : constant String := Text_Of (Text);
-      begin
-         if Whole'Length > 0
-           and then Whole (Whole'Last) = Character'Val (10)
-         then
-            return Whole (Whole'First .. Whole'Last - 1);
-         end if;
-         return Whole;
-      end Generated;
 
       --  One run of the command, with however many prompts it is given.
       procedure Answer (First, Second : String; Into : out Natural) is
          Source : Fixed_Arguments;
-         Out_Handle, Err_Handle : File_Type;
-         Status : Natural;
       begin
          Add (Source, "run");
          Add (Source, Model);
@@ -8460,26 +8417,7 @@ package body Tests.CLI_Cases is
          Add (Source, "--max-tokens");
          Add (Source, "3");
 
-         Create (Out_Handle, Out_File, Text);
-         Create (Err_Handle, Out_File, Notes);
-         Set_Output (Out_Handle);
-         Set_Error (Err_Handle);
-         begin
-            Ran (Source, Status);
-         exception
-            when others =>
-               Set_Output (Standard_Output);
-               Set_Error (Standard_Error);
-               Close (Out_Handle);
-               Close (Err_Handle);
-               raise;
-         end;
-         Set_Output (Standard_Output);
-         Set_Error (Standard_Error);
-         Close (Out_Handle);
-         Close (Err_Handle);
-
-         Into := Status;
+         Ran (Source, Into);
       end Answer;
 
       Status : Natural;
@@ -8490,14 +8428,14 @@ package body Tests.CLI_Cases is
       Assert (Status = 0, "the first run failed:" & Natural'Image (Status));
 
       declare
-         Alone_First : constant String := Generated;
+         Alone_First : constant String := Last_Output;
       begin
          Answer ("aa", "", Status);
          Assert (Status = 0,
                  "the second run failed:" & Natural'Image (Status));
 
          declare
-            Alone_Second : constant String := Generated;
+            Alone_Second : constant String := Last_Output;
          begin
             --  The two answers differ, or nothing below can tell a fresh
             --  session from a continued one.
@@ -8510,9 +8448,9 @@ package body Tests.CLI_Cases is
                     "the run with two prompts failed:"
                     & Natural'Image (Status));
 
-            Assert (Generated = Alone_First & Alone_Second,
+            Assert (Last_Output = Alone_First & Alone_Second,
                     "two prompts in one run did not answer as they answer "
-                    & "alone: got <" & Generated & "> against <"
+                    & "alone: got <" & Last_Output & "> against <"
                     & Alone_First & Alone_Second & ">");
          end;
       end;
@@ -8538,14 +8476,10 @@ package body Tests.CLI_Cases is
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T2);
-      use Ada.Text_IO;
 
       Model : constant String := "obj/external-agree-model.gguf";
-      Text  : constant String := "obj/external-agree-text.txt";
-      Notes : constant String := "obj/external-agree-notes.txt";
 
       Prompt : constant String := "abab";
-      Tokens : constant := 4;
 
       Report : External_Model.Report;
    begin
@@ -8554,7 +8488,7 @@ package body Tests.CLI_Cases is
       External_Model.Run
         (Path    => Model,
          Prompt  => Prompt,
-         Tokens  => Tokens,
+         Tokens  => 4,
          Threads => 1,
          Result  => Report);
 
@@ -8564,7 +8498,6 @@ package body Tests.CLI_Cases is
 
       declare
          Source : Fixed_Arguments;
-         Out_Handle, Err_Handle : File_Type;
          Status : Natural;
       begin
          Add (Source, "run");
@@ -8585,47 +8518,14 @@ package body Tests.CLI_Cases is
          Add (Source, "--max-tokens");
          Add (Source, "4");
 
-         Create (Out_Handle, Out_File, Text);
-         Create (Err_Handle, Out_File, Notes);
-         Set_Output (Out_Handle);
-         Set_Error (Err_Handle);
-         begin
-            Ran (Source, Status);
-         exception
-            when others =>
-               Set_Output (Standard_Output);
-               Set_Error (Standard_Error);
-               Close (Out_Handle);
-               Close (Err_Handle);
-               raise;
-         end;
-         Set_Output (Standard_Output);
-         Set_Error (Standard_Error);
-         Close (Out_Handle);
-         Close (Err_Handle);
-
+         Ran (Source, Status);
          Assert (Status = 0, "the command failed:" & Natural'Image (Status));
       end;
 
-      declare
-         --  Less the terminator Text_IO writes when it closes a file whose
-         --  last line was left open.
-         function Generated return String is
-            Whole : constant String := Text_Of (Text);
-         begin
-            if Whole'Length > 0
-              and then Whole (Whole'Last) = Character'Val (10)
-            then
-               return Whole (Whole'First .. Whole'Last - 1);
-            end if;
-            return Whole;
-         end Generated;
-      begin
-         Assert (Speed_Run.Digest_Of (Generated) = Report.Digest,
-                 "the runner and the command generated different text: "
-                 & Speed_Run.Digest_Of (Generated) & " against "
-                 & Report.Digest);
-      end;
+      Assert (Speed_Run.Digest_Of (Last_Output) = Report.Digest,
+              "the runner and the command generated different text: "
+              & Speed_Run.Digest_Of (Last_Output) & " against "
+              & Report.Digest);
    end The_External_Runner_Runs_What_The_Command_Does;
 
    procedure Runs_Report_Which_Backend_Ran

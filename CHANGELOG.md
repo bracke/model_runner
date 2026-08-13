@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--context-shift N`: a context that rolls.** When the context fills, the
+  oldest N positions are dropped, the rest slide down, and the run carries
+  on; `--context-keep N` says how many at the front stay. Without it a run
+  that fills its context ends there.
+
+  The keys move with the text: each one is turned back by the angle those N
+  positions stand for, because a key rotated for where it was would otherwise
+  describe a position the text no longer has -- and a model reading that
+  produces fluent text and no error. The identity that rests on -- turning
+  back by N is rotating N earlier -- is held at the kernel level for every
+  pairing and every stretch. Writing that test found two wrong versions: one
+  applying the stretch's attenuation twice, one dividing it out.
+
+  What a shift loses is more than the tokens it drops, and the specification
+  says so: the keys and values that stay were computed while the dropped
+  tokens were still there, so moving them renumbers their positions without
+  recomputing them. A rolling context is an approximation of the same text
+  read afresh, not an equivalent. The first version of the session-level test
+  asserted that equivalence and failed by half a logit -- which was the
+  approximation showing, not a fault, and the test now holds the bookkeeping
+  and leaves the arithmetic to the kernel test that can be exact.
+
 - **`--json-schema` and `--json-schema-file`: a schema becomes a grammar.**
   It reads `type`, `properties` with `required`, `items`, `enum` and `const`,
   and refuses every other keyword by name. Ignoring one would produce a

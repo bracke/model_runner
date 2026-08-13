@@ -492,7 +492,13 @@ package body Model_Runner.Generation is
             return;
          end if;
 
-         if Remaining + Item.Max_Tokens > Available then
+         --  A run that may drop its oldest positions is not bounded by what
+         --  the context holds at once, so the sum below is not a limit on
+         --  it. The prompt still has to fit -- there is nothing to drop
+         --  before it has been read -- which is the check above.
+         if Item.Context_Shift = 0
+           and then Remaining + Item.Max_Tokens > Available
+         then
             Status := E.Make (E.Generation_Context_Exhausted);
             E.Add_Integer
               (Status, "prompt", Long_Long_Integer (Remaining),
@@ -982,6 +988,30 @@ package body Model_Runner.Generation is
                else
                   L.Evaluate
                     (Session, Source, Token, Logits.all, Cancel, Status);
+               end if;
+
+               --  A context that has filled, when the caller asked for the
+               --  oldest to be dropped rather than the run to end. Tried
+               --  once: if the token still will not go in after the shift,
+               --  the run ends as it would have.
+               if E.Is_Error (Status)
+                 and then Status.Code = E.Generation_Context_Exhausted
+                 and then Item.Context_Shift > 0
+               then
+                  declare
+                     Moved : E.Error_Info;
+                  begin
+                     L.Shift
+                       (Session, Source, Item.Context_Keep,
+                        Item.Context_Shift, Moved);
+
+                     if E.Is_Ok (Moved) then
+                        Outcome.Shifted := Outcome.Shifted + 1;
+                        L.Evaluate
+                          (Session, Source, Token, Logits.all, Cancel,
+                           Status);
+                     end if;
+                  end;
                end if;
 
                if E.Is_Error (Status) then

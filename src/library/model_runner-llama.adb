@@ -3277,6 +3277,117 @@ package body Model_Runner.Llama is
    -- Reset --
    -----------
 
+   -----------
+   -- Shift --
+   -----------
+
+   procedure Shift
+     (Item   : in out Session;
+      Source : Model'Class;
+      Keep   : Natural;
+      Drop   : Positive;
+      Status : out E.Error_Info)
+   is
+      Settings : constant Configuration := Source.Settings;
+
+      Head_Size : constant Element_Count :=
+        Element_Count (Settings.Head_Size);
+      KV_Heads  : constant Element_Count :=
+        Element_Count (Settings.KV_Heads);
+      KV_Width  : constant Element_Count := KV_Heads * Head_Size;
+      V_Width   : constant Element_Count :=
+        KV_Heads * Element_Count (Settings.Value_Size);
+
+      Moved : Natural;
+   begin
+      Status := E.Success;
+
+      if Item.Current = Closed or else Item.Current = Failed then
+         Status := E.Make (E.Lifecycle_Invalid_State);
+         E.Add_Text
+           (Status, "state",
+            Model_Runner.Text.To_Lower (Session_State'Image (Item.Current)),
+            E.Param_Identifier);
+         return;
+      end if;
+
+      if Keep + Drop > Item.Committed then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Integer (Status, "input", Long_Long_Integer (Keep + Drop));
+         E.Add_Integer
+           (Status, "expected", Long_Long_Integer (Item.Committed));
+         return;
+      end if;
+
+      Moved := Item.Committed - Keep - Drop;
+
+      --  Every layer, every moved position: the key turned back by the angle
+      --  Drop stands for and written where it now belongs, the value copied.
+      for Index in Item.Owner.Layers'Range loop
+         declare
+            Base : constant Element_Count :=
+              Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
+            V_Base : constant Element_Count :=
+              Element_Count (Index) * Element_Count (Item.Context) * V_Width;
+         begin
+            for Step in 0 .. Moved - 1 loop
+               declare
+                  From : constant Element_Count :=
+                    Base + Element_Count (Keep + Drop + Step) * KV_Width;
+                  Into : constant Element_Count :=
+                    Base + Element_Count (Keep + Step) * KV_Width;
+
+                  V_From : constant Element_Count :=
+                    V_Base + Element_Count (Keep + Drop + Step) * V_Width;
+                  V_Into : constant Element_Count :=
+                    V_Base + Element_Count (Keep + Step) * V_Width;
+               begin
+                  if Item.Held = Exact then
+                     Item.Key_Row.all (0 .. KV_Width - 1) :=
+                       Item.Keys.all (From .. From + KV_Width - 1);
+                  else
+                     for Offset in 0 .. KV_Width - 1 loop
+                        Item.Key_Row.all (Offset) :=
+                          N.To_Real (Item.Half_Keys.all (From + Offset));
+                     end loop;
+                  end if;
+
+                  K.Apply_Rotary
+                    (Item.Key_Row.all, KV_Heads, Head_Size,
+                     Element_Count (Settings.Rotary), Drop,
+                     Settings.Rope_Base, Settings.Scaling, Turns (Source),
+                     Settings.Pairing, Backwards => True);
+
+                  if Item.Held = Exact then
+                     Item.Keys.all (Into .. Into + KV_Width - 1) :=
+                       Item.Key_Row.all (0 .. KV_Width - 1);
+                     Item.Values.all (V_Into .. V_Into + V_Width - 1) :=
+                       Item.Values.all (V_From .. V_From + V_Width - 1);
+                  else
+                     for Offset in 0 .. KV_Width - 1 loop
+                        Item.Half_Keys.all (Into + Offset) :=
+                          N.To_Half (Item.Key_Row.all (Offset));
+                     end loop;
+                     for Offset in 0 .. V_Width - 1 loop
+                        Item.Half_Values.all (V_Into + Offset) :=
+                          Item.Half_Values.all (V_From + Offset);
+                     end loop;
+                  end if;
+               end;
+            end loop;
+         end;
+      end loop;
+
+      --  And the history, which is what a restored context is checked
+      --  against and what a prefix comparison reads.
+      for Step in 0 .. Moved - 1 loop
+         Item.History.all (Keep + Step) :=
+           Item.History.all (Keep + Drop + Step);
+      end loop;
+
+      Item.Committed := Keep + Moved;
+   end Shift;
+
    ------------
    -- Rewind --
    ------------

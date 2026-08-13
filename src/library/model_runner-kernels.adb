@@ -225,7 +225,8 @@ package body Model_Runner.Kernels is
       Base            : Wide_Real;
       Scaling         : Rotary_Scaling := No_Scaling;
       Factors         : Real_Array := No_Factors;
-      Pairing         : Rotary_Pairing := Interleaved)
+      Pairing         : Rotary_Pairing := Interleaved;
+      Backwards       : Boolean := False)
    is
       --  A pair's frequency divisor, when the model carries one. A table of
       --  the wrong length is not used at all: applying the part that fits
@@ -319,8 +320,21 @@ package body Model_Runner.Kernels is
 
                   Theta    : constant Wide_Real :=
                     Between * (1.0 - Mix) + Extended * Mix;
-                  Cosine   : constant Wide_Real := N.Cos (Theta) * Magnitude;
-                  Sine     : constant Wide_Real := N.Sin (Theta) * Magnitude;
+                  --  Turning back is the angle negated and the magnitude
+                  --  left alone. A stretch that attenuates applies its
+                  --  factor when a vector is rotated; a vector being moved
+                  --  has been rotated once already and carries it, so
+                  --  applying it again -- or dividing it out -- would leave
+                  --  a vector no position would have produced. Both were
+                  --  tried and both were caught by asking the kernel whether
+                  --  turning back by N equals rotating N earlier, which is
+                  --  the identity a shifted context rests on.
+                  Cosine   : constant Wide_Real :=
+                    (if Backwards then N.Cos (Theta)
+                     else N.Cos (Theta) * Magnitude);
+                  Sine     : constant Wide_Real :=
+                    (if Backwards then -N.Sin (Theta)
+                     else N.Sin (Theta) * Magnitude);
                   Even     : constant Element_Count :=
                     (if Pairing = Interleaved
                      then Origin + 2 * Pair
