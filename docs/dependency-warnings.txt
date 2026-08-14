@@ -30,7 +30,7 @@ httpclient 1
 ssllib 38
 cryptolib 19
 truststores 0
-hostkit 0
+hostkit 1
 zlib 0
 awklib 0
 regexp 1

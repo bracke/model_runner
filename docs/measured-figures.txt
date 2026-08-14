@@ -194,6 +194,14 @@
 # tensors and multiply them. Not re-measured: these two were taken again
 # three commits ago on this machine, and taking them again for a type
 # declaration would say what that run already says.
+# 2026-08-14, the tokenizer timed by a tool rather than by the shell. Three
+# groups moved because benchmarks.adb gained a section. Not re-measured, and
+# the reason is order: the new section runs after the row products, the
+# device ratios and the share scaling, so it cannot have affected a figure
+# taken before it started. Read Run to check that rather than take it on
+# trust -- it is one call list, and the tokenizer lines sit between the
+# vector kernels and the metadata parse.
+
 # 2026-08-14, processor time from this repository's own tool. `tests speed`
 # reports it beside the wall time, taken around the same region, which
 # removes the one figure in this file that came from the shell. The reason
@@ -408,7 +416,7 @@
 # they were taken under are not recorded anywhere -- unlike every figure
 # taken from here on.
 # load: 1.25 rising to 3.34, one `tests benchmark` run, 2026-08-14
-kernels E942FD537CAF9EAC src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb
+kernels 8CBEC9BEDB453016 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb
 
 # covers: the twelve-token figure, the worker-count and share-count
 # comparisons, and the batch-size table under "Speed". Re-measure all four
@@ -734,7 +742,7 @@ reference 2B860DC8D91BDD2A src/library/model_runner-backend-reference.adb src/li
 # the caveat under the table now gives all three pairs rather than one.
 # load: 1.25 rising to 3.34 for the fifteen ratios and the batched
 #       ones; 1.0 to 1.9 for the two-backend table, 2026-08-14
-device 7FE91A6B4DB2EB0E src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 9763533FF5187EAC src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -753,7 +761,7 @@ drafting 8F79553C7F2330F5 src/library/model_runner-generation.adb src/library/mo
 # load: unknown -- the pinned figures were taken before the tools
 #       reported one, and retaking them needs a machine quiet enough for
 #       `tests benchmark` to measure at all
-scaling 565C9C09236203AD src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb
+scaling 3860EF43E7E63137 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker

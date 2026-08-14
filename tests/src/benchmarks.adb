@@ -1128,6 +1128,83 @@ package body Benchmarks is
       --  cost a fifth of it without anything noticing. A vocabulary is what
       --  makes a real file's metadata large: a hundred thousand token strings
       --  and their scores, which is the shape of a small real model.
+      --  The tokenizer on text chosen to be hard for it.
+      --
+      --  These figures were timed by the shell, which is why they were the
+      --  last ones in this repository with no load beside them: a figure a
+      --  tool does not take is a figure whose conditions nobody records.
+      --  The tool takes them now.
+      --
+      --  Two texts of sixty thousand characters. Ordinary letters are the
+      --  easy case; a run of the same bracket is the hard one, because every
+      --  position is a candidate for the same merges and the scan that looks
+      --  for markers had no bound until it was given one. What the second
+      --  number is for is that it stays close to the first.
+      procedure Measure_Tokenizer (Name : String; Filler : Character) is
+         Span : constant := 60_000;
+
+         Image   : B.Byte_Array_Access;
+         Parsed  : Model_Runner.GGUF.Containers.Container;
+         Words   : Model_Runner.Tokenizer.Vocabulary;
+         Status  : E.Error_Info;
+
+         Text    : constant String (1 .. Span) := [others => Filler];
+         Room    : Model_Runner.Tokenizer.Token_Array (1 .. Span + 2);
+         Last    : Natural;
+
+         Started : Ada.Real_Time.Time;
+         Elapsed : Duration := 0.0;
+         Passes  : Long_Long_Integer := 0;
+      begin
+         Tiny_Model.Build (Image);
+         if Image = null then
+            return;
+         end if;
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+         begin
+            Model_Runner.GGUF.Containers.Reader.Parse
+              (Parsed, Source, Status => Status);
+            if E.Is_Error (Status) then
+               B.Free (Image);
+               return;
+            end if;
+
+            Model_Runner.Tokenizer.Load (Words, Parsed, Status => Status);
+            if E.Is_Error (Status) then
+               Model_Runner.GGUF.Containers.Close (Parsed);
+               B.Free (Image);
+               return;
+            end if;
+
+            Started := Ada.Real_Time.Clock;
+            loop
+               Model_Runner.Tokenizer.Encode
+                 (Words, Text, False, False, Room, Last, Status);
+               Passes := Passes + 1;
+               Elapsed := Ada.Real_Time.To_Duration
+                 (Ada.Real_Time.Clock - Started);
+               exit when Elapsed >= Seconds;
+            end loop;
+
+            --  Per whole text rather than per character, because that is
+            --  what the README quotes and what a caller feels: one prompt.
+            IO.Put_Line
+              ("  " & Name & " "
+               & Long_Float'Image
+                   (Long_Float (Elapsed) / Long_Float (Passes))
+               & " s for" & Integer'Image (Span) & " characters");
+
+            Model_Runner.Tokenizer.Close (Words);
+            Model_Runner.GGUF.Containers.Close (Parsed);
+         end;
+
+         B.Free (Image);
+      end Measure_Tokenizer;
+
       procedure Measure_Parse is
          Tokens  : constant := 100_000;
          Builder : Fixtures.Builder;
@@ -1471,6 +1548,11 @@ package body Benchmarks is
       Measure_Vector ("rms norm", 'N');
       Measure_Vector ("silu", 'L');
       Measure_Vector ("dot", 'D');
+      IO.New_Line;
+
+      IO.Put_Line ("tokenizing sixty thousand characters");
+      Measure_Tokenizer ("ordinary letters ", 'a');
+      Measure_Tokenizer ("the same bracket ", '<');
       IO.New_Line;
 
       IO.Put_Line ("metadata parsing");

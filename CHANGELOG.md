@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests benchmark` times the tokenizer,** on sixty thousand ordinary
+  characters and sixty thousand of the same bracket. Those were the last
+  figures here taken by the shell rather than by a tool, which is why they
+  were the last with no load beside them. What the tool reports is narrower
+  than what the shell timed and more useful: the encode alone, where the old
+  figure was a whole `model_runner run` -- parsing the model, loading the
+  vocabulary, tokenizing, and refusing the prompt for length.
+
+### Added
+
 - **`tests speed` reports processor time,** taken around the same region as
   the wall time so the two answer about the same work. That was the one
   figure in the README that came from the shell, on the reasoning that
