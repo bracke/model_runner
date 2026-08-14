@@ -36,6 +36,7 @@ with Project_Tools.Files;
 with Project_Tools.Text;
 with Packaging;
 with Pristine;
+with Host_Load;
 with Speed_Run;
 with Tool_Commands;
 with Fuzzing;
@@ -762,7 +763,40 @@ begin
          end Mode_Of;
 
          Result  : Speed_Run.Report;
+
+         --  A word on its own, so it is looked for across every argument.
+         function Given (Name : String) return Boolean is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Given;
+
+         Load_Now : constant Long_Float := Host_Load.Now;
       begin
+         --  Refused on a busy machine, exactly as `tests benchmark` is and
+         --  on the same bound. These two publish figures that are compared
+         --  with each other and with what the README says, and one of them
+         --  refusing a machine the other accepted meant the same host was
+         --  too busy for one set of published numbers and fine for another.
+         if not Given ("--anyway")
+           and then not Host_Load.Publishable (Load_Now)
+         then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "the machine is at a load of "
+               & Model_Runner.Text.Image (Load_Now, 2)
+               & ", above the "
+               & Model_Runner.Text.Image (Long_Float (Host_Load.Too_Busy), 2)
+               & " a figure worth publishing needs; wait, or pass --anyway "
+               & "for the shape of the answer");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
          Speed_Run.Run
            (Path        => Option ("--model", ""),
             Prompt_Path =>

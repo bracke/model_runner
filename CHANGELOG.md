@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests check` finds the line that breaks a catalog.** The runtime refuses
+  a catalog whole -- one line it cannot compile and nothing renders, in any
+  locale, with no indication of where. Finding the last one took a bisection
+  by hand. This does the bisection: eleven opens rather than eleven hundred,
+  and the failing line comes back in the diagnostic.
+
+  Proved on every run against a planted fault, because a search only
+  exercised on the day something breaks is a search nobody knows works. The
+  planted fault is a line with a key and no value: one line, and understood.
+
+- **`tests speed` refuses to measure on a busy machine,** on the same bound
+  as `tests benchmark` and for the same reason, with the same `--anyway`. The
+  bound now lives beside the load reader rather than in one tool, because the
+  rule is about figures and not about any one measurement: the same host was
+  too busy for one set of published numbers and fine for another.
+
+- **Every figure group records the load it was taken under,** and `tests
+  check` refuses a group that says nothing. A group may say the load is
+  unknown -- five do, and have to, because their figures predate the tools
+  printing one -- and the check reports how many, so the number is visible
+  and can only come down as figures are retaken.
+
+### Fixed
+
+- **The explanation for the `{seconds}` failure was wrong and is corrected in
+  the catalog beside it.** What was measured is that with that placeholder in
+  one message and its pseudo-locale twin, the catalog stopped loading and
+  renaming it fixed it. The same name planted in other messages does not do
+  it, so it is a fact about one line rather than a rule about a name, and
+  yesterday's note said otherwise.
+
 - **`--device-patience N`** says how many seconds to wait for one product
   before giving up on the device. The default of a minute is far longer than
   any product on any machine this has run on, and that is a guess about

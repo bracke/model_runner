@@ -51,7 +51,7 @@ with Ada.Text_IO;
 
 with Expectations;
 with External_Model;
-with Benchmarks;
+with Host_Load;
 with Speed_Run;
 with Tiny_Model;
 
@@ -8479,16 +8479,16 @@ package body Tests.CLI_Cases is
    is
       pragma Unreferenced (T2);
    begin
-      Assert (Benchmarks.Publishable (0.0),
+      Assert (Host_Load.Publishable (0.0),
               "a host that keeps no load average was refused a figure, "
               & "which refuses every host that keeps none");
-      Assert (Benchmarks.Publishable (0.2),
+      Assert (Host_Load.Publishable (0.2),
               "a quiet machine was refused a figure");
-      Assert (Benchmarks.Publishable (Benchmarks.Too_Busy),
+      Assert (Host_Load.Publishable (Host_Load.Too_Busy),
               "the bound itself was refused, so the bound is not the bound");
-      Assert (not Benchmarks.Publishable (Benchmarks.Too_Busy + 0.01),
+      Assert (not Host_Load.Publishable (Host_Load.Too_Busy + 0.01),
               "a load above the bound was allowed to publish a figure");
-      Assert (not Benchmarks.Publishable (8.0),
+      Assert (not Host_Load.Publishable (8.0),
               "a machine at a load of eight was allowed to publish a "
               & "figure");
    end A_Busy_Machine_Cannot_Publish_A_Figure;

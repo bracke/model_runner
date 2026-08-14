@@ -331,6 +331,137 @@ package body Checks is
          end if;
       end Contents;
 
+      --  Which line stops a catalog loading, found by halving.
+      --
+      --  The runtime refuses a catalog whole: one line it cannot compile and
+      --  nothing renders, in any locale, with no indication of where. A
+      --  placeholder named seconds does it, which took a bisection by hand
+      --  to find and is the reason this exists -- the next one should cost
+      --  nobody an afternoon.
+      --
+      --  Halving rather than one line at a time, because each attempt
+      --  compiles a whole catalog: eleven opens against eleven hundred. The
+      --  header goes into every candidate, and a candidate that is missing
+      --  most of its keys still loads, which is what makes the search
+      --  possible at all.
+      --
+      --  @param Source Catalog to search.
+      --  @param Scratch Where to write candidates.
+      --  @return The offending line, or the empty string when the catalog
+      --    loads or when no single line accounts for it.
+      function Offending_Line (Source, Scratch : String) return String is
+         --  Read directly rather than through Contents, which takes a path
+         --  relative to the repository and would look for this one inside
+         --  itself. That silently returned nothing, and the search returned
+         --  nothing with it -- which looked exactly like a catalog with no
+         --  single line to blame.
+         Text : constant String :=
+           (if Files.File_Exists (Source)
+            then Files.Read_Raw_File (Source) else "");
+
+         --  Every line, as start and stop offsets into Text.
+         type Span is record
+            From, To : Natural := 0;
+         end record;
+
+         Lines : array (1 .. 4096) of Span;
+         Count : Natural := 0;
+
+         --  The header this catalog needs whatever else is dropped.
+         Header : Natural := 0;
+
+         procedure Split is
+            At_Byte : Natural := Text'First;
+         begin
+            while At_Byte <= Text'Last loop
+               declare
+                  Stop : Natural := At_Byte;
+               begin
+                  while Stop <= Text'Last
+                    and then Text (Stop) /= Character'Val (10)
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  if Count < Lines'Last then
+                     Count := Count + 1;
+                     Lines (Count) := (At_Byte, Stop - 1);
+                  end if;
+                  At_Byte := Stop + 1;
+               end;
+            end loop;
+         end Split;
+
+         --  Whether the catalog made of the header plus lines First .. Last
+         --  refuses to load.
+         function Refuses (First, Last : Natural) return Boolean is
+            Handle : Ada.Text_IO.File_Type;
+            Held   : Model_Runner.Localization.Catalog;
+            Answer : Boolean;
+         begin
+            Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Scratch);
+            for Index in 1 .. Header loop
+               Ada.Text_IO.Put_Line
+                 (Handle, Text (Lines (Index).From .. Lines (Index).To));
+            end loop;
+            for Index in First .. Last loop
+               Ada.Text_IO.Put_Line
+                 (Handle, Text (Lines (Index).From .. Lines (Index).To));
+            end loop;
+            Ada.Text_IO.Close (Handle);
+
+            Model_Runner.Localization.Open (Held, Scratch, "en");
+            Answer := not Model_Runner.Localization.Is_Ready (Held);
+            Model_Runner.Localization.Close (Held);
+            return Answer;
+         end Refuses;
+
+         Low, High : Natural;
+      begin
+         if Text'Length = 0 then
+            return "";
+         end if;
+
+         Split;
+
+         --  The header is everything before the first locale entry, which is
+         --  where default_locale is stated.
+         while Header < Count
+           and then not Project_Tools.Text.Contains
+                          (Text (Lines (Header + 1).From
+                                 .. Lines (Header + 1).To), "en.")
+         loop
+            Header := Header + 1;
+         end loop;
+
+         Low := Header + 1;
+         High := Count;
+
+         if not Refuses (Low, High) then
+            return "";
+         end if;
+
+         --  Halve while one half still refuses on its own. When neither
+         --  does, the two lines that disagree are in different halves and
+         --  this cannot name one -- which is said by returning nothing
+         --  rather than by naming the wrong line.
+         while High > Low loop
+            declare
+               Middle : constant Natural := Low + (High - Low) / 2;
+            begin
+               if Refuses (Low, Middle) then
+                  High := Middle;
+               elsif Refuses (Middle + 1, High) then
+                  Low := Middle + 1;
+               else
+                  return "";
+               end if;
+            end;
+         end loop;
+
+         return Text (Lines (Low).From .. Lines (Low).To);
+      end Offending_Line;
+
       --  One section of a document, from its heading to the next one.
       --  The heading must end at its line: "## Backend" is a prefix of
       --  "## Backends and pools", and matching the prefix let that section be
@@ -1882,11 +2013,19 @@ package body Checks is
 
                Result.Performed := Result.Performed + 1;
                if not Model_Runner.Localization.Is_Ready (Held) then
-                  Fail ("the message catalog does not parse in " & Name
-                        & "; the runtime refused it, which it does for the "
-                        & "whole file -- look for a line added since it last "
-                        & "loaded, and for a placeholder name the runtime "
-                        & "does not accept");
+                  declare
+                     Guilty : constant String :=
+                       Offending_Line
+                         (Path ("resources/messages/catalog.txt"),
+                          Path ("obj/catalog-candidate.txt"));
+                  begin
+                     pragma Assert (True);
+                     Fail ("the message catalog does not parse in " & Name
+                           & "; the runtime refuses it whole, so nothing "
+                           & "renders in any locale"
+                           & (if Guilty = "" then ""
+                              else " -- the line is: " & Guilty));
+                  end;
                else
                   --  And it renders rather than reaching the emergency
                   --  form, which is what a caller would see instead.
@@ -2700,6 +2839,80 @@ package body Checks is
          if Named = 0 then
             Fail ("no accounting categories were found; the check no longer "
                   & "matches the source it reads");
+         end if;
+      end;
+
+      --  And the finder finds. A catalog with a line the runtime refuses is
+      --  written from the real one, and what comes back has to be that line.
+      --
+      --  Run every time rather than only when the catalog is broken,
+      --  because a search that is only exercised on the day something
+      --  breaks is a search nobody knows works. The planted line is the one
+      --  that cost an afternoon: a placeholder named seconds, which the
+      --  runtime refuses and which looks exactly like the dozen placeholders
+      --  beside it that it accepts.
+      declare
+         Real    : constant String :=
+           Contents ("resources/messages/catalog.txt");
+         Planted : constant String := Path ("obj/catalog-planted.txt");
+
+         --  A line with a key and no value, which the runtime refuses --
+         --  the whole catalog, in every locale, which is the failure this
+         --  search exists for.
+         --
+         --  Chosen because it is one line and it is understood. The fault
+         --  that prompted all this was a placeholder named seconds, and
+         --  what this repository can say about that is only what it
+         --  measured: with that name in the English and pseudo-locale forms
+         --  of one message the catalog stopped loading, and renaming it
+         --  fixed it. Why is not established, and a search proved against a
+         --  fault nobody can explain is a search nobody can trust.
+         --
+         --  Two other things were tried and are not faults of this kind: an
+         --  unclosed placeholder leaves the catalog loading and renders
+         --  wrongly, and a duplicated key does stop it loading but no
+         --  single line accounts for it -- either of the two could go.
+         Was : constant String :=
+           "en.error.backend.closed = the backend is closed";
+         Fault : constant String := "en.error.backend.planted_fault";
+         Now   : constant String :=
+           "en.error.backend.closed = the backend is closed"
+           & Character'Val (10) & Fault;
+
+         Handle : Ada.Text_IO.File_Type;
+         At_Was : Natural := 0;
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if Real'Length > 0 then
+            At_Was := Ada.Strings.Fixed.Index (Real, Was);
+         end if;
+
+         if At_Was = 0 then
+            Fail ("the catalog could not be read, or no longer carries the "
+                  & "line this plants a fault in, so the search for what "
+                  & "breaks a catalog was not exercised");
+         else
+            Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Planted);
+            Ada.Text_IO.Put (Handle, Real (Real'First .. At_Was - 1));
+            Ada.Text_IO.Put (Handle, Now);
+            Ada.Text_IO.Put
+              (Handle, Real (At_Was + Was'Length .. Real'Last));
+            Ada.Text_IO.Close (Handle);
+
+            declare
+               Found : constant String :=
+                 Offending_Line (Planted, Path ("obj/catalog-candidate.txt"));
+            begin
+               if Found /= Fault then
+                  Fail ("the search for the line that breaks a catalog "
+                        & "returned "
+                        & (if Found = "" then "nothing"
+                           else """" & Found & """")
+                        & " where the planted line was """ & Fault
+                        & """, so it would not find a real one either");
+               end if;
+            end;
          end if;
       end;
 
@@ -5031,6 +5244,29 @@ package body Checks is
          Marker  : constant String := "# covers:";
          Covers  : String (1 .. 400) := [others => ' '];
          Covered : Natural := 0;
+
+         --  The "# load:" line before a group says what the machine was
+         --  doing when its figures were taken. A timing is a fact about a
+         --  machine at a moment and the moment is half of it: the processor
+         --  side of the comparisons here has moved by forty per cent
+         --  between otherwise identical runs. A figure that carries the
+         --  load it was taken under can be compared with another; one that
+         --  does not has to be believed.
+         --
+         --  The tools print it and this is what makes them: every group has
+         --  to say, so a figure taken before the tools reported a load has
+         --  to be taken again rather than left with an empty provenance.
+         Load_Marker : constant String := "# load:";
+         Load_Said   : Boolean := False;
+
+         --  A group may say its load is unknown, and some have to: figures
+         --  taken before the tools printed one cannot be given a load now
+         --  without inventing it. What is refused is silence. What is
+         --  reported is how many are still unknown, so the number is
+         --  visible and can only go down -- a figure retaken is a figure
+         --  that arrives with its conditions.
+         Load_Unknown : Boolean := False;
+         Unknown_Loads : Natural := 0;
       begin
          Result.Performed := Result.Performed + 1;
 
@@ -5079,6 +5315,15 @@ package body Checks is
                         end;
                      end if;
 
+                     if Line'Length >= Load_Marker'Length
+                       and then Line (Line'First .. Line'First
+                                      + Load_Marker'Length - 1) = Load_Marker
+                     then
+                        Load_Said := True;
+                        Load_Unknown :=
+                          Project_Tools.Text.Contains (Line, "unknown");
+                     end if;
+
                      if Line'Length > 0
                        and then Word (Line, 1)'Length > 0
                        and then Word (Line, 1) (Word (Line, 1)'First) /= '#'
@@ -5118,6 +5363,20 @@ package body Checks is
                               Which := Which + 1;
                            end loop;
 
+                           Result.Performed := Result.Performed + 1;
+                           if not Load_Said then
+                              Fail (Record_Path & " records " & Name
+                                    & " without a load line, so what "
+                                    & "the machine was doing when those "
+                                    & "figures were taken is not written "
+                                    & "down anywhere");
+                           end if;
+                           if Load_Said and then Load_Unknown then
+                              Unknown_Loads := Unknown_Loads + 1;
+                           end if;
+                           Load_Said := False;
+                           Load_Unknown := False;
+
                            if Whole and then Which = 3 then
                               Fail (Record_Path & " records " & Name
                                     & " without naming a source");
@@ -5139,6 +5398,16 @@ package body Checks is
                   From := Stop + 1;
                end;
             end loop;
+
+            if Unknown_Loads > 0 then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "  note:" & Natural'Image (Unknown_Loads)
+                  & " figure groups do not record the load they were taken "
+                  & "under, because they were taken before the tools "
+                  & "reported one; retaking a group is what removes it from "
+                  & "that count");
+            end if;
          end if;
       end;
 

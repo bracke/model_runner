@@ -1298,13 +1298,13 @@ package body Benchmarks is
       --  running and the device side does not, so the answer would be about
       --  the machine. Refused rather than warned about, and the caller who
       --  wants it anyway says so.
-      if not Anyway and then not Publishable (Started_At) then
+      if not Anyway and then not Host_Load.Publishable (Started_At) then
          IO.Put_Line
            (IO.Standard_Error,
             "the machine is at a load of "
             & Model_Runner.Text.Image (Started_At, 2)
             & ", above the "
-            & Model_Runner.Text.Image (Long_Float (Too_Busy), 2)
+            & Model_Runner.Text.Image (Long_Float (Host_Load.Too_Busy), 2)
             & " a figure worth publishing needs; wait, or pass --anyway "
             & "for the shape of the answer");
 

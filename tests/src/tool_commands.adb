@@ -22,7 +22,8 @@ package body Tool_Commands is
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
-     & " --backend --repeat-penalty --draft-model --draft-tokens --repeats ";
+     & " --backend --repeat-penalty --draft-model --draft-tokens --repeats"
+     & " --anyway ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway ";
    Opts_External  : aliased constant String :=
      " --model --prompt --max-tokens --threads --expect --repack --backend"
@@ -35,7 +36,7 @@ package body Tool_Commands is
      "--model PATH [--prompt-file PATH] [--max-tokens N] [--threads N]"
      & " [--batch-size N] [--repack MODE] [--backend NAME]"
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
-     & " [--repeats N]";
+     & " [--repeats N] [--anyway]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway]";
    Takes_External  : aliased constant String :=
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"

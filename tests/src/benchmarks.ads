@@ -31,24 +31,4 @@ package Benchmarks is
       Rounds  : Positive := 3;
       Anyway  : Boolean := False);
 
-   --  The load above which a figure is refused.
-   --
-   --  One and a half rather than one: a machine with nothing on it still
-   --  shows the last minute of whatever ran before, and refusing the first
-   --  run after a build would refuse most first runs.
-   Too_Busy : constant := 1.5;
-
-   --  Whether a figure taken at this load is worth publishing.
-   --
-   --  A function rather than the comparison written where it is used,
-   --  because a bound that only exists inside a procedure that spends a
-   --  minute measuring cannot be checked by anything: the suite would have
-   --  to arrange for a busy machine to see the refusal, which it cannot do.
-   --
-   --  @param Load The host's one-minute load average, as Host_Load reports
-   --    it, where zero means the host keeps no such number.
-   --  @return True when the load is low enough, or unknown.
-   function Publishable (Load : Long_Float) return Boolean
-   is (Load <= Too_Busy);
-
 end Benchmarks;

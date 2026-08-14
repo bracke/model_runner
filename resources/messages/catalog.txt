@@ -403,9 +403,13 @@ en.error.backend.queue_full = the backend work queue is full
 en.error.backend.closed = the backend is closed
 en.error.backend.invalid_worker_count = the requested worker count is unusable
 en.error.backend.no_device = no compute device answered on this machine
-# The bound is {limit} and not {seconds}: a placeholder of that name stops
-# this catalog loading at all, in every locale, and the only symptom is that
-# nothing renders. Renamed rather than chased into the messages crate.
+# The bound is {limit} and not {seconds}, and what is known about that is
+# only what was measured: with {seconds} in this line and in its pseudo-locale
+# twin, the catalog stopped loading in every locale, and renaming it fixed
+# it. Why is not established -- the same placeholder name planted in other
+# messages does not do it -- so this is a fact about one line rather than a
+# rule about a name. `tests check` finds the line that breaks a catalog now,
+# which is what the next one should cost instead of an afternoon.
 en.error.backend.device_stalled = the {backend} device did not finish a product within {limit} seconds and was given up on
 en.error.memory.limit_exceeded = {category} needs {requested} bytes, above the limit of {limit}
 en.error.memory.allocation_failed = cannot allocate memory for {category}
