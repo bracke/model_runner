@@ -929,6 +929,22 @@ private
    type Token_History_Access is access Token_History;
 
    type Session is limited new Ada.Finalization.Limited_Controlled with record
+      --  The token for the call in progress, or null between calls.
+      --
+      --  Held here rather than passed, and that is a deliberate choice with
+      --  a cost. Every product in this engine goes through two procedures,
+      --  and those two have twenty callers; threading a parameter to all of
+      --  them would put the token where a reader expects it and would also
+      --  be twenty places to miss one, silently, in a program where missing
+      --  one means a run that cannot be stopped. Set at the top of the two
+      --  entry points that take a token and cleared when they return.
+      --
+      --  Only the device reads it. The other backends are interruptible
+      --  between layers, which is where this engine checks; a device is
+      --  interruptible between slices of the wait for it, which is inside
+      --  one layer and needs the token down there.
+      Stopping : Model_Runner.Cancellation.Token_Reference := null;
+
       --  What this session holds, by category. The plan computes every one
       --  of these before anything is allocated; recording them is what makes
       --  a memory report say where the memory went, and what lets a limit

@@ -8,6 +8,7 @@ with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
 with Model_Runner.Localization;
+with Model_Runner.Cancellation;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
@@ -763,6 +764,107 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Device_Decodes_Every_Format_It_Claims;
 
+   -------------------------------------------
+   -- Device_Stops_When_The_Caller_Asks --
+   -------------------------------------------
+
+   --  A product on the device answers a standing stop request.
+   --
+   --  Cancellation is checked between layers everywhere else in this
+   --  program, and a layer on a device is a submission and a wait for it.
+   --  The wait could not be interrupted, so it was the longest a stop
+   --  request went unanswered -- and on a wider model or a longer batch than
+   --  this machine runs, that is the whole of a layer. The wait is taken in
+   --  slices now, and the token is asked between them.
+   --
+   --  What is checked here is the standing case, because it is the only one
+   --  a test can arrange: a request arriving during a wait needs a wait long
+   --  enough to arrive during, and a product that takes that long is not
+   --  something a suite can conjure on demand. The standing case exercises
+   --  the same path from the caller down to the engine; what it does not
+   --  reach is the loop itself.
+   --
+   --  Answered before the device is touched, which is also the honest
+   --  answer: a caller who has already asked to stop should not have work
+   --  uploaded for them.
+   procedure Device_Stops_When_The_Caller_Asks
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Ready : Boolean;
+
+      Wide : constant N.Element_Count := 64;
+      Tall : constant N.Element_Count := 8;
+
+      Storage : B.Byte_Array_Access;
+      Weight  : T.View;
+      Vector  : T.Real_Array_Access;
+      Room    : T.Real_Array_Access;
+      Status  : E.Error_Info;
+
+      Stop : aliased Model_Runner.Cancellation.Token;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device was asked to stop here");
+         return;
+      end if;
+
+      declare
+         Values : constant N.Real_Array (0 .. Wide * Tall - 1) :=
+           [others => 0.5];
+         Bytes  : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+      begin
+         B.Allocate (Bytes'Length, Storage);
+         Storage.all := Bytes;
+      end;
+
+      T.Make (G.Type_F32, Tall, Wide, Storage, 0, Weight, Status);
+      Assert (E.Is_Ok (Status), "the weight view could not be built");
+
+      T.Allocate (Wide, Vector);
+      T.Allocate (Tall, Room);
+      Vector.all := [others => 1.0];
+
+      --  Without a request first, so that what follows is the request's
+      --  doing and not the product's.
+      Model_Runner.Backend.Device.Dispatch
+        (Weight, Vector, Room, Status, Stop'Unchecked_Access);
+      Assert (E.Is_Ok (Status),
+              "a product with no request standing was refused: "
+              & E.Error_Code'Image (Status.Code));
+
+      Stop.Request;
+      Model_Runner.Backend.Device.Dispatch
+        (Weight, Vector, Room, Status, Stop'Unchecked_Access);
+      Assert (Status.Code = E.Generation_Cancelled,
+              "a standing request did not stop a product on the device: "
+              & E.Error_Code'Image (Status.Code));
+
+      Model_Runner.Backend.Device.Dispatch_Batch
+        (Weight, Vector, 1, Room, Status, Stop'Unchecked_Access);
+      Assert (Status.Code = E.Generation_Cancelled,
+              "a standing request did not stop a batch on the device: "
+              & E.Error_Code'Image (Status.Code));
+
+      --  And a caller that passes no token is not stopped by somebody
+      --  else's, which is what a null reference has to mean.
+      Model_Runner.Backend.Device.Dispatch (Weight, Vector, Room, Status);
+      Assert (E.Is_Ok (Status),
+              "a product with no token was refused while a request stood "
+              & "elsewhere: " & E.Error_Code'Image (Status.Code));
+
+      T.Free (Vector);
+      T.Free (Room);
+      B.Free (Storage);
+      Model_Runner.Backend.Device.Close;
+   end Device_Stops_When_The_Caller_Asks;
+
    ------------------------------------------
    -- Device_Gives_Back_What_It_Cannot_Hold --
    ------------------------------------------
@@ -1296,6 +1398,9 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Device_Decodes_Every_Format_It_Claims'Access,
          "the device decodes every format it claims, as the processor does");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Device_Stops_When_The_Caller_Asks'Access,
+         "a product on the device answers a standing stop request");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Device_Gives_Back_What_It_Cannot_Hold'Access,
          "a device with less memory than the matrices need gives back the "

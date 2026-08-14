@@ -7,6 +7,50 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A run on the device can be stopped.** Cancellation is checked between
+  layers everywhere else in this program, and a layer on a device is a
+  submission and a wait for it -- a wait that could not be interrupted, so it
+  was the longest a stop request went unanswered. The wait is taken in
+  twenty-millisecond slices now and the token is asked between them, and a
+  request already standing when a product is asked for is answered before
+  anything reaches the device at all.
+
+  A cancelled product still finishes on the device. A dispatch cannot be
+  taken back and its buffers belong to the device until the fence says
+  otherwise; giving them back sooner is how a cancelled run would corrupt the
+  next one.
+
+  The token is held on the session rather than threaded through the twenty
+  callers of the two procedures every product goes through. That is a
+  deliberate trade with a cost, written down where the field is declared:
+  twenty call sites is twenty places to miss one silently, in a program where
+  missing one means a run that cannot be stopped.
+
+- **A test for `--device-memory`,** which had none. Three runs in one
+  process -- no option, a budget smaller than the model, and zero -- against
+  the statistics each prints, because the statistics are the part that is a
+  fact where a timing would be a measurement.
+
+### Fixed
+
+- **The bound on waiting for a device was a second, and wrong twice over.** A
+  product larger than this machine's -- a wider model, a longer batch -- can
+  legitimately take longer, so the bound refused work that was going
+  perfectly well; and when it expired it returned with the command buffer
+  still executing, so the next call would reset and record over a buffer the
+  device was reading. The whole bound is a minute now, which slicing makes
+  affordable because a device that has stopped answering no longer holds the
+  thread for it, and a dispatch that exceeds it finishes the engine rather
+  than reusing what cannot be taken back.
+
+- **`--device-memory` was ignored when the device was already open.** A
+  second Open with a different budget, or with the weights to be read where
+  they lie rather than copied, was answered with the first one's device and
+  its policy, and said nothing. One process runs one model in this program,
+  so the shipped path never met it -- which is exactly why it survived. The
+  new test runs three settings in one process and met it at once, reading the
+  first setting's statistics three times.
+
 - **`tests check --record-warnings` writes the pinned crates' warning counts
   down** instead of comparing against them, and writes the file's preamble
   with them so that it cannot end up explaining itself in terms that have

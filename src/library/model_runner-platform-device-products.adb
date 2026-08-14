@@ -1175,7 +1175,15 @@ package body Model_Runner.Platform.Device.Products is
    end Close;
 
    function Is_Ready (Item : Engine) return Boolean
-   is (Item.Pipeline /= Null_Handle and then Item.Fence /= Null_Handle);
+   is (Item.Pipeline /= Null_Handle and then Item.Fence /= Null_Handle
+       and then not Item.Stalled);
+
+   function Is_Stalled (Item : Engine) return Boolean is (Item.Stalled);
+
+   --  The code a Vulkan wait returns when the fence has not signalled yet.
+   --  Anything else that is not success is a refusal, and asking again would
+   --  only put the same question.
+   Timeout_Result : constant Interfaces.C.int := 2;
 
    ---------------------------------------------------------------------------
    --  One product
@@ -1324,7 +1332,9 @@ package body Model_Runner.Platform.Device.Products is
       Count   : Positive;
       Target  : out Model_Runner.Numerics.Real_Array;
       Ok      : out Boolean;
-      Key     : System.Address := System.Null_Address)
+      Cancelled : out Boolean;
+      Key     : System.Address := System.Null_Address;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
    is
       Elements : constant Natural := Rows * Columns;
 
@@ -1360,6 +1370,19 @@ package body Model_Runner.Platform.Device.Products is
    begin
       Target := [others => 0.0];
       Ok := False;
+      Cancelled := False;
+
+      --  Asked before anything is uploaded or recorded, as well as between
+      --  slices of the wait further down. A request that is already standing
+      --  when the product is asked for costs the device nothing, and it is
+      --  the only form of this a test can arrange: a request that arrives
+      --  during a wait needs a wait long enough to arrive during.
+      if Model_Runner.Cancellation."/=" (Cancel, null)
+        and then Cancel.all.Is_Requested
+      then
+         Cancelled := True;
+         return;
+      end if;
 
       if not Is_Ready (Item)
         or else Rows = 0
@@ -1671,15 +1694,75 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         --  A second is far longer than any product here takes, and it is a
-         --  bound rather than a wait: a device that has stopped answering
-         --  should give the caller back its thread.
-         if Wait (Item.Logical, 1, Fence_Handle'Address, 1,
-                  1_000_000_000) /= 0
-         then
-            Release_Borrowed;
-            return;
-         end if;
+         --  Waited for in slices rather than in one go, for two reasons.
+         --
+         --  A caller can ask to stop. Cancellation is checked between
+         --  layers everywhere else in this program, and a layer on a device
+         --  is one of these waits, so a wait that cannot be interrupted is
+         --  the longest a stop request goes unanswered. Slicing makes that
+         --  a slice rather than a whole product.
+         --
+         --  And the bound was wrong. A single second was a bound on the
+         --  wait, and a product larger than this machine's -- a wider model,
+         --  a longer batch -- can legitimately take longer, so the bound
+         --  refused work that was going perfectly well. Worse, it returned
+         --  with the command buffer still executing and the next call would
+         --  reset and record over it while the device was reading it. The
+         --  slices make the whole bound generous, because a device that has
+         --  stopped answering no longer holds the thread for the whole of
+         --  it; and when the bound does expire the engine is finished with
+         --  rather than reused, because there is no way to take work back
+         --  off a device that is not responding.
+         declare
+            Slice  : constant := 20_000_000;     --  Twenty milliseconds.
+            Slices : constant := 3_000;          --  A minute in all.
+
+            Answered : Boolean := False;
+            Stopped  : Boolean := False;
+         begin
+            for Attempt in 1 .. Slices loop
+               declare
+                  Answer : constant Interfaces.C.int :=
+                    Wait (Item.Logical, 1, Fence_Handle'Address, 1, Slice);
+               begin
+                  if Answer = 0 then
+                     Answered := True;
+                     exit;
+                  elsif Answer /= Timeout_Result then
+                     --  A refusal rather than a timeout, and waiting again
+                     --  would only ask the same question.
+                     exit;
+                  end if;
+               end;
+
+               --  Asked between slices and acted on after the device has
+               --  finished, never instead of finishing: the buffers this
+               --  dispatch is reading belong to it until the fence says
+               --  otherwise, and giving them back sooner is how a cancelled
+               --  run corrupts the next one.
+               if not Stopped
+                 and then Model_Runner.Cancellation."/=" (Cancel, null)
+                 and then Cancel.all.Is_Requested
+               then
+                  Stopped := True;
+               end if;
+            end loop;
+
+            if not Answered then
+               --  The device did not finish inside the whole bound. Its
+               --  buffers are still its own, so this engine is done: the
+               --  caller is told, and nothing here touches them again.
+               Item.Stalled := True;
+               Ok := False;
+               return;
+            end if;
+
+            if Stopped then
+               Release_Borrowed;
+               Cancelled := True;
+               return;
+            end if;
+         end;
       end;
 
       --  And what came out.
@@ -1729,6 +1812,11 @@ package body Model_Runner.Platform.Device.Products is
       Key     : System.Address := System.Null_Address)
    is
       Elements : constant Natural := Rows * Columns;
+
+      --  This form has no caller that can be asked to stop -- it is the
+      --  decoded-values one, used where a caller already holds binary32 --
+      --  so nothing here reads it.
+      Stopped : Boolean;
    begin
       Target := [others => 0.0];
       Ok := False;
@@ -1751,7 +1839,7 @@ package body Model_Runner.Platform.Device.Products is
       begin
          Multiply
            (Item, Room, 0, Values_F32, Rows, Columns, Vector, 1, Target, Ok,
-            Key);
+            Stopped, Key);
       end;
    end Multiply;
 

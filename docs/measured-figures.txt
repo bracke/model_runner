@@ -194,6 +194,24 @@
 # tensors and multiply them. Not re-measured: these two were taken again
 # three commits ago on this machine, and taking them again for a type
 # declaration would say what that run already says.
+# 2026-08-14, the sliced wait and the token that reaches it. The device now
+# waits for its fence in twenty-millisecond slices instead of one second, and
+# asks between them whether the caller wants to stop.
+#
+# Re-measured, the device pair: 1.178 s short and 2.556 s long against the
+# published 1.262 and 2.504, at a load of 1.85 to 2.17 against the published
+# pair's 1.0. Slicing a wait costs nothing when the fence signals inside the
+# first slice, which is what these numbers say. Not republished: the pair is
+# published beside its processor counterpart and taken with it, and replacing
+# one column with a run taken on its own would make the comparison a
+# comparison of two different afternoons.
+#
+# The engine, reference and drafting groups were not re-measured. What they
+# see of this change is one field assignment per Evaluate call -- the token
+# for the call in progress, stored where the products can reach it -- and the
+# device pair above, which measures the same assignment along with the part
+# that actually changed, did not move.
+
 # 2026-08-14, the second place the weights are freed. Repacking frees the
 # arena while the model stays open, and the device was told about the model
 # closing and not about that. Both go through one procedure now, which is
@@ -464,7 +482,7 @@ kernels D020F24F7A7AF1AA src/library/model_runner-quantization.adb src/library/m
 # published 1.28, on a machine running three other agents at a load average
 # of 2.5 on eight cores. Not republished for that reason, and the generated
 # text is unchanged: the same output digest, 7784f071e5740782.
-engine 907E9E8704EE82C0 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 301C9594319D4312 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -473,7 +491,7 @@ engine 907E9E8704EE82C0 src/library/model_runner-llama.adb src/library/model_run
 # that was added.
 # 2026-08-12, the same two changes, and this group is a ratio between two
 # backends neither of which the memory check applies to.
-reference 365BE05F4D80B4CE src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 1E1536F7C9964FB0 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
 # and the 111-token prompt, on both backends -- the claim that the two print
@@ -638,7 +656,7 @@ reference 365BE05F4D80B4CE src/library/model_runner-backend-reference.adb src/li
 # The processor column moved more between measurements than the device
 # column did, again, which is the second time that has happened and is why
 # the caveat under the table now gives all three pairs rather than one.
-device 71B79277E7F19F3D src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device BE2E3BCEF80C4B6A src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -650,7 +668,7 @@ device 71B79277E7F19F3D src/shaders/row_product.comp src/library/model_runner-sh
 # the file the drafting loop is written in, so the loop could have been
 # rewritten without anything asking for a re-measure. A figure covered by a
 # group that does not name its own source is a figure covered by nothing.
-drafting 8D31F1E384B173CD src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting 97362A7348F89F3F src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 75070ADF4DD3B9CB src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb

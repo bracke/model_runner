@@ -1,5 +1,6 @@
 with Interfaces;
 
+with Model_Runner.Cancellation;
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
 with Model_Runner.Tensors;
@@ -59,6 +60,7 @@ package Model_Runner.Backend.Device is
 
    --  Give back every matrix the device holds, and stay open.
    --
+   --
    --  Called when a model closes, because a resident matrix is remembered by
    --  where its bytes lie: once that storage is freed, another matrix of the
    --  same shape and format can take the address and the device would answer
@@ -109,6 +111,15 @@ package Model_Runner.Backend.Device is
    --  @param Weight Weight view; must be binary32.
    --  @param Vector Input vector of Weight's column count.
    --  @param Target Receives Weight's row count.
+   --  @param Cancel Stop request to watch, or null for none. Asked before
+   --    anything reaches the device and between slices of the wait for it
+   --    to finish; answered with Generation_Cancelled once the dispatch is
+   --    done there, which it must be, because a dispatch cannot be taken
+   --    back and its buffers belong to the device until the fence says
+   --    otherwise. Cancellation is checked between layers everywhere else
+   --    in this program, and a layer on a device is these waits, so a wait
+   --    that could not be interrupted was the longest a stop request went
+   --    unanswered.
    --  @param Status Success, Backend_Unsupported_Format when the view is not
    --    binary32, Lifecycle_Invalid_State when no device is open, or
    --    Tensor_Shape_Mismatch.
@@ -116,7 +127,8 @@ package Model_Runner.Backend.Device is
      (Weight : Model_Runner.Tensors.View;
       Vector : Model_Runner.Tensors.Real_Array_Access;
       Target : Model_Runner.Tensors.Real_Array_Access;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null);
 
    --  The same product for each vector of a batch.
    --
@@ -131,13 +143,15 @@ package Model_Runner.Backend.Device is
    --    another.
    --  @param Count How many.
    --  @param Target Receives Count results of Weight's row count.
+   --  @param Cancel Stop request to watch, or null for none, as in Dispatch.
    --  @param Status Success, or what one product would have said.
    procedure Dispatch_Batch
      (Weight  : Model_Runner.Tensors.View;
       Vectors : Model_Runner.Tensors.Real_Array_Access;
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : Model_Runner.Tensors.Real_Array_Access;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
 
 private
 

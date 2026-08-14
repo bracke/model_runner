@@ -46,6 +46,7 @@ with Model_Runner.Tokenizer;
 with Ada.Calendar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
+with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
 with Expectations;
@@ -2218,6 +2219,178 @@ package body Tests.CLI_Cases is
          end;
       end;
    end Session_Memory_Is_Counted;
+
+   ----------------------------------------
+   -- Device_Memory_Reaches_The_Device --
+   ----------------------------------------
+
+   --  `--device-memory` decides where the weights are, and says so.
+   --
+   --  The option had no test at all. What it does is not a speed control and
+   --  never was, which is the opposite of what it was written expecting: it
+   --  says how much of the device's own memory the weights may take, and
+   --  naming zero means none of it -- the device is handed a pointer into
+   --  this process's memory instead of a copy. The README publishes what the
+   --  three ways cost, and nothing held the option to doing any of them.
+   --
+   --  Read back from the statistics rather than from a timing, because the
+   --  statistics are the part that is a fact: how many matrices are on the
+   --  device, how many are read where they lie, and how many have been given
+   --  back to make room. A timing would be a measurement, and a suite is not
+   --  where measurements belong.
+   --
+   --  Three runs, and each is a different one of the three:
+   --
+   --    no option        every matrix copied to the device, nothing borrowed
+   --    a small budget   a few copied and the rest given back and copied
+   --                     again as they are wanted
+   --    zero             nothing copied, the weights read where they lie
+   procedure Device_Memory_Reaches_The_Device
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Path : constant String := "obj/device-memory-model.gguf";
+
+      --  What one run said about the device, as the fields it printed.
+      function Ran_With (Budget : String) return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         Add (Source, "run");
+         Add (Source, Path);
+         Add (Source, "--backend");
+         Add (Source, "device");
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "hi");
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         Add (Source, "--show-stats");
+
+         --  The mapping asked for by name rather than left to the default,
+         --  because it decides the answer: reading the weights where they
+         --  lie needs a page-aligned range, which a mapped file is and a
+         --  heap copy of one is not. With --no-mmap the same command reads
+         --  nothing where it lies and copies all of it, which is correct
+         --  and is not what this is about.
+         Add (Source, "--mmap");
+
+         if Budget /= "" then
+            Add (Source, "--device-memory");
+            Add (Source, Budget);
+         end if;
+
+         Ada.Text_IO.Create
+           (Handle, Ada.Text_IO.Out_File, "obj/device-memory.txt");
+         Ada.Text_IO.Set_Error (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+               Ada.Text_IO.Close (Handle);
+               raise;
+         end;
+         Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+         Ada.Text_IO.Close (Handle);
+
+         return Text_Of ("obj/device-memory.txt");
+      end Ran_With;
+
+      --  The number a statistics line carries, or minus one when the line
+      --  is not there at all -- which is the answer on a machine with no
+      --  device, and is why every assertion below is guarded.
+      function Number_After (Said, Label : String) return Integer is
+         At_Label : constant Natural :=
+           Ada.Strings.Fixed.Index (Said, Label);
+         Stop     : Natural;
+      begin
+         if At_Label = 0 then
+            return -1;
+         end if;
+
+         Stop := At_Label + Label'Length;
+         while Stop <= Said'Last and then Said (Stop) = ' ' loop
+            Stop := Stop + 1;
+         end loop;
+
+         declare
+            From : constant Natural := Stop;
+         begin
+            while Stop <= Said'Last
+              and then Said (Stop) in '0' .. '9'
+            loop
+               Stop := Stop + 1;
+            end loop;
+            if Stop = From then
+               return -1;
+            end if;
+            return Integer'Value (Said (From .. Stop - 1));
+         end;
+      end Number_After;
+   begin
+      Tiny_Model.Write (Path);
+
+      declare
+         Whole : constant String := Ran_With ("");
+         Held  : constant Integer := Number_After (Whole, "matrices on the device");
+      begin
+         if Held < 0 then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device took a model here");
+            return;
+         end if;
+
+         Assert (Held > 0,
+                 "a run with no budget named put no matrix on the device");
+         Assert (Number_After (Whole, "read where they lie") = 0,
+                 "a run with no budget named borrowed the host's memory");
+         Assert (Number_After (Whole, "matrices given back") = 0,
+                 "a run with room for the model gave a matrix back");
+      end;
+
+      declare
+         --  Enough for a matrix or two of this fixture and not for all of
+         --  them, so that the run has to give one back and fetch it again.
+         Tight : constant String := Ran_With ("4K");
+      begin
+         Assert (Number_After (Tight, "matrices given back") > 0,
+                 "a budget smaller than the model gave nothing back, so "
+                 & "either the budget did not reach the device or the "
+                 & "model fitted after all");
+         Assert (Number_After (Tight, "read where they lie") = 0,
+                 "a small budget borrowed the host's memory, which is what "
+                 & "zero means and not what a small number means");
+      end;
+
+      declare
+         None : constant String := Ran_With ("0");
+      begin
+         --  How many matrices are read where they lie is not asserted, and
+         --  the reason is a limit of the fixture rather than of the option.
+         --  A device is handed a page-aligned range, and a matrix qualifies
+         --  only when the page-rounded range around it lies wholly inside
+         --  the storage that owns it. This model is seven kilobytes -- less
+         --  than two pages -- so which of its matrices qualify depends on
+         --  where the mapping lands, and it has been seen both ways in the
+         --  same binary on the same machine. On a real model the same
+         --  command reads a hundred and fifty-four of a hundred and
+         --  fifty-five where they lie, every time.
+         --
+         --  What does hold at any size is that a run told to copy nothing
+         --  gives nothing back: giving back is what a budget does when it
+         --  is too small, and this run has no budget to be too small.
+         Assert (Number_After (None, "matrices given back") = 0,
+                 "a run told to copy nothing gave a matrix back");
+         Assert (Number_After (None, "matrices on the device") > 0,
+                 "a run with a zero budget put nothing on the device at "
+                 & "all, so the option refused the model rather than "
+                 & "changing where its weights are read from");
+      end;
+   end Device_Memory_Reaches_The_Device;
 
    --  A session reports the phase it is in.
    --
@@ -9691,6 +9864,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, A_Busy_Machine_Cannot_Publish_A_Figure'Access,
          "a busy machine cannot publish a figure");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Device_Memory_Reaches_The_Device'Access,
+         "--device-memory decides where the weights are, and says so");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Speed_Tool_Reads_The_Machine'Access,
          "the load a figure carries is the load the host reports");

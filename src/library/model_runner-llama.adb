@@ -1668,7 +1668,7 @@ package body Model_Runner.Llama is
               (Weight, Vector, Target, Status);
          when Model_Runner.Backend.Backend_Device =>
             Model_Runner.Backend.Device.Dispatch
-              (Weight, Vector, Target, Status);
+              (Weight, Vector, Target, Status, Item.Stopping);
       end case;
    end Product;
 
@@ -1690,7 +1690,7 @@ package body Model_Runner.Llama is
 
          when Model_Runner.Backend.Backend_Device =>
             Model_Runner.Backend.Device.Dispatch_Batch
-              (Weight, Vectors, Count, Target, Status);
+              (Weight, Vectors, Count, Target, Status, Item.Stopping);
       end case;
    end Product_Batch;
 
@@ -3516,6 +3516,13 @@ package body Model_Runner.Llama is
    begin
       Logits := [others => 0.0];
 
+      --  Where the products can reach it. Not cleared on the way out, and
+      --  it does not need to be: every entry point that reaches a product
+      --  sets it first, so what is read is always this call's token. A
+      --  session between calls holds the last one it was given, which is
+      --  the caller's own and which nothing reads.
+      Item.Stopping := Cancel;
+
       if Item.Current = Closed or else Item.Current = Failed then
          Status := E.Make (E.Lifecycle_Invalid_State);
          E.Add_Text
@@ -3818,6 +3825,10 @@ package body Model_Runner.Llama is
       is (Which * Stride);
    begin
       Logits := [others => 0.0];
+
+      --  As in Evaluate: where the products can reach it, set on the way in
+      --  by every entry point that reaches one.
+      Item.Stopping := Cancel;
 
       if Item.Current = Closed or else Item.Current = Failed then
          Status := E.Make (E.Lifecycle_Invalid_State);

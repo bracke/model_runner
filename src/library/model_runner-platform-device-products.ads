@@ -1,6 +1,7 @@
 with Interfaces;
 
 with Model_Runner.Bytes;
+with Model_Runner.Cancellation;
 with Model_Runner.Numerics;
 
 --  Matrix-vector products on a device.
@@ -88,6 +89,16 @@ package Model_Runner.Platform.Device.Products is
    --  @param Item Engine to empty; harmless on one that holds nothing.
    procedure Forget_Matrices (Item : in out Engine);
 
+   --  Whether a dispatch was left unfinished on this engine.
+   --
+   --  A device that stopped answering keeps the buffers it was given, and
+   --  there is no way to take work back off it. So the engine stops rather
+   --  than recording over a buffer the device may still be reading.
+   --
+   --  @param Item Engine to ask about.
+   --  @return True once a dispatch has exceeded the whole bound.
+   function Is_Stalled (Item : Engine) return Boolean;
+
    --  Prepare a device to compute products.
    --
    --  @param Item Engine to fill; released first.
@@ -153,6 +164,14 @@ package Model_Runner.Platform.Device.Products is
    --    keeps nothing, which is what a caller with a matrix it will not use
    --    again should pass.
    --  @param Ok True when the device computed it.
+   --  @param Cancelled True when the caller asked to stop. The product
+   --    finished on the device -- a dispatch cannot be taken back, and its
+   --    buffers belong to the device until the fence says otherwise -- and
+   --    its result is not written out.
+   --  @param Key Address identifying the matrix, so that a matrix already
+   --    on the device is used where it lies rather than uploaded again.
+   --  @param Cancel Stop request to watch, or null for none. Asked before
+   --    anything reaches the device and between slices of the wait for it.
    procedure Multiply
      (Item    : in out Engine;
       Weights : Model_Runner.Bytes.Byte_Array;
@@ -164,7 +183,10 @@ package Model_Runner.Platform.Device.Products is
       Count   : Positive;
       Target  : out Model_Runner.Numerics.Real_Array;
       Ok      : out Boolean;
-      Key     : System.Address := System.Null_Address);
+
+      Cancelled : out Boolean;
+      Key     : System.Address := System.Null_Address;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
 
    --  The same, for one vector of binary32 weights already decoded.
    --
@@ -356,6 +378,12 @@ private
       --  How many of the resident matrices are the host's own memory rather
       --  than a copy of it.
       Taken      : Natural := 0;
+
+      --  Set when a dispatch did not finish inside the whole bound. The
+      --  command buffer is still the device's, so nothing here may reset or
+      --  record over it again, and the engine refuses every further product
+      --  rather than reusing what it cannot take back.
+      Stalled    : Boolean := False;
 
       Vector_Buffer : System.Address := System.Null_Address;
       Vector_Memory : System.Address := System.Null_Address;

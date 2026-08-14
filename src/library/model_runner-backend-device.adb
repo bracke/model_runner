@@ -29,6 +29,11 @@ package body Model_Runner.Backend.Device is
    --  open and has to answer for how it was opened.
    Sharing : Boolean := False;
 
+   --  And how much of the device's memory it was opened for, for the same
+   --  reason and for one more: a second Open asking for something different
+   --  has to get it.
+   Opened_Budget : Interfaces.Unsigned_64 := 0;
+
    Named      : String (1 .. Devices.Max_Name_Bytes) := [others => ' '];
    Named_Last : Natural := 0;
 
@@ -93,7 +98,20 @@ package body Model_Runner.Backend.Device is
    is
       Found : Boolean;
    begin
-      if Ready_Now then
+      --  An open device is kept only when it was opened for what is being
+      --  asked for now. It used to be kept whatever was asked: a second
+      --  Open with a different budget, or with the weights to be read where
+      --  they lie rather than copied, was answered with the first one's
+      --  device and its policy, and said nothing.
+      --
+      --  One process runs one model in this program, so the shipped path
+      --  never met it -- which is exactly why it survived. A test that runs
+      --  three --device-memory settings in one process met it at once, and
+      --  read the first setting's statistics three times.
+      if Ready_Now
+        and then Opened_Budget = Budget
+        and then Sharing = Share_Host
+      then
          Ready := True;
          return;
       end if;
@@ -129,6 +147,7 @@ package body Model_Runner.Backend.Device is
       end;
 
       Sharing := Share_Host;
+      Opened_Budget := Budget;
       Ready_Now := True;
       Ready := True;
    end Open;
@@ -263,11 +282,13 @@ package body Model_Runner.Backend.Device is
       Vectors : T.Real_Array_Access;
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : T.Real_Array_Access;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
    is
-      Packing : Products.Weight_Packing;
-      Known   : Boolean;
-      Ok      : Boolean;
+      Packing   : Products.Weight_Packing;
+      Known     : Boolean;
+      Ok        : Boolean;
+      Cancelled : Boolean := False;
    begin
       Status := E.Success;
 
@@ -338,12 +359,25 @@ package body Model_Runner.Backend.Device is
             Products.Multiply
               (Engine, Storage, Weight.Offset, Packing,
                Natural (Weight.Rows), Natural (Weight.Columns),
-               Vectors.all, Positive (Count), Target.all, Ok,
-               Key => Storage (Storage'First + Weight.Offset)'Address);
+               Vectors.all, Positive (Count), Target.all, Ok, Cancelled,
+               Key => Storage (Storage'First + Weight.Offset)'Address,
+               Cancel => Cancel);
          end;
       end;
 
-      if not Ok then
+      --  Asked to stop comes before could not compute, because it is the
+      --  truer answer: the product did reach the device and did run there.
+      if Cancelled then
+         Status := E.Make (E.Generation_Cancelled);
+      elsif Products.Is_Stalled (Engine) then
+         --  The device did not finish inside the whole bound. Said as its
+         --  own thing rather than as a missing capability, because the
+         --  remedy is different: nothing about this model or this request
+         --  was wrong.
+         Status := E.Make (E.Backend_No_Device);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                     E.Param_Identifier);
+      elsif not Ok then
          Status := E.Make (E.Backend_Capability_Missing);
          E.Add_Text (Status, "capability", "matrix_vector",
                      E.Param_Identifier);
@@ -360,9 +394,10 @@ package body Model_Runner.Backend.Device is
      (Weight : T.View;
       Vector : T.Real_Array_Access;
       Target : T.Real_Array_Access;
-      Status : out E.Error_Info) is
+      Status : out E.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null) is
    begin
-      Compute (Weight, Vector, 1, Target, Status);
+      Compute (Weight, Vector, 1, Target, Status, Cancel);
    end Dispatch;
 
    --------------------
@@ -374,9 +409,10 @@ package body Model_Runner.Backend.Device is
       Vectors : T.Real_Array_Access;
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : T.Real_Array_Access;
-      Status  : out E.Error_Info) is
+      Status  : out E.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null) is
    begin
-      Compute (Weight, Vectors, Count, Target, Status);
+      Compute (Weight, Vectors, Count, Target, Status, Cancel);
    end Dispatch_Batch;
 
 end Model_Runner.Backend.Device;
