@@ -66,6 +66,16 @@ package Speed_Run is
       Load_Before : Long_Float := 0.0;
       Load_After  : Long_Float := 0.0;
 
+      --  Processor seconds the whole run spent, which is what a worker
+      --  count is really a question about: wall time says how long it took
+      --  and this says what it cost. The README said this was the one
+      --  number the tool could not produce and quoted the shell's timer for
+      --  it, which meant the figure beside every other one here came from
+      --  somewhere else and carried no load of its own.
+      --  The median of the runs, taken around the same region the wall
+      --  time is taken around, so the two answer about the same work.
+      Processor : Duration := 0.0;
+
       --  What a draft model proposed and how much of it was taken, for a
       --  measurement with one. Both zero without.
       Drafted   : Natural := 0;

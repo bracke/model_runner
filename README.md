@@ -1035,15 +1035,15 @@ Named in the specification, absent here:
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself. From the six-token prompt in
-`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.87 s** --
-0.41 s evaluating the prompt and 1.46 s generating -- the median of three
-runs, taken at a load of 1.29 rising to 1.54. The figure this replaces was
+`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.88 s** --
+0.39 s evaluating the prompt and 1.49 s generating -- and 10.4 s of processor
+time, the median of three runs, taken at a load of 1.28 rising to 1.82. The figure this replaces was
 1.37 s, and the load it was taken under was not recorded, which is why it is
 replaced rather than compared with: a third of a second between two runs of
 the same code is exactly the range this machine moves through, and the older
 figure cannot say where in it it sat. The processor-time figure that stood
-beside it -- 9.3 s -- came from the operating system's timing tool rather
-than from this one and is not retaken here. Loading the model costs a further 0.6 s of
+beside it -- 9.3 s -- came from the operating system's timing tool; the
+10.4 s above comes from this one. Loading the model costs a further 0.6 s of
 wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
 
@@ -1056,9 +1056,14 @@ model_runner run MODEL --raw --prompt-file tests/fixtures/speed-prompt-short.txt
 
 and `tests speed --model MODEL` takes the same measurement three times and
 reports the median, so the figure above is a command rather than a memory.
-The processor figure is the one number here the tool does not produce:
-totalling processor time across the worker tasks needs a host call this
-crate would have to bind per platform, and `/usr/bin/time` already gives it.
+It reports the processor time as well now, taken around the same region as
+the wall time so that the two answer about the same work. That used to be the
+one number here the tool did not produce -- the reasoning was that totalling
+processor time across the worker tasks needs a host call this crate would
+have to bind per platform, and `/usr/bin/time` already gives it. What it
+actually needs is the same file the load comes from, which this reads
+already; and a figure from the shell is a figure with no load beside it,
+which is the thing this section spent a week learning to care about.
 
 This paragraph used to say 2.07 s, about 1.1 s of it evaluating the prompt,
 and 14.2 s of processor time, from "a short prompt" that was never named.
@@ -1074,9 +1079,13 @@ The worker count is what that processor figure is about. The same run at
 fourteen threads takes 2.29 s of wall against 2.43 s at seven, and 17.3 s of
 processor time against 10.1 s: six per cent of the wall for seventy per cent
 more energy, which is why the program chooses one worker per core rather
-than one per processor. The wall figures here include loading, which the
-split above excludes, and the processor figures come from the operating
-system's timing tool.
+than one per processor. Those four numbers are the oldest here: they come
+from the operating system's timing tool, from runs whose load nobody
+recorded, and they are the pair this section has not managed to retake --
+the tools refuse to measure above a load of 1.5, and this machine has not
+been below it for long enough at a stretch. They are kept because the
+conclusion does not turn on the third digit, and said to be old because that
+is not the same as knowing they are current.
 
 A job is cut into one more piece than the pool has workers, because the task
 that submits it takes the last piece rather than waiting; the figures below

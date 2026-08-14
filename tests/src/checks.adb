@@ -2916,6 +2916,75 @@ package body Checks is
          end if;
       end;
 
+      --  A tool that publishes a timing publishes the load it was taken
+      --  under.
+      --
+      --  The figures file is held to recording a load, which covers the
+      --  numbers already published. This covers the tools: a new one, or an
+      --  old one that starts printing a duration, would otherwise produce
+      --  figures with no conditions attached and nothing would say so until
+      --  somebody tried to compare two of them.
+      --
+      --  What counts as publishing a timing is printing seconds. What
+      --  counts as reporting the load is naming Host_Load, which is the one
+      --  reader for it.
+      --
+      --  `tests external-model` is the exception and states it: it
+      --  publishes counts and answers rather than timings, and a line
+      --  carrying a load is a line that differs between two runs of the
+      --  same check -- which is what its published transcripts are compared
+      --  against. Adding the field there broke that comparison, which is
+      --  how the omission got a reason rather than staying an oversight.
+      declare
+         Excused : constant String := "tests/src/external_model.adb";
+
+         procedure Publishes_A_Load (Which : String) is
+            Body_Text : constant String := Contents (Which);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if Body_Text'Length = 0 then
+               Fail (Which & " is not there, so what publishes the figures "
+                     & "in this repository is not what this check reads");
+            elsif not Project_Tools.Text.Contains (Body_Text, "seconds")
+              and then not Project_Tools.Text.Contains (Body_Text, " s ")
+            then
+               Fail (Which & " no longer prints a timing, so it does not "
+                     & "belong on the list this check reads");
+            elsif not Project_Tools.Text.Contains (Body_Text, "Host_Load")
+            then
+               Fail (Which & " publishes a timing and does not read the "
+                     & "load it was taken under, so its figures cannot be "
+                     & "compared with any other");
+            end if;
+         end Publishes_A_Load;
+      begin
+         Publishes_A_Load ("tests/src/speed_run.adb");
+         Publishes_A_Load ("tests/src/benchmarks.adb");
+
+         --  And the one that is excused is still excused for the reason it
+         --  gives, which is checked rather than remembered: an exception
+         --  whose reason has quietly gone is an exception nobody decided on.
+         Result.Performed := Result.Performed + 1;
+         declare
+            Body_Text : constant String := Contents (Excused);
+         begin
+            if Body_Text'Length = 0 then
+               Fail (Excused & " is not there, and this check excuses it "
+                     & "from reporting a load");
+            elsif Project_Tools.Text.Contains (Body_Text, "Host_Load") then
+               Fail (Excused & " reads the load now, so it is no longer the "
+                     & "exception this check excuses; put it on the list "
+                     & "instead");
+            elsif not Project_Tools.Text.Contains
+                        (Body_Text, "publishes counts")
+            then
+               Fail (Excused & " no longer says why it publishes no load, "
+                     & "so the exception is one nobody decided on");
+            end if;
+         end;
+      end;
+
       --  The crates this build is made of, beyond this one.
       --
       --  Every dependency here is pinned to a sibling working tree, so a

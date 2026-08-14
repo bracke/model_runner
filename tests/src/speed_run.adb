@@ -161,6 +161,7 @@ package body Speed_Run is
       Drafting        : Boolean := False;
 
       Walls     : Duration_Array (1 .. Repeats) := [others => 0.0];
+      Spents    : Duration_Array (1 .. Repeats) := [others => 0.0];
       Evaluates : Duration_Array (1 .. Repeats) := [others => 0.0];
       Generates : Duration_Array (1 .. Repeats) := [others => 0.0];
    begin
@@ -207,6 +208,7 @@ package body Speed_Run is
          Prompt : constant String := As_Commanded;
 
          Started : Ada.Real_Time.Time;
+         Spent_At : Long_Float := 0.0;
       begin
          --  Loading is timed and reported separately, which is what the
          --  README says of it: one figure is the model and the other is the
@@ -368,6 +370,7 @@ package body Speed_Run is
                     (if Drafting then Draft_Tokens else 0);
 
                   Started := Ada.Real_Time.Clock;
+                  Spent_At := Host_Load.Processor_Seconds;
                   Gen.Generate
                     (Engine, Session, Prompt, Request, Stop, null,
                      Sink'Unchecked_Access, null, Timer'Unchecked_Access,
@@ -382,6 +385,15 @@ package body Speed_Run is
                   Walls (Pass) :=
                     Ada.Real_Time.To_Duration
                       (Ada.Real_Time.Clock - Started);
+
+                  --  Around the same region the wall is taken around, so
+                  --  the two answer about the same work. Taken across the
+                  --  whole run it would have counted loading the model and
+                  --  the other repeats, which is what a caller reading "the
+                  --  processor time of a twelve-token run" would not
+                  --  expect.
+                  Spents (Pass) :=
+                    Duration (Host_Load.Processor_Seconds - Spent_At);
 
                   Evaluates (Pass) :=
                     Duration
@@ -451,6 +463,7 @@ package body Speed_Run is
       if Result.Runs = Repeats then
          Result.Ran := True;
          Result.Wall := Middle (Walls);
+         Result.Processor := Middle (Spents);
          Result.Evaluate := Middle (Evaluates);
          Result.Generate := Middle (Generates);
          Say ("measured");
@@ -481,6 +494,9 @@ package body Speed_Run is
         & (if Item.Drafted = 0 then ""
            else ", proposed" & Natural'Image (Item.Drafted)
                 & " accepted" & Natural'Image (Item.Accepted))
+        & "; "
+        & T.Image (Long_Float (Item.Processor), 2)
+        & " s of processor time"
         & "; load " & T.Image (Item.Load_Before, 2)
         & " to " & T.Image (Item.Load_After, 2);
    end Summary;

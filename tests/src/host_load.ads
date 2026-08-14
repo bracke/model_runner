@@ -22,6 +22,25 @@ package Host_Load is
    --  @return The load average, or zero.
    function Now return Long_Float;
 
+   --  Processor time this program has used, in seconds.
+   --
+   --  Wall time says how long a run took and processor time says what it
+   --  cost, and the two answer different questions: a worker count that
+   --  buys six per cent of the wall for seventy per cent more processor
+   --  time is a bad bargain that a wall figure alone calls a good one.
+   --
+   --  Here for the same reason the load is: it is a fact about this machine
+   --  and this moment, read the same way, and a tool that publishes a
+   --  timing should be able to publish both without binding a host call of
+   --  its own. The README said this number was the one the tool could not
+   --  produce, and it was right until this.
+   --
+   --  Zero where the host does not say, which is honest as far as it goes
+   --  and is why a tool that prints it should say where it came from.
+   --
+   --  @return Processor seconds used by this process and its tasks, or zero.
+   function Processor_Seconds return Long_Float;
+
    --  The load above which a figure is not worth publishing.
    --
    --  One and a half rather than one: a machine with nothing on it still

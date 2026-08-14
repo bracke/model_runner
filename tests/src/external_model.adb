@@ -1,3 +1,12 @@
+--  This tool publishes counts and answers rather than timings, which is
+--  why it reports no load where `tests speed` and `tests benchmark` both
+--  do. A line carrying a load is a line that differs between two runs of
+--  the same check, and the transcripts this publishes are compared
+--  against each other. The field was added here once and broke that
+--  comparison, which is how the omission got a reason rather than
+--  staying an oversight. `tests check` reads this paragraph: if this
+--  tool ever does publish a timing, put it on the list there instead.
+
 with Ada.Directories;
 
 with Model_Runner.Backend.CPU;

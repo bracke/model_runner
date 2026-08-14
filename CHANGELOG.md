@@ -5,6 +5,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`tests speed` reports processor time,** taken around the same region as
+  the wall time so the two answer about the same work. That was the one
+  figure in the README that came from the shell, on the reasoning that
+  totalling processor time across worker tasks needs a host call bound per
+  platform. It needs the same file the load comes from, which this already
+  reads. A figure from the shell is a figure with no load beside it.
+
+- **A check that a tool publishing a timing reports a load.** The figures
+  file is held to recording one, which covers the numbers already published;
+  this covers the tools, so a new one -- or an old one that starts printing a
+  duration -- cannot produce figures with no conditions attached. `tests
+  external-model` is the stated exception, and the reason now lives in that
+  file where somebody editing it will see it, because the check reads it
+  there: an exception whose reason has quietly gone is an exception nobody
+  decided on.
+
+### Changed
+
+- **The twelve-token figure retaken with its processor time:** 1.88 s wall
+  and 10.4 s of processor time at a load of 1.28 to 1.82, against 1.37 s and
+  a 9.3 s that came from `/usr/bin/time`.
+
+  The worker-count pair beside it was not retaken and is now labelled the
+  oldest figures here. Each half of that comparison needs its own quiet
+  window, and the machine offered one rather than two: the tools refuse above
+  a load of 1.5 and it sat above that nearly all day. The conclusion does not
+  turn on the third digit, and saying they are old is not the same as
+  pretending they are current.
+
 ### Changed
 
 - **Three figure groups retaken with their loads recorded,** which is what
