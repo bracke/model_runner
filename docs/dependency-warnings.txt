@@ -1,0 +1,37 @@
+# What the crates this build is pinned to compile with.
+#
+# Every dependency here is pinned to a sibling working tree, so a build of
+# this program compiles those trees as surely as it compiles this one. Their
+# warnings are not this repository's to fix -- a gate that went red for a
+# sibling crate's warning would pass on one machine and on no other, and
+# would put this project's release behind somebody else's tidying.
+#
+# What this file does is stop them being wallpaper. Sixty-three warnings
+# listed every run are sixty-three warnings nobody reads, and the
+# sixty-fourth arrives invisible among them. So the count is written down,
+# and `tests check` refuses a crate that has more than is recorded here, or
+# one with warnings that is not recorded at all. A crate that gets tidier is
+# reported so the number can come down.
+#
+# The count is of compilations that said something, not of warnings: one
+# compilation can say a dozen things. That is what a .stderr log beside an
+# object file counts as, and it is the number the check can see.
+#
+# A crate at zero is listed too, because absent and quiet have to be
+# different things here: an unlisted crate is one nobody has looked at.
+#
+# Format, one crate a line:
+#   <crate> <compilations that left warnings>
+
+awklib 0
+cryptolib 19
+hostkit 0
+httpclient 1
+messages 0
+project_tools 1
+regexp 1
+ssllib 38
+tarlib 3
+terminal_styles 0
+truststores 0
+zlib 0

@@ -7,6 +7,40 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The dependency check reads what a crate actually compiles, and holds its
+  warnings to a recorded number.** It read one directory name, so a crate
+  keeping its sources anywhere else was walked, found nothing and reported
+  nothing -- which reads exactly like a crate in good order. It now walks the
+  whole tree and judges the units that have objects, which is what this build
+  compiles; a crate it can match nothing in fails rather than passing
+  quietly.
+
+  The counts live in `docs/dependency-warnings.txt`. Sixty-three warnings
+  listed every run are sixty-three warnings nobody reads and a sixty-fourth
+  arrives invisible among them, so a rise fails the gate, an unrecorded crate
+  with warnings fails it, and a crate that gets tidier is reported so the
+  number can come down.
+
+  Units with a body per platform are exempt from both evidence checks and the
+  exemption is counted, because it cannot be silent: a Windows body finds the
+  POSIX body's object file -- they share a name -- and is judged against its
+  own modification time. One edited in a pinned crate was reported as proof
+  this build was stale. Nothing here can tell which of the two was compiled,
+  because an object file records its source's name and not its path.
+
+### Fixed
+
+- **The second place the weights are freed did not tell the device.**
+  Repacking frees the arena while the model stays open, and only the closing
+  path had been taught to give the device's matrices back first -- so the
+  same fault fixed yesterday was still there, at a site nobody had looked at.
+  Both go through one procedure now, so there is one place to remember rather
+  than two.
+
+  Found by listing what the first fix did not cover rather than by anything
+  failing, which is the only way this one was going to be found: it needs the
+  allocator to hand a repacked model the address the device is still holding.
+
 - **The gate can see the crates this build is made of.** Every dependency is
   pinned to a sibling working tree, so a build compiles those trees as surely
   as this one, and the checks read this repository's object directories only.

@@ -898,6 +898,30 @@ package body Model_Runner.Llama is
       end loop;
    end Resolve_Experts;
 
+   ---------------------
+   -- Release_Weights --
+   ---------------------
+
+   procedure Release_Weights (Item : in out Model) is
+   begin
+      --  The device is told before the bytes go, never after.
+      --
+      --  It remembers a matrix by where its bytes lie, so an address it
+      --  holds and this program has freed is an address the next matrix can
+      --  be given -- and the device would answer for that one with these
+      --  weights. This is the only place the weights are freed, so that it
+      --  is the only place that has to remember to say so: there were two,
+      --  and the second was found by listing what the first one's fix did
+      --  not cover rather than by anything failing.
+      --
+      --  Said unconditionally. A model that never touched a device gives
+      --  back nothing, which costs nothing, and a model cannot know whether
+      --  the device holds its addresses.
+      Model_Runner.Backend.Device.Forget_Matrices;
+      B.Free (Item.Arena);
+      Item.Arena_Base := 0;
+   end Release_Weights;
+
    -------------
    -- Prepare --
    -------------
@@ -1512,8 +1536,7 @@ package body Model_Runner.Llama is
                     (if Item.Arena = null then 0
                      else Interfaces.Unsigned_64 (Item.Arena.all'Length));
                begin
-                  B.Free (Item.Arena);
-                  Item.Arena_Base := 0;
+                  Release_Weights (Item);
                   Mem.Record_Release
                     (Item.Accounting, Mem.Model_Weights, Was);
                end;
@@ -1998,19 +2021,6 @@ package body Model_Runner.Llama is
 
       Item.Ready := False;
 
-      --  The device is told before the weights go, not after. It remembers a
-      --  matrix by where its bytes lie, and in a moment they will not be
-      --  there: another model's tensor of the same shape and format can land
-      --  on the same address, and the device would answer for it with this
-      --  model's weights. A run in three or four of the conformance sweep
-      --  came out wrong that way, by a fifth of a logit.
-      --
-      --  Told unconditionally rather than only when this model used the
-      --  device, because the device holds matrices by address and this
-      --  model's addresses are about to become anybody's. A model that never
-      --  touched a device gives back nothing, which costs nothing.
-      Model_Runner.Backend.Device.Forget_Matrices;
-
       if Item.Layers /= null then
          for Index in Item.Layers.all'Range loop
             T.Free (Item.Layers.all (Index).Attention_Norm);
@@ -2035,9 +2045,12 @@ package body Model_Runner.Llama is
 
       T.Free (Item.Output_Norm);
       T.Free (Item.Rope_Factors);
-      B.Free (Item.Arena);
+
+      --  The repacked arena goes with it, and after it: by then the device
+      --  has been told to give everything back, so there is no address left
+      --  for it to be wrong about.
+      Release_Weights (Item);
       B.Free (Item.Repacked);
-      Item.Arena_Base := 0;
       Item.Embeddings := T.Empty_View;
       Item.Output := T.Empty_View;
       Item.Settings := (others => <>);

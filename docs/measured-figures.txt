@@ -194,6 +194,27 @@
 # tensors and multiply them. Not re-measured: these two were taken again
 # three commits ago on this machine, and taking them again for a type
 # declaration would say what that run already says.
+# 2026-08-14, the second place the weights are freed. Repacking frees the
+# arena while the model stays open, and the device was told about the model
+# closing and not about that. Both go through one procedure now, which is
+# the change these four fingerprints moved for.
+#
+# Re-measured rather than argued, for the group where the change is on a
+# timed path: repacking happens during Prepare, and the twelve-token figure
+# quotes loading. The pair reads 1.818 s and 1.407 s at a load of 1.25
+# against the published 1.777 and 1.262 taken at 1.0 -- the generating
+# component is 1.449 against 1.398 and 1.049 against 1.062, so the two runs
+# agree to within what consecutive runs of this tool agree to. The published
+# table is left alone: replacing figures with figures that say the same
+# thing would lose the comparison with the run before, which is the only
+# thing that makes either of them mean anything.
+#
+# The reference and drafting groups were not re-measured. The added call
+# walks the list of matrices a device holds, which is empty on every
+# processor path, and the engine group above measures the same code and did
+# not move. That is the whole of the change: one procedure, called from the
+# two places the weights are freed.
+
 # 2026-08-14, the device forgetting a closed model's matrices. Four groups
 # moved because llama.adb and the device engine changed. Not re-measured, and
 # this is the reason: the whole change is one call in Model.Close and the
@@ -443,7 +464,7 @@ kernels D020F24F7A7AF1AA src/library/model_runner-quantization.adb src/library/m
 # published 1.28, on a machine running three other agents at a load average
 # of 2.5 on eight cores. Not republished for that reason, and the generated
 # text is unchanged: the same output digest, 7784f071e5740782.
-engine FC9EAED1A334CC6C src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 907E9E8704EE82C0 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -452,7 +473,7 @@ engine FC9EAED1A334CC6C src/library/model_runner-llama.adb src/library/model_run
 # that was added.
 # 2026-08-12, the same two changes, and this group is a ratio between two
 # backends neither of which the memory check applies to.
-reference 6C39FFA0C2C92AE8 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 365BE05F4D80B4CE src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
 # and the 111-token prompt, on both backends -- the claim that the two print
@@ -617,7 +638,7 @@ reference 6C39FFA0C2C92AE8 src/library/model_runner-backend-reference.adb src/li
 # The processor column moved more between measurements than the device
 # column did, again, which is the second time that has happened and is why
 # the caveat under the table now gives all three pairs rather than one.
-device A2BE44FF7CA4552F src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 71B79277E7F19F3D src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -629,7 +650,7 @@ device A2BE44FF7CA4552F src/shaders/row_product.comp src/library/model_runner-sh
 # the file the drafting loop is written in, so the loop could have been
 # rewritten without anything asking for a re-measure. A figure covered by a
 # group that does not name its own source is a figure covered by nothing.
-drafting CEFB1F75332618BB src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting 8D31F1E384B173CD src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 scaling 75070ADF4DD3B9CB src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb

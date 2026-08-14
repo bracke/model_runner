@@ -110,6 +110,112 @@ package body Checks is
             return False;
       end Is_Subunit;
 
+      --  How many noisy compilations a pinned crate is recorded as having.
+      --
+      --  Minus one when it is not recorded at all, which is a failure rather
+      --  than a zero: an unrecorded crate is one nobody has looked at, and
+      --  saying so is the point.
+      function Recorded_Warnings (Name : String) return Integer is
+         Path   : constant String := Root & "/docs/dependency-warnings.txt";
+         Handle : Ada.Text_IO.File_Type;
+         Answer : Integer := -1;
+      begin
+         if not Ada.Directories.Exists (Path) then
+            return -1;
+         end if;
+
+         Ada.Text_IO.Open (Handle, Ada.Text_IO.In_File, Path);
+         while not Ada.Text_IO.End_Of_File (Handle) loop
+            declare
+               Line : constant String :=
+                 Ada.Strings.Fixed.Trim
+                   (Ada.Text_IO.Get_Line (Handle), Ada.Strings.Both);
+               Space : Natural;
+            begin
+               if Line'Length > 0 and then Line (Line'First) /= '#' then
+                  Space := Ada.Strings.Fixed.Index (Line, " ");
+                  if Space > Line'First
+                    and then Line (Line'First .. Space - 1) = Name
+                  then
+                     Answer :=
+                       Integer'Value
+                         (Ada.Strings.Fixed.Trim
+                            (Line (Space .. Line'Last), Ada.Strings.Both));
+                     exit;
+                  end if;
+               end if;
+            end;
+         end loop;
+         Ada.Text_IO.Close (Handle);
+         return Answer;
+      exception
+         when others =>
+            if Ada.Text_IO.Is_Open (Handle) then
+               Ada.Text_IO.Close (Handle);
+            end if;
+            return -1;
+      end Recorded_Warnings;
+
+      --  Whether another file in this tree carries the same unit name.
+      --
+      --  A unit with a body per platform has one: src/platform/posix and
+      --  src/platform/windows both hold model_runner-platform-signals.adb,
+      --  and only the one for this host is compiled. They share an object
+      --  file name, so the body that was not compiled finds the other one's
+      --  object and is judged against its own modification time -- which
+      --  reported a Windows body somebody had edited as evidence that this
+      --  build was stale. It was evidence of nothing: that file is not in
+      --  this build.
+      --
+      --  Nothing here can tell which of the two was compiled, because the
+      --  object file records the source's name and not its path. So a unit
+      --  with more than one candidate is not judged at all, and that is
+      --  said rather than assumed.
+      function Has_Twin (Place, Path : String) return Boolean is
+         Wanted : constant String := Ada.Directories.Simple_Name (Path);
+         Found  : Boolean := False;
+
+         procedure Walk (Where : String) is
+            Search : Ada.Directories.Search_Type;
+            Item   : Ada.Directories.Directory_Entry_Type;
+         begin
+            if Found or else not Ada.Directories.Exists (Where) then
+               return;
+            end if;
+
+            Ada.Directories.Start_Search
+              (Search, Where, "",
+               [Ada.Directories.Ordinary_File => True,
+                Ada.Directories.Directory => True,
+                others => False]);
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Item);
+               declare
+                  Simple : constant String :=
+                    Ada.Directories.Simple_Name (Item);
+                  Full : constant String := Ada.Directories.Full_Name (Item);
+               begin
+                  if Simple /= "." and then Simple /= ".."
+                    and then Simple /= "obj" and then Simple /= ".git"
+                  then
+                     if Ada.Directories."="
+                          (Ada.Directories.Kind (Item),
+                           Ada.Directories.Directory)
+                     then
+                        Walk (Full);
+                     elsif Simple = Wanted and then Full /= Path then
+                        Found := True;
+                     end if;
+                  end if;
+               end;
+            end loop;
+            Ada.Directories.End_Search (Search);
+         end Walk;
+      begin
+         Walk (Place);
+         return Found;
+      end Has_Twin;
+
       procedure Check (Condition : Boolean; Detail : String) is
       begin
          Result.Performed := Result.Performed + 1;
@@ -2628,13 +2734,30 @@ package body Checks is
                   return;
                end if;
 
-               Units := Units + 1;
+               declare
+                  Made_At : constant Ada.Calendar.Time := Evidence_Time (Unit);
+               begin
+                  --  A source with no object here is not part of what this
+                  --  build compiles. Sibling crates keep their own tests and
+                  --  tools in the same tree, built by their own project
+                  --  files into their own directories, and reporting those
+                  --  as never compiled would be reporting on somebody
+                  --  else's build. What can be said about this one is the
+                  --  units it has objects for.
+                  if Made_At = Ada.Calendar.Time_Of (1901, 1, 1) then
+                     return;
+                  end if;
 
-               if Evidence_Time (Unit)
-                    < Ada.Directories.Modification_Time (Path)
-               then
-                  Behind := Behind + 1;
-               end if;
+                  if Has_Twin (Place, Path) then
+                     return;
+                  end if;
+
+                  Units := Units + 1;
+
+                  if Made_At < Ada.Directories.Modification_Time (Path) then
+                     Behind := Behind + 1;
+                  end if;
+               end;
             end Consider;
 
             --  Sources, and the logs beside the objects, both a tree deep.
@@ -2659,7 +2782,14 @@ package body Checks is
                      Full : constant String :=
                        Ada.Directories.Full_Name (Item);
                   begin
-                     if Simple /= "." and then Simple /= ".." then
+                     if Simple /= "." and then Simple /= ".."
+                       and then (Looking_For_Logs
+                                 or else (Simple /= "obj"
+                                          and then Simple /= "bin"
+                                          and then Simple /= "alire"
+                                          and then Simple /= "config"
+                                          and then Simple /= ".git"))
+                     then
                         if Ada.Directories."="
                              (Ada.Directories.Kind (Item),
                               Ada.Directories.Directory)
@@ -2703,10 +2833,24 @@ package body Checks is
 
             Crates := Crates + 1;
 
-            if Ada.Directories.Exists (Place & "/src") then
-               Walk (Place & "/src", Looking_For_Logs => False);
-            end if;
+            --  The whole tree rather than src, because a crate keeps its
+            --  sources where it likes and this was reading one directory
+            --  name: a crate that keeps them anywhere else was walked, found
+            --  nothing, and reported nothing -- which reads exactly like a
+            --  crate in good order.
+            Walk (Place, Looking_For_Logs => False);
             Walk (Place & "/obj", Looking_For_Logs => True);
+
+            --  A crate this build compiles nothing of is a crate this check
+            --  is silent about, and silence and a clean bill have to look
+            --  different. It read one directory name before and a crate
+            --  keeping its sources anywhere else came out looking tidy.
+            if Units = 0 then
+               Fail ("the pinned crate " & Name
+                     & " has no compiled unit this check could match to a "
+                     & "source, so what it says about that crate is nothing "
+                     & "at all");
+            end if;
 
             if Units > 0 and then Behind > 0 then
                Unbuilt := Unbuilt + 1;
@@ -2718,13 +2862,41 @@ package body Checks is
 
             if Said > 0 then
                Noisy := Noisy + 1;
-               Ada.Text_IO.Put_Line
-                 (Ada.Text_IO.Standard_Error,
-                  "  note: " & Natural'Image (Said)
-                  & " compilations of the pinned crate " & Name
-                  & " left warnings behind, which are that crate's to "
-                  & "answer for");
             end if;
+
+            --  Against what was recorded, because sixty-three warnings
+            --  listed every run are sixty-three warnings nobody reads, and
+            --  a sixty-fourth arriving among them is invisible. What is
+            --  refused is a rise: this repository cannot make another
+            --  repository tidy, and it can notice the day one gets worse.
+            declare
+               Allowed : constant Integer := Recorded_Warnings (Name);
+            begin
+               if Allowed < 0 then
+                  if Said > 0 then
+                     Fail ("the pinned crate " & Name & " left"
+                           & Natural'Image (Said)
+                           & " compilations with warnings and is not in "
+                           & "docs/dependency-warnings.txt; record what it "
+                           & "is at, or make it quiet");
+                  end if;
+               elsif Said > Allowed then
+                  Fail ("the pinned crate " & Name & " left"
+                        & Natural'Image (Said)
+                        & " compilations with warnings where"
+                        & Integer'Image (Allowed)
+                        & " was recorded, so this build is noisier than the "
+                        & "one that was signed off");
+               elsif Said < Allowed then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "  note: the pinned crate " & Name & " is down to"
+                     & Natural'Image (Said) & " from"
+                     & Integer'Image (Allowed)
+                     & "; record the lower number in "
+                     & "docs/dependency-warnings.txt");
+               end if;
+            end;
          end Consider_Crate;
 
          --  The pins, read from the manifest that names them. Two manifests,
@@ -2839,6 +3011,11 @@ package body Checks is
          Stale   : Natural := 0;
          Named   : Natural := 0;
 
+         --  Units with a body per platform, which are not judged: see
+         --  Has_Twin. Counted so that the number is visible rather than the
+         --  exemption being silent.
+         Twinned : Natural := 0;
+
          --  The newest .ali for a unit across every object directory, or the
          --  epoch when there is none. Both build profiles are looked in,
          --  because either is a real build and neither is preferred here.
@@ -2929,7 +3106,12 @@ package body Checks is
                Source_At : constant Ada.Calendar.Time :=
                  Ada.Directories.Modification_Time (Path);
             begin
-               if Made_At = Ada.Calendar.Time_Of (1901, 1, 1) then
+               if Has_Twin (Root & "/src", Path)
+                 or else Has_Twin (Root & "/tests/src", Path)
+                 or else Has_Twin (Root & "/tools/src", Path)
+               then
+                  Twinned := Twinned + 1;
+               elsif Made_At = Ada.Calendar.Time_Of (1901, 1, 1) then
                   Missing := Missing + 1;
                   if Missing <= 5 then
                      Fail (Unit & " has never been compiled here, so the "
@@ -2998,6 +3180,11 @@ package body Checks is
          if Named = 0 then
             Fail ("no sources were found to check for compilation evidence, "
                   & "so this check is looking in the wrong place");
+         elsif Twinned = 0 then
+            Fail ("no unit with a body per platform was found, and this "
+                  & "program has several, so the exemption for them is "
+                  & "matching nothing and the rest of this check may be "
+                  & "matching nothing either");
          elsif Missing + Stale > 5 then
             Fail (Natural'Image (Missing + Stale) & " of"
                   & Natural'Image (Named)
