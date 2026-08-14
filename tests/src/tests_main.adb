@@ -294,9 +294,19 @@ begin
          --  521 to 844, nearly all of it a suite that had just run in the
          --  step above and a conformance sweep that had run on Linux.
          Repository_Only : Boolean := False;
+
+         --  Write the pinned crates' warning counts down instead of
+         --  comparing against them. A maintenance action rather than a
+         --  check, so it runs the repository checks and nothing else: a
+         --  conformance sweep is not what a caller who wants a file
+         --  rewritten is asking for.
+         Recording : Boolean := False;
       begin
          for Index in 2 .. Ada.Command_Line.Argument_Count loop
             if Ada.Command_Line.Argument (Index) = "--repository" then
+               Repository_Only := True;
+            elsif Ada.Command_Line.Argument (Index) = "--record-warnings" then
+               Recording := True;
                Repository_Only := True;
             end if;
          end loop;
@@ -311,7 +321,7 @@ begin
             Failed := True;
          end if;
 
-         Checks.Run (Root, Result);
+         Checks.Run (Root, Result, Record_Warnings => Recording);
          Failed := Failed or else not Checks.Is_Clean (Result);
 
          --  The gate runs the two things that were commands somebody had to

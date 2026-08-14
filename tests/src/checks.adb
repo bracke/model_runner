@@ -61,7 +61,11 @@ package body Checks is
    -- Run --
    ---------
 
-   procedure Run (Root : String; Result : out Report) is
+   procedure Run
+     (Root             : String;
+      Result           : out Report;
+      Record_Warnings  : Boolean := False)
+   is
 
       procedure Fail (Detail : String) is
       begin
@@ -215,6 +219,58 @@ package body Checks is
          Walk (Place);
          return Found;
       end Has_Twin;
+
+      --  The words at the top of docs/dependency-warnings.txt, written by
+      --  the tool that writes the counts so that the file cannot end up
+      --  explaining itself in terms that have stopped being true.
+      procedure Write_Preamble (Into : Ada.Text_IO.File_Type) is
+         procedure Say (Text : String) is
+         begin
+            Ada.Text_IO.Put_Line (Into, Text);
+         end Say;
+      begin
+         Say ("# What the crates this build is pinned to compile with.");
+         Say ("#");
+         Say ("# Written by `tests check --record-warnings`. Every "
+              & "dependency here is");
+         Say ("# pinned to a sibling working tree, so a build of this "
+              & "program compiles");
+         Say ("# those trees as surely as it compiles this one. Their "
+              & "warnings are not");
+         Say ("# this repository's to fix -- a gate that went red for a "
+              & "sibling crate's");
+         Say ("# warning would pass on one machine and on no other, and "
+              & "would put this");
+         Say ("# project's release behind somebody else's tidying.");
+         Say ("#");
+         Say ("# What this file does is stop them being wallpaper. "
+              & "Sixty-three warnings");
+         Say ("# listed every run are sixty-three warnings nobody reads, "
+              & "and the");
+         Say ("# sixty-fourth arrives invisible among them. So the count "
+              & "is written down,");
+         Say ("# and `tests check` refuses a crate that has more than is "
+              & "recorded here,");
+         Say ("# or one with warnings that is not recorded at all. A "
+              & "crate that gets");
+         Say ("# tidier is reported so the number can come down.");
+         Say ("#");
+         Say ("# The count is of compilations that said something, not of "
+              & "warnings: one");
+         Say ("# compilation can say a dozen things. That is what a "
+              & ".stderr log beside an");
+         Say ("# object file counts as, and it is the number the check "
+              & "can see.");
+         Say ("#");
+         Say ("# A crate at zero is listed too, because absent and quiet "
+              & "have to be");
+         Say ("# different things here: an unlisted crate is one nobody "
+              & "has looked at.");
+         Say ("#");
+         Say ("# Format, one crate a line:");
+         Say ("#   <crate> <compilations that left warnings>");
+         Say ("");
+      end Write_Preamble;
 
       procedure Check (Condition : Boolean; Detail : String) is
       begin
@@ -2679,6 +2735,9 @@ package body Checks is
          Unbuilt : Natural := 0;
          Noisy   : Natural := 0;
 
+         --  Open only while the counts are being written down.
+         Recording : Ada.Text_IO.File_Type;
+
          --  One pinned crate: is it compiled, and did it say anything?
          --  Both manifests pin most of the same crates, and a crate
          --  considered twice reports itself twice.
@@ -2864,6 +2923,17 @@ package body Checks is
                Noisy := Noisy + 1;
             end if;
 
+            --  Written down rather than compared, when that is what was
+            --  asked for. A number kept by hand is a number that drifts,
+            --  and the alternative to this is reading a failure and editing
+            --  a file to match it, which is the same work done less
+            --  carefully.
+            if Record_Warnings then
+               Ada.Text_IO.Put_Line
+                 (Recording, Name & Natural'Image (Said));
+               return;
+            end if;
+
             --  Against what was recorded, because sixty-three warnings
             --  listed every run are sixty-three warnings nobody reads, and
             --  a sixty-fourth arriving among them is invisible. What is
@@ -2969,8 +3039,23 @@ package body Checks is
       begin
          Result.Performed := Result.Performed + 1;
 
+         if Record_Warnings then
+            Ada.Text_IO.Create
+              (Recording, Ada.Text_IO.Out_File,
+               Root & "/docs/dependency-warnings.txt");
+            Write_Preamble (Recording);
+         end if;
+
          Read_Pins (Root & "/alire.toml", Root);
          Read_Pins (Root & "/tests/alire.toml", Root & "/tests");
+
+         if Record_Warnings then
+            Ada.Text_IO.Close (Recording);
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "  note: wrote docs/dependency-warnings.txt from"
+               & Natural'Image (Crates) & " pinned crates");
+         end if;
 
          if Crates = 0 then
             Fail ("no pinned crates were found, so this check is reading "

@@ -28,6 +28,16 @@ package Checks is
    --
    --  @param Root Repository root directory.
    --  @param Result Totals.
-   procedure Run (Root : String; Result : out Report);
+   --  @param Root Repository root to read.
+   --  @param Result What was performed and what failed.
+   --  @param Record_Warnings Rewrite docs/dependency-warnings.txt with the
+   --    counts observed on this run instead of comparing against it. For
+   --    bringing a number down after a pinned crate is tidied, which
+   --    otherwise means reading a failure and editing a file by hand -- and
+   --    a number kept by hand is a number that drifts.
+   procedure Run
+     (Root             : String;
+      Result           : out Report;
+      Record_Warnings  : Boolean := False);
 
 end Checks;

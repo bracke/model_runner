@@ -18,7 +18,7 @@ package body Tool_Commands is
    Nothing : aliased constant String := "";
 
    Opts_None      : aliased constant String := " ";
-   Opts_Check     : aliased constant String := " --repository ";
+   Opts_Check     : aliased constant String := " --repository --record-warnings ";
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
@@ -29,7 +29,7 @@ package body Tool_Commands is
      & " --draft-model --draft-tokens ";
    Opts_Tokenize  : aliased constant String := " --model --prompt ";
 
-   Takes_Check     : aliased constant String := "[ROOT] [--repository]";
+   Takes_Check     : aliased constant String := "[ROOT] [--repository] [--record-warnings]";
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
    Takes_Speed     : aliased constant String :=
      "--model PATH [--prompt-file PATH] [--max-tokens N] [--threads N]"

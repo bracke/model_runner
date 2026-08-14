@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests check --record-warnings` writes the pinned crates' warning counts
+  down** instead of comparing against them, and writes the file's preamble
+  with them so that it cannot end up explaining itself in terms that have
+  stopped being true. Bringing a number down after a sibling crate is tidied
+  meant reading a failure and editing a file to match it by hand, which is
+  the same work done less carefully. It runs the repository checks and
+  nothing else: a caller who wants a file rewritten is not asking for a
+  conformance sweep.
+
 - **The dependency check reads what a crate actually compiles, and holds its
   warnings to a recorded number.** It read one directory name, so a crate
   keeping its sources anywhere else was walked, found nothing and reported
