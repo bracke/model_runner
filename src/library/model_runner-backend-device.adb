@@ -34,6 +34,10 @@ package body Model_Runner.Backend.Device is
    --  has to get it.
    Opened_Budget : Interfaces.Unsigned_64 := 0;
 
+   --  And how it was opened to wait, for the same reason.
+   Opened_Slice    : Duration := 0.020;
+   Opened_Patience : Duration := 60.0;
+
    Named      : String (1 .. Devices.Max_Name_Bytes) := [others => ' '];
    Named_Last : Natural := 0;
 
@@ -94,7 +98,9 @@ package body Model_Runner.Backend.Device is
    procedure Open
      (Ready      : out Boolean;
       Budget     : Interfaces.Unsigned_64 := 0;
-      Share_Host : Boolean := False)
+      Share_Host : Boolean := False;
+      Slice      : Duration := 0.020;
+      Patience   : Duration := 60.0)
    is
       Found : Boolean;
    begin
@@ -111,6 +117,8 @@ package body Model_Runner.Backend.Device is
       if Ready_Now
         and then Opened_Budget = Budget
         and then Sharing = Share_Host
+        and then Opened_Slice = Slice
+        and then Opened_Patience = Patience
       then
          Ready := True;
          return;
@@ -132,7 +140,8 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Products.Open (Engine, Opened, Found, Budget, Share_Host);
+      Products.Open (Engine, Opened, Found, Budget, Share_Host,
+                     Slice, Patience);
       if not Found then
          Devices.Close (Opened);
          return;
@@ -148,6 +157,8 @@ package body Model_Runner.Backend.Device is
 
       Sharing := Share_Host;
       Opened_Budget := Budget;
+      Opened_Slice := Slice;
+      Opened_Patience := Patience;
       Ready_Now := True;
       Ready := True;
    end Open;
@@ -202,6 +213,8 @@ package body Model_Runner.Backend.Device is
    -----------------
 
    function Given_Back return Natural is (Products.Given_Back (Engine));
+
+   function Waited return Natural is (Products.Waited (Engine));
 
    ------------------------
    -- Forget_Matrices --

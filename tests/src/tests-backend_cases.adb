@@ -764,6 +764,91 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Device_Decodes_Every_Format_It_Claims;
 
+   --------------------------------------------
+   -- Device_Gives_Up_On_One_That_Will_Not_Answer --
+   --------------------------------------------
+
+   --  A dispatch that outlasts the whole bound finishes the engine.
+   --
+   --  A device that has stopped answering keeps the buffers it was given
+   --  and there is no way to take work back off it, so the engine stops
+   --  rather than resetting a command buffer the device may still be
+   --  reading. That path had never run: it needs a device that has stopped
+   --  answering, and a suite cannot arrange one.
+   --
+   --  What it can arrange is a bound of no time at all. A caller who asks
+   --  for no patience waits not at all, so the first product it asks for
+   --  exceeds the bound however fast the device is -- which reaches the
+   --  giving-up path with a device in perfect health, and is the only way
+   --  to reach it on purpose.
+   --
+   --  The engine is unusable afterwards, which is the point: what is
+   --  checked is that it stays that way, because a device that has been
+   --  given up on and then used again is the fault this exists to prevent.
+   procedure Device_Gives_Up_On_One_That_Will_Not_Answer
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Ready : Boolean;
+
+      Wide : constant N.Element_Count := 64;
+      Tall : constant N.Element_Count := 8;
+
+      Storage : B.Byte_Array_Access;
+      Weight  : T.View;
+      Vector  : T.Real_Array_Access;
+      Room    : T.Real_Array_Access;
+      Status  : E.Error_Info;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Patience => 0.0);
+
+      if not Ready then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device was given up on here");
+         return;
+      end if;
+
+      declare
+         Values : constant N.Real_Array (0 .. Wide * Tall - 1) :=
+           [others => 0.5];
+         Bytes  : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+      begin
+         B.Allocate (Bytes'Length, Storage);
+         Storage.all := Bytes;
+      end;
+
+      T.Make (G.Type_F32, Tall, Wide, Storage, 0, Weight, Status);
+      Assert (E.Is_Ok (Status), "the weight view could not be built");
+
+      T.Allocate (Wide, Vector);
+      T.Allocate (Tall, Room);
+      Vector.all := [others => 1.0];
+
+      Model_Runner.Backend.Device.Dispatch (Weight, Vector, Room, Status);
+      Assert (Status.Code = E.Backend_No_Device,
+              "a dispatch that outlasted the bound was reported as "
+              & E.Error_Code'Image (Status.Code)
+              & " rather than as a device that did not answer");
+
+      --  And it does not come back. An engine that gave up and then served
+      --  the next product would be recording over a buffer it does not own.
+      Model_Runner.Backend.Device.Dispatch (Weight, Vector, Room, Status);
+      Assert (not E.Is_Ok (Status),
+              "an engine that gave up on its device answered the next "
+              & "product as though nothing had happened");
+
+      T.Free (Vector);
+      T.Free (Room);
+      B.Free (Storage);
+
+      --  Closed here rather than left, because every test after this one
+      --  would otherwise meet an engine that has given up.
+      Model_Runner.Backend.Device.Close;
+   end Device_Gives_Up_On_One_That_Will_Not_Answer;
+
    -------------------------------------------
    -- Device_Stops_When_The_Caller_Asks --
    -------------------------------------------
@@ -845,6 +930,96 @@ package body Tests.Backend_Cases is
       Assert (Status.Code = E.Generation_Cancelled,
               "a standing request did not stop a product on the device: "
               & E.Error_Code'Image (Status.Code));
+
+      --  And a request that arrives while the device is working, which is
+      --  the case the slicing exists for and the one above does not reach:
+      --  a request already standing is answered before anything is
+      --  submitted, so it never gets near the loop.
+      --
+      --  Two things make this reliable rather than a race. The slices are a
+      --  nanosecond, so a wait times out however fast the device is and the
+      --  loop goes round to ask the token -- without that, seeing the
+      --  request would depend on the product outlasting twenty
+      --  milliseconds, which is a test that passes on one machine. And the
+      --  matrix is four million elements, so the product takes long enough
+      --  for another task to have run by the time it is done.
+      declare
+         During : aliased Model_Runner.Cancellation.Token;
+
+         Big_Wide : constant N.Element_Count := 2048;
+         Big_Tall : constant N.Element_Count := 2048;
+
+         Big_Storage : B.Byte_Array_Access;
+         Big_Weight  : T.View;
+         Big_Vector  : T.Real_Array_Access;
+         Big_Room    : T.Real_Array_Access;
+
+      begin
+         Model_Runner.Backend.Device.Close;
+         Model_Runner.Backend.Device.Open (Ready, Slice => 0.000_000_001);
+         Assert (Ready, "the device would not reopen with a tiny slice");
+
+         --  Filled rather than encoded, because encoding four million
+         --  values means a value array and a byte array of them both alive
+         --  at once, and thirty-two megabytes of that does not belong on a
+         --  stack. What the bytes say does not matter here; how many of
+         --  them there are does.
+         B.Allocate
+           (Model_Runner.Bytes.Byte_Count (Big_Wide * Big_Tall) * 4,
+            Big_Storage);
+         Assert (Big_Storage /= null, "no room for the large matrix");
+         Big_Storage.all := [others => 60];
+
+         T.Make (G.Type_F32, Big_Tall, Big_Wide, Big_Storage, 0, Big_Weight,
+                 Status);
+         Assert (E.Is_Ok (Status), "the large weight view could not be built");
+
+         T.Allocate (Big_Wide, Big_Vector);
+         T.Allocate (Big_Tall, Big_Room);
+         Big_Vector.all := [others => 1.0];
+
+         --  The asking task is declared here rather than above, so that
+         --  its delay starts beside the dispatch instead of before the
+         --  sixteen megabytes are allocated and filled. Started earlier, it
+         --  had always fired by the time the product began -- which is the
+         --  standing case again, and the slice counter below is what caught
+         --  that rather than a green test hiding it.
+         declare
+            task Asks;
+
+            task body Asks is
+            begin
+               delay 0.000_1;
+               During.Request;
+            end Asks;
+         begin
+            Model_Runner.Backend.Device.Dispatch
+              (Big_Weight, Big_Vector, Big_Room, Status,
+               During'Unchecked_Access);
+         end;
+
+         Assert (Status.Code = E.Generation_Cancelled,
+                 "a request made while the device was working was not seen "
+                 & "between slices of the wait: "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  And it was seen there rather than by the check before anything
+         --  is submitted. That check answers a request that was already
+         --  standing, so a cancelled product proves nothing on its own:
+         --  what proves it is that the wait went round more than once,
+         --  which is the only place a request arriving later can be seen.
+         Assert (Model_Runner.Backend.Device.Waited > 1,
+                 "the product was cancelled without the wait going round, "
+                 & "so the request was already standing and this says "
+                 & "nothing about a request that arrives during a product");
+
+         T.Free (Big_Vector);
+         T.Free (Big_Room);
+         B.Free (Big_Storage);
+      end;
+
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
 
       Model_Runner.Backend.Device.Dispatch_Batch
         (Weight, Vector, 1, Room, Status, Stop'Unchecked_Access);
@@ -1398,6 +1573,9 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Device_Decodes_Every_Format_It_Claims'Access,
          "the device decodes every format it claims, as the processor does");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Device_Gives_Up_On_One_That_Will_Not_Answer'Access,
+         "a dispatch that outlasts the whole bound finishes the engine");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Device_Stops_When_The_Caller_Asks'Access,
          "a product on the device answers a standing stop request");

@@ -7,6 +7,42 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device's wait is sayable, so both of its unreachable paths are now
+  tested.** How long one wait lasts before the caller's stop request is asked
+  about again, and how long to wait in all before giving up on a device that
+  has stopped answering, are what the engine was opened for rather than
+  constants. Neither path could be reached on purpose before: giving up needs
+  a device that has stopped answering, and seeing a stop request during a
+  product needs a product that outlasts a slice.
+
+  A caller who asks for no patience waits not at all, so the first product
+  exceeds the bound however healthy the device is -- which reaches the
+  giving-up path, and checks the part that matters, that the engine stays
+  given-up-on rather than serving the next product from a buffer it no longer
+  owns.
+
+  A caller who asks for slices of a nanosecond makes every wait go round, so
+  a request made while a product runs is seen. `Waited` reports how many
+  slices the last product took, which is what tells a cancelled product
+  cancelled between slices from one cancelled before it was submitted -- and
+  it caught exactly that: the first version of the test had its asking task
+  fire before the product began, and passed.
+
+- **A fixture large enough to say where weights are read from.** The narrow
+  binary32 model is seven kilobytes, under two pages, and a device is handed
+  page-aligned ranges -- so which of its matrices could be read where they
+  lie depended on where the mapping landed, and moved between runs of the
+  same binary. `Tiny_Model.Write` takes a format now, and the k-quant
+  fixtures are written at the deep widths: half a megabyte, a hundred pages,
+  and the answer settles.
+
+### Fixed
+
+- **A closed engine remembered that it had given up.** Closing did not clear
+  the stalled state, so an engine that had exceeded the bound refused every
+  product after the next Open, on a device in perfect health. Found by the
+  test above being followed by another.
+
 - **A run on the device can be stopped.** Cancellation is checked between
   layers everywhere else in this program, and a layer on a device is a
   submission and a wait for it -- a wait that could not be interrupted, so it

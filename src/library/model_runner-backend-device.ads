@@ -50,13 +50,28 @@ package Model_Runner.Backend.Device is
    --    than copy them to the device. It holds the model once instead of
    --    twice and runs slower, measurably; the statistics report how many
    --    matrices it applied to.
+   --  @param Slice How long one wait for the device lasts before a stop
+   --    request is asked about again.
+   --  @param Patience How long to wait in all before giving up on a device
+   --    that has stopped answering. Zero waits not at all.
    procedure Open
      (Ready      : out Boolean;
       Budget     : Interfaces.Unsigned_64 := 0;
-      Share_Host : Boolean := False);
+      Share_Host : Boolean := False;
+      Slice      : Duration := 0.020;
+      Patience   : Duration := 60.0);
 
    --  Release the device and everything it holds. Idempotent.
    procedure Close;
+
+   --  Slices the last product spent waiting for the device.
+   --
+   --  One is a product answered inside the first slice, which is what every
+   --  product on this machine is. More says the wait went round and asked
+   --  whether the caller wanted to stop.
+   --
+   --  @return Slices taken by the last product, or zero before any.
+   function Waited return Natural;
 
    --  Give back every matrix the device holds, and stay open.
    --

@@ -46,6 +46,12 @@ package Tiny_Model is
    --  Where that fixture is, for a test to name.
    Suite_Fixture : constant String := "fixtures/tiny-model.gguf";
 
+   --  Which format the weight matrices use. The norms and the small vectors
+   --  stay binary32 in both, as they do in a real quantized model.
+   type Weight_Format is
+     (F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0,
+      Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS);
+
    --  Write the fixture to disk.
    --
    --  @param Path Destination path; overwritten if it exists.
@@ -56,16 +62,18 @@ package Tiny_Model is
    --  @param Room Context length the model declares. The default is small
    --    on purpose, so that tests reach the context bound without a large
    --    conversation; a test that needs a turn to complete asks for more.
+   --  @param Format Which format the weight matrices take, which also
+   --    decides how large the file is: the k-quant formats are written at
+   --    the deep widths, so one of those is the fixture to ask for when a
+   --    test needs weights spanning more than a page or two. F32 at the
+   --    narrow widths is seven kilobytes, which is under two pages, and a
+   --    device reading weights where they lie can say almost nothing about
+   --    a file that small.
    procedure Write
      (Path           : String;
       Adds_Beginning : Boolean := True;
-      Room           : Positive := Context);
-
-   --  Which format the weight matrices use. The norms and the small vectors
-   --  stay binary32 in both, as they do in a real quantized model.
-   type Weight_Format is
-     (F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0,
-      Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS);
+      Room           : Positive := Context;
+      Format         : Weight_Format := F32);
 
    --  A quantized row is a whole number of thirty-two element blocks, so a
    --  model whose widths are eight and twelve cannot be quantized at all.

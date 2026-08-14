@@ -823,7 +823,9 @@ package body Model_Runner.Platform.Device.Products is
       On         : Context;
       Ready      : out Boolean;
       Budget     : Interfaces.Unsigned_64 := 0;
-      Share_Host : Boolean := False)
+      Share_Host : Boolean := False;
+      Slice      : Duration := 0.020;
+      Patience   : Duration := 60.0)
    is
       Made : aliased Address := Null_Handle;
    begin
@@ -1082,6 +1084,8 @@ package body Model_Runner.Platform.Device.Products is
          Item.Fence := Made;
       end;
 
+      Item.Slice := Slice;
+      Item.Patience := Patience;
       Ready := True;
    end Open;
 
@@ -1140,6 +1144,11 @@ package body Model_Runner.Platform.Device.Products is
       Item.Released := 0;
       Item.Taken := 0;
       Item.Heap := 0;
+
+      --  A closed engine has given up on nothing. Forgetting this left an
+      --  engine that had been given up on refusing every product after the
+      --  next Open, on a device in perfect health.
+      Item.Stalled := False;
       Item.Budget := 0;
       Item.Imports := False;
       Item.Import_To := 0;
@@ -1179,6 +1188,8 @@ package body Model_Runner.Platform.Device.Products is
        and then not Item.Stalled);
 
    function Is_Stalled (Item : Engine) return Boolean is (Item.Stalled);
+
+   function Waited (Item : Engine) return Natural is (Item.Waited);
 
    --  The code a Vulkan wait returns when the fence has not signalled yet.
    --  Anything else that is not success is a refusal, and asking again would
@@ -1714,16 +1725,41 @@ package body Model_Runner.Platform.Device.Products is
          --  rather than reused, because there is no way to take work back
          --  off a device that is not responding.
          declare
-            Slice  : constant := 20_000_000;     --  Twenty milliseconds.
-            Slices : constant := 3_000;          --  A minute in all.
+            --  Nanoseconds, which is what a Vulkan wait counts in.
+            Nanoseconds : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64'Max
+                (1, Interfaces.Unsigned_64 (Item.Slice * 1_000_000_000.0));
+
+            --  How many of those the whole bound holds. A caller who asks
+            --  for no patience at all gets none: zero slices is a wait that
+            --  does not happen, which is the only way to reach the giving-up
+            --  path without a device that has genuinely stopped answering.
+            --  Clamped, because a long patience divided by a short slice
+            --  is a count no Natural holds: a minute of nanosecond slices
+            --  is sixty thousand million of them. The clamp is what makes
+            --  a caller who asks for both an ordinary caller rather than a
+            --  Constraint_Error.
+            Wanted : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64
+                (Duration'Max (0.0, Item.Patience) * 1_000_000_000.0)
+              / Nanoseconds;
+
+            Slices : constant Natural :=
+              (if Wanted > Interfaces.Unsigned_64 (Natural'Last)
+               then Natural'Last
+               else Natural (Wanted));
 
             Answered : Boolean := False;
             Stopped  : Boolean := False;
          begin
+            Item.Waited := 0;
+
             for Attempt in 1 .. Slices loop
+               Item.Waited := Attempt;
                declare
                   Answer : constant Interfaces.C.int :=
-                    Wait (Item.Logical, 1, Fence_Handle'Address, 1, Slice);
+                    Wait (Item.Logical, 1, Fence_Handle'Address, 1,
+                          Nanoseconds);
                begin
                   if Answer = 0 then
                      Answered := True;

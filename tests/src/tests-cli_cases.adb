@@ -2252,6 +2252,10 @@ package body Tests.CLI_Cases is
 
       Path : constant String := "obj/device-memory-model.gguf";
 
+      --  What the run that copies everything put on the device, for the run
+      --  that copies nothing to be held against.
+      Copied : Integer := 0;
+
       --  What one run said about the device, as the fields it printed.
       function Ran_With (Budget : String) return String is
          Source : Fixed_Arguments;
@@ -2331,12 +2335,23 @@ package body Tests.CLI_Cases is
          end;
       end Number_After;
    begin
-      Tiny_Model.Write (Path);
+      --  A k-quant fixture rather than the narrow binary32 one, because
+      --  this test asks where the weights are read from and that question
+      --  needs weights worth reading. The narrow fixture is seven kilobytes
+      --  -- under two pages -- and a device is handed page-aligned ranges,
+      --  so which of its matrices could be read where they lie depended on
+      --  where the mapping landed, and the answer moved between runs of the
+      --  same binary. The k-quant fixture is written at the deep widths and
+      --  is half a megabyte, which is a hundred pages and settles it.
+      Tiny_Model.Write (Path, Format => Tiny_Model.Q4_K);
 
       declare
          Whole : constant String := Ran_With ("");
-         Held  : constant Integer := Number_After (Whole, "matrices on the device");
+         Held  : constant Integer :=
+           Number_After (Whole, "matrices on the device");
       begin
+         Copied := Number_After (Whole, "bytes on the device");
+
          if Held < 0 then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
@@ -2369,26 +2384,14 @@ package body Tests.CLI_Cases is
       declare
          None : constant String := Ran_With ("0");
       begin
-         --  How many matrices are read where they lie is not asserted, and
-         --  the reason is a limit of the fixture rather than of the option.
-         --  A device is handed a page-aligned range, and a matrix qualifies
-         --  only when the page-rounded range around it lies wholly inside
-         --  the storage that owns it. This model is seven kilobytes -- less
-         --  than two pages -- so which of its matrices qualify depends on
-         --  where the mapping lands, and it has been seen both ways in the
-         --  same binary on the same machine. On a real model the same
-         --  command reads a hundred and fifty-four of a hundred and
-         --  fifty-five where they lie, every time.
-         --
-         --  What does hold at any size is that a run told to copy nothing
-         --  gives nothing back: giving back is what a budget does when it
-         --  is too small, and this run has no budget to be too small.
+         Assert (Number_After (None, "read where they lie") > 0,
+                 "--device-memory 0 copied the weights instead of reading "
+                 & "them where they lie");
          Assert (Number_After (None, "matrices given back") = 0,
                  "a run told to copy nothing gave a matrix back");
-         Assert (Number_After (None, "matrices on the device") > 0,
-                 "a run with a zero budget put nothing on the device at "
-                 & "all, so the option refused the model rather than "
-                 & "changing where its weights are read from");
+         Assert (Number_After (None, "bytes on the device") < Copied,
+                 "a run reading the weights where they lie copied as many "
+                 & "bytes as one copying all of them");
       end;
    end Device_Memory_Reaches_The_Device;
 

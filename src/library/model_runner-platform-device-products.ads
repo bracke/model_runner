@@ -89,6 +89,18 @@ package Model_Runner.Platform.Device.Products is
    --  @param Item Engine to empty; harmless on one that holds nothing.
    procedure Forget_Matrices (Item : in out Engine);
 
+   --  How many slices the last product spent waiting for the device.
+   --
+   --  One is a product the device answered inside the first slice. More
+   --  than one means the wait went round, which is where a stop request
+   --  made while a product is running is seen -- so this is how a test can
+   --  tell that a cancelled product was cancelled there rather than by the
+   --  check before anything was submitted.
+   --
+   --  @param Item Engine to ask about.
+   --  @return Slices taken by the last product, or zero before any.
+   function Waited (Item : Engine) return Natural;
+
    --  Whether a dispatch was left unfinished on this engine.
    --
    --  A device that stopped answering keeps the buffers it was given, and
@@ -115,12 +127,23 @@ package Model_Runner.Platform.Device.Products is
    --    and the device reads it more slowly for the rest of the run:
    --    measured on this machine at 0.80 tokens a second against 9.95 for
    --    the same model copied in. A memory decision, not a speed one.
+   --  @param Slice How long one wait for the device to finish lasts before
+   --    the caller's stop request is asked about again. The default is what
+   --    a caller wants; a test naming a tiny one is how the loop below can
+   --    be reached at all, because a product that finishes inside the first
+   --    slice never gets to a second.
+   --  @param Patience How long to wait in all before giving up on a device
+   --    that has stopped answering. Zero waits not at all, which is how a
+   --    test reaches the giving-up path without a device that has genuinely
+   --    stopped -- there is no way to arrange one of those on demand.
    procedure Open
      (Item       : in out Engine;
       On         : Context;
       Ready      : out Boolean;
       Budget     : Interfaces.Unsigned_64 := 0;
-      Share_Host : Boolean := False);
+      Share_Host : Boolean := False;
+      Slice      : Duration := 0.020;
+      Patience   : Duration := 60.0);
 
    --  Release everything the device was holding. Idempotent.
    --
@@ -378,6 +401,18 @@ private
       --  How many of the resident matrices are the host's own memory rather
       --  than a copy of it.
       Taken      : Natural := 0;
+
+      --  How long one wait lasts and how long to wait in all, as the
+      --  engine was opened for.
+      Slice      : Duration := 0.020;
+      Patience   : Duration := 60.0;
+
+      --  Slices taken waiting for the last product. One means the device
+      --  answered inside the first, which is what every product on this
+      --  machine does; more means the wait went round and asked the caller
+      --  whether to stop, which is the only thing that makes a stop
+      --  request during a product visible at all.
+      Waited     : Natural := 0;
 
       --  Set when a dispatch did not finish inside the whole bound. The
       --  command buffer is still the device's, so nothing here may reset or
