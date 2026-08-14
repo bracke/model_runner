@@ -5,6 +5,37 @@ package body Host_Load is
 
    Where : constant String := "/proc/loadavg";
 
+   ---------------------
+   -- Wait_For_Quiet --
+   ---------------------
+
+   function Wait_For_Quiet
+     (Minutes : Natural;
+      Say     : access procedure (Load : Long_Float) := null) return Boolean
+   is
+      Looks : constant Natural := Minutes * 60;
+      Seen  : Long_Float := Now;
+   begin
+      if Publishable (Seen) then
+         return True;
+      end if;
+
+      for Look in 1 .. Looks loop
+         if Say /= null then
+            Say (Seen);
+         end if;
+
+         delay 1.0;
+         Seen := Now;
+
+         if Publishable (Seen) then
+            return True;
+         end if;
+      end loop;
+
+      return False;
+   end Wait_For_Quiet;
+
    ------------------------
    -- Processor_Seconds --
    ------------------------

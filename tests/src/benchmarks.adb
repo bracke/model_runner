@@ -238,9 +238,26 @@ package body Benchmarks is
    procedure Run
      (Seconds : Duration := 0.5;
       Rounds  : Positive := 3;
-      Anyway  : Boolean := False)
+      Anyway  : Boolean := False;
+      Wait    : Natural := 0)
    is
       package IO renames Ada.Text_IO;
+
+      --  Said once in a while rather than once a second.
+      Told : Natural := 0;
+
+      procedure Still (Load : Long_Float) is
+      begin
+         if Told mod 30 = 0 then
+            IO.Put_Line
+              (IO.Standard_Error,
+               "waiting for the machine to fall below "
+               & Model_Runner.Text.Image (Long_Float (Host_Load.Too_Busy), 2)
+               & "; it is at " & Model_Runner.Text.Image (Load, 2));
+         end if;
+         Told := Told + 1;
+      end Still;
+
       use type Ada.Real_Time.Time;
 
       --  Time a kernel until at least Seconds have passed, then report the
@@ -1375,7 +1392,23 @@ package body Benchmarks is
       --  running and the device side does not, so the answer would be about
       --  the machine. Refused rather than warned about, and the caller who
       --  wants it anyway says so.
-      if not Anyway and then not Host_Load.Publishable (Started_At) then
+      if not Anyway and then Wait > 0
+        and then not Host_Load.Publishable (Started_At)
+        and then not Host_Load.Wait_For_Quiet (Wait, Still'Access)
+      then
+         IO.Put_Line
+           (IO.Standard_Error,
+            "the machine did not fall below "
+            & Model_Runner.Text.Image (Long_Float (Host_Load.Too_Busy), 2)
+            & " within" & Natural'Image (Wait)
+            & " minutes; nothing measured");
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         return;
+      end if;
+
+      if not Anyway and then Wait = 0
+        and then not Host_Load.Publishable (Started_At)
+      then
          IO.Put_Line
            (IO.Standard_Error,
             "the machine is at a load of "

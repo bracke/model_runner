@@ -776,13 +776,67 @@ begin
          end Given;
 
          Load_Now : constant Long_Float := Host_Load.Now;
+
+         --  How many looks have gone by, so that waiting says so once in a
+         --  while rather than once a second.
+         Told : Natural := 0;
+
+         --  Minutes to wait for the machine, or none. Read through its own
+         --  reader because Number is for values that must be positive and
+         --  this one's absence is the ordinary case.
+         function Waiting return Natural is
+         begin
+            return Natural'Value (Option ("--wait", ""));
+         exception
+            when others =>
+               return 0;
+         end Waiting;
       begin
          --  Refused on a busy machine, exactly as `tests benchmark` is and
          --  on the same bound. These two publish figures that are compared
          --  with each other and with what the README says, and one of them
          --  refusing a machine the other accepted meant the same host was
          --  too busy for one set of published numbers and fine for another.
+         --  A caller who says --wait is told when rather than refused: the
+           --  loop that watched the load and started the tool when it fell
+           --  used to live in a shell script outside this repository, which
+           --  every figure retaken this week went through.
          if not Given ("--anyway")
+           and then Waiting > 0
+         then
+            declare
+               procedure Still (Load : Long_Float) is
+               begin
+                  if Told mod 30 = 0 then
+                     Ada.Text_IO.Put_Line
+                       (Ada.Text_IO.Standard_Error,
+                        "waiting for the machine to fall below "
+                        & Model_Runner.Text.Image
+                            (Long_Float (Host_Load.Too_Busy), 2)
+                        & "; it is at "
+                        & Model_Runner.Text.Image (Load, 2));
+                  end if;
+                  Told := Told + 1;
+               end Still;
+
+               Quiet : constant Boolean :=
+                 Host_Load.Wait_For_Quiet
+                   (Waiting, Still'Unrestricted_Access);
+            begin
+               if not Quiet then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "the machine did not fall below "
+                     & Model_Runner.Text.Image
+                         (Long_Float (Host_Load.Too_Busy), 2)
+                     & " within" & Natural'Image (Waiting)
+                     & " minutes; nothing measured");
+                  Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+                  return;
+               end if;
+            end;
+
+         elsif not Given ("--anyway")
            and then not Host_Load.Publishable (Load_Now)
          then
             Ada.Text_IO.Put_Line
@@ -881,6 +935,15 @@ begin
                return Default;
          end Number;
 
+         --  Minutes to wait, where absent means none.
+         function Minutes (Name : String) return Natural is
+         begin
+            return Natural'Value (Option (Name, ""));
+         exception
+            when others =>
+               return 0;
+         end Minutes;
+
          --  A word on its own rather than a value, so it is looked for
          --  across every argument including the last, which Option cannot
          --  do because it reads the one after the name.
@@ -904,7 +967,8 @@ begin
                then 0.5
                else Duration (Number ("--seconds", 1))),
             Rounds  => Number ("--rounds", 3),
-            Anyway  => Given ("--anyway"));
+            Anyway  => Given ("--anyway"),
+            Wait    => Minutes ("--wait"));
       end;
 
    elsif Command = "package" then

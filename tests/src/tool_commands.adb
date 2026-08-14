@@ -23,8 +23,8 @@ package body Tool_Commands is
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
      & " --backend --repeat-penalty --draft-model --draft-tokens --repeats"
-     & " --anyway ";
-   Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway ";
+     & " --anyway --wait ";
+   Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
    Opts_External  : aliased constant String :=
      " --model --prompt --max-tokens --threads --expect --repack --backend"
      & " --draft-model --draft-tokens ";
@@ -36,8 +36,8 @@ package body Tool_Commands is
      "--model PATH [--prompt-file PATH] [--max-tokens N] [--threads N]"
      & " [--batch-size N] [--repack MODE] [--backend NAME]"
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
-     & " [--repeats N] [--anyway]";
-   Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway]";
+     & " [--repeats N] [--anyway] [--wait MINUTES]";
+   Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway] [--wait MINUTES]";
    Takes_External  : aliased constant String :=
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"
      & " [--expect TEXT] [--repack MODE] [--backend NAME]"

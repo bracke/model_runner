@@ -449,6 +449,7 @@ cd tests && ./bin/tests check              # the gate: the suite, repository
                                            # checks, conformance, a fuzz run
 cd tests && ./bin/tests conformance        # engine vs independent reference
 cd tests && ./bin/tests benchmark          # row kernels and parsing, synthetic
+cd tests && ./bin/tests benchmark --wait 30 # the same, once the machine is quiet
 cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
 cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv
                                            # after recompiling a shader
@@ -1132,10 +1133,12 @@ it, so with one worker per core there was always one more runnable task than
 there were cores, the operating system took a core from a worker, and the
 whole job waited for that worker because a job is not done until its slowest
 share is. It now takes the last share itself instead of waiting. Pinned, eight
-shares went from 9326 Me/s to 14182. Taken again with the command above, and
-with the tool taking its own medians, eight shares reads 12420 Me/s against
-seven at 12007 -- the point being that eight no longer falls below seven,
-which is what the change was for. The 9326 is history: it needs the commit
+shares went from 9326 Me/s to 14182. Taken again with the command above at a
+load of 1.03, eight shares reads 10122 Me/s against seven at 10713 -- so with
+one vector a pass eight still falls a little below seven, by six per cent
+where it used to fall by a quarter. Batched it does not: thirty-two vectors a
+pass reads 21234 at eight against 21035 at seven. What the change was for was
+the quarter, and that is gone. The 9326 is history: it needs the commit
 before the change, and it is quoted here as the reason rather than as
 something a reader can reproduce.
 
@@ -1156,10 +1159,12 @@ host that cannot answer says so rather than guessing. `--threads` overrides it
 everywhere and still accepts any number the backend allows.
 
 What is left over is not the memory. Measured on its own, away from the model,
-the matrix product reaches about 5.0x on eight shares against its own serial
-rate, and reaches it whether one vector is passed or thirty-two -- 2465 to
-12420 Me/s in the first case and 4600 to 22977 in the second, medians of three
-runs, pinned.
+the matrix product reaches about 4.9x on eight shares against its own serial
+rate, and reaches it whether one vector is passed or thirty-two -- 2231 to
+10122 Me/s in the first case and 4317 to 21234 in the second, medians of three
+runs, pinned, at a load of 1.03 rising to 2.68. The one-vector case peaks at
+seven shares rather than eight, 10713 Me/s against 10122, which the batched
+case does not do.
 If memory were the wall those two would part company, because the second reads
 each weight byte once for thirty-two multiplies and the first reads it once
 for one. At eight shares the product moves 13.2 GB/s, which this machine is
@@ -1179,13 +1184,13 @@ ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
 end. That gap was the contention, not the bytes: with the contention gone the
 four-bit format is within a few per cent of the eight-bit one either way --
-12541 Me/s against 12420 at eight shares with one vector, 17820 against 22977
-with thirty-two, 2544 against 2465 serially -- and end to end the two are
-indistinguishable, 2.06 and 2.18 s against 2.06 and 2.26. The one gap left is
-the four-bit format at thirty-two vectors and eight shares, which fell from
-its own seven-share figure of 20023 in this sitting; it does the same at four
-shares and above in every run taken here, and it is the only place the two
-formats are not level.
+8636 Me/s against 10122 at eight shares with one vector, 22332 against 21234
+with thirty-two, 2451 against 2231 serially -- and end to end the two are
+indistinguishable, 2.06 and 2.18 s against 2.06 and 2.26. Which of the two
+leads changes with the case and with the run: four-bit is ahead serially and
+batched and behind at eight shares with one vector, and it was the other way
+round in the sitting before this one. That is the finding -- they are level,
+and a gap either way at one shape is the machine rather than the format.
 
 It is worth keeping as a lesson rather than a result. A measurement taken
 while something else is the bottleneck measures that other thing, and the way
@@ -1387,7 +1392,12 @@ equally exposed to whatever else is running: the processor side competes with
 it and the device side mostly waits on a fence, so other work moves the ratio
 and a ratio that moves with the machine is a figure about the machine.
 `--anyway` measures regardless, for a reader who wants the shape of an answer
-rather than a figure to publish. For the same reason the device rows are the
+rather than a figure to publish, and `--wait MINUTES` waits for the machine
+instead of refusing it -- which is what a caller who wants figures rather
+than an answer now actually wants, and which `tests speed` takes too. Every
+figure in this file retaken this week came through a loop outside the
+repository that polled the load and started the tool when it fell; that loop
+belongs here. For the same reason the device rows are the
 best of their rounds rather than the middle one -- the least interrupted
 round is the closest the two sides get to being measured on the same machine
 -- while every other figure here stays a median, being a whole-run time on

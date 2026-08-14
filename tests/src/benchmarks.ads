@@ -26,9 +26,13 @@ package Benchmarks is
    --  @param Rounds How many rounds to take the median of.
    --  @param Anyway Measure even on a busy machine, for a caller who wants
    --    the shape of an answer rather than a figure to publish.
+   --  @param Wait Minutes to wait for the machine to go quiet before giving
+   --    up on it. Zero refuses at once, which is what a caller who is
+   --    watching wants; a caller who is not wants to come back to figures.
    procedure Run
      (Seconds : Duration := 0.5;
       Rounds  : Positive := 3;
-      Anyway  : Boolean := False);
+      Anyway  : Boolean := False;
+      Wait    : Natural := 0);
 
 end Benchmarks;

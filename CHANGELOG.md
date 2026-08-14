@@ -5,6 +5,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`--wait MINUTES` on `tests speed` and `tests benchmark`,** which waits for
+  the machine to go quiet instead of refusing it. Every figure retaken this
+  week came through a loop that polled the load and started the tool when it
+  fell -- a shell script outside the repository, which is both the wrong
+  language for this project and the wrong place for a thing every measurement
+  needs. It says what it is waiting for while it waits, and gives up with a
+  failure rather than measuring something not worth publishing.
+
+### Changed
+
+- **The pinned scaling figures retaken,** which was the last group recording
+  no load. At a load of 1.03 rising to 2.68: eight shares reads 10122 Me/s
+  with one vector against the published 12420, and seven reads 10713 against
+  12007 -- so the peak at seven that the last change removed is back, at six
+  per cent where it used to be a quarter. Batched there is no peak at all,
+  21234 at eight against 21035 at seven.
+
+  The four-bit against eight-bit numbers swapped sides: four-bit now leads
+  serially and batched and trails at eight shares with one vector, where last
+  time it was the reverse. Two runs disagreeing about which is ahead at one
+  shape is what level looks like, and the README says that rather than
+  picking whichever run reads better.
+
 ### Changed
 
 - **The worker-count comparison retaken, and the reasoning built on it

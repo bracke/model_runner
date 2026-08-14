@@ -61,4 +61,26 @@ package Host_Load is
    function Publishable (Load : Long_Float) return Boolean
    is (Load <= Too_Busy);
 
+   --  Wait for the machine to be quiet enough to publish a figure from.
+   --
+   --  Every figure retaken this week came through a loop that polled the
+   --  load and started the tool when it dropped -- a shell script outside
+   --  the repository, which is both the wrong language for this project and
+   --  the wrong place for a thing every measurement needs. The tools refused
+   --  and exited; what a caller wanted was to be told when.
+   --
+   --  Polled rather than waited on, because there is nothing to wait on: the
+   --  load average is a number in a file that other people's work moves.
+   --  Once a second is often enough for a number that is an average over a
+   --  minute.
+   --
+   --  @param Minutes How long to keep looking. Zero looks once.
+   --  @param Say Called with each load seen, so a caller can show that it is
+   --    waiting rather than hung. Not called at all when the first look
+   --    succeeds.
+   --  @return True when the machine went quiet, False when the time ran out.
+   function Wait_For_Quiet
+     (Minutes : Natural;
+      Say     : access procedure (Load : Long_Float) := null) return Boolean;
+
 end Host_Load;
