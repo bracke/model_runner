@@ -194,6 +194,26 @@
 # tensors and multiply them. Not re-measured: these two were taken again
 # three commits ago on this machine, and taking them again for a type
 # declaration would say what that run already says.
+# 2026-08-14, the benchmark measures every format on the device. It measured
+# the three the shader used to decode; the other twelve had arrived as
+# branches with nothing timing them.
+#
+# Re-measured from one run at a load of 1.29: the fifteen device ratios, the
+# two batched ones and the row-product table, all published. The finding is
+# that the device's advantage tracks how badly the processor's own decoder
+# vectorizes -- four to one on Q5_0, Q5_1, IQ4_NL and IQ4_XS, which are the
+# formats a per-lane shift or a gather makes slow on x86, and a quarter on
+# the formats the processor is best at.
+#
+# The scaling group was not re-measured, and this is the reason. Its
+# fingerprint moved because benchmarks.adb is in its source list and
+# benchmarks.adb changed; the change is which formats the device section
+# asks for, and the share-scaling loop it covers is not touched by it. Read
+# the diff rather than take this on trust: it is one call list. The figures
+# that group covers were taken pinned, which this run was not, so replacing
+# them with unpinned numbers would be a worse measurement rather than a
+# newer one.
+
 # 2026-08-13, the shader learnt the other twelve formats. It decoded three of
 # the fifteen and now decodes all of them, so nothing needs repacking to
 # reach a device.
@@ -248,7 +268,7 @@
 # that these figures predate the tool reporting a load, so the conditions
 # they were taken under are not recorded anywhere -- unlike every figure
 # taken from here on.
-kernels 0FBE78DC1ADD0533 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb
+kernels 11A9A932E54C7D15 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb
 
 # covers: the twelve-token figure, the worker-count and share-count
 # comparisons, and the batch-size table under "Speed". Re-measure all four
@@ -564,7 +584,7 @@ reference 3207358E3CF55CF8 src/library/model_runner-backend-reference.adb src/li
 # The processor column moved more between measurements than the device
 # column did, again, which is the second time that has happened and is why
 # the caveat under the table now gives all three pairs rather than one.
-device 92DFAAC22E69DC74 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 684204F00236F56C src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -579,7 +599,7 @@ device 92DFAAC22E69DC74 src/shaders/row_product.comp src/library/model_runner-sh
 drafting 7AF158134D50D29B src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
-scaling FC71DC797AAD6688 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb
+scaling 41CE6001CEE38740 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker

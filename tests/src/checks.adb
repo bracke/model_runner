@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Directories;
 with Ada.Text_IO;
 with Interfaces;
@@ -2495,6 +2496,201 @@ package body Checks is
          if Named = 0 then
             Fail ("no accounting categories were found; the check no longer "
                   & "matches the source it reads");
+         end if;
+      end;
+
+      --  Every unit carries compilation evidence no older than the switches.
+      --
+      --  The check above reads the logs a compilation leaves behind, and a
+      --  log is only written when a unit is compiled. So a unit nobody has
+      --  compiled since a style switch was turned on has no log, and reads
+      --  as clean -- which is how five hundred and forty-seven warnings sat
+      --  in this tree while the gate said there were none. Fifty of ninety
+      --  library sources had a log; the other forty were vouched for by
+      --  nothing, and the tree could not be built from clean at all, which
+      --  is why nobody found out.
+      --
+      --  What is checked is the .ali file, because that is written for every
+      --  compilation whether or not anything was said, where a .stderr is
+      --  not: one body in this tree has an object and no .stderr, so
+      --  requiring a log per unit would fail on a unit that is perfectly
+      --  well compiled. The .ali must be newer than its source and newer
+      --  than every project file, since the project files are where the
+      --  switches live: an .ali older than the switches was made under
+      --  different ones and says nothing about these.
+      --
+      --  The remedy is a build from clean. That is the point: this check is
+      --  how a tree that cannot be built from clean says so.
+      declare
+         use type Ada.Calendar.Time;
+
+         Newest_Project : Ada.Calendar.Time :=
+           Ada.Calendar.Time_Of (1901, 1, 1);
+
+         Missing : Natural := 0;
+         Stale   : Natural := 0;
+         Named   : Natural := 0;
+
+         --  The newest .ali for a unit across every object directory, or the
+         --  epoch when there is none. Both build profiles are looked in,
+         --  because either is a real build and neither is preferred here.
+         function Evidence_Time (Unit : String) return Ada.Calendar.Time is
+            Best : Ada.Calendar.Time := Ada.Calendar.Time_Of (1901, 1, 1);
+
+            procedure Consider_Place (Place : String) is
+               Path : constant String := Place & "/" & Unit & ".ali";
+            begin
+               if Ada.Directories.Exists (Path) then
+                  declare
+                     When_Made : constant Ada.Calendar.Time :=
+                       Ada.Directories.Modification_Time (Path);
+                  begin
+                     if When_Made > Best then
+                        Best := When_Made;
+                     end if;
+                  end;
+               end if;
+            end Consider_Place;
+         begin
+            Consider_Place (Root & "/obj/development");
+            Consider_Place (Root & "/obj/release");
+            Consider_Place (Root & "/tests/obj/development");
+            Consider_Place (Root & "/tests/obj/release");
+            Consider_Place (Root & "/tools/obj/development");
+            Consider_Place (Root & "/tools/obj/release");
+            return Best;
+         end Evidence_Time;
+
+         --  Every project file, wherever it sits, because a switch changed
+         --  in any of them changes what a compilation would say.
+         procedure Note_Projects (Place : String) is
+            Search : Ada.Directories.Search_Type;
+            Item   : Ada.Directories.Directory_Entry_Type;
+         begin
+            if not Ada.Directories.Exists (Place) then
+               return;
+            end if;
+
+            Ada.Directories.Start_Search
+              (Search, Place, "*.gpr",
+               [Ada.Directories.Ordinary_File => True, others => False]);
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Item);
+               declare
+                  When_Made : constant Ada.Calendar.Time :=
+                    Ada.Directories.Modification_Time
+                      (Ada.Directories.Full_Name (Item));
+               begin
+                  if When_Made > Newest_Project then
+                     Newest_Project := When_Made;
+                  end if;
+               end;
+            end loop;
+            Ada.Directories.End_Search (Search);
+         end Note_Projects;
+
+         --  One source: what unit is it part of, and is that unit vouched
+         --  for? A spec beside a body is compiled with the body and shares
+         --  its evidence, so only the body is asked about.
+         procedure Consider (Path : String) is
+            Simple : constant String := Ada.Directories.Simple_Name (Path);
+            Unit   : constant String :=
+              Ada.Directories.Base_Name (Simple);
+            Kind   : constant String := Ada.Directories.Extension (Simple);
+         begin
+            if Kind /= "adb" and then Kind /= "ads" then
+               return;
+            end if;
+
+            if Kind = "ads"
+              and then Ada.Directories.Exists
+                         (Ada.Directories.Containing_Directory (Path)
+                          & "/" & Unit & ".adb")
+            then
+               return;
+            end if;
+
+            Named := Named + 1;
+
+            declare
+               Made_At : constant Ada.Calendar.Time := Evidence_Time (Unit);
+               Source_At : constant Ada.Calendar.Time :=
+                 Ada.Directories.Modification_Time (Path);
+            begin
+               if Made_At = Ada.Calendar.Time_Of (1901, 1, 1) then
+                  Missing := Missing + 1;
+                  if Missing <= 5 then
+                     Fail (Unit & " has never been compiled here, so the "
+                           & "warning check vouches for nothing in it; "
+                           & "build from clean");
+                  end if;
+               elsif Made_At < Source_At or else Made_At < Newest_Project then
+                  Stale := Stale + 1;
+                  if Stale <= 5 then
+                     Fail (Unit & " was last compiled before its source or "
+                           & "the switches changed, so its warning log is "
+                           & "evidence about a different build; build from "
+                           & "clean");
+                  end if;
+               end if;
+            end;
+         end Consider;
+
+         --  Sources lie in a tree rather than a directory: the platform
+         --  bodies are three levels down.
+         procedure Walk (Place : String) is
+            Search : Ada.Directories.Search_Type;
+            Item   : Ada.Directories.Directory_Entry_Type;
+         begin
+            if not Ada.Directories.Exists (Place) then
+               return;
+            end if;
+
+            Ada.Directories.Start_Search
+              (Search, Place, "",
+               [Ada.Directories.Ordinary_File => True,
+                Ada.Directories.Directory => True,
+                others => False]);
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Item);
+               declare
+                  Simple : constant String :=
+                    Ada.Directories.Simple_Name (Item);
+                  Full : constant String :=
+                    Ada.Directories.Full_Name (Item);
+               begin
+                  if Simple /= "." and then Simple /= ".." then
+                     if Ada.Directories."=" (Ada.Directories.Kind (Item),
+                                             Ada.Directories.Directory)
+                     then
+                        Walk (Full);
+                     else
+                        Consider (Full);
+                     end if;
+                  end if;
+               end;
+            end loop;
+            Ada.Directories.End_Search (Search);
+         end Walk;
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         Note_Projects (Root);
+         Note_Projects (Root & "/tests");
+         Note_Projects (Root & "/tools");
+
+         Walk (Root & "/src");
+         Walk (Root & "/tests/src");
+         Walk (Root & "/tools/src");
+
+         if Named = 0 then
+            Fail ("no sources were found to check for compilation evidence, "
+                  & "so this check is looking in the wrong place");
+         elsif Missing + Stale > 5 then
+            Fail (Natural'Image (Missing + Stale) & " of"
+                  & Natural'Image (Named)
+                  & " units carry no current compilation evidence; the "
+                  & "warning check speaks only for the rest");
          end if;
       end;
 

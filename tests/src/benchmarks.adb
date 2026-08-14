@@ -1368,12 +1368,40 @@ package body Benchmarks is
          if Ready then
             IO.Put_Line
               ("device backend against the CPU one, serial, matrix resident");
-            Measure_Device_Ratio ("q8_0, one vector per pass  ");
-            Measure_Device_Ratio ("q4_0, one vector per pass  ", G.Type_Q4_0);
-            Measure_Device_Ratio ("f32,  one vector per pass  ", G.Type_F32);
-            Measure_Device_Ratio ("q8_0, eight per pass       ",
+
+            --  Every format the shader decodes, one vector per pass. It read
+            --  three of the fifteen until recently and this measured the
+            --  three; the other twelve arrived as branches nobody had timed,
+            --  which is how a format ends up correct and four times slower
+            --  than the one beside it with nothing to say so.
+            --
+            --  The order is the shader's own, so a reader comparing this
+            --  against the branches reads them in the same sequence.
+            Measure_Device_Ratio ("f32,   one vector per pass ", G.Type_F32);
+            Measure_Device_Ratio ("f16,   one vector per pass ", G.Type_F16);
+            Measure_Device_Ratio ("bf16,  one vector per pass ", G.Type_BF16);
+            Measure_Device_Ratio ("q4_0,  one vector per pass ", G.Type_Q4_0);
+            Measure_Device_Ratio ("q4_1,  one vector per pass ", G.Type_Q4_1);
+            Measure_Device_Ratio ("q5_0,  one vector per pass ", G.Type_Q5_0);
+            Measure_Device_Ratio ("q5_1,  one vector per pass ", G.Type_Q5_1);
+            Measure_Device_Ratio ("q8_0,  one vector per pass ", G.Type_Q8_0);
+            Measure_Device_Ratio ("iq4nl, one vector per pass ",
+                                  G.Type_IQ4_NL);
+            Measure_Device_Ratio ("q2_k,  one vector per pass ", G.Type_Q2_K);
+            Measure_Device_Ratio ("q3_k,  one vector per pass ", G.Type_Q3_K);
+            Measure_Device_Ratio ("q4_k,  one vector per pass ", G.Type_Q4_K);
+            Measure_Device_Ratio ("q5_k,  one vector per pass ", G.Type_Q5_K);
+            Measure_Device_Ratio ("q6_k,  one vector per pass ", G.Type_Q6_K);
+            Measure_Device_Ratio ("iq4xs, one vector per pass ",
+                                  G.Type_IQ4_XS);
+
+            --  And the batch, on the format a model of this machine's size
+            --  is actually written in. What a batch buys is the same
+            --  arithmetic for every format, so measuring all fifteen twice
+            --  more would say what these two say.
+            Measure_Device_Ratio ("q8_0,  eight per pass      ",
                                   G.Type_Q8_0, 8);
-            Measure_Device_Ratio ("q8_0, thirty-two per pass  ",
+            Measure_Device_Ratio ("q8_0,  thirty-two per pass ",
                                   G.Type_Q8_0, 32);
             IO.New_Line;
          else

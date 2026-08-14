@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The gate refuses evidence it cannot vouch for.** The no-warnings check
+  reads the logs a compilation leaves behind, and a log is only written when
+  a unit is compiled -- so a unit nobody has compiled since a switch was
+  turned on has none and reads as clean. That is how 547 warnings sat in this
+  tree while the gate said there were none. Every unit must now carry an
+  `.ali` no older than its source and no older than any project file, so a
+  unit compiled under different switches, or never compiled here at all,
+  fails the gate instead of passing it silently. The remedy is a build from
+  clean, which is the point: this is how a tree that cannot be built from
+  clean says so. It could not be, and nobody knew.
+
+  The `.ali` is what is checked rather than the log, because that one is
+  written for every compilation whether anything was said or not; one body in
+  this tree has an object and no log.
+
+- **`tests benchmark` measures every format on the device.** It measured the
+  three the shader used to decode, so the twelve branches added last week
+  arrived with nothing timing them -- and a format can be perfectly correct
+  and four times slower than the one beside it with nothing to say so.
+
+  The finding is that the device's advantage tracks how badly the processor's
+  own decoder vectorizes rather than anything about the device. It wins by
+  four to one on IQ4_NL, Q5_1, Q5_0 and IQ4_XS -- the formats where a
+  per-lane shift or a gather stops baseline x86-64 vectorizing -- and by a
+  quarter on the formats the processor is best at. The ordering of the
+  fifteen is nearly the reverse of the per-element table under Kernels, which
+  is the same fact said twice.
+
+  Published with the row-product table, both from one run at a load of 1.29.
+
 - **The device shader decodes every format the program reads.** It decoded
   three of the fifteen -- binary32, Q8_0 and Q4_0 -- and the other twelve
   reached a device only through `--repack f32`: a pass over the whole model

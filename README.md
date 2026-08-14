@@ -1336,7 +1336,7 @@ statistics say which of the three happened.
 
 Under the model, one product at a time, `tests benchmark` measures where that
 leaves each format. It prints the machine's load at both ends of its run --
-1.29 rising to 2.63 for the figures below -- and **refuses to measure at all
+1.29 rising to 3.62 for the figures below -- and **refuses to measure at all
 above a load of 1.5**, because a ratio of a device against a processor is not
 equally exposed to whatever else is running: the processor side competes with
 it and the device side mostly waits on a fence, so other work moves the ratio
@@ -1348,44 +1348,76 @@ round is the closest the two sides get to being measured on the same machine
 -- while every other figure here stays a median, being a whole-run time on
 one side only, where a middle round is what a caller would see.
 
-That is not a formality. Taking the figures again this way moved the
+That is not a formality. Taking the figures again that way moved the
 single-vector rows and left the batched ones where they were:
 
-| Per pass | Before, at load 2.34-3.11 | Now, at 1.29-2.63 |
+| Per pass | At load 2.34-3.11 | At load 1.36-2.96 |
 | --- | --- | --- |
-| q8_0, one vector | 0.74 | 0.77 |
-| q4_0, one vector | 0.83 | 0.96 |
-| f32, one vector | 1.33 | 1.49 |
-| q8_0, eight vectors | 0.27 | 0.25 |
-| q8_0, thirty-two vectors | 0.104 | 0.104 |
+| q8_0, one vector | 0.74 | 0.81 |
+| q4_0, one vector | 0.83 | 0.97 |
+| f32, one vector | 1.33 | 1.42 |
+| q8_0, eight vectors | 0.27 | 0.24 |
+| q8_0, thirty-two vectors | 0.104 | 0.105 |
 
 Which is what the bias predicted: the single-vector cases are the close ones,
 where a processor slowed by other work is most of the difference, and the
 batched cases are so far in the device's favour that the machine around them
-barely shows. The device was being flattered by up to a sixth exactly where
-the answer was in doubt. A 512 by 2048 matrix, resident, against the serial
+barely shows.
+
+All fifteen formats are measured now, which they were not while the shader
+decoded three of them: twelve branches arrived with nothing timing them, and
+a format can be perfectly correct and four times slower than the one beside
+it with nothing to say so. A 512 by 2048 matrix, resident, against the serial
 processor path -- the device's time as a fraction of it, so below one is
-faster there:
+faster there, taken in one run at a load of 1.29 rising to 3.62:
 
-| Per pass | Device time / processor time |
+| Format | Ratio | Format | Ratio |
+| --- | --- | --- | --- |
+| IQ4_NL | 0.23 | Q4_1 | 0.74 |
+| Q5_1 | 0.29 | Q8_0 | 0.74 |
+| Q5_0 | 0.30 | Q5_K | 0.79 |
+| IQ4_XS | 0.31 | Q4_K | 0.84 |
+| Q2_K | 0.42 | Q6_K | 0.87 |
+| Q3_K | 0.64 | Q4_0 | 0.93 |
+| | | F16 | 1.04 |
+| | | BF16 | 1.74 |
+| | | F32 | 1.98 |
+
+| Per pass, batched | Ratio |
 | --- | --- |
-| q8_0, one vector | 0.77 |
-| q4_0, one vector | 0.96 |
-| f32, one vector | 1.49 |
-| q8_0, eight vectors | 0.25 |
-| q8_0, thirty-two vectors | 0.104 |
+| q8_0, eight vectors | 0.24 |
+| q8_0, thirty-two vectors | 0.12 |
 
-Binary32 is the one format the device is slower at, and that is the finding
-rather than a disappointment: it is four bytes a weight where q8_0 is one, so
-the vector-per-pass case is bus-bound and the decoding the shader does is
-what buys the other rows. The batch rows are where the shader's eight
-accumulators show: thirty-two vectors a pass cost a tenth of what the
-processor spends on them.
+Read that column as a statement about the processor as much as about the
+device, because that is what it is. The formats the device wins hardest on
+are exactly the ones the processor's own kernels are worst at, and for
+reasons already written down in the Kernels section: Q5_0 and Q5_1 keep the
+fifth bit at a varying place in a thirty-two bit word, so the shift amount
+varies with the element and baseline x86-64 cannot vectorize that loop;
+IQ4_NL and IQ4_XS index a table of sixteen levels, which is a gather and does
+not vectorize either. A device does not care about either -- it has lanes
+that shift by their own amount and lanes that gather -- so it wins by four to
+one where the processor is crippled and by a quarter where the processor is
+at its best. The ordering of the two columns is nearly the reverse of the
+per-element table under Kernels, which is the same fact said twice.
+
+Binary32 is the one format the device is clearly slower at, and that is the
+finding rather than a disappointment: it is four bytes a weight where q8_0 is
+one, so the vector-per-pass case is bus-bound and the decoding the shader
+does is what buys the other rows. BF16 is the same story at half the bytes.
+The batch rows are where the shader's eight accumulators show: thirty-two
+vectors a pass cost an eighth of what the processor spends on them.
+
+A single-vector ratio is the noisiest figure in this file. The f32 row read
+1.33, 1.42, 1.49 and 1.98 across four runs at different loads -- it is the
+row where the least work is done per byte moved, so it is the row the machine
+around it moves most. The batched rows and the strongly-quantized rows are
+steady to a few per cent.
 
 The arithmetic is not the processor's: the shader accumulates a row in
 binary32 where the kernels accumulate in binary64 and round once. What that
 costs is measured in the conformance section above, over every architecture
-and each of the three formats the device reads.
+and every one of the fifteen formats the device reads.
 
 ### Drafting
 
@@ -1586,13 +1618,13 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.29 | Q3_K | 0.50 |
+| F32 | 0.29 | Q3_K | 0.51 |
 | Q4_0 | 0.33 | F16 | 0.59 |
-| BF16 | 0.33 | Q2_K | 0.74 |
-| Q4_K | 0.39 | IQ4_XS | 0.95 |
-| Q6_K | 0.40 | Q5_0 | 1.08 |
-| Q8_0 | 0.40 | Q5_1 | 1.12 |
-| Q5_K | 0.43 | IQ4_NL | 1.44 |
+| BF16 | 0.34 | Q2_K | 0.74 |
+| Q4_K | 0.40 | IQ4_XS | 0.96 |
+| Q6_K | 0.40 | Q5_0 | 1.10 |
+| Q8_0 | 0.41 | Q5_1 | 1.12 |
+| Q5_K | 0.43 | IQ4_NL | 1.46 |
 | Q4_1 | 0.45 | | |
 
 The two five-bit legacy formats are outliers, and the reason is where they
