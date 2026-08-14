@@ -5,6 +5,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **Three figure groups retaken with their loads recorded,** which is what
+  the load lines were added for. Every one of them moved by more than the
+  code changes between then and now can account for: the twelve-token figure
+  from 1.37 s to 1.87 s, the reference comparison from thirteen times the
+  work to eleven, the drafted run from 4.094 s to 5.705 s and the check of
+  five positions from 396 ms to 540 ms.
+
+  That is the argument for recording the load, made by the figures
+  themselves. The older ones were taken on a machine whose state nobody
+  wrote down, so nothing can say how much of each gap is the machine and how
+  much is the program. From here on something can.
+
+  Two groups still say unknown: the pinned scaling figures and the
+  tokenizer's, which was timed by the shell. The count is reported by the
+  gate and comes down as groups are retaken.
+
 ### Added
 
 - **`tests check` finds the line that breaks a catalog.** The runtime refuses

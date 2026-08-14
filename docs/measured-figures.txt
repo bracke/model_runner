@@ -194,6 +194,22 @@
 # tensors and multiply them. Not re-measured: these two were taken again
 # three commits ago on this machine, and taking them again for a type
 # declaration would say what that run already says.
+# 2026-08-14, the figures retaken with their loads. Three groups had none
+# recorded and now have: the twelve-token figure, the reference comparison
+# and the drafting trio. Every one of them moved, and by more than the
+# change to the code between then and now could account for -- the
+# twelve-token figure from 1.37 s to 1.87 s, the reference ratio from
+# thirteen times to eleven, the drafted run from 4.094 s to 5.705 s.
+#
+# That is the argument for recording the load, made by the figures
+# themselves. The older ones were taken on a machine whose state nobody
+# wrote down, so there is no way to tell how much of the gap is the machine
+# and how much is the program. From here on there is.
+#
+# What it cost: the tools refuse to measure above a load of 1.5, and this
+# machine sat above it nearly all day. The runs waited for windows and took
+# them one at a time.
+
 # 2026-08-14, the busy-machine bound moved to Host_Load so that `tests speed`
 # refuses on it too. Three groups moved for it. Not re-measured, and the
 # reason is that nothing measured changed: the bound and the predicate moved
@@ -512,7 +528,11 @@ kernels E942FD537CAF9EAC src/library/model_runner-quantization.adb src/library/m
 # published 1.28, on a machine running three other agents at a load average
 # of 2.5 on eight cores. Not republished for that reason, and the generated
 # text is unchanged: the same output digest, 7784f071e5740782.
-# load: unknown -- taken before the tools reported one
+# load: the twelve-token figure at 1.29 rising to 1.54, 2026-08-14. The
+#       worker-count and batch-size tables beside it were not retaken and
+#       carry no load: they come from the operating system's timing tool
+#       rather than from `tests speed`, which is a second thing to fix and
+#       not this one.
 engine 301C9594319D4312 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
@@ -522,7 +542,8 @@ engine 301C9594319D4312 src/library/model_runner-llama.adb src/library/model_run
 # that was added.
 # 2026-08-12, the same two changes, and this group is a ratio between two
 # backends neither of which the memory check applies to.
-# load: unknown -- taken before the tools reported one
+# load: 1.10 to 1.74 for the processor side and 1.25 to 1.57 for the
+#       reference side, taken minutes apart, 2026-08-14
 reference 1E1536F7C9964FB0 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
@@ -702,7 +723,7 @@ device 4C4089E8119C08B8 src/shaders/row_product.comp src/library/model_runner-sh
 # the file the drafting loop is written in, so the loop could have been
 # rewritten without anything asking for a re-measure. A figure covered by a
 # group that does not name its own source is a figure covered by nothing.
-# load: unknown -- taken before the tools reported one
+# load: 1.19 to 2.52 across the three runs, 2026-08-14
 drafting 97362A7348F89F3F src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
