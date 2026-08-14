@@ -69,6 +69,25 @@ package Model_Runner.Platform.Device.Products is
    --  What holds a device's pipeline for the product.
    type Engine is limited private;
 
+   --  Give back every matrix the device is holding, and keep the pipeline.
+   --
+   --  A resident matrix is remembered by where its bytes lie, what shape
+   --  they have and what format they are in. That names a matrix for as long
+   --  as it exists, and no longer: once the storage is freed, another matrix
+   --  of the same shape and format can be put at the same address, and the
+   --  device would answer for the second with the first one's weights.
+   --
+   --  So whoever frees the storage has to say so, and a model closing is
+   --  exactly that moment. It is not a hypothetical: the conformance sweep
+   --  opens and closes a model per format and architecture with the device
+   --  open across all of them, and the allocator returns the address it has
+   --  just taken often enough that a run in every three or four came out
+   --  wrong -- by a fifth of a logit, which is a wrong answer and not a
+   --  rounding difference.
+   --
+   --  @param Item Engine to empty; harmless on one that holds nothing.
+   procedure Forget_Matrices (Item : in out Engine);
+
    --  Prepare a device to compute products.
    --
    --  @param Item Engine to fill; released first.

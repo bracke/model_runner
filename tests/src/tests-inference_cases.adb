@@ -1185,6 +1185,48 @@ package body Tests.Inference_Cases is
             end loop;
          end;
 
+         --  A model that closes takes the device's memory of it with it.
+         --
+         --  The device remembers a matrix by where its bytes lie, what shape
+         --  they are and what format they are in, and that names a matrix
+         --  only while it exists. Once this model's storage is freed another
+         --  model's tensor can land on the same address with the same shape,
+         --  and the device would answer for the second with the first one's
+         --  weights.
+         --
+         --  That is not a hypothetical, which is how it was found: the
+         --  conformance sweep opens and closes a model per format and
+         --  architecture with the device open across all of them, and about
+         --  half its runs came out wrong -- by a fifth of a logit, which is
+         --  a wrong answer rather than a rounding difference, and it moved
+         --  from run to run because it depended on what the allocator handed
+         --  back.
+         --
+         --  What is checked here is the invariant rather than the symptom,
+         --  because the symptom needs an allocator to reuse an address and a
+         --  test cannot insist on that. The sweep is what would catch a
+         --  behaviour regression; this catches the mechanism going away.
+         if Model_Runner.Backend.Device.Is_Ready then
+            Assert (Model_Runner.Backend.Device.Resident > 0,
+                    "the device held nothing before the model closed, so "
+                    & "what follows would pass whatever the close did");
+            L.Close (Model, Status);
+            Assert (Model_Runner.Backend.Device.Resident = 0,
+                    "the device still held"
+                    & Natural'Image (Model_Runner.Backend.Device.Resident)
+                    & " matrices of a model that has closed, so the next "
+                    & "model to take those addresses would be answered with "
+                    & "this one's weights");
+
+            --  And saying it again to a device holding nothing is harmless,
+            --  which the spec promises and the model path relies on: a model
+            --  that never touched a device says it too, because a model
+            --  cannot know whether the device holds its addresses.
+            Model_Runner.Backend.Device.Forget_Matrices;
+            Assert (Model_Runner.Backend.Device.Resident = 0,
+                    "forgetting an empty device left something behind");
+         end if;
+
          L.Close (Model, Status);
          Containers.Close (Item);
       end;

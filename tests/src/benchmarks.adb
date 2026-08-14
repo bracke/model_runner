@@ -1395,12 +1395,51 @@ package body Benchmarks is
             Measure_Device_Ratio ("iq4xs, one vector per pass ",
                                   G.Type_IQ4_XS);
 
-            --  And the batch, on the format a model of this machine's size
-            --  is actually written in. What a batch buys is the same
-            --  arithmetic for every format, so measuring all fifteen twice
-            --  more would say what these two say.
+            IO.New_Line;
+            IO.Put_Line
+              ("device backend, eight vectors a pass, matrix resident");
+
+            --  And the same fifteen batched. It was one format at two widths
+            --  on the argument that a batch buys the same arithmetic for
+            --  every format -- which is an argument, not a measurement, and
+            --  the one-vector column had just shown that what the device
+            --  wins is decided by the format rather than by the device. A
+            --  batch changes what the row is bound by, so it can change
+            --  which formats it favours, and that is exactly the sort of
+            --  claim this file exists to stop being made from an armchair.
+            Measure_Device_Ratio ("f32,   eight per pass      ",
+                                  G.Type_F32, 8);
+            Measure_Device_Ratio ("f16,   eight per pass      ",
+                                  G.Type_F16, 8);
+            Measure_Device_Ratio ("bf16,  eight per pass      ",
+                                  G.Type_BF16, 8);
+            Measure_Device_Ratio ("q4_0,  eight per pass      ",
+                                  G.Type_Q4_0, 8);
+            Measure_Device_Ratio ("q4_1,  eight per pass      ",
+                                  G.Type_Q4_1, 8);
+            Measure_Device_Ratio ("q5_0,  eight per pass      ",
+                                  G.Type_Q5_0, 8);
+            Measure_Device_Ratio ("q5_1,  eight per pass      ",
+                                  G.Type_Q5_1, 8);
             Measure_Device_Ratio ("q8_0,  eight per pass      ",
                                   G.Type_Q8_0, 8);
+            Measure_Device_Ratio ("iq4nl, eight per pass      ",
+                                  G.Type_IQ4_NL, 8);
+            Measure_Device_Ratio ("q2_k,  eight per pass      ",
+                                  G.Type_Q2_K, 8);
+            Measure_Device_Ratio ("q3_k,  eight per pass      ",
+                                  G.Type_Q3_K, 8);
+            Measure_Device_Ratio ("q4_k,  eight per pass      ",
+                                  G.Type_Q4_K, 8);
+            Measure_Device_Ratio ("q5_k,  eight per pass      ",
+                                  G.Type_Q5_K, 8);
+            Measure_Device_Ratio ("q6_k,  eight per pass      ",
+                                  G.Type_Q6_K, 8);
+            Measure_Device_Ratio ("iq4xs, eight per pass      ",
+                                  G.Type_IQ4_XS, 8);
+
+            --  One deeper batch, on the format a model of this machine's
+            --  size is actually written in, to say where the curve is going.
             Measure_Device_Ratio ("q8_0,  thirty-two per pass ",
                                   G.Type_Q8_0, 32);
             IO.New_Line;

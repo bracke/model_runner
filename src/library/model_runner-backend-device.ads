@@ -57,6 +57,15 @@ package Model_Runner.Backend.Device is
    --  Release the device and everything it holds. Idempotent.
    procedure Close;
 
+   --  Give back every matrix the device holds, and stay open.
+   --
+   --  Called when a model closes, because a resident matrix is remembered by
+   --  where its bytes lie: once that storage is freed, another matrix of the
+   --  same shape and format can take the address and the device would answer
+   --  for the second with the first one's weights. Safe to call with no
+   --  device, or with one holding nothing.
+   procedure Forget_Matrices;
+
    --  Report whether a device is open and ready.
    --
    --  @return True when Dispatch can succeed.

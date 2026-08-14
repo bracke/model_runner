@@ -1085,6 +1085,28 @@ package body Model_Runner.Platform.Device.Products is
       Ready := True;
    end Open;
 
+   --------------------------
+   -- Forget_Matrices --
+   --------------------------
+
+   procedure Forget_Matrices (Item : in out Engine) is
+      --  Buffers belong to the instance that made them, so the entry points
+      --  have to be the ones this engine was opened with.
+      Ignored : constant Boolean := Set_Asking (Item);
+   begin
+      for Index in 1 .. Item.Used loop
+         Give_Back_Buffer
+           (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory);
+         Item.Kept (Index).Key := Null_Handle;
+         Item.Kept (Index).Bytes := 0;
+         Item.Kept (Index).Rows := 0;
+         Item.Kept (Index).Columns := 0;
+      end loop;
+
+      Item.Used := 0;
+      Item.Kept_Bytes := 0;
+   end Forget_Matrices;
+
    procedure Close (Item : in out Engine) is
       --  Whatever this engine was opened on, which is nothing at all for an
       --  engine that never was.

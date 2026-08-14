@@ -1336,7 +1336,7 @@ statistics say which of the three happened.
 
 Under the model, one product at a time, `tests benchmark` measures where that
 leaves each format. It prints the machine's load at both ends of its run --
-1.29 rising to 3.62 for the figures below -- and **refuses to measure at all
+1.25 rising to 3.34 for the figures below -- and **refuses to measure at all
 above a load of 1.5**, because a ratio of a device against a processor is not
 equally exposed to whatever else is running: the processor side competes with
 it and the device side mostly waits on a fence, so other work moves the ratio
@@ -1364,32 +1364,30 @@ where a processor slowed by other work is most of the difference, and the
 batched cases are so far in the device's favour that the machine around them
 barely shows.
 
-All fifteen formats are measured now, which they were not while the shader
-decoded three of them: twelve branches arrived with nothing timing them, and
-a format can be perfectly correct and four times slower than the one beside
-it with nothing to say so. A 512 by 2048 matrix, resident, against the serial
-processor path -- the device's time as a fraction of it, so below one is
-faster there, taken in one run at a load of 1.29 rising to 3.62:
+All fifteen formats are measured now, one vector a pass and eight, which
+they were not while the shader decoded three of them: twelve branches
+arrived with nothing timing them, and a format can be perfectly correct and
+four times slower than the one beside it with nothing to say so. A 512 by
+2048 matrix, resident, against the serial processor path -- the device's time
+as a fraction of it, so below one is faster there, taken in one run at a load
+of 1.25 rising to 3.34:
 
-| Format | Ratio | Format | Ratio |
-| --- | --- | --- | --- |
-| IQ4_NL | 0.23 | Q4_1 | 0.74 |
-| Q5_1 | 0.29 | Q8_0 | 0.74 |
-| Q5_0 | 0.30 | Q5_K | 0.79 |
-| IQ4_XS | 0.31 | Q4_K | 0.84 |
-| Q2_K | 0.42 | Q6_K | 0.87 |
-| Q3_K | 0.64 | Q4_0 | 0.93 |
-| | | F16 | 1.04 |
-| | | BF16 | 1.74 |
-| | | F32 | 1.98 |
+| Format | One vector | Eight | | Format | One vector | Eight |
+| --- | --- | --- | --- | --- | --- | --- |
+| IQ4_NL | 0.24 | 0.15 | | Q3_K | 0.66 | 0.22 |
+| Q5_0 | 0.30 | 0.16 | | Q4_1 | 0.67 | 0.24 |
+| Q5_1 | 0.30 | 0.16 | | Q8_0 | 0.75 | 0.21 |
+| IQ4_XS | 0.34 | 0.18 | | Q4_0 | 0.80 | 0.24 |
+| Q2_K | 0.42 | 0.18 | | Q4_K | 0.84 | 0.25 |
+| F16 | 0.65 | 0.23 | | Q5_K | 0.86 | 0.22 |
+| | | | | Q6_K | 0.96 | 0.25 |
+| | | | | F32 | 1.39 | 0.26 |
+| | | | | BF16 | 1.41 | 0.29 |
 
-| Per pass, batched | Ratio |
-| --- | --- |
-| q8_0, eight vectors | 0.24 |
-| q8_0, thirty-two vectors | 0.12 |
+and q8_0 at thirty-two vectors a pass, which is 0.097.
 
-Read that column as a statement about the processor as much as about the
-device, because that is what it is. The formats the device wins hardest on
+Read the one-vector column as a statement about the processor as much as
+about the device, because that is what it is. The formats the device wins hardest on
 are exactly the ones the processor's own kernels are worst at, and for
 reasons already written down in the Kernels section: Q5_0 and Q5_1 keep the
 fifth bit at a varying place in a thirty-two bit word, so the shift amount
@@ -1398,21 +1396,37 @@ IQ4_NL and IQ4_XS index a table of sixteen levels, which is a gather and does
 not vectorize either. A device does not care about either -- it has lanes
 that shift by their own amount and lanes that gather -- so it wins by four to
 one where the processor is crippled and by a quarter where the processor is
-at its best. The ordering of the two columns is nearly the reverse of the
+at its best. The order of that column is nearly the reverse of the
 per-element table under Kernels, which is the same fact said twice.
 
-Binary32 is the one format the device is clearly slower at, and that is the
-finding rather than a disappointment: it is four bytes a weight where q8_0 is
-one, so the vector-per-pass case is bus-bound and the decoding the shader
-does is what buys the other rows. BF16 is the same story at half the bytes.
-The batch rows are where the shader's eight accumulators show: thirty-two
-vectors a pass cost an eighth of what the processor spends on them.
+Binary32 is the one format the device is clearly slower at with a single
+vector, and that is the finding rather than a disappointment: it is four
+bytes a weight where q8_0 is one, so the vector-per-pass case is bus-bound
+and the decoding the shader does is what buys the other rows. BF16 is the
+same story at half the bytes.
 
-A single-vector ratio is the noisiest figure in this file. The f32 row read
-1.33, 1.42, 1.49 and 1.98 across four runs at different loads -- it is the
-row where the least work is done per byte moved, so it is the row the machine
-around it moves most. The batched rows and the strongly-quantized rows are
-steady to a few per cent.
+The eight-vector column is where the argument that was standing in for a
+measurement turns out to have been wrong. Only q8_0 was batched here, on the
+reasoning that a batch buys the same arithmetic for every format and
+measuring all fifteen would say what one says. It does not. Batching
+compresses the whole spread: nine to one across the formats with one vector,
+two to one with eight. The formats the device was worst at gain most --
+binary32 goes from 1.39 to 0.26, from slower than the processor to four times
+faster -- because a batch reads each weight once for eight vectors, so the
+bus stops being the wall and what is left is arithmetic, which is what a
+device has. Every format lands between 0.15 and 0.29, and the ordering is
+still the processor's: the two five-bit formats and the two non-linear ones
+stay ahead because the processor is still bad at them, only now by a sixth
+rather than by four times.
+
+Thirty-two vectors a pass costs a tenth of the processor's time, so the curve
+is still bending at eight.
+
+A single-vector ratio is the noisiest figure in this file. The f32 row has
+read 1.33, 1.39, 1.42, 1.49 and 1.98 across five runs at different loads --
+it is the row where the least work is done per byte moved, so it is the row
+the machine around it moves most. The batched rows are steady to a few per
+cent.
 
 The arithmetic is not the processor's: the shader accumulates a row in
 binary32 where the kernels accumulate in binary64 and round once. What that
@@ -1618,13 +1632,13 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.29 | Q3_K | 0.51 |
-| Q4_0 | 0.33 | F16 | 0.59 |
-| BF16 | 0.34 | Q2_K | 0.74 |
-| Q4_K | 0.40 | IQ4_XS | 0.96 |
-| Q6_K | 0.40 | Q5_0 | 1.10 |
-| Q8_0 | 0.41 | Q5_1 | 1.12 |
-| Q5_K | 0.43 | IQ4_NL | 1.46 |
+| F32 | 0.28 | Q3_K | 0.50 |
+| Q4_0 | 0.32 | F16 | 0.59 |
+| BF16 | 0.33 | Q2_K | 0.73 |
+| Q4_K | 0.39 | IQ4_XS | 0.95 |
+| Q6_K | 0.39 | Q5_0 | 1.08 |
+| Q8_0 | 0.40 | Q5_1 | 1.11 |
+| Q5_K | 0.43 | IQ4_NL | 1.19 |
 | Q4_1 | 0.45 | | |
 
 The two five-bit legacy formats are outliers, and the reason is where they

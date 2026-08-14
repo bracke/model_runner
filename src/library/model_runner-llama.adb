@@ -1998,6 +1998,19 @@ package body Model_Runner.Llama is
 
       Item.Ready := False;
 
+      --  The device is told before the weights go, not after. It remembers a
+      --  matrix by where its bytes lie, and in a moment they will not be
+      --  there: another model's tensor of the same shape and format can land
+      --  on the same address, and the device would answer for it with this
+      --  model's weights. A run in three or four of the conformance sweep
+      --  came out wrong that way, by a fifth of a logit.
+      --
+      --  Told unconditionally rather than only when this model used the
+      --  device, because the device holds matrices by address and this
+      --  model's addresses are about to become anybody's. A model that never
+      --  touched a device gives back nothing, which costs nothing.
+      Model_Runner.Backend.Device.Forget_Matrices;
+
       if Item.Layers /= null then
          for Index in Item.Layers.all'Range loop
             T.Free (Item.Layers.all (Index).Attention_Norm);

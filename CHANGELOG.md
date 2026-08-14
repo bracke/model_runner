@@ -7,6 +7,61 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The gate can see the crates this build is made of.** Every dependency is
+  pinned to a sibling working tree, so a build compiles those trees as surely
+  as this one, and the checks read this repository's object directories only.
+  Sixty-three compilations in six pinned crates had left warnings behind that
+  were invisible from here, and a pinned crate that would not compile at all
+  was found by a build failing rather than by anything saying so.
+
+  Stale evidence in a pinned crate is refused, because that is a fact about
+  this build: sources newer than objects mean the dependency has not been
+  compiled since it changed, and nothing resting on it can be vouched for
+  either. Their warnings are listed rather than refused -- this repository
+  cannot hold another repository's tree to its own switches, and a gate that
+  went red for a sibling crate's warning would pass on one machine and no
+  other.
+
+  Subunits are recognized and skipped in both checks. A subunit is compiled
+  into its parent and has no object file of its own, and four ordinary files
+  in a pinned crate were reported as never compiled before this was fixed.
+
+- **The batch is measured for every format, and the argument it replaced was
+  wrong.** One format at two widths was measured, on the reasoning that a
+  batch buys the same arithmetic everywhere and measuring fifteen would say
+  what one says. It does not: batching compresses the spread across formats
+  from nine to one down to two to one, and the formats the device was worst
+  at gain most. Binary32 reads 1.39 with one vector and 0.26 with eight --
+  from slower than the processor to four times faster -- because a batch
+  reads each weight once for eight vectors, so the bus stops being the wall.
+
+  Thirty device ratios and the row-product table were published from one run
+  at a load of 1.25.
+
+### Fixed
+
+- **A device answered one model with another's weights.** It remembers a
+  matrix by where its bytes lie, what shape they are and what format they are
+  in, and that names a matrix only while it exists. Once a model closed and
+  its storage was freed, the next model's tensor could land on the same
+  address with the same shape, and the device answered for the second with
+  the first one's weights. A model closing now tells the device to give back
+  everything it holds.
+
+  The comment written when the residency key was fixed for format and shape
+  said this could not arise, because in this program the weights live as long
+  as the model does. That was true of the program and false of its own
+  conformance sweep, which opens and closes a model per format and
+  architecture with the device open across all of them -- and about half its
+  runs were failing by a fifth of a logit, moving from run to run because it
+  depended on what the allocator handed back. Four consecutive sweeps are
+  clean now where four before it read 0, 16, 80 and 96 logits outside
+  tolerance.
+
+  It surfaced only because the sweep began crossing the device in fifteen
+  formats instead of three, which is fifteen times as many models opened and
+  closed.
+
 - **The gate refuses evidence it cannot vouch for.** The no-warnings check
   reads the logs a compilation leaves behind, and a log is only written when
   a unit is compiled -- so a unit nobody has compiled since a switch was

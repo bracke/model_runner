@@ -184,6 +184,17 @@ package body Model_Runner.Backend.Device is
 
    function Given_Back return Natural is (Products.Given_Back (Engine));
 
+   ------------------------
+   -- Forget_Matrices --
+   ------------------------
+
+   procedure Forget_Matrices is
+   begin
+      if Products.Is_Ready (Engine) then
+         Products.Forget_Matrices (Engine);
+      end if;
+   end Forget_Matrices;
+
    ---------------
    -- Packing_Of --
    ---------------

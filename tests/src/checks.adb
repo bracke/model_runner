@@ -6,6 +6,7 @@ use type Interfaces.Unsigned_64;
 
 with Hostkit.Fs;
 
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Project_Tools.Ada_Source;
 with Project_Tools.Processes;
@@ -67,6 +68,47 @@ package body Checks is
          Result.Failed := Result.Failed + 1;
          Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, "  fail: " & Detail);
       end Fail;
+
+      --  A body that is part of another unit rather than one of its own.
+      --
+      --  A subunit is compiled into its parent and has no .ali of its own,
+      --  so asking for one would report four perfectly ordinary files in a
+      --  pinned crate as never compiled. It is recognized the way the
+      --  language defines it: the first thing that is not a comment or blank
+      --  is the word separate.
+      function Is_Subunit (Path : String) return Boolean is
+         Handle : Ada.Text_IO.File_Type;
+         Answer : Boolean := False;
+      begin
+         Ada.Text_IO.Open (Handle, Ada.Text_IO.In_File, Path);
+         while not Ada.Text_IO.End_Of_File (Handle) loop
+            declare
+               Line : constant String :=
+                 Ada.Strings.Fixed.Trim
+                   (Ada.Text_IO.Get_Line (Handle), Ada.Strings.Both);
+            begin
+               if Line'Length = 0
+                 or else (Line'Length >= 2
+                          and then Line (Line'First .. Line'First + 1) = "--")
+               then
+                  null;
+               else
+                  Answer :=
+                    Line'Length >= 9
+                    and then Line (Line'First .. Line'First + 8) = "separate ";
+                  exit;
+               end if;
+            end;
+         end loop;
+         Ada.Text_IO.Close (Handle);
+         return Answer;
+      exception
+         when others =>
+            if Ada.Text_IO.Is_Open (Handle) then
+               Ada.Text_IO.Close (Handle);
+            end if;
+            return False;
+      end Is_Subunit;
 
       procedure Check (Condition : Boolean; Detail : String) is
       begin
@@ -2499,6 +2541,272 @@ package body Checks is
          end if;
       end;
 
+      --  The crates this build is made of, beyond this one.
+      --
+      --  Every dependency here is pinned to a sibling working tree, so a
+      --  build of this program compiles those trees as surely as it compiles
+      --  this one -- and the checks above read this repository's object
+      --  directories only. Twelve warnings in one of those crates were
+      --  invisible from here, and a pinned crate that would not compile at
+      --  all was found by a build failing rather than by anything saying so.
+      --
+      --  What is refused and what is only reported differ on purpose.
+      --
+      --  Stale evidence is refused, because that is a fact about this build:
+      --  a pinned crate whose sources are newer than its objects has not
+      --  been compiled since it changed, and nothing that depends on it can
+      --  be vouched for either. That is exactly the state that stopped this
+      --  program building at all, and it went unnamed.
+      --
+      --  Their warnings are listed rather than refused. This repository
+      --  cannot hold another repository's tree to its own switches: a gate
+      --  that went red for a sibling crate's warning would be a gate that
+      --  passes on one machine and on no other, and would put this project's
+      --  release behind somebody else's tidying. Listing them is what was
+      --  missing; refusing them would be claiming an authority this
+      --  repository does not have.
+      declare
+         use type Ada.Calendar.Time;
+         use type Ada.Directories.File_Size;
+
+         Crates  : Natural := 0;
+         Unbuilt : Natural := 0;
+         Noisy   : Natural := 0;
+
+         --  One pinned crate: is it compiled, and did it say anything?
+         --  Both manifests pin most of the same crates, and a crate
+         --  considered twice reports itself twice.
+         Seen      : array (1 .. 32) of Ada.Strings.Unbounded.Unbounded_String;
+         Seen_Last : Natural := 0;
+
+         procedure Consider_Crate (Name : String; Place : String) is
+            Behind : Natural := 0;
+            Units  : Natural := 0;
+            Said   : Natural := 0;
+
+            function Evidence_Time (Unit : String) return Ada.Calendar.Time is
+               Best : Ada.Calendar.Time := Ada.Calendar.Time_Of (1901, 1, 1);
+
+               procedure Consider_Place (Where : String) is
+                  Path : constant String := Where & "/" & Unit & ".ali";
+               begin
+                  if Ada.Directories.Exists (Path) then
+                     declare
+                        When_Made : constant Ada.Calendar.Time :=
+                          Ada.Directories.Modification_Time (Path);
+                     begin
+                        if When_Made > Best then
+                           Best := When_Made;
+                        end if;
+                     end;
+                  end if;
+               end Consider_Place;
+            begin
+               Consider_Place (Place & "/obj/development");
+               Consider_Place (Place & "/obj/release");
+               return Best;
+            end Evidence_Time;
+
+            procedure Consider (Path : String) is
+               Simple : constant String := Ada.Directories.Simple_Name (Path);
+               Unit   : constant String := Ada.Directories.Base_Name (Simple);
+               Kind   : constant String := Ada.Directories.Extension (Simple);
+            begin
+               if Kind /= "adb" and then Kind /= "ads" then
+                  return;
+               end if;
+
+               if Kind = "ads"
+                 and then Ada.Directories.Exists
+                            (Ada.Directories.Containing_Directory (Path)
+                             & "/" & Unit & ".adb")
+               then
+                  return;
+               end if;
+
+               if Is_Subunit (Path) then
+                  return;
+               end if;
+
+               Units := Units + 1;
+
+               if Evidence_Time (Unit)
+                    < Ada.Directories.Modification_Time (Path)
+               then
+                  Behind := Behind + 1;
+               end if;
+            end Consider;
+
+            --  Sources, and the logs beside the objects, both a tree deep.
+            procedure Walk (Where : String; Looking_For_Logs : Boolean) is
+               Search : Ada.Directories.Search_Type;
+               Item   : Ada.Directories.Directory_Entry_Type;
+            begin
+               if not Ada.Directories.Exists (Where) then
+                  return;
+               end if;
+
+               Ada.Directories.Start_Search
+                 (Search, Where, "",
+                  [Ada.Directories.Ordinary_File => True,
+                   Ada.Directories.Directory => True,
+                   others => False]);
+               while Ada.Directories.More_Entries (Search) loop
+                  Ada.Directories.Get_Next_Entry (Search, Item);
+                  declare
+                     Simple : constant String :=
+                       Ada.Directories.Simple_Name (Item);
+                     Full : constant String :=
+                       Ada.Directories.Full_Name (Item);
+                  begin
+                     if Simple /= "." and then Simple /= ".." then
+                        if Ada.Directories."="
+                             (Ada.Directories.Kind (Item),
+                              Ada.Directories.Directory)
+                        then
+                           Walk (Full, Looking_For_Logs);
+                        elsif Looking_For_Logs then
+                           if Ada.Directories.Extension (Simple) = "stderr"
+                             and then Ada.Directories.Size (Full) > 0
+                           then
+                              Said := Said + 1;
+                           end if;
+                        else
+                           Consider (Full);
+                        end if;
+                     end if;
+                  end;
+               end loop;
+               Ada.Directories.End_Search (Search);
+            end Walk;
+         begin
+            if not Ada.Directories.Exists (Place) then
+               return;
+            end if;
+
+            declare
+               use Ada.Strings.Unbounded;
+               Full : constant String :=
+                 Ada.Directories.Full_Name (Place);
+            begin
+               for Index in 1 .. Seen_Last loop
+                  if To_String (Seen (Index)) = Full then
+                     return;
+                  end if;
+               end loop;
+
+               if Seen_Last < Seen'Last then
+                  Seen_Last := Seen_Last + 1;
+                  Seen (Seen_Last) := To_Unbounded_String (Full);
+               end if;
+            end;
+
+            Crates := Crates + 1;
+
+            if Ada.Directories.Exists (Place & "/src") then
+               Walk (Place & "/src", Looking_For_Logs => False);
+            end if;
+            Walk (Place & "/obj", Looking_For_Logs => True);
+
+            if Units > 0 and then Behind > 0 then
+               Unbuilt := Unbuilt + 1;
+               Fail (Natural'Image (Behind) & " of" & Natural'Image (Units)
+                     & " units of the pinned crate " & Name
+                     & " are older than their sources, so this build rests "
+                     & "on objects that do not match the tree it pins");
+            end if;
+
+            if Said > 0 then
+               Noisy := Noisy + 1;
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "  note: " & Natural'Image (Said)
+                  & " compilations of the pinned crate " & Name
+                  & " left warnings behind, which are that crate's to "
+                  & "answer for");
+            end if;
+         end Consider_Crate;
+
+         --  The pins, read from the manifest that names them. Two manifests,
+         --  because the tests crate pins what it needs and the library pins
+         --  what it needs, and neither list is the other.
+         procedure Read_Pins (Manifest : String; Beside : String) is
+            Handle : Ada.Text_IO.File_Type;
+            In_Pin : Boolean := False;
+         begin
+            if not Ada.Directories.Exists (Manifest) then
+               return;
+            end if;
+
+            Ada.Text_IO.Open (Handle, Ada.Text_IO.In_File, Manifest);
+            while not Ada.Text_IO.End_Of_File (Handle) loop
+               declare
+                  Line : constant String := Ada.Text_IO.Get_Line (Handle);
+                  Trimmed : constant String :=
+                    Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both);
+               begin
+                  if Trimmed = "[[pins]]" then
+                     In_Pin := True;
+                  elsif Trimmed'Length > 0
+                    and then Trimmed (Trimmed'First) = '['
+                  then
+                     In_Pin := False;
+                  elsif In_Pin
+                    and then Project_Tools.Text.Contains (Trimmed, "path =")
+                  then
+                     declare
+                        Equals : constant Natural :=
+                          Ada.Strings.Fixed.Index (Trimmed, "=");
+                        Opens  : constant Natural :=
+                          Ada.Strings.Fixed.Index (Trimmed, """");
+                        Closes : constant Natural :=
+                          Ada.Strings.Fixed.Index
+                            (Trimmed, """", Ada.Strings.Backward);
+                     begin
+                        if Equals > Trimmed'First
+                          and then Closes > Opens
+                          and then Opens > 0
+                        then
+                           declare
+                              Name : constant String :=
+                                Ada.Strings.Fixed.Trim
+                                  (Trimmed (Trimmed'First .. Equals - 1),
+                                   Ada.Strings.Both);
+                              Path : constant String :=
+                                Trimmed (Opens + 1 .. Closes - 1);
+                           begin
+                              --  This repository pins itself from the tests
+                              --  crate, and it is what the checks above are
+                              --  about.
+                              if Name /= "model_runner" then
+                                 Consider_Crate (Name, Beside & "/" & Path);
+                              end if;
+                           end;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+            Ada.Text_IO.Close (Handle);
+         exception
+            when others =>
+               if Ada.Text_IO.Is_Open (Handle) then
+                  Ada.Text_IO.Close (Handle);
+               end if;
+         end Read_Pins;
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         Read_Pins (Root & "/alire.toml", Root);
+         Read_Pins (Root & "/tests/alire.toml", Root & "/tests");
+
+         if Crates = 0 then
+            Fail ("no pinned crates were found, so this check is reading "
+                  & "the manifests wrongly: this program is built from "
+                  & "nine of them");
+         end if;
+      end;
+
       --  Every unit carries compilation evidence no older than the switches.
       --
       --  The check above reads the logs a compilation leaves behind, and a
@@ -2607,6 +2915,10 @@ package body Checks is
                          (Ada.Directories.Containing_Directory (Path)
                           & "/" & Unit & ".adb")
             then
+               return;
+            end if;
+
+            if Kind = "adb" and then Is_Subunit (Path) then
                return;
             end if;
 
