@@ -244,6 +244,27 @@ package body Model_Runner.Numerics is
    -- Exp --
    ---------
 
+   ----------
+   -- Tanh --
+   ----------
+
+   function Tanh (Item : Wide_Real) return Wide_Real is
+   begin
+      if not Is_Finite (Item) then
+         return (if Item > 0.0 then 1.0 else -1.0);
+      elsif Item > 20.0 then
+         return 1.0;
+      elsif Item < -20.0 then
+         return -1.0;
+      end if;
+
+      declare
+         Twice : constant Wide_Real := Exp (2.0 * Item);
+      begin
+         return (Twice - 1.0) / (Twice + 1.0);
+      end;
+   end Tanh;
+
    function Exp (Item : Wide_Real) return Wide_Real is
    begin
       if not Is_Finite (Item) then

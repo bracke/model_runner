@@ -7,6 +7,44 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The `gemma` architecture.** The same shape as the four already here with
+  three differences, each of which produces a plausible wrong answer rather
+  than a refusal when it is missed: the normalization gain is one plus the
+  stored weight, because the weights are trained around zero; the embedding
+  row is multiplied by the square root of the embedding width before the
+  first layer; and the feed-forward gate is a Gaussian error unit in its
+  hyperbolic-tangent form rather than a logistic one.
+
+  Crossed with every format and both evaluation paths against the
+  independent implementation, because the three touch every part of a pass
+  rather than a metadata prefix. The sweep is 10860 sequences and 149760
+  logits now, none outside tolerance.
+
+  The fixture writes its normalization weights around zero rather than
+  around one, which is what the convention means: written around one, a
+  reader that missed the lift would answer almost correctly and the fixture
+  would prove nothing.
+
+  Not implemented: the second and third generations, which add attention and
+  final logit softcapping, alternating window widths and a second pair of
+  norms a block.
+
+### Changed
+
+- **The row-product table moved by up to a factor of two, and no decoder
+  changed.** Q4_0 went from 0.33 ns an element to 0.59, IQ4_NL from 1.44 to
+  0.59, IQ4_XS from 0.95 to 0.48, Q2_K from 0.79 to 1.01. What changed is
+  that the kernels body gained a procedure -- the Gaussian gate -- which no
+  row product calls.
+
+  Two runs an hour apart agree on the new numbers, so it is not the machine.
+  Adding a subprogram to a hot compilation unit moves what the compiler does
+  with the rest of it, and that unit is where every decoder lives. The
+  published table is the new one; the old one was the same code compiled
+  beside different code, and neither number is evidence about a decoder.
+
+### Added
+
 - **`--wait MINUTES` on `tests speed` and `tests benchmark`,** which waits for
   the machine to go quiet instead of refusing it. Every figure retaken this
   week came through a loop that polled the load and started the tool when it

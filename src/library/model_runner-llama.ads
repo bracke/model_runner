@@ -100,7 +100,7 @@ package Model_Runner.Llama is
    --  The architectures this profile reads.
    --
    --  All of them are the same shape: RMS normalization, rotary encoding,
-   --  grouped query attention and a SwiGLU feed-forward. Qwen2 adds a bias
+   --  grouped query attention and a gated feed-forward. Qwen2 adds a bias
    --  to each of the three attention projections; Qwen3 drops the biases
    --  again and normalizes each query and key head before the rotation;
    --  Qwen3_MoE is Qwen3 with its feed-forward block behind a router, which
@@ -108,7 +108,22 @@ package Model_Runner.Llama is
    --  read from the keys rather than from the name. Each belongs here rather
    --  than in a profile of its own because each is this shape with a
    --  difference.
-   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE);
+   --
+   --  Gemma is the same shape with three differences, and each is the kind
+   --  that produces a plausible wrong answer rather than a refusal:
+   --
+   --    the normalization gain is one plus the stored weight, because the
+   --    weights are trained around zero rather than around one -- read as
+   --    llama reads them, every layer is scaled by roughly nothing;
+   --
+   --    the embedding row is multiplied by the square root of the embedding
+   --    width before the first layer, which is a factor of about forty on a
+   --    model of this size;
+   --
+   --    the feed-forward gate is a Gaussian error unit rather than a
+   --    logistic one, which is close enough to SiLU to look right and
+   --    different enough to be wrong.
+   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma);
 
    --  The identifier a file carries for an architecture.
    --
@@ -119,7 +134,8 @@ package Model_Runner.Llama is
          when Llama     => "llama",
          when Qwen2     => "qwen2",
          when Qwen3     => "qwen3",
-         when Qwen3_MoE => "qwen3moe");
+         when Qwen3_MoE => "qwen3moe",
+         when Gemma     => "gemma");
 
    --  Validated architecture configuration.
    --

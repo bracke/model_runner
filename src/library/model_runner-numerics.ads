@@ -156,6 +156,17 @@ package Model_Runner.Numerics is
    --  @return e raised to Item, or 0.0 when Item underflows the format.
    function Exp (Item : Wide_Real) return Wide_Real;
 
+   --  Hyperbolic tangent, used by the Gaussian error unit's approximation.
+   --
+   --  Bounded rather than evaluated for a large magnitude: the function is
+   --  one to the format's precision well before the exponential inside it
+   --  overflows, and the bound is what keeps a large activation from
+   --  producing a not-a-number where it should produce one.
+   --
+   --  @param Item Argument.
+   --  @return Hyperbolic tangent of Item, in minus one to one.
+   function Tanh (Item : Wide_Real) return Wide_Real;
+
    --  Square root used by RMS normalization, evaluated in the wide format.
    --
    --  @param Item Non-negative value.

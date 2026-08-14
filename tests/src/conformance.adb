@@ -118,8 +118,19 @@ package body Conformance is
       --  path would buy one string comparison for a third of the run time.
       --  It is compared against the reference on its own, where the mixture
       --  it carries is the point rather than the prefix.
-      Crossed : constant array (1 .. 3) of Tiny_Model.Fixture_Architecture :=
-        [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3];
+      --  Gemma is crossed rather than compared once, because its three
+      --  differences touch every part of a pass: the gain on every
+      --  normalization, the scale on the embedding, and the gate in every
+      --  feed-forward block. A single comparison would exercise them, and
+      --  crossing them with the formats and the paths is what says they
+      --  survive a quantized weight and a batched evaluation.
+      --  Gemma is crossed rather than compared once, because its three
+      --  differences touch every part of a pass: the gain on every
+      --  normalization, the scale on the embedding, and the gate in every
+      --  feed-forward block, dense or mixed.
+      Crossed : constant array (1 .. 4) of Tiny_Model.Fixture_Architecture :=
+        [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
+         Tiny_Model.Gemma];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -303,6 +314,7 @@ package body Conformance is
                      Relative : constant Long_Float :=
                        (if Scale > 0.0 then Gap / Scale else 0.0);
                   begin
+
                      if L."=" (Cache, L.Halved) then
                         Result.Cached_Compared := Result.Cached_Compared + 1;
                         Result.Cached_Worst_Abs :=

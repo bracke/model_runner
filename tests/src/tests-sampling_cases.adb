@@ -1906,6 +1906,87 @@ package body Tests.Sampling_Cases is
    --  The engine's rule is that the arithmetic stays finite and the caller's
    --  own finiteness check reports the condition. A kernel that divided by a
    --  zero scale instead would take the process with it.
+   ------------------------------------------
+   -- Gemma_Differs_Where_It_Says_It_Does --
+   ------------------------------------------
+
+   --  The three kernels Gemma needs, each against what it should be.
+   --
+   --  These are the differences that make a Gemma file a Gemma file, and
+   --  each of them produces a plausible wrong answer rather than a refusal
+   --  when it is missed. The conformance sweep crosses the whole
+   --  architecture against an independent implementation, which is what says
+   --  they compose; this says what each of them is, against a number worked
+   --  out by hand rather than by either implementation.
+   procedure Gemma_Differs_Where_It_Says_It_Does
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package K renames Model_Runner.Kernels;
+
+      --  The Gaussian error unit in the form the models were trained
+      --  against, at three points worked out from the formula:
+      --
+      --    0     -> 0
+      --    1     -> 0.5 * 1 * (1 + tanh(0.7978845 * 1.044715)) = 0.8411920
+      --    -1    -> 0.5 * -1 * (1 + tanh(-0.8332217))          = -0.1588080
+      --
+      --  The two either side of zero sum to zero's neighbourhood, which is
+      --  the property that tells this apart from SiLU: SiLU at 1 is
+      --  0.7310586, a twentieth away, and at -1 is -0.2689414.
+      Values : N.Real_Array (0 .. 2) := [0.0, 1.0, -1.0];
+   begin
+      K.GELU (Values);
+
+      Assert (abs (Values (0)) < 1.0E-6,
+              "the gate at zero is not zero:" & N.Real'Image (Values (0)));
+      Assert (abs (Values (1) - 0.841_192) < 1.0E-4,
+              "the gate at one is" & N.Real'Image (Values (1))
+              & " where the formula gives 0.841192 -- SiLU would give "
+              & "0.731059");
+      Assert (abs (Values (2) + 0.158_808) < 1.0E-4,
+              "the gate at minus one is" & N.Real'Image (Values (2))
+              & " where the formula gives -0.158808 -- SiLU would give "
+              & "-0.268941");
+
+      --  A large magnitude saturates rather than overflowing: the argument
+      --  to the tangent grows as the cube, so an activation of ten already
+      --  asks for the exponential of eighty-seven.
+      declare
+         Large : N.Real_Array (0 .. 1) := [40.0, -40.0];
+      begin
+         K.GELU (Large);
+         Assert (abs (Large (0) - 40.0) < 1.0E-3,
+                 "a large positive value did not pass through:"
+                 & N.Real'Image (Large (0)));
+         Assert (abs (Large (1)) < 1.0E-3,
+                 "a large negative value did not go to zero:"
+                 & N.Real'Image (Large (1)));
+      end;
+
+      --  And the lifted normalization gain, which is one plus the stored
+      --  weight. A weight of zero is then a gain of one, which is what
+      --  makes reading a Gemma file the ordinary way so quiet: it does not
+      --  fail, it scales everything by nothing.
+      declare
+         Source : constant N.Real_Array (0 .. 3) := [1.0, 1.0, 1.0, 1.0];
+         Zeroed : constant N.Real_Array (0 .. 3) := [others => 0.0];
+         Plain  : N.Real_Array (0 .. 3) := [others => 9.0];
+         Raised : N.Real_Array (0 .. 3) := [others => 9.0];
+      begin
+         K.RMS_Norm (Source, Zeroed, 1.0E-5, Plain);
+         K.RMS_Norm (Source, Zeroed, 1.0E-5, Raised, Lifted => True);
+
+         for Index in Plain'Range loop
+            Assert (Plain (Index) = 0.0,
+                    "a gain of zero read plainly did not scale to nothing");
+            Assert (abs (Raised (Index) - 1.0) < 1.0E-4,
+                    "a gain of zero read as one plus it did not scale to "
+                    & "one:" & N.Real'Image (Raised (Index)));
+         end loop;
+      end;
+   end Gemma_Differs_Where_It_Says_It_Does;
+
    procedure Kernels_Survive_Degenerate_Input
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -2374,6 +2455,9 @@ package body Tests.Sampling_Cases is
         (T, Any_Sampling_Returns_A_Usable_Token'Access,
          "any configuration returns a usable token or says it cannot");
       Register_Routine
+        (T, Gemma_Differs_Where_It_Says_It_Does'Access,
+         "the three kernels gemma needs are what they say they are");
+      AUnit.Test_Cases.Registration.Register_Routine
         (T, Kernels_Survive_Degenerate_Input'Access,
          "the kernels answer degenerate input instead of trapping on it");
       Register_Routine

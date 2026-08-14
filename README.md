@@ -344,7 +344,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Kernels | Scalar reference add, multiply, scale, dot, RMS normalization, softmax, SiLU, rotary encoding, with `Wide_Real` accumulation for length-dependent reductions |
 | Tokenizer | SentencePiece (`llama`) vocabulary: scores, token types, special tokens, byte fallback, greedy highest-score merge encoding. Byte-pair (`gpt2`) vocabulary: merge tables by rank, byte-level stand-in alphabet, and six cutting rules named by `tokenizer.ggml.pre`, a vocabulary naming any other being refused by name rather than cut by the wrong one. Both with UTF-8-boundary-safe incremental decoding. A special-token identifier that is absent leaves the token unset; one that names no token refuses the model rather than being ignored |
 | Chat templates | Bounded allowlisted engine: `for`, `if`/`elif`/`else`, `set`, comments, `+`-joined output, `==`/`!=`/`and`/`or`/`not` with parentheses, `is defined`/`is none`/`in`, `trim` and `length`, message indexing, front slicing such as `messages[1:]`, `loop.first`/`last`/`index`, whitespace control. Enough that the template a current Llama-3 file ships with renders. Compiled and validated at load time; `macro`, `include` and `import` are rejected there, while a value the engine cannot compute -- a function call, `tojson`, arithmetic -- is refused if the render reaches it, which the tool-calling branches of a plain conversation never do |
-| Architecture profile | `llama`, `qwen2`, `qwen3` and `qwen3moe`, each read under its own metadata keys and refused by name otherwise, with the refusal naming every one this build reads. All are the same shape with a difference: qwen2 a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour; qwen3 no biases and a root-mean-square normalization of every query and key head before the rotation, equally required; qwen3moe that again with the feed-forward block behind a router. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, uniformly across layers. A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
+| Architecture profile | `llama`, `qwen2`, `qwen3`, `qwen3moe` and `gemma`, each read under its own metadata keys and refused by name otherwise, with the refusal naming every one this build reads. All are the same shape with a difference: qwen2 a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour; qwen3 no biases and a root-mean-square normalization of every query and key head before the rotation, equally required; qwen3moe that again with the feed-forward block behind a router; gemma three differences of its own -- the normalization gain is one plus the stored weight rather than the weight, because its weights are trained around zero; the embedding row is multiplied by the square root of the embedding width before the first layer; and the feed-forward gate is a Gaussian error unit rather than a logistic one. Each of the three produces a plausible wrong answer rather than a refusal when it is missed, which is why each is crossed against the independent implementation rather than checked once. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, uniformly across layers. A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
 | Execution | Embedding lookup, per-layer RMS norm, Q/K/V projection, rotary encoding, grouped-query causal attention without duplicating key or value heads, output projection, SiLU-gated feed-forward, residuals, raw logits |
 | KV cache and session | Explicit cache sized with checked arithmetic, transactional commit, state machine, reset preserving allocations, committed-prefix reuse. Any number of sessions may be open on one prepared model at once: a model carries no per-evaluation state -- the activations, the normalized copies and the query and key rows all belong to the session -- so a second sequence costs its own cache and nothing else. Held by a test that interleaves two sessions a token at a time and checks each gets what it would have got alone; interleaved rather than sequential, because sequential sessions pass even on a model that does hold such state. Anything that would write to the model is refused while a session is open. `--prompt` asks for several: the model is read once and answers each in turn, which is what the sessions buy |
 | Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, per-token biases, sequence penalty, repetition penalty, frequency and presence penalties, temperature, top-k, tail-free, locally typical, top-p, min-p, exclude-top-choices, renormalize, select. Everything that acts on a token acts on the greedy path too, which is where a caller can check by hand what a penalty did -- they did not, for as long as they have existed. Mirostat v2 replaces the truncation filters rather than joining them and is refused alongside any of them, because two answers to one question is not a configuration. Greedy is tie-broken to the lowest token and consumes no random state; xoshiro256++ seeded per session. `--logit-bias TOKEN=X` nudges a token; `--logprobs N` reports what the model made of each position, from a plain softmax over the raw logits with none of the sampling applied |
@@ -715,8 +715,8 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 8145, logits compared 112320,
-             worst absolute 2.24055356401465E-05,
+conformance: sequences 10860, logits compared 149760,
+             worst absolute 1.72628292586907E-04,
              worst relative 5.39566401500295E-03,
              rounded logits compared 10800,
              rounded worst absolute 1.36861269753309E-01,
@@ -727,7 +727,7 @@ conformance: sequences 8145, logits compared 112320,
              outside tolerance 0
 ```
 
-Three architectures -- `llama`, `qwen2` and `qwen3` -- in each of the five
+Four architectures -- `llama`, `qwen2`, `qwen3` and `gemma` -- in each of the five
 shapes a supported model comes in: dense, sliding-window, a mixture of
 experts, a stretched rotation, and heads wider than the embedding implies with
 keys and values different widths again. The processor and the binary64 backends, every evaluation path -- a token at a
@@ -1386,7 +1386,7 @@ statistics say which of the three happened.
 
 Under the model, one product at a time, `tests benchmark` measures where that
 leaves each format. It prints the machine's load at both ends of its run --
-1.25 rising to 3.34 for the figures below -- and **refuses to measure at all
+1.70 rising to 2.37 for the figures below -- and **refuses to measure at all
 above a load of 1.5**, because a ratio of a device against a processor is not
 equally exposed to whatever else is running: the processor side competes with
 it and the device side mostly waits on a fence, so other work moves the ratio
@@ -1425,21 +1425,20 @@ arrived with nothing timing them, and a format can be perfectly correct and
 four times slower than the one beside it with nothing to say so. A 512 by
 2048 matrix, resident, against the serial processor path -- the device's time
 as a fraction of it, so below one is faster there, taken in one run at a load
-of 1.25 rising to 3.34:
+of 1.70 rising to 2.37:
 
 | Format | One vector | Eight | | Format | One vector | Eight |
 | --- | --- | --- | --- | --- | --- | --- |
-| IQ4_NL | 0.24 | 0.15 | | Q3_K | 0.66 | 0.22 |
-| Q5_0 | 0.30 | 0.16 | | Q4_1 | 0.67 | 0.24 |
-| Q5_1 | 0.30 | 0.16 | | Q8_0 | 0.75 | 0.21 |
-| IQ4_XS | 0.34 | 0.18 | | Q4_0 | 0.80 | 0.24 |
-| Q2_K | 0.42 | 0.18 | | Q4_K | 0.84 | 0.25 |
-| F16 | 0.65 | 0.23 | | Q5_K | 0.86 | 0.22 |
-| | | | | Q6_K | 0.96 | 0.25 |
-| | | | | F32 | 1.39 | 0.26 |
-| | | | | BF16 | 1.41 | 0.29 |
+| Q5_0 | 0.30 | 0.18 | | IQ4_XS | 0.71 | 0.24 |
+| Q2_K | 0.31 | 0.16 | | Q4_1 | 0.77 | 0.24 |
+| Q5_1 | 0.31 | 0.18 | | Q8_0 | 0.78 | 0.24 |
+| Q4_0 | 0.54 | 0.22 | | Q4_K | 0.88 | 0.25 |
+| IQ4_NL | 0.59 | 0.23 | | Q5_K | 0.89 | 0.25 |
+| Q3_K | 0.64 | 0.23 | | Q6_K | 0.97 | 0.28 |
+| F16 | 0.71 | 0.25 | | BF16 | 1.27 | 0.29 |
+| | | | | F32 | 1.46 | 0.29 |
 
-and q8_0 at thirty-two vectors a pass, which is 0.104.
+and q8_0 at thirty-two vectors a pass, which is 0.11.
 
 Read the one-vector column as a statement about the processor as much as
 about the device, because that is what it is. The formats the device wins hardest on
@@ -1689,14 +1688,14 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.28 | Q3_K | 0.52 |
-| Q4_0 | 0.33 | F16 | 0.59 |
-| BF16 | 0.35 | Q2_K | 0.79 |
-| Q4_K | 0.40 | IQ4_XS | 0.95 |
-| Q6_K | 0.40 | Q5_0 | 1.10 |
-| Q8_0 | 0.40 | Q5_1 | 1.14 |
-| Q5_K | 0.44 | IQ4_NL | 1.44 |
-| Q4_1 | 0.45 | | |
+| F32 | 0.29 | Q3_K | 0.51 |
+| BF16 | 0.34 | IQ4_NL | 0.59 |
+| Q4_K | 0.38 | Q4_0 | 0.59 |
+| Q6_K | 0.39 | F16 | 0.61 |
+| Q5_K | 0.41 | Q2_K | 1.01 |
+| Q8_0 | 0.42 | Q5_0 | 1.07 |
+| Q4_1 | 0.43 | Q5_1 | 1.10 |
+| IQ4_XS | 0.48 | | |
 
 The two five-bit legacy formats are outliers, and the reason is where they
 keep the fifth bit: bit *j* of a thirty-two bit word rather than a fixed place

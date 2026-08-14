@@ -87,7 +87,14 @@ private
    --  The architectures this reference implements. It has to be the same
    --  set the engine implements, or a conformance run compares two
    --  different functions and blames the engine for the difference.
-   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE);
+   --  Gemma is here for the same reason the others are: it is this shape
+   --  with a difference, and the differences are worked out from what the
+   --  architecture says rather than read out of the engine. Three of them --
+   --  the lifted normalization gain, the embedding scale and the Gaussian
+   --  gate -- and each is written here in the form the paper gives rather
+   --  than the form the engine uses, which is the whole point of a second
+   --  implementation.
+   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the

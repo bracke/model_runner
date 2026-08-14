@@ -90,7 +90,8 @@ package body Model_Runner.Kernels is
      (Source  : Real_Array;
       Weight  : Real_Array;
       Epsilon : Real;
-      Target  : out Real_Array)
+      Target  : out Real_Array;
+      Lifted  : Boolean := False)
    is
       Sum   : Wide_Real := 0.0;
       Gain  : Wide_Real;
@@ -125,11 +126,21 @@ package body Model_Runner.Kernels is
          Gain := 1.0 / Gain;
       end if;
 
-      for Index in 0 .. Element_Count (Source'Length) - 1 loop
-         Target (Target'First + Index) :=
-           Real (Wide_Real (Source (Source'First + Index)) * Gain)
-           * Weight (Weight'First + Index);
-      end loop;
+      --  Two loops rather than one with a test in it: the test is the same
+      --  every element, and this one is read once per token per layer.
+      if Lifted then
+         for Index in 0 .. Element_Count (Source'Length) - 1 loop
+            Target (Target'First + Index) :=
+              Real (Wide_Real (Source (Source'First + Index)) * Gain)
+              * (1.0 + Weight (Weight'First + Index));
+         end loop;
+      else
+         for Index in 0 .. Element_Count (Source'Length) - 1 loop
+            Target (Target'First + Index) :=
+              Real (Wide_Real (Source (Source'First + Index)) * Gain)
+              * Weight (Weight'First + Index);
+         end loop;
+      end if;
    end RMS_Norm;
 
    -------------
@@ -211,6 +222,31 @@ package body Model_Runner.Kernels is
          end;
       end loop;
    end SiLU;
+
+   ----------
+   -- GELU --
+   ----------
+
+   procedure GELU (Target : in out Real_Array) is
+      --  Square root of two over pi, and the cubic term's weight. Both are
+      --  the constants of the approximation rather than anything derived,
+      --  and are written out so that a reader can compare them with the
+      --  paper rather than with a computation.
+      Root : constant Wide_Real := 0.797_884_560_802_865_4;
+      Bend : constant Wide_Real := 0.044_715;
+   begin
+      for Index in Target'Range loop
+         declare
+            Value : constant Wide_Real := Wide_Real (Target (Index));
+            Inner : constant Wide_Real :=
+              Root * (Value + Bend * Value * Value * Value);
+         begin
+            Target (Index) :=
+              Real (0.5 * Value * (1.0 + N.Tanh (Inner)));
+         end;
+      end loop;
+
+   end GELU;
 
    -------------------
    -- Apply_Rotary --

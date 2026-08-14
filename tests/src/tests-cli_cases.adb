@@ -2906,8 +2906,12 @@ package body Tests.CLI_Cases is
       Assert (Settings.Pairing = Model_Runner.Kernels.Split,
               "qwen2 did not ask for the split rotation");
 
-      --  A file naming something else is refused by name.
-      Configured ("gemma", Settings, Status);
+      --  A file naming something else is refused by name. The example is a
+      --  real architecture rather than a nonsense word, so that what is
+      --  tested is the refusal to read an architecture this build does not
+      --  implement rather than the refusal to read a typo -- and it had to
+      --  be changed once, when gemma stopped being one of those.
+      Configured ("mamba", Settings, Status);
       Assert (Status.Code = E.Arch_Unsupported,
               "an architecture this build does not read was accepted: "
               & E.Error_Code'Image (Status.Code));

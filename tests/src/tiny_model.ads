@@ -102,7 +102,11 @@ package Tiny_Model is
    --  difference: Qwen2 a bias on each attention projection, Qwen3 a
    --  normalization of every query and key head instead, Qwen3_MoE the same
    --  under its own metadata prefix.
-   type Fixture_Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE);
+   --  Gemma is written with normalization weights around zero rather than
+   --  around one, because that is what its gain convention means and a
+   --  fixture that wrote them around one would be a fixture where reading
+   --  the convention wrongly still gives the right answer.
+   type Fixture_Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma);
 
    --  How the fixture stretches the rotation. Plain is a model that says
    --  nothing, which rotates as it was trained.

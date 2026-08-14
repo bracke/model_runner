@@ -68,11 +68,20 @@ package Model_Runner.Kernels is
    --  @param Epsilon Positive stabilizer from the model metadata.
    --  @param Target Output vector; must have Source's length. May alias
    --    Source.
+   --  @param Lifted Take the gain as one plus the stored weight rather than
+   --    as the weight. Gemma trains its normalization weights around zero
+   --    where every other architecture here trains them around one, so a
+   --    file read the wrong way is scaled by roughly nothing and answers
+   --    nonsense rather than refusing. A parameter rather than a second
+   --    kernel, and rather than adding one to the weights at load: the
+   --    weights are the file's own bytes, mapped read-only, and this program
+   --    does not write to a model.
    procedure RMS_Norm
      (Source  : Real_Array;
       Weight  : Real_Array;
       Epsilon : Real;
-      Target  : out Real_Array);
+      Target  : out Real_Array;
+      Lifted  : Boolean := False);
 
    --  Softmax over a vector, in place.
    --
@@ -88,6 +97,22 @@ package Model_Runner.Kernels is
    --
    --  @param Target Values to activate, updated in place.
    procedure SiLU (Target : in out Real_Array);
+
+   --  Gaussian error unit, in place, in the form the models that want it
+   --  were trained with.
+   --
+   --  The exact function is x times the normal distribution's cumulative
+   --  value at x, which needs an error function; what every implementation
+   --  of these models uses instead is the hyperbolic-tangent approximation
+   --  below, and a model trained against that approximation wants that
+   --  approximation rather than the exact function it approximates.
+   --
+   --  It is close to SiLU and not close enough: the two differ by about a
+   --  hundredth of the input at its worst, which is a model that answers
+   --  plausibly and not the same way twice.
+   --
+   --  @param Target Values to transform, updated in place.
+   procedure GELU (Target : in out Real_Array);
 
    --  How a head's elements are paired for the rotation.
    --

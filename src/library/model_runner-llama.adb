@@ -148,7 +148,7 @@ package body Model_Runner.Llama is
                Settings.Pairing :=
                  (case Kind is
                     when Llama => K.Interleaved,
-                    when Qwen2 | Qwen3 | Qwen3_MoE => K.Split);
+                    when Qwen2 | Qwen3 | Qwen3_MoE | Gemma => K.Split);
                Found := True;
             end if;
          end loop;
@@ -921,6 +921,45 @@ package body Model_Runner.Llama is
       B.Free (Item.Arena);
       Item.Arena_Base := 0;
    end Release_Weights;
+
+   --  The feed-forward gate this architecture was trained with.
+   --
+   --  Gemma's is a Gaussian error unit; everything else here is a logistic
+   --  one. The two are close enough that reading a Gemma file with SiLU
+   --  produces fluent wrong text rather than anything that looks broken,
+   --  which is why this is decided from the architecture rather than left
+   --  to a default.
+   procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
+   is
+   begin
+      if Item.Settings.Kind = Gemma then
+         K.GELU (Target);
+      else
+         K.SiLU (Target);
+      end if;
+   end Gate_Activation;
+
+   --  What the embedding row is multiplied by before the first layer.
+   --
+   --  One everywhere but Gemma, which scales by the square root of the
+   --  embedding width -- about forty on a model of a useful size, so a file
+   --  read without it produces text rather than a refusal, and the text is
+   --  wrong. Computed here rather than stored, because it is one square root
+   --  per token and the alternative is a field that can disagree with the
+   --  architecture that decides it.
+   function Embedding_Scale (Item : Model'Class) return Real
+   is (if Item.Settings.Kind = Gemma
+       then Real (N.Sqrt (N.Wide_Real (Item.Settings.Embedding)))
+       else 1.0);
+
+   --  Whether this model's normalization weights are trained around zero.
+   --
+   --  Gemma's are, so its gain is one plus the stored weight; every other
+   --  architecture here trains them around one and uses the weight as it
+   --  stands. Asked of the model rather than carried in the plan, so that
+   --  the nine places a normalization happens cannot disagree.
+   function Lifted_Norms (Item : Model'Class) return Boolean
+   is (Item.Settings.Kind = Gemma);
 
    -------------
    -- Prepare --
@@ -1875,6 +1914,9 @@ package body Model_Runner.Llama is
          declare
             Origin : constant Element_Count := Vector'First + Head * Width;
          begin
+            --  Plainly, and not the lifted convention: this normalizes a
+            --  query or key head, which only Qwen3 does, and Qwen3 trains
+            --  those weights around one like everything else here.
             K.RMS_Norm
               (Vector (Origin .. Origin + Width - 1), Gain, Epsilon, Room);
             Vector (Origin .. Origin + Width - 1) := Room;
@@ -1977,7 +2019,10 @@ package body Model_Runner.Llama is
                return;
             end if;
 
-            K.SiLU (Item.Gate.all);
+            --  A mixture is Qwen3_MoE only, which is a logistic gate; asked
+            --  of the model all the same, so that an architecture added with
+            --  a router and a different gate cannot quietly get this one.
+            Gate_Activation (Item.Owner.all, Item.Gate.all);
             K.Multiply (Item.Gate.all, Item.Up.all);
 
             Product (Item, Which.Down, Item.Gate, Item.Expert_Row, Status);
@@ -3567,6 +3612,12 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      if Embedding_Scale (Source) /= 1.0 then
+         for Value of Item.Activation.all loop
+            Value := Value * Embedding_Scale (Source);
+         end loop;
+      end if;
+
       for Index in Source.Layers.all'Range loop
          if C.Is_Cancelled (Cancel) then
             --  The reserved position was never committed, so the cache still
@@ -3587,7 +3638,8 @@ package body Model_Runner.Llama is
             --  Attention block.
             K.RMS_Norm
               (Item.Activation.all, Current.Attention_Norm.all,
-               Settings.Epsilon, Item.Normalized.all);
+               Settings.Epsilon, Item.Normalized.all,
+               Lifted => Lifted_Norms (Source));
 
             Product
               (Item, Current.Query, Item.Normalized, Item.Query, Status);
@@ -3700,7 +3752,8 @@ package body Model_Runner.Llama is
             --  Feed-forward block.
             K.RMS_Norm
               (Item.Activation.all, Current.Feed_Norm.all,
-               Settings.Epsilon, Item.Normalized.all);
+               Settings.Epsilon, Item.Normalized.all,
+               Lifted => Lifted_Norms (Source));
 
             if Settings.Experts > 0 then
                Mixture
@@ -3715,7 +3768,7 @@ package body Model_Runner.Llama is
                  (Item, Current.Up, Item.Normalized, Item.Up, Status);
                exit when E.Is_Error (Status);
 
-               K.SiLU (Item.Gate.all);
+               Gate_Activation (Source, Item.Gate.all);
                K.Multiply (Item.Gate.all, Item.Up.all);
 
                Product
@@ -3733,7 +3786,8 @@ package body Model_Runner.Llama is
 
       K.RMS_Norm
         (Item.Activation.all, Source.Output_Norm.all, Settings.Epsilon,
-         Item.Normalized.all);
+         Item.Normalized.all,
+         Lifted => Lifted_Norms (Source));
 
       --  The output projection is the widest product of the token, so it is
       --  the one that most benefits from the pool. It writes into a
@@ -3916,6 +3970,12 @@ package body Model_Runner.Llama is
               (Source.Embeddings,
                Element_Count (Tokens (Tokens'First + Natural (Which))),
                Acts.all (Origin .. Origin + Width - 1), Status);
+
+            if Embedding_Scale (Source) /= 1.0 then
+               for Value of Acts.all (Origin .. Origin + Width - 1) loop
+                  Value := Value * Embedding_Scale (Source);
+               end loop;
+            end if;
             if E.Is_Error (Status) then
                Release;
                Item.Current := Failed;
@@ -3947,7 +4007,8 @@ package body Model_Runner.Llama is
                   K.RMS_Norm
                     (Acts.all (Origin .. Origin + Width - 1),
                      Current.Attention_Norm.all, Settings.Epsilon,
-                     Norm.all (Origin .. Origin + Width - 1));
+                     Norm.all (Origin .. Origin + Width - 1),
+                     Lifted => Lifted_Norms (Source));
                end;
             end loop;
 
@@ -4089,7 +4150,8 @@ package body Model_Runner.Llama is
                   K.RMS_Norm
                     (Acts.all (Origin .. Origin + Width - 1),
                      Current.Feed_Norm.all, Settings.Epsilon,
-                     Norm.all (Origin .. Origin + Width - 1));
+                     Norm.all (Origin .. Origin + Width - 1),
+                     Lifted => Lifted_Norms (Source));
                end;
             end loop;
 
@@ -4125,7 +4187,8 @@ package body Model_Runner.Llama is
                   declare
                      Origin : constant Element_Count := Slot (Which, Feed);
                   begin
-                     K.SiLU (Gate.all (Origin .. Origin + Feed - 1));
+                     Gate_Activation
+                       (Source, Gate.all (Origin .. Origin + Feed - 1));
                      K.Multiply
                        (Gate.all (Origin .. Origin + Feed - 1),
                         Up.all (Origin .. Origin + Feed - 1));
@@ -4172,7 +4235,8 @@ package body Model_Runner.Llama is
                  (Acts.all (Origin .. Origin + Width - 1),
                   Source.Output_Norm.all, Settings.Epsilon,
                   States.all (States.all'First + Origin
-                              .. States.all'First + Origin + Width - 1));
+                              .. States.all'First + Origin + Width - 1),
+                  Lifted => Lifted_Norms (Source));
             end;
          end loop;
       end if;
@@ -4193,7 +4257,8 @@ package body Model_Runner.Llama is
                K.RMS_Norm
                  (Acts.all (Origin .. Origin + Width - 1),
                   Source.Output_Norm.all, Settings.Epsilon,
-                  Item.Normalized.all);
+                  Item.Normalized.all,
+                  Lifted => Lifted_Norms (Source));
 
                Product
                  (Item, Source.Output, Item.Normalized, Item.Logit_Row,
@@ -4217,7 +4282,8 @@ package body Model_Runner.Llama is
       begin
          K.RMS_Norm
            (Acts.all (Origin .. Origin + Width - 1), Source.Output_Norm.all,
-            Settings.Epsilon, Item.Normalized.all);
+            Settings.Epsilon, Item.Normalized.all,
+            Lifted => Lifted_Norms (Source));
       end;
 
       Product

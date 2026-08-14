@@ -201,9 +201,17 @@ package body Tiny_Model is
       procedure Gain_Of (Name : String; Width : Positive) is
          Values : N.Real_Array (0 .. N.Element_Count (Width) - 1);
          Drawn  : constant N.Real_Array := Next (N.Element_Count (Width));
+
+         --  Around zero for Gemma and around one for everything else,
+         --  because that is what the two conventions mean. Written this way
+         --  on purpose: a Gemma fixture whose weights sat around one would
+         --  answer nearly the same whether the reader lifted the gain or
+         --  not, and a fixture that cannot tell two readings apart is a
+         --  fixture that proves neither.
+         Middle : constant N.Real := (if Kind = Gemma then 0.0 else 1.0);
       begin
          for Index in Values'Range loop
-            Values (Index) := 1.0 + Drawn (Index) * 0.25;
+            Values (Index) := Middle + Drawn (Index) * 0.25;
          end loop;
          Fixtures.Add_Tensor
            (Builder, Name, [G.U64 (Width)], G.Type_F32,
@@ -228,7 +236,8 @@ package body Tiny_Model is
            when Llama     => "llama",
            when Qwen2     => "qwen2",
            when Qwen3     => "qwen3",
-           when Qwen3_MoE => "qwen3moe");
+           when Qwen3_MoE => "qwen3moe",
+           when Gemma     => "gemma");
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];

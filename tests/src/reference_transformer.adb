@@ -832,7 +832,8 @@ package body Reference_Transformer is
          when Llama     => "llama.",
          when Qwen2     => "qwen2.",
          when Qwen3     => "qwen3.",
-         when Qwen3_MoE => "qwen3moe.");
+         when Qwen3_MoE => "qwen3moe.",
+         when Gemma     => "gemma.");
 
    procedure Load
      (Item   : in out Model;
@@ -1102,6 +1103,8 @@ package body Reference_Transformer is
             Item.Kind := Qwen3;
          elsif Named = "qwen3moe" then
             Item.Kind := Qwen3_MoE;
+         elsif Named = "gemma" then
+            Item.Kind := Gemma;
          else
             return;
          end if;
@@ -1462,6 +1465,52 @@ package body Reference_Transformer is
       Normed : Real_Vector (0 .. Width - 1) := [others => 0.0];
 
       --  Root-mean-square normalization with a per-element gain.
+      --  The gate this architecture was trained with, written as the two
+      --  formulas rather than as a call into the engine's kernels.
+      --
+      --  Gemma's is the Gaussian error unit in its hyperbolic-tangent form,
+      --  which is what the models were trained against; everything else here
+      --  is the logistic one. They agree to about a hundredth of the input
+      --  at the worst, which is near enough to look right in generated text
+      --  and far enough to be a different model.
+      function Gated (Value : Long_Float) return Long_Float is
+         Root : constant Long_Float := 0.797_884_560_802_865_4;
+         Bend : constant Long_Float := 0.044_715;
+      begin
+         if Item.Kind = Gemma then
+            declare
+               Inner : constant Long_Float :=
+                 Root * (Value + Bend * Value * Value * Value);
+            begin
+               --  The tangent saturates, and this says so rather than
+               --  computing an exponential that cannot be represented. Past
+               --  about twenty the difference from one is below what this
+               --  format holds, and the cubic inside makes twenty a value
+               --  an ordinary activation reaches: at an input of three the
+               --  argument is already four, and at eight it is over three
+               --  hundred, where the exponential of twice it overflows.
+               --
+               --  Found by the engine and this disagreeing about Gemma by
+               --  six logits, with both computing the same function for
+               --  every input either of them printed. What they did not
+               --  agree about was the inputs neither of them prints.
+               if Inner > 20.0 then
+                  return Value;
+               elsif Inner < -20.0 then
+                  return 0.0;
+               end if;
+
+               declare
+                  Twice : constant Long_Float := Functions.Exp (2.0 * Inner);
+               begin
+                  return 0.5 * Value * (1.0 + (Twice - 1.0) / (Twice + 1.0));
+               end;
+            end;
+         end if;
+
+         return Value / (1.0 + Functions.Exp (-Value));
+      end Gated;
+
       procedure Normalize
         (Source : Real_Vector;
          Gain   : Real_Vector;
@@ -1477,9 +1526,18 @@ package body Reference_Transformer is
             Scale : constant Long_Float :=
               1.0 / Functions.Sqrt
                       (Total / Long_Float (Source'Length) + Item.Epsilon);
+
+            --  Gemma stores its normalization weights around zero and uses
+            --  one plus them as the gain. Written as the architecture states
+            --  it rather than as the engine implements it: the engine has a
+            --  flag on its kernel, and this has the addition where the
+            --  formula puts it.
+            Lift : constant Long_Float :=
+              (if Item.Kind = Gemma then 1.0 else 0.0);
          begin
             for Index in Source'Range loop
-               Target (Index) := Source (Index) * Scale * Gain (Index);
+               Target (Index) :=
+                 Source (Index) * Scale * (Lift + Gain (Index));
             end loop;
          end;
       end Normalize;
@@ -1681,11 +1739,23 @@ package body Reference_Transformer is
       Values := new History (0 .. Item.Layers * Steps - 1, 0 .. V_Width - 1);
 
       for Step in 0 .. Steps - 1 loop
-         --  Embedding lookup.
-         for Index in 0 .. Width - 1 loop
-            State (Index) :=
-              Item.Embeddings (Tokens (Tokens'First + Step), Index);
-         end loop;
+         --  Embedding lookup, scaled by what the architecture says.
+         --
+         --  Gemma multiplies the row by the square root of the embedding
+         --  width before the first layer. Written as the square root of the
+         --  width because that is what the architecture states; the engine
+         --  computes the same number once per token from the same field.
+         declare
+            Lift : constant Long_Float :=
+              (if Item.Kind = Gemma
+               then Functions.Sqrt (Long_Float (Width))
+               else 1.0);
+         begin
+            for Index in 0 .. Width - 1 loop
+               State (Index) :=
+                 Item.Embeddings (Tokens (Tokens'First + Step), Index) * Lift;
+            end loop;
+         end;
 
          for Block in 0 .. Item.Layers - 1 loop
             declare
@@ -1911,11 +1981,18 @@ package body Reference_Transformer is
                            Project_Rows
                              (Current.Up_Experts.all, Rows_Feed, Input, Up);
 
+                           --  Through the same gate the dense block uses,
+                           --  which is the architecture's and not a copy of
+                           --  one. This was the logistic written out, and a
+                           --  mixture under an architecture with a
+                           --  different gate then disagreed with the engine
+                           --  by two logits in three -- while every gate
+                           --  either implementation printed matched, because
+                           --  the dense blocks were never the ones that
+                           --  differed.
                            for Index in Gate'Range loop
                               Gate (Index) :=
-                                Gate (Index)
-                                / (1.0 + Functions.Exp (-Gate (Index)))
-                                * Up (Index);
+                                Gated (Gate (Index)) * Up (Index);
                            end loop;
 
                            Project_Rows
@@ -1942,9 +2019,7 @@ package body Reference_Transformer is
                      Project (Current.Up.all, Normed, Up);
 
                      for Index in Gate'Range loop
-                        Gate (Index) :=
-                          Gate (Index) / (1.0 + Functions.Exp (-Gate (Index)))
-                          * Up (Index);
+                        Gate (Index) := Gated (Gate (Index)) * Up (Index);
                      end loop;
 
                      Project (Current.Down.all, Gate, Normed);
