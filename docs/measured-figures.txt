@@ -194,6 +194,16 @@
 # tensors and multiply them. Not re-measured: these two were taken again
 # three commits ago on this machine, and taking them again for a type
 # declaration would say what that run already says.
+# 2026-08-14, a device that stops answering gets its own code, and the bound
+# gets an option. The engine is unchanged in what it computes; what moved is
+# which diagnostic a stalled device produces and where the bound comes from.
+#
+# Re-measured, the short device run: 1.178 s at a load of 3.74, generating
+# 1.000 s, against the published 1.262 and 1.062 at a load of 1.0. Faster on
+# a busier machine, which is the noise this pair has always had and is why it
+# is published beside its processor counterpart rather than alone. Not
+# republished, for the reason given twice above.
+
 # 2026-08-14, the wait made sayable. The slice and the whole bound are what
 # the engine was opened for rather than constants, so a test can reach the
 # giving-up path with a device in perfect health and can make a stop request
@@ -668,7 +678,7 @@ reference 1E1536F7C9964FB0 src/library/model_runner-backend-reference.adb src/li
 # The processor column moved more between measurements than the device
 # column did, again, which is the second time that has happened and is why
 # the caveat under the table now gives all three pairs rather than one.
-device EB67712CB4C3A549 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 1F948E812F3822F6 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived

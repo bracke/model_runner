@@ -1901,6 +1901,16 @@ package body Model_Runner.CLI.Execute is
          Pres.Put_Note (Screen, "cli.note.device_memory_unused");
       end if;
 
+      --  Said for the same reason and in the same place: an option that
+      --  changes nothing where it was given should say so rather than look
+      --  as though it worked.
+      if Item.Device_Patience_Set
+        and then Model_Runner.Backend."/=" (Item.Backend,
+                                            Model_Runner.Backend.Backend_Device)
+      then
+         Pres.Put_Note (Screen, "cli.note.device_patience_unused");
+      end if;
+
       case Item.Backend is
       when Model_Runner.Backend.Backend_Reference =>
          --  No pool: this backend runs on the calling task and says so.
@@ -1915,7 +1925,8 @@ package body Model_Runner.CLI.Execute is
             Ready : Boolean;
          begin
             Model_Runner.Backend.Device.Open
-              (Ready, Item.Device_Memory, Item.Device_Share);
+              (Ready, Item.Device_Memory, Item.Device_Share,
+               Patience => Item.Device_Patience);
 
             if not Ready then
                --  A condition of its own rather than a borrowed one. This
@@ -2218,7 +2229,8 @@ package body Model_Runner.CLI.Execute is
             Ready : Boolean;
          begin
             Model_Runner.Backend.Device.Open
-              (Ready, Item.Device_Memory, Item.Device_Share);
+              (Ready, Item.Device_Memory, Item.Device_Share,
+               Patience => Item.Device_Patience);
 
             if not Ready then
                Fail (E.Make (E.Backend_No_Device));

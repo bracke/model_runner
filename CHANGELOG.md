@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--device-patience N`** says how many seconds to wait for one product
+  before giving up on the device. The default of a minute is far longer than
+  any product on any machine this has run on, and that is a guess about
+  hardware -- which is exactly the guess a caller with different hardware has
+  to be able to correct. A model wide enough on a device slow enough can take
+  longer than a minute for one product, and that caller had no way to say so.
+  Naming it where the run is not on a device says so rather than looking as
+  though it worked, as `--device-memory` already does.
+
+  How often the wait asks whether you want to stop is not an option and stays
+  at twenty milliseconds: that is a responsiveness number rather than a
+  hardware one, and nobody notices the difference between twenty
+  milliseconds and five.
+
+### Changed
+
+- **A device that stops answering has its own diagnostic.** It borrowed the
+  one for a machine with no device at all, which sends a reader the wrong
+  way: there is a device, this model and this request are fine, and what a
+  caller can do about it -- wait for whatever else is using the device, or
+  say they will wait longer -- is not what the borrowed message suggests. A
+  diagnostic that misdirects is worse than a vague one. That makes 162 codes.
+
 - **The device's wait is sayable, so both of its unreachable paths are now
   tested.** How long one wait lasts before the caller's stop request is asked
   about again, and how long to wait in all before giving up on a device that
@@ -3069,7 +3092,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 161 diagnostic
+- Localization through `messages`, with a catalog entry for all 162 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

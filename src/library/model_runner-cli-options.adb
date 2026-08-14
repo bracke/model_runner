@@ -28,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 66) of Registry_Row :=
+   Registry : constant array (1 .. 67) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -117,6 +117,9 @@ package body Model_Runner.CLI.Options is
       (Text ("--device-memory"),
        [Command_Run | Command_Embed => True, others => False],
        Text ("device_memory")),
+      (Text ("--device-patience"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("device_patience")),
       (Text ("--mmap"),
        [Command_Run | Command_Embed => True, others => False], Text ("mmap")),
       (Text ("--no-mmap"), [Command_Run => True, others => False], Text ("no_mmap")),
@@ -722,7 +725,8 @@ package body Model_Runner.CLI.Options is
          Flag_XTC_Probability, Flag_XTC_Threshold,
          Flag_DRY_Multiplier, Flag_DRY_Base, Flag_DRY_Allowed,
          Flag_Mirostat, Flag_Mirostat_Tau, Flag_Mirostat_Eta,
-         Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Logprobs,
+         Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Device_Patience,
+         Flag_Logprobs,
          Flag_Draft_Model, Flag_Draft_Tokens,
          Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
@@ -1729,6 +1733,40 @@ package body Model_Runner.CLI.Options is
                         --  of that are measured in the README.
                         Result.Device_Share := Result.Device_Memory = 0;
                         Result.Device_Memory_Set := True;
+                        Free_Text (Held);
+                     end;
+
+                  elsif Name = "--device-patience" then
+                     declare
+                        Seconds : Long_Long_Integer;
+                        Parsed  : Boolean;
+                     begin
+                        Mark (Flag_Device_Patience, Name, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        Take_Value (Name, Value_Present, Value_First, Argument,
+                                    Held, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        To_Number (Held.all, Seconds, Parsed);
+
+                        --  A whole number of seconds, and at least one. Zero
+                        --  would be a device given up on before it began,
+                        --  which is a thing the engine can do and not a
+                        --  thing anybody wants from a command line.
+                        if not Parsed or else Seconds < 1
+                          or else Seconds > 3_600
+                        then
+                           Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                           Free_Text (Held);
+                           return;
+                        end if;
+
+                        Result.Device_Patience := Duration (Seconds);
+                        Result.Device_Patience_Set := True;
                         Free_Text (Held);
                      end;
 

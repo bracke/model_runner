@@ -76,6 +76,7 @@ en.help.run.logprobs =   --logprobs N            report each token's log-probabi
 en.help.run.logit_bias =   --logit-bias TOKEN=X    add X to that token's logit; repeatable
 en.help.run.memory_limit =   --memory-limit SIZE     limit model memory; accepts K, M and G suffixes
 en.help.run.device_memory =   --device-memory SIZE    device memory for the weights; 0 reads them where they lie
+en.help.run.device_patience =   --device-patience N     seconds to wait for one product before giving up on the device
 en.help.run.mmap =   --mmap                  require memory mapping of the model file
 en.help.run.no_mmap =   --no-mmap               never memory-map the model file
 en.help.run.quiet =   --quiet                 suppress progress, notes and warnings
@@ -267,6 +268,7 @@ en.diagnostic.note = model_runner: {detail}
 en.cli.note.next_prompt = prompt {index} of {total}
 en.cli.note.draft_tokens_unused = --draft-tokens says how many a draft model may propose, and this run has no draft model; it changes nothing here
 en.cli.note.device_memory_unused = --device-memory says what the device may hold, and this run is not on a device; it changes nothing here
+en.cli.note.device_patience_unused = --device-patience says how long to wait for a device, and this run is not on one; it changes nothing here
 en.diagnostic.frame = model_runner:   while {detail}
 en.diagnostic.offset = model_runner:   at file offset {offset}
 en.diagnostic.hint.usage = run 'model_runner help' for usage
@@ -401,6 +403,10 @@ en.error.backend.queue_full = the backend work queue is full
 en.error.backend.closed = the backend is closed
 en.error.backend.invalid_worker_count = the requested worker count is unusable
 en.error.backend.no_device = no compute device answered on this machine
+# The bound is {limit} and not {seconds}: a placeholder of that name stops
+# this catalog loading at all, in every locale, and the only symptom is that
+# nothing renders. Renamed rather than chased into the messages crate.
+en.error.backend.device_stalled = the {backend} device did not finish a product within {limit} seconds and was given up on
 en.error.memory.limit_exceeded = {category} needs {requested} bytes, above the limit of {limit}
 en.error.memory.allocation_failed = cannot allocate memory for {category}
 en.error.memory.plan_overflow = the memory plan overflows
@@ -777,6 +783,7 @@ qps.help.run.logprobs = ⟦  --logprobs Ñ            ŕépóŕŧ éáçh ŧók�
 qps.help.run.logit_bias = ⟦  --logit-bias ŦÓKÉÑ=X    áðð X ŧó ŧháŧ ŧókéñ'ß ĺógíŧ; ŕépéáŧáƀĺé⟧
 qps.help.run.memory_limit = ⟦  --memory-limit ŠÍZÉ     ĺímíŧ móðéĺ mémóŕý; áççépŧß K, M áñð G ßúffíxéß⟧
 qps.help.run.device_memory = ⟦  --device-memory ŠÍZÉ    ðévíçé mémóŕý fóŕ ŧhé wéíghŧß; 0 ŕéáðß ŧhém whéŕé ŧhéy ĺíé⟧
+qps.help.run.device_patience = ⟦  --device-patience Ñ     ßéçóñðß ŧó wáíŧ fóŕ óñé próðúçŧ ßéfóŕé gíviñg úp óñ ŧhé ðévíçé⟧
 qps.help.run.mmap = ⟦  --mmap                  ŕéqúíŕé mémóŕý máppíñg óf ŧhé móðéĺ fíĺé⟧
 qps.help.run.no_mmap = ⟦  --no-mmap               ñévéŕ mémóŕý-máp ŧhé móðéĺ fíĺé⟧
 qps.help.run.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß, ñóŧéß áñð wáŕñíñgß⟧
@@ -957,6 +964,7 @@ qps.diagnostic.note = ⟦model_runner: {detail}⟧
 qps.cli.note.next_prompt = ⟦pŕómpŧ {index} óf {total}⟧
 qps.cli.note.draft_tokens_unused = ⟦--draft-tokens ßáyß hów máñy á ðŕáfŧ móðéĺ máy pŕópóßé, áñð ŧhíß ŕúñ háß ñó ðŕáfŧ móðéĺ; íŧ çháñgéß ñóŧhíñg héŕé⟧
 qps.cli.note.device_memory_unused = ⟦--device-memory ßáyß wháŧ ŧhé ðévíçé máy hóĺð, áñð ŧhíß ŕúñ íß ñóŧ óñ á ðévíçé; íŧ çháñgéß ñóŧhíñg héŕé⟧
+qps.cli.note.device_patience_unused = ⟦--device-patience ßáyß hów ĺóñg ŧó wáíŧ fóŕ á ðévíçé, áñð ŧhíß ŕúñ íß ñóŧ óñ óñé; íŧ çháñgéß ñóŧhíñg héŕé⟧
 qps.diagnostic.frame = ⟦model_runner:   whíĺé {detail}⟧
 qps.diagnostic.offset = ⟦model_runner:   áŧ fíĺé óffßéŧ {offset}⟧
 qps.diagnostic.hint.usage = ⟦ŕúñ 'model_runner héĺp' fóŕ úßágé⟧
@@ -1089,6 +1097,7 @@ qps.error.backend.worker_failed = ⟦á wóŕkéŕ fáíĺéð⟧
 qps.error.backend.queue_full = ⟦ŧhé báçkéñð wóŕk qúéúé íß fúĺĺ⟧
 qps.error.backend.closed = ⟦ŧhé báçkéñð íß çĺóßéð⟧
 qps.error.backend.no_device = ⟦ñó çóɱpúŧé ðévíçé áñßwéréð óñ ŧhíß ɱáçhíñé⟧
+qps.error.backend.device_stalled = ⟦ŧhé {backend} ðévíçé ðíð ñóŧ fíñíßh á próðúçŧ wíŧhíñ {limit} ßéçóñðß áñð wáß gívéñ úp óñ⟧
 qps.error.backend.invalid_worker_count = ⟦ŧhé ŕéqúéßŧéð wóŕkéŕ çóúñŧ íß úñúßábĺé⟧
 qps.error.memory.limit_exceeded = ⟦{category} ñééðß {requested} býŧéß, ábóvé ŧhé ĺímíŧ óf {limit}⟧
 qps.error.memory.allocation_failed = ⟦çáññóŧ áĺĺóçáŧé mémóŕý fóŕ {category}⟧

@@ -383,13 +383,19 @@ package body Model_Runner.Backend.Device is
       if Cancelled then
          Status := E.Make (E.Generation_Cancelled);
       elsif Products.Is_Stalled (Engine) then
-         --  The device did not finish inside the whole bound. Said as its
-         --  own thing rather than as a missing capability, because the
-         --  remedy is different: nothing about this model or this request
-         --  was wrong.
-         Status := E.Make (E.Backend_No_Device);
+         --  The device did not finish inside the whole bound. Its own code
+         --  rather than the one for a machine with no device, which is what
+         --  this used to borrow: there is a device, nothing about this model
+         --  or this request was wrong, and what a caller can do about it --
+         --  wait for whatever else is using the device, or say they are
+         --  willing to wait longer -- is not what the other message
+         --  suggests. A diagnostic that sends a reader the wrong way is
+         --  worse than a vague one.
+         Status := E.Make (E.Backend_Device_Stalled);
          E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
                      E.Param_Identifier);
+         E.Add_Integer
+           (Status, "limit", Long_Long_Integer (Opened_Patience));
       elsif not Ok then
          Status := E.Make (E.Backend_Capability_Missing);
          E.Add_Text (Status, "capability", "matrix_vector",

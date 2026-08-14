@@ -306,6 +306,26 @@ package Model_Runner.CLI.Options is
       --  Zero bytes of the device's own memory, which means the weights are
       --  read where they lie rather than copied anywhere.
       Device_Share      : Boolean := False;
+
+      --  How long to wait for one product before giving up on the device,
+      --  in seconds. The default is a minute, which is far longer than any
+      --  product on any machine this has run on and is a bound rather than
+      --  a wait: a device that has stopped answering gives the caller back
+      --  its thread instead of keeping it forever.
+      --
+      --  Said on the command line because the bound is a guess about
+      --  hardware, and a guess about hardware is exactly what a caller with
+      --  different hardware needs to be able to correct. A model wide
+      --  enough, on a device slow enough, can take longer than a minute for
+      --  one product, and before this that caller had no way to say so.
+      --
+      --  How often the wait asks whether the caller wants to stop is not
+      --  said here and stays at twenty milliseconds. That is a
+      --  responsiveness number rather than a hardware one -- it decides how
+      --  quickly a Ctrl-C is noticed, and no person notices the difference
+      --  between twenty milliseconds and five.
+      Device_Patience     : Duration := 60.0;
+      Device_Patience_Set : Boolean := False;
       Mapping      : Model_Runner.Byte_Sources.Files.Mapping_Policy :=
         Model_Runner.Byte_Sources.Files.Mapping_Automatic;
 

@@ -828,10 +828,10 @@ package body Tests.Backend_Cases is
       Vector.all := [others => 1.0];
 
       Model_Runner.Backend.Device.Dispatch (Weight, Vector, Room, Status);
-      Assert (Status.Code = E.Backend_No_Device,
+      Assert (Status.Code = E.Backend_Device_Stalled,
               "a dispatch that outlasted the bound was reported as "
               & E.Error_Code'Image (Status.Code)
-              & " rather than as a device that did not answer");
+              & " rather than as a device that stopped answering");
 
       --  And it does not come back. An engine that gave up and then served
       --  the next product would be recording over a buffer it does not own.

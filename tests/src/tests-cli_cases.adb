@@ -1210,6 +1210,8 @@ package body Tests.CLI_Cases is
          Require ("--stop");
          Require ("--stop-token");
          Require ("--memory-limit");
+         Require ("--device-memory");
+         Require ("--device-patience");
          Require ("--mmap");
          Require ("--no-mmap");
          Require ("--quiet");
@@ -2379,6 +2381,52 @@ package body Tests.CLI_Cases is
          Assert (Number_After (Tight, "read where they lie") = 0,
                  "a small budget borrowed the host's memory, which is what "
                  & "zero means and not what a small number means");
+      end;
+
+      --  And the wait bound reaches the device too, which is the other
+      --  half of what a caller can say about one. A minute is a guess about
+      --  hardware, and the caller with different hardware is the one who
+      --  has to be able to correct it.
+      declare
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Path);
+         Add (Source, "--backend");
+         Add (Source, "device");
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "hi");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+         Add (Source, "--device-patience");
+         Add (Source, "120");
+         Ran (Source, Status);
+         Assert (Status = 0,
+                 "a run naming a longer wait was refused; status"
+                 & Natural'Image (Status));
+      end;
+
+      declare
+         Refused : Fixed_Arguments;
+         Status  : Natural;
+      begin
+         --  Zero is a device given up on before it began. The engine can be
+         --  told to do that and a test does; a command line cannot, because
+         --  nobody wants it and a caller who typed it meant something else.
+         Add (Refused, "run");
+         Add (Refused, Path);
+         Add (Refused, "--backend");
+         Add (Refused, "device");
+         Add (Refused, "--prompt");
+         Add (Refused, "hi");
+         Add (Refused, "--device-patience");
+         Add (Refused, "0");
+         Ran (Refused, Status);
+         Assert (Status = E.Exit_Usage,
+                 "a wait of no seconds was accepted; status"
+                 & Natural'Image (Status));
       end;
 
       declare

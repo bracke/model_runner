@@ -211,6 +211,13 @@ package Model_Runner.Errors is
       Backend_Invalid_Worker_Count,
       Backend_No_Device,
 
+      --  A device that has one and stopped answering. Its own code rather
+      --  than the one above, because the remedy is different: there is a
+      --  device, this model and this request are fine, and what a caller
+      --  can do about it is wait for whatever else is using it or say they
+      --  are willing to wait longer.
+      Backend_Device_Stalled,
+
       --  Memory planning and allocation.
       Memory_Limit_Exceeded,
       Memory_Allocation_Failed,

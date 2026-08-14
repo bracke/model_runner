@@ -353,7 +353,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback |
 | CLI | `run`, `embed`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection. `--prompt` is repeatable: several prompts are several sequences from one loaded model, each with its own context and its own statistics, and standard error says which is which so that standard output stays nothing but generated text. It is refused together with a saved or restored context, which names one conversation |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]`, the last removing the system message when no text follows it, blank-line submission, no history written to disk. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 161 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 162 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
@@ -1318,6 +1318,20 @@ larger than the number is then run rather than refused. `--device-memory 0`
 means none of it, and the weights are read where they already are -- the
 device is handed a pointer into this process's memory instead of a copy,
 where the device shares the host's memory and will take one.
+
+`--device-patience N` says how many seconds to wait for one product before
+giving up on the device. The default is a minute, which is far longer than
+any product on any machine this has run on -- and that is a guess about
+hardware, which is exactly the kind of guess the caller with different
+hardware has to be able to correct. A model wide enough on a device slow
+enough can take longer than a minute for one product, and before this that
+caller had no way to say so and got a refusal instead. A device that does
+exceed the bound is given up on rather than waited for further: its buffers
+are still its own and there is no way to take work back off it, so the engine
+stops rather than recording over a buffer the device may still be reading.
+How often the wait asks whether you want to stop is not an option and stays
+at twenty milliseconds; that is a responsiveness number rather than a
+hardware one.
 
 That is a memory decision and never a speed one, which is the opposite of
 what it was written expecting. The same model and prompt, three ways:
