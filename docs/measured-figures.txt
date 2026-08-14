@@ -194,6 +194,28 @@
 # tensors and multiply them. Not re-measured: these two were taken again
 # three commits ago on this machine, and taking them again for a type
 # declaration would say what that run already says.
+# 2026-08-14, the tokenizer figures taken by the tool. 0.0098 s for sixty
+# thousand ordinary characters and 0.0127 s for sixty thousand brackets, at
+# a load of 1.12 -- against the 0.039 and 0.045 timed in the shell, which
+# were a whole `model_runner run` rather than the encode. The row-product
+# table and the thirty device ratios come from the same run and are
+# republished with them.
+
+# 2026-08-14, the worker-count pair retaken -- and it does not say what the
+# paragraph built on it said. Fourteen threads reads 1.536 s of wall and
+# 16.12 s of processor time against seven at 1.884 s and 10.42 s, both at a
+# load of about 1.25. That is eighteen per cent off the wall for fifty-five
+# per cent more processor time, where the published text said six per cent
+# for seventy.
+#
+# The old numbers came from the shell's timer, on runs whose load nobody
+# recorded, and included the model load that these exclude. The conclusion
+# stands -- one worker per core -- but it stands on energy alone now rather
+# than on the wall being nearly unchanged, and the README says so. This is
+# the third figure this week that moved once it was taken again with its
+# conditions written down, and the second whose stated reasoning had to be
+# rewritten rather than just its digits.
+
 # 2026-08-14, the tokenizer timed by a tool rather than by the shell. Three
 # groups moved because benchmarks.adb gained a section. Not re-measured, and
 # the reason is order: the new section runs after the row products, the
@@ -415,7 +437,7 @@
 # that these figures predate the tool reporting a load, so the conditions
 # they were taken under are not recorded anywhere -- unlike every figure
 # taken from here on.
-# load: 1.25 rising to 3.34, one `tests benchmark` run, 2026-08-14
+# load: 1.12 rising to 2.03, one `tests benchmark` run, 2026-08-14
 kernels 8CBEC9BEDB453016 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb
 
 # covers: the twelve-token figure, the worker-count and share-count
@@ -561,9 +583,9 @@ kernels 8CBEC9BEDB453016 src/library/model_runner-quantization.adb src/library/m
 # load: the twelve-token figure at 1.28 rising to 1.82, 2026-08-14, and it
 #       now carries its processor time from this repository's own tool
 #       rather than from the shell. The worker-count and batch-size tables
-#       beside it still come from the operating system's timing tool and
-#       from runs whose load nobody recorded: retaking them wants two runs
-#       in one quiet window and this machine has not offered one.
+#       beside it was retaken too: fourteen threads and seven, both at
+#       about 1.25, 2026-08-14. The batch-size table is the last part of
+#       this group with no load recorded.
 engine 4029E2048FC12368 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
@@ -740,8 +762,8 @@ reference 2B860DC8D91BDD2A src/library/model_runner-backend-reference.adb src/li
 # The processor column moved more between measurements than the device
 # column did, again, which is the second time that has happened and is why
 # the caveat under the table now gives all three pairs rather than one.
-# load: 1.25 rising to 3.34 for the fifteen ratios and the batched
-#       ones; 1.0 to 1.9 for the two-backend table, 2026-08-14
+# load: 1.12 rising to 2.03 for the fifteen ratios and the batched ones;
+#       1.0 to 1.9 for the two-backend table, 2026-08-14
 device 9763533FF5187EAC src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -780,5 +802,7 @@ scaling 3860EF43E7E63137 src/library/model_runner-backend-cpu.adb src/library/mo
 # fuzz' watches the same thing continuously as its worst case in milliseconds,
 # but that is a limit and not a figure: it says the cost is not absurd, not
 # what the cost is.
-# load: unknown -- timed by the shell before the tools reported one
+# load: 1.12, one `tests benchmark` run, 2026-08-14. The 25.5 s that says
+#       why the bound exists is history and needs the commit before it; it
+#       is not reproducible and is quoted as a reason rather than a figure.
 tokenizer C31707CC57513F4B src/library/model_runner-tokenizer.adb

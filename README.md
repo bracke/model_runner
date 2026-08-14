@@ -649,10 +649,21 @@ found any other way. `Encode` looks for a control token wherever the text
 opens a bracket, and the scan reached the longest token the format allows —
 1024 bytes — at every one of them. Sixty thousand brackets, well inside the
 documented input limit, took **25.5 seconds** where the same length of
-ordinary text took **0.039**. Nothing was wrong with the answer. The scan is
-now bounded by the longest marker the vocabulary actually holds, which for the
-fixture is four bytes and for a real vocabulary about seventeen, and the same
-prompt takes 0.045 seconds.
+ordinary text took a fortieth of a second. Nothing was wrong with the answer.
+The scan is now bounded by the longest marker the vocabulary actually holds,
+which for the fixture is four bytes and for a real vocabulary about
+seventeen.
+
+`tests benchmark` times both cases now, at a load of 1.12: **0.0098 s** for
+sixty thousand ordinary characters and **0.0127 s** for sixty thousand
+brackets, so the hostile text costs about a third more rather than six
+hundred times more. Those are lower than the 0.039 and 0.045 this used to
+quote, and the reason is what they measure: the older pair came from timing
+a whole `model_runner run` in the shell -- parsing the model, loading the
+vocabulary, encoding, and refusing the prompt for length -- while these are
+the encode. The 25.5 s is history and needs the commit before the bound; it
+is quoted as the reason the bound exists rather than as something to
+reproduce.
 
 The longest cases are drawn from an alphabet where one character in two is a
 bracket, because a cost paid per bracket is invisible in text where one
@@ -1076,16 +1087,20 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. The same run at
-fourteen threads takes 2.29 s of wall against 2.43 s at seven, and 17.3 s of
-processor time against 10.1 s: six per cent of the wall for seventy per cent
-more energy, which is why the program chooses one worker per core rather
-than one per processor. Those four numbers are the oldest here: they come
-from the operating system's timing tool, from runs whose load nobody
-recorded, and they are the pair this section has not managed to retake --
-the tools refuse to measure above a load of 1.5, and this machine has not
-been below it for long enough at a stretch. They are kept because the
-conclusion does not turn on the third digit, and said to be old because that
-is not the same as knowing they are current.
+fourteen threads takes **1.54 s** of wall against **1.88 s** at seven, and
+16.1 s of processor time against 10.4 s, both at a load of about 1.25.
+
+That is eighteen per cent off the wall for fifty-five per cent more processor
+time, and it is worth saying plainly that it is not what this paragraph used
+to say. The figures here were 2.29 s against 2.43 s and 17.3 s against
+10.1 s -- six per cent of the wall for seventy per cent more energy -- taken
+with the shell's timer, on runs whose load nobody recorded, and including the
+model load that these exclude. Six per cent for seventy is a bad bargain that
+argues for itself. Eighteen for fifty-five is a real trade, and the default
+of one worker per core rests on the energy alone: the same tokens for two
+thirds of the processor time, on a fifteen-watt part where that is heat and
+battery rather than an abstraction. A caller who wants the wall and has the
+power can ask for `--threads 14` and will get it.
 
 A job is cut into one more piece than the pool has workers, because the task
 that submits it takes the last piece rather than waiting; the figures below
@@ -1414,7 +1429,7 @@ of 1.25 rising to 3.34:
 | | | | | F32 | 1.39 | 0.26 |
 | | | | | BF16 | 1.41 | 0.29 |
 
-and q8_0 at thirty-two vectors a pass, which is 0.097.
+and q8_0 at thirty-two vectors a pass, which is 0.104.
 
 Read the one-vector column as a statement about the processor as much as
 about the device, because that is what it is. The formats the device wins hardest on
@@ -1664,13 +1679,13 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.28 | Q3_K | 0.50 |
-| Q4_0 | 0.32 | F16 | 0.59 |
-| BF16 | 0.33 | Q2_K | 0.73 |
-| Q4_K | 0.39 | IQ4_XS | 0.95 |
-| Q6_K | 0.39 | Q5_0 | 1.08 |
-| Q8_0 | 0.40 | Q5_1 | 1.11 |
-| Q5_K | 0.43 | IQ4_NL | 1.19 |
+| F32 | 0.28 | Q3_K | 0.52 |
+| Q4_0 | 0.33 | F16 | 0.59 |
+| BF16 | 0.35 | Q2_K | 0.79 |
+| Q4_K | 0.40 | IQ4_XS | 0.95 |
+| Q6_K | 0.40 | Q5_0 | 1.10 |
+| Q8_0 | 0.40 | Q5_1 | 1.14 |
+| Q5_K | 0.44 | IQ4_NL | 1.44 |
 | Q4_1 | 0.45 | | |
 
 The two five-bit legacy formats are outliers, and the reason is where they

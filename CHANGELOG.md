@@ -5,6 +5,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The worker-count comparison retaken, and the reasoning built on it
+  rewritten.** Fourteen threads takes 1.54 s of wall and 16.1 s of processor
+  time against seven at 1.88 s and 10.4 s, both at a load of about 1.25. That
+  is eighteen per cent off the wall for fifty-five per cent more processor
+  time, where the paragraph said six per cent for seventy.
+
+  Six per cent for seventy is a bad bargain that argues for itself; eighteen
+  for fifty-five is a real trade. The default of one worker per core stands,
+  but on the energy alone -- the same tokens for two thirds of the processor
+  time, on a fifteen-watt part where that is heat and battery. A caller who
+  wants the wall can ask for `--threads 14`.
+
+- **The tokenizer figures taken by the tool:** 0.0098 s for sixty thousand
+  ordinary characters and 0.0127 s for sixty thousand brackets, at a load of
+  1.12, against 0.039 and 0.045 timed in the shell. The older pair measured a
+  whole `model_runner run` -- parse, load the vocabulary, encode, refuse for
+  length -- and was quoted as the tokenizer's cost. These are the encode.
+
+- **The row-product table and the thirty device ratios** republished from the
+  same run, at a load of 1.12 rising to 2.03.
+
+  One group is left recording no load: the pinned scaling figures, whose run
+  needs a longer quiet window than this machine has offered.
+
 ### Added
 
 - **`tests benchmark` times the tokenizer,** on sixty thousand ordinary
