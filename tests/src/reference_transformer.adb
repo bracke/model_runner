@@ -835,7 +835,8 @@ package body Reference_Transformer is
          when Qwen3_MoE => "qwen3moe.",
          when Gemma     => "gemma.",
          when Gemma2    => "gemma2.",
-         when Gemma3    => "gemma3.");
+         when Gemma3    => "gemma3.",
+         when Phi3      => "phi3.");
 
    procedure Load
      (Item   : in out Model;
@@ -1044,6 +1045,49 @@ package body Reference_Transformer is
       end Read_Matrix;
 
       --  Read a one-dimensional tensor.
+      --  One projection out of a tensor that holds several.
+      --
+      --  Phi3 writes its queries, keys and values as one tensor and its gate
+      --  and up projection as another. This reads the whole thing and takes
+      --  the rows it wants, which is the slow and obvious way -- the engine
+      --  makes a view at an offset instead, and the two agreeing is the
+      --  point of doing it differently.
+      --
+      --  @param First Row the part starts at.
+      --  @param Count Rows the part holds.
+      function Read_Part
+        (Name : String; First, Count : Natural; Present : out Boolean)
+        return Matrix_Access
+      is
+         Whole : Matrix_Access := Read_Matrix (Name, Present);
+      begin
+         if not Present or else Whole = null then
+            Present := False;
+            return null;
+         end if;
+
+         if Whole'Last (1) < First + Count - 1 then
+            Free_Matrix (Whole);
+            Present := False;
+            return null;
+         end if;
+
+         declare
+            Part : constant Matrix_Access :=
+              new Matrix (0 .. Count - 1, Whole'Range (2));
+         begin
+            for Row in 0 .. Count - 1 loop
+               for Column in Whole'Range (2) loop
+                  Part (Row, Column) := Whole (First + Row, Column);
+               end loop;
+            end loop;
+
+            Free_Matrix (Whole);
+            Present := True;
+            return Part;
+         end;
+      end Read_Part;
+
       function Read_Vector (Name : String; Present : out Boolean)
         return Vector_Access
       is
@@ -1111,6 +1155,8 @@ package body Reference_Transformer is
             Item.Kind := Gemma2;
          elsif Named = "gemma3" then
             Item.Kind := Gemma3;
+         elsif Named = "phi3" then
+            Item.Kind := Phi3;
          else
             return;
          end if;
@@ -1328,20 +1374,42 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            Current.Query :=
-              Read_Matrix (Layer_Name (Index, "attn_q.weight"), Present);
+            --  Phi3's three attention projections come out of one tensor,
+            --  in the order the rows are written: queries, keys, values.
+            if Item.Kind = Phi3 then
+               Current.Query :=
+                 Read_Part (Layer_Name (Index, "attn_qkv.weight"),
+                            0, Item.Heads * Item.Head_Size, Present);
+            else
+               Current.Query :=
+                 Read_Matrix (Layer_Name (Index, "attn_q.weight"), Present);
+            end if;
             if not Present then
                return;
             end if;
 
-            Current.Key :=
-              Read_Matrix (Layer_Name (Index, "attn_k.weight"), Present);
+            if Item.Kind = Phi3 then
+               Current.Key :=
+                 Read_Part (Layer_Name (Index, "attn_qkv.weight"),
+                            Item.Heads * Item.Head_Size,
+                            Item.KV_Heads * Item.Head_Size, Present);
+            else
+               Current.Key :=
+                 Read_Matrix (Layer_Name (Index, "attn_k.weight"), Present);
+            end if;
             if not Present then
                return;
             end if;
 
-            Current.Value :=
-              Read_Matrix (Layer_Name (Index, "attn_v.weight"), Present);
+            if Item.Kind = Phi3 then
+               Current.Value :=
+                 Read_Part (Layer_Name (Index, "attn_qkv.weight"),
+                            (Item.Heads + Item.KV_Heads) * Item.Head_Size,
+                            Item.KV_Heads * Item.Value_Size, Present);
+            else
+               Current.Value :=
+                 Read_Matrix (Layer_Name (Index, "attn_v.weight"), Present);
+            end if;
             if not Present then
                return;
             end if;
@@ -1430,14 +1498,27 @@ package body Reference_Transformer is
                   return;
                end if;
             else
-               Current.Gate :=
-                 Read_Matrix (Layer_Name (Index, "ffn_gate.weight"), Present);
+               if Item.Kind = Phi3 then
+                  Current.Gate :=
+                    Read_Part (Layer_Name (Index, "ffn_up.weight"),
+                               0, Item.Feed_Forward, Present);
+               else
+                  Current.Gate :=
+                    Read_Matrix
+                      (Layer_Name (Index, "ffn_gate.weight"), Present);
+               end if;
                if not Present then
                   return;
                end if;
 
-               Current.Up :=
-                 Read_Matrix (Layer_Name (Index, "ffn_up.weight"), Present);
+               if Item.Kind = Phi3 then
+                  Current.Up :=
+                    Read_Part (Layer_Name (Index, "ffn_up.weight"),
+                               Item.Feed_Forward, Item.Feed_Forward, Present);
+               else
+                  Current.Up :=
+                    Read_Matrix (Layer_Name (Index, "ffn_up.weight"), Present);
+               end if;
                if not Present then
                   return;
                end if;

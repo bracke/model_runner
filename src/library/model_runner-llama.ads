@@ -135,8 +135,14 @@ package Model_Runner.Llama is
    --  attends to everything and turns on the model's. It normalizes query
    --  and key heads as Qwen3 does, which is the one difference here that was
    --  already written for something else.
+   --  Phi3 is this shape with its projections written as two tensors rather
+   --  than five: the queries, keys and values in one, and the gate and the
+   --  up projection in another. Nothing about the arithmetic differs -- what
+   --  differs is where the weights are, and a reader that took the first
+   --  rows of a fused tensor for the whole of a projection would compute a
+   --  model whose heads are somebody else's.
    type Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3);
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3);
 
    --  The identifier a file carries for an architecture.
    --
@@ -150,7 +156,8 @@ package Model_Runner.Llama is
          when Qwen3_MoE => "qwen3moe",
          when Gemma     => "gemma",
          when Gemma2    => "gemma2",
-         when Gemma3    => "gemma3");
+         when Gemma3    => "gemma3",
+         when Phi3      => "phi3");
 
    --  Validated architecture configuration.
    --

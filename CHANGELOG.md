@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The `phi3` architecture.** Nothing in its arithmetic differs; everything
+  about where its weights are does. The queries, keys and values are one
+  tensor and the gate and up projection another, and a part is taken out as a
+  view at a row offset rather than copied -- which works because a row is a
+  whole number of blocks in every format this reads, so a part begins on a
+  block boundary. Repacking then rewrites each part as its own tensor, so a
+  repacked phi3 model is no longer fused at all.
+
+  Crossed with every format and both evaluation paths: 19005 sequences,
+  262080 logits, none outside tolerance.
+
+### Fixed
+
+- **A fixture that made a new architecture look wrong.** Phi3's first sweep
+  disagreed on 72 logits, all in the halved-cache and rounded sets, and its
+  exact comparisons sat at 4e-4 where every other architecture agrees at
+  2e-5. The cause was the fixture: weights are drawn per tensor, so writing
+  three projections as one tensor drew a different random model, and the
+  lossy tolerances measured on the others did not describe it. The fused
+  tensors are drawn as their parts now, in the order the unfused
+  architectures draw them, so a phi3 fixture is a llama fixture with its
+  weights in fewer places -- and the sweep compares like with like instead of
+  calling the difference between two random models a tolerance. Every
+  comparison agrees, and the exact set is back at 2.6e-5.
+
+### Added
+
 - **The `gemma3` architecture.** It keeps gemma2's two normalizations a
   block, drops its two bounds, normalizes query and key heads as qwen3 does,
   windows five layers in six rather than every other one, and turns those

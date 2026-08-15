@@ -148,7 +148,8 @@ package body Model_Runner.Llama is
                Settings.Pairing :=
                  (case Kind is
                     when Llama => K.Interleaved,
-                    when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3 =>
+                    when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3
+                       | Phi3 =>
                       K.Split);
                Found := True;
             end if;
@@ -805,6 +806,79 @@ package body Model_Runner.Llama is
       end;
    end Resolve;
 
+   --  Resolve one projection out of a tensor that holds several.
+   --
+   --  Phi3 writes the queries, keys and values as one tensor and the gate
+   --  and the up projection as another. A row is a whole number of blocks in
+   --  every format this reads, so a part begins at a block boundary and is
+   --  a view over the same bytes at an offset -- no copy, and the part is an
+   --  ordinary matrix to everything downstream, including the repacking
+   --  pass, which rewrites each part as its own tensor.
+   --
+   --  The whole shape is checked rather than the part's: a file whose fused
+   --  tensor is the wrong size is a file this cannot read, and finding that
+   --  out from the first part alone would take the first rows of something
+   --  else and call them a projection.
+   --
+   --  @param Whole_Rows Rows the fused tensor holds altogether.
+   --  @param First_Row Row this part starts at.
+   --  @param Rows Rows this part holds.
+   procedure Resolve_Part
+     (Item       : in out Model;
+      Source     : Containers.Container;
+      Name       : String;
+      Whole_Rows : Element_Count;
+      Columns    : Element_Count;
+      First_Row  : Element_Count;
+      Rows       : Element_Count;
+      Result     : out T.View;
+      Status     : out E.Error_Info;
+      Repack     : Repack_Mode := No_Repack)
+   is
+      Whole : T.View;
+   begin
+      Result := T.Empty_View;
+
+      --  The whole tensor first, which is where the shape and the format
+      --  are checked. Repack reaches it because that check asks what the
+      --  backend will read rather than what the file holds.
+      Resolve (Item, Source, Name, Whole_Rows, Columns, Whole, Status,
+               Repack => Repack);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      declare
+         Per_Block : constant Element_Count :=
+           Element_Count (Model_Runner.GGUF.Block_Elements (Whole.Format));
+         Row_Bytes : constant B.Byte_Count :=
+           B.Byte_Count (Columns / Per_Block)
+           * B.Byte_Count (Model_Runner.GGUF.Block_Bytes (Whole.Format));
+      begin
+         if Columns mod Per_Block /= 0 then
+            Status := E.Make (E.Arch_Invalid_Tensor_Shape);
+            E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+            E.Add_Integer (Status, "columns", Long_Long_Integer (Columns));
+            return;
+         end if;
+
+         T.Make
+           (Format  => Whole.Format,
+            Rows    => Rows,
+            Columns => Columns,
+            Data    => Item.Arena,
+            Offset  => Whole.Offset + B.Byte_Count (First_Row) * Row_Bytes,
+            Result  => Result,
+            Status  => Status);
+      end;
+
+      --  Nothing repacks here. The pass that rewrites weights runs later,
+      --  over every view the model holds, and a part is one of those: it
+      --  arrives there as an ordinary matrix and is rewritten as its own
+      --  tensor, which is also what makes a repacked phi3 model stop being
+      --  fused at all.
+   end Resolve_Part;
+
    --  Resolve a one-dimensional normalization weight and decode it once into a
    --  plain vector. Norm weights are read on every layer of every token, and
    --  they are tiny, so keeping them decoded costs little and removes a
@@ -1363,20 +1437,45 @@ package body Model_Runner.Llama is
                   exit when E.Is_Error (Status);
                end if;
 
-               Resolve
-                 (Item, Source, Layer_Key (Index, "attn_q.weight"),
-                  Wide, Width, Current.Query, Status, Repack);
-               exit when E.Is_Error (Status);
+               --  Three projections out of one tensor where the
+               --  architecture fuses them, and three tensors where it does
+               --  not. The order inside the fused one is queries, then
+               --  keys, then values, which is the order the rows are
+               --  written in.
+               if Item.Settings.Kind = Phi3 then
+                  Resolve_Part
+                    (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
+                     Wide + KV + KV_Out, Width, 0, Wide,
+                     Current.Query, Status, Repack);
+                  exit when E.Is_Error (Status);
 
-               Resolve
-                 (Item, Source, Layer_Key (Index, "attn_k.weight"),
-                  KV, Width, Current.Key, Status, Repack);
-               exit when E.Is_Error (Status);
+                  Resolve_Part
+                    (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
+                     Wide + KV + KV_Out, Width, Wide, KV,
+                     Current.Key, Status, Repack);
+                  exit when E.Is_Error (Status);
 
-               Resolve
-                 (Item, Source, Layer_Key (Index, "attn_v.weight"),
-                  KV_Out, Width, Current.Value, Status, Repack);
-               exit when E.Is_Error (Status);
+                  Resolve_Part
+                    (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
+                     Wide + KV + KV_Out, Width, Wide + KV, KV_Out,
+                     Current.Value, Status, Repack);
+                  exit when E.Is_Error (Status);
+               else
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "attn_q.weight"),
+                     Wide, Width, Current.Query, Status, Repack);
+                  exit when E.Is_Error (Status);
+
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "attn_k.weight"),
+                     KV, Width, Current.Key, Status, Repack);
+                  exit when E.Is_Error (Status);
+
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "attn_v.weight"),
+                     KV_Out, Width, Current.Value, Status, Repack);
+                  exit when E.Is_Error (Status);
+               end if;
 
                --  Qwen2 adds a bias to each projection; Llama and Qwen3
                --  have none. Required when the architecture says so rather
@@ -1429,7 +1528,30 @@ package body Model_Runner.Llama is
                   Current.Feed_Norm, Status);
                exit when E.Is_Error (Status);
 
-               if Item.Settings.Experts = 0 then
+               if Item.Settings.Experts = 0 and then Item.Settings.Kind = Phi3
+               then
+                  --  The gate and the up projection in one tensor, gate
+                  --  first. Taking them the other way round is a model that
+                  --  gates on what it should be scaling, which reads as
+                  --  fluent nonsense rather than as a refusal.
+                  Resolve_Part
+                    (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                     Feed * 2, Width, 0, Feed,
+                     Current.Gate, Status, Repack);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Part
+                    (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                     Feed * 2, Width, Feed, Feed,
+                     Current.Up, Status, Repack);
+                  exit when E.Is_Error (Status);
+
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ffn_down.weight"),
+                     Width, Feed, Current.Down, Status, Repack);
+                  exit when E.Is_Error (Status);
+
+               elsif Item.Settings.Experts = 0 then
                   Resolve
                     (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
                      Feed, Width, Current.Gate, Status, Repack);

@@ -99,22 +99,24 @@ package body Tiny_Model is
          return Fixtures.Sequence (Count, Seed, 0.5);
       end Next;
 
-      --  Append a float32 tensor whose contents come from the sequence.
-      procedure Weight
+      --  Append a tensor whose contents are given rather than drawn, which
+      --  is what an architecture writing several projections into one tensor
+      --  needs: the parts are drawn separately, in the order the unfused
+      --  architectures draw them, and written as one. A phi3 fixture is then
+      --  the same model as a llama one with its weights in fewer places --
+      --  so a reader that splits them correctly gets llama's answer, and the
+      --  sweep compares like with like instead of comparing two different
+      --  random models and calling the difference a tolerance.
+      procedure Weight_Of
         (Name       : String;
-         Dimensions : Fixtures.Dimension_List)
+         Dimensions : Fixtures.Dimension_List;
+         Values     : N.Real_Array)
       is
-         Total : N.Element_Count := 1;
+         Total : constant N.Element_Count := Values'Length;
       begin
-         for Extent of Dimensions loop
-            Total := Total * N.Element_Count (Extent);
-         end loop;
-         declare
-            Values : constant N.Real_Array := Next (Total);
-         begin
-            --  A quantized model keeps its matrices quantized and its norms
-            --  in binary32; the fixture follows that, so the quantized path
-            --  is exercised the way a real file exercises it.
+         --  A quantized model keeps its matrices quantized and its norms
+         --  in binary32; the fixture follows that, so the quantized path
+         --  is exercised the way a real file exercises it.
             if Format = F16 then
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_F16,
@@ -176,7 +178,19 @@ package body Tiny_Model is
                  (Builder, Name, Dimensions, G.Type_F32,
                   Fixtures.Encode_F32 (Values));
             end if;
-         end;
+      end Weight_Of;
+
+      --  The ordinary case: one tensor, drawn as it is written.
+      procedure Weight
+        (Name       : String;
+         Dimensions : Fixtures.Dimension_List)
+      is
+         Total : N.Element_Count := 1;
+      begin
+         for Extent of Dimensions loop
+            Total := Total * N.Element_Count (Extent);
+         end loop;
+         Weight_Of (Name, Dimensions, Next (Total));
       end Weight;
 
       --  Append a normalization weight, which is kept near one so that the
@@ -245,7 +259,8 @@ package body Tiny_Model is
            when Qwen3_MoE => "qwen3moe",
            when Gemma     => "gemma",
            when Gemma2    => "gemma2",
-           when Gemma3    => "gemma3");
+           when Gemma3    => "gemma3",
+           when Phi3      => "phi3");
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
@@ -548,14 +563,40 @@ package body Tiny_Model is
                   [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
                   G.Type_F32, Fixtures.Encode_F32 (Values));
             end;
+         elsif Kind = Phi3 then
+            --  One tensor holding all three, in the order a reader has to
+            --  take them out: queries, then keys, then values -- and drawn
+            --  as three, in the order every other architecture draws them,
+            --  so this fixture is that fixture with its weights in fewer
+            --  places rather than a different model.
+            declare
+               use type N.Real_Array;
+
+               Q : constant N.Real_Array :=
+                 Next (N.Element_Count (Embedding * Heads * Key_Size));
+               K : constant N.Real_Array :=
+                 Next (N.Element_Count (Embedding * KV_Heads * Key_Size));
+               V : constant N.Real_Array :=
+                 Next (N.Element_Count (Embedding * KV_Heads * Value_Size));
+            begin
+               Weight_Of
+                 (Layer_Name (Index, "attn_qkv.weight"),
+                  [G.U64 (Embedding),
+                   G.U64 (Heads * Key_Size + KV_Heads * Key_Size
+                          + KV_Heads * Value_Size)],
+                  Q & K & V);
+            end;
          else
             Weight (Layer_Name (Index, "attn_q.weight"),
                     [G.U64 (Embedding), G.U64 (Heads * Key_Size)]);
          end if;
-         Weight (Layer_Name (Index, "attn_k.weight"),
-                 [G.U64 (Embedding), G.U64 (KV_Heads * Key_Size)]);
-         Weight (Layer_Name (Index, "attn_v.weight"),
-                 [G.U64 (Embedding), G.U64 (KV_Heads * Value_Size)]);
+
+         if Kind /= Phi3 then
+            Weight (Layer_Name (Index, "attn_k.weight"),
+                    [G.U64 (Embedding), G.U64 (KV_Heads * Key_Size)]);
+            Weight (Layer_Name (Index, "attn_v.weight"),
+                    [G.U64 (Embedding), G.U64 (KV_Heads * Value_Size)]);
+         end if;
          --  Qwen2 carries a bias beside each projection; Llama has none.
          if Kind = Qwen2 and then not Omit_Biases then
             Norm_Of (Layer_Name (Index, "attn_q.bias"), Heads * Key_Size);
@@ -589,6 +630,24 @@ package body Tiny_Model is
                     [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Experts)]);
             Weight (Layer_Name (Index, "ffn_down_exps.weight"),
                     [G.U64 (Expert_Feed), G.U64 (Embedding), G.U64 (Experts)]);
+         elsif Kind = Phi3 then
+            --  The gate and the up projection in one tensor, gate first,
+            --  and drawn as two for the same reason.
+            declare
+               use type N.Real_Array;
+
+               Gate : constant N.Real_Array :=
+                 Next (N.Element_Count (Embedding * Feed_Forward));
+               Up   : constant N.Real_Array :=
+                 Next (N.Element_Count (Embedding * Feed_Forward));
+            begin
+               Weight_Of
+                 (Layer_Name (Index, "ffn_up.weight"),
+                  [G.U64 (Embedding), G.U64 (2 * Feed_Forward)],
+                  Gate & Up);
+            end;
+            Weight (Layer_Name (Index, "ffn_down.weight"),
+                    [G.U64 (Feed_Forward), G.U64 (Embedding)]);
          else
             Weight (Layer_Name (Index, "ffn_gate.weight"),
                     [G.U64 (Embedding), G.U64 (Feed_Forward)]);

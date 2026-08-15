@@ -128,9 +128,10 @@ package body Conformance is
       --  differences touch every part of a pass: the gain on every
       --  normalization, the scale on the embedding, and the gate in every
       --  feed-forward block, dense or mixed.
-      Crossed : constant array (1 .. 6) of Tiny_Model.Fixture_Architecture :=
+      Crossed : constant array (1 .. 7) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
-         Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3];
+         Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3,
+         Tiny_Model.Phi3];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -349,23 +350,28 @@ package body Conformance is
                      --  rounded path is judged by its own pair, because
                      --  holding it to the exact one would say only what
                      --  rounding already says.
-                     if L."=" (Cache, L.Halved) then
-                        if Gap > Cached_Absolute_Tolerance
-                          and then Relative > Cached_Relative_Tolerance
-                        then
+                     --  Which tolerance a comparison answers to depends on
+                     --  what was asked of it: a halved cache and a halved
+                     --  mantissa each have their own, measured, and the
+                     --  exact modes answer to the strict one.
+                     declare
+                        Bad : Boolean := False;
+                     begin
+                        if L."=" (Cache, L.Halved) then
+                           Bad := Gap > Cached_Absolute_Tolerance
+                             and then Relative > Cached_Relative_Tolerance;
+                        elsif Repack = L.To_BF16 then
+                           Bad := Gap > Lossy_Absolute_Tolerance
+                             and then Relative > Lossy_Relative_Tolerance;
+                        else
+                           Bad := Gap > Absolute_Tolerance
+                             and then Relative > Relative_Tolerance;
+                        end if;
+
+                        if Bad then
                            Result.Failures := Result.Failures + 1;
                         end if;
-                     elsif Repack = L.To_BF16 then
-                        if Gap > Lossy_Absolute_Tolerance
-                          and then Relative > Lossy_Relative_Tolerance
-                        then
-                           Result.Failures := Result.Failures + 1;
-                        end if;
-                     elsif Gap > Absolute_Tolerance
-                       and then Relative > Relative_Tolerance
-                     then
-                        Result.Failures := Result.Failures + 1;
-                     end if;
+                     end;
                   end;
                end loop;
             end if;
