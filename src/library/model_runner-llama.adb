@@ -148,7 +148,8 @@ package body Model_Runner.Llama is
                Settings.Pairing :=
                  (case Kind is
                     when Llama => K.Interleaved,
-                    when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 => K.Split);
+                    when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3 =>
+                      K.Split);
                Found := True;
             end if;
          end loop;
@@ -485,8 +486,25 @@ package body Model_Runner.Llama is
       --  gemma2 file without them is a file this build cannot compute, and
       --  a file that states them under another architecture's prefix is a
       --  file that means something else by them.
+      if Settings.Kind = Gemma3 then
+         --  Five layers in six slide a window; the sixth sees everything.
+         Settings.Alternating := True;
+         Settings.Window_Every := 6;
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "rope.local_freq_base"),
+            1.0, 1.0E12, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Local_Base :=
+           (if E.Is_Ok (Local) then Value else 10_000.0);
+      end if;
+
       if Settings.Kind = Gemma2 then
          Settings.Alternating := True;
+         Settings.Window_Every := 2;
 
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attn_logit_softcapping"),
@@ -961,12 +979,28 @@ package body Model_Runner.Llama is
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
    is
    begin
-      if Item.Settings.Kind in Gemma | Gemma2 then
+      if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 then
          K.GELU (Target);
       else
          K.SiLU (Target);
       end if;
    end Gate_Activation;
+
+   --  The base a layer turns its rotation on.
+   --
+   --  One base for the whole model everywhere but Gemma3, which turns the
+   --  windowed layers on a base of their own -- a small one for a layer that
+   --  looks a few positions back and the model's own for the layer that sees
+   --  everything. Asked per layer rather than carried in the plan, because
+   --  the alternative is a field that can disagree with the window it is
+   --  supposed to follow.
+   function Turn_Base
+     (Settings : Configuration; Layer : Natural) return N.Wide_Real
+   is (if Settings.Local_Base > 0.0
+         and then Settings.Window_Every > 0
+         and then Layer mod Settings.Window_Every /= Settings.Window_Every - 1
+       then Settings.Local_Base
+       else Settings.Rope_Base);
 
    --  A score held under a bound, as the architecture that states one puts
    --  it: cap times the hyperbolic tangent of the score over the cap. Small
@@ -1002,7 +1036,7 @@ package body Model_Runner.Llama is
    --  stands. Asked of the model rather than carried in the plan, so that
    --  the nine places a normalization happens cannot disagree.
    function Lifted_Norms (Item : Model'Class) return Boolean
-   is (Item.Settings.Kind in Gemma | Gemma2);
+   is (Item.Settings.Kind in Gemma | Gemma2 | Gemma3);
 
    --  Normalize what a sublayer produced, where the architecture says so.
    --
@@ -1042,7 +1076,7 @@ package body Model_Runner.Llama is
    --  per token and the alternative is a field that can disagree with the
    --  architecture that decides it.
    function Embedding_Scale (Item : Model'Class) return Real
-   is (if Item.Settings.Kind in Gemma | Gemma2
+   is (if Item.Settings.Kind in Gemma | Gemma2 | Gemma3
        then Real (N.Sqrt (N.Wide_Real (Item.Settings.Embedding)))
        else 1.0);
 
@@ -1315,7 +1349,7 @@ package body Model_Runner.Llama is
                --  gemma2 file without them is not one this build can
                --  compute, and taking them if present would read such a
                --  file as a model with two normalizations missing.
-               if Item.Settings.Kind = Gemma2 then
+               if Item.Settings.Kind in Gemma2 | Gemma3 then
                   Resolve_Norm
                     (Item, Source,
                      Layer_Key (Index, "post_attention_norm.weight"), Width,
@@ -1371,7 +1405,7 @@ package body Model_Runner.Llama is
                --  the rotation, with one gain per element of a head shared
                --  across the heads. Required for the architectures that have
                --  it, for the same reason the biases are.
-               if Item.Settings.Kind in Qwen3 | Qwen3_MoE then
+               if Item.Settings.Kind in Qwen3 | Qwen3_MoE | Gemma3 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
                      Element_Count (Item.Settings.Head_Size),
@@ -3276,7 +3310,7 @@ package body Model_Runner.Llama is
          T.Allocate (Width, Item.Activation);
          T.Allocate (Width, Item.Normalized);
 
-         if Source.Settings.Kind = Gemma2 then
+         if Source.Settings.Kind in Gemma2 | Gemma3 then
             T.Allocate (Width, Item.Post_Room);
          end if;
 
@@ -3563,7 +3597,8 @@ package body Model_Runner.Llama is
                   K.Apply_Rotary
                     (Item.Key_Row.all, KV_Heads, Head_Size,
                      Element_Count (Settings.Rotary), Drop,
-                     Settings.Rope_Base, Settings.Scaling, Turns (Source),
+                     Turn_Base (Settings, Natural (Index)),
+                     Settings.Scaling, Turns (Source),
                      Settings.Pairing, Backwards => True);
 
                   if Item.Held = Exact then
@@ -3668,7 +3703,15 @@ package body Model_Runner.Llama is
    is
       Width : constant Element_Count := Element_Count (Settings.Window);
    begin
-      if Settings.Alternating and then Layer mod 2 = 1 then
+      --  Which layers slide a window. Gemma2 alternates, so every second
+      --  layer sees everything; Gemma3 windows five in six, so every sixth
+      --  does. Written as one rule with the period the architecture states,
+      --  because two rules that mean the same thing are two rules to get
+      --  wrong.
+      if Settings.Alternating
+        and then Settings.Window_Every > 0
+        and then Layer mod Settings.Window_Every = Settings.Window_Every - 1
+      then
          return 0;
       end if;
 
@@ -3824,12 +3867,14 @@ package body Model_Runner.Llama is
             K.Apply_Rotary
               (Item.Query.all, Heads, Head_Size,
                Element_Count (Settings.Rotary), Item.Committed,
-               Settings.Rope_Base, Settings.Scaling, Turns (Source),
+               Turn_Base (Settings, Natural (Index)),
+               Settings.Scaling, Turns (Source),
                Settings.Pairing);
             K.Apply_Rotary
               (Item.Key_Row.all, KV_Heads, Head_Size,
                Element_Count (Settings.Rotary), Item.Committed,
-               Settings.Rope_Base, Settings.Scaling, Turns (Source),
+               Turn_Base (Settings, Natural (Index)),
+               Settings.Scaling, Turns (Source),
                Settings.Pairing);
 
             --  Write into the reserved slot. The slot is only readable as
@@ -4219,13 +4264,15 @@ package body Model_Runner.Llama is
                     (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
                      Element_Count (Settings.Rotary),
                      Item.Committed + Natural (Which),
-                     Settings.Rope_Base, Settings.Scaling, Turns (Source),
+                     Turn_Base (Settings, Natural (Index)),
+                     Settings.Scaling, Turns (Source),
                      Settings.Pairing);
                   K.Apply_Rotary
                     (Keys.all (KV_At .. KV_At + KV_Width - 1),
                      KV_Heads, Head_Size, Element_Count (Settings.Rotary),
                      Item.Committed + Natural (Which),
-                     Settings.Rope_Base, Settings.Scaling, Turns (Source),
+                     Turn_Base (Settings, Natural (Index)),
+                     Settings.Scaling, Turns (Source),
                      Settings.Pairing);
 
                   if Item.Held = Exact then

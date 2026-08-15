@@ -129,7 +129,14 @@ package Model_Runner.Llama is
    --  scores and another on the logits, both applied as a scaled hyperbolic
    --  tangent; and a sliding window on every other layer rather than on all
    --  of them or none.
-   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2);
+   --  Gemma3 keeps gemma2's two normalizations a block and drops its two
+   --  bounds. What it adds is a rotation that differs by layer: five layers
+   --  in six slide a window and turn on a base of their own, and the sixth
+   --  attends to everything and turns on the model's. It normalizes query
+   --  and key heads as Qwen3 does, which is the one difference here that was
+   --  already written for something else.
+   type Architecture is
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3);
 
    --  The identifier a file carries for an architecture.
    --
@@ -142,7 +149,8 @@ package Model_Runner.Llama is
          when Qwen3     => "qwen3",
          when Qwen3_MoE => "qwen3moe",
          when Gemma     => "gemma",
-         when Gemma2    => "gemma2");
+         when Gemma2    => "gemma2",
+         when Gemma3    => "gemma3");
 
    --  Validated architecture configuration.
    --
@@ -202,6 +210,16 @@ package Model_Runner.Llama is
       --  than to all of them. Gemma2 alternates, starting with the window
       --  on layer zero.
       Alternating     : Boolean := False;
+
+      --  How many layers in a row slide a window before one attends to
+      --  everything. Zero for an architecture with no pattern, two for one
+      --  that alternates, six for Gemma3's five-in-six.
+      Window_Every    : Natural := 0;
+
+      --  The base the windowed layers turn on, where it differs from the
+      --  model's. Zero when every layer turns on the same one, which is
+      --  every architecture here but Gemma3.
+      Local_Base      : Wide_Real := 0.0;
 
       --  How many experts each layer holds and how many of them run for one
       --  position. Zero experts is a dense model: one feed-forward block per

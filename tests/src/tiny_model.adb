@@ -189,7 +189,7 @@ package body Tiny_Model is
          --  Around zero where the architecture's gain is one plus the
          --  weight, as in Gain_Of and for the same reason.
          Middle : constant N.Real :=
-           (if Kind in Gemma | Gemma2 then 0.0 else 1.0);
+           (if Kind in Gemma | Gemma2 | Gemma3 then 0.0 else 1.0);
       begin
          for Index in Values'Range loop
             Values (Index) := Middle + Drawn (Index) * 0.25;
@@ -214,7 +214,7 @@ package body Tiny_Model is
          --  not, and a fixture that cannot tell two readings apart is a
          --  fixture that proves neither.
          Middle : constant N.Real :=
-           (if Kind in Gemma | Gemma2 then 0.0 else 1.0);
+           (if Kind in Gemma | Gemma2 | Gemma3 then 0.0 else 1.0);
       begin
          for Index in Values'Range loop
             Values (Index) := Middle + Drawn (Index) * 0.25;
@@ -244,7 +244,8 @@ package body Tiny_Model is
            when Qwen3     => "qwen3",
            when Qwen3_MoE => "qwen3moe",
            when Gemma     => "gemma",
-           when Gemma2    => "gemma2");
+           when Gemma2    => "gemma2",
+           when Gemma3    => "gemma3");
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
@@ -337,6 +338,13 @@ package body Tiny_Model is
            (Builder, Prefix & ".attn_logit_softcapping", 4.0);
          Fixtures.Add_F32
            (Builder, Prefix & ".final_logit_softcapping", 2.0);
+      end if;
+
+      --  Gemma3 turns its windowed layers on a base of their own. Far from
+      --  the model's, so that a reader which used one base for every layer
+      --  answers visibly differently rather than nearly the same.
+      if Kind = Gemma3 then
+         Fixtures.Add_F32 (Builder, Prefix & ".rope.local_freq_base", 500.0);
       end if;
 
       Fixtures.Add_String
@@ -510,7 +518,7 @@ package body Tiny_Model is
          Norm (Layer_Name (Index, "attn_norm.weight"));
 
          --  Gemma2's two extra normalizations, one after each sublayer.
-         if Kind = Gemma2 then
+         if Kind in Gemma2 | Gemma3 then
             Norm (Layer_Name (Index, "post_attention_norm.weight"));
             Norm (Layer_Name (Index, "post_ffw_norm.weight"));
          end if;
@@ -558,7 +566,9 @@ package body Tiny_Model is
          --  Qwen3 normalizes each query head and each key head instead of
          --  biasing the projections. One gain per element of a head, shared
          --  across the heads.
-         if Kind in Qwen3 | Qwen3_MoE and then not Omit_Biases then
+         if Kind in Qwen3 | Qwen3_MoE | Gemma3
+           and then not Omit_Biases
+         then
             Gain_Of (Layer_Name (Index, "attn_q_norm.weight"), Key_Size);
             Gain_Of (Layer_Name (Index, "attn_k_norm.weight"), Key_Size);
          end if;

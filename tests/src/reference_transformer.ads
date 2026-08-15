@@ -94,7 +94,8 @@ private
    --  gate -- and each is written here in the form the paper gives rather
    --  than the form the engine uses, which is the whole point of a second
    --  implementation.
-   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2);
+   type Architecture is
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -180,6 +181,13 @@ private
       --  states none.
       Attention_Cap : Long_Float := 0.0;
       Logit_Cap     : Long_Float := 0.0;
+
+      --  How many layers in a row slide a window before one sees
+      --  everything, and the base the windowed ones turn on. Gemma3 states
+      --  both; every other architecture here turns every layer on one base
+      --  and windows all of them or none.
+      Window_Every  : Natural := 0;
+      Local_Base    : Long_Float := 0.0;
 
       --  How many experts a layer holds, how many of them run for one
       --  position, and how wide one of them is. Zero experts is a dense

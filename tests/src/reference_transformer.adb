@@ -834,7 +834,8 @@ package body Reference_Transformer is
          when Qwen3     => "qwen3.",
          when Qwen3_MoE => "qwen3moe.",
          when Gemma     => "gemma.",
-         when Gemma2    => "gemma2.");
+         when Gemma2    => "gemma2.",
+         when Gemma3    => "gemma3.");
 
    procedure Load
      (Item   : in out Model;
@@ -1108,6 +1109,8 @@ package body Reference_Transformer is
             Item.Kind := Gemma;
          elsif Named = "gemma2" then
             Item.Kind := Gemma2;
+         elsif Named = "gemma3" then
+            Item.Kind := Gemma3;
          else
             return;
          end if;
@@ -1152,6 +1155,13 @@ package body Reference_Transformer is
          Status : Model_Runner.Errors.Error_Info;
       begin
          Containers.Get_Float
+           (Source, Prefix (Item) & "rope.local_freq_base",
+            1.0, 1.0E12, Value, Status);
+         if Model_Runner.Errors.Is_Ok (Status) then
+            Item.Local_Base := Long_Float (Value);
+         end if;
+
+         Containers.Get_Float
            (Source, Prefix (Item) & "attn_logit_softcapping",
             1.0, 1.0E6, Value, Status);
          if Model_Runner.Errors.Is_Ok (Status) then
@@ -1165,6 +1175,15 @@ package body Reference_Transformer is
             Item.Logit_Cap := Long_Float (Value);
          end if;
       end;
+
+      --  The period of the window pattern, which the architecture states by
+      --  being what it is rather than by a key: two for Gemma2 and six for
+      --  Gemma3.
+      Item.Window_Every :=
+        (case Item.Kind is
+            when Gemma2 => 2,
+            when Gemma3 => 6,
+            when others => 0);
 
       Item.Experts := Metadata (Source, Prefix (Item) & "expert_count", 0);
       Item.Experts_Used :=
@@ -1292,7 +1311,7 @@ package body Reference_Transformer is
 
             --  Gemma2's two extra normalizations, required where the
             --  architecture states them.
-            if Item.Kind = Gemma2 then
+            if Item.Kind in Gemma2 | Gemma3 then
                Current.Post_Attention_Norm :=
                  Read_Vector
                    (Layer_Name (Index, "post_attention_norm.weight"),
@@ -1349,7 +1368,12 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            if Item.Kind in Qwen3 | Qwen3_MoE then
+            --  Gemma3 normalizes query and key heads as Qwen3 does. The
+            --  application below is keyed on the gain being there rather
+            --  than on the architecture, so loading it is all that this
+            --  needs -- which is why the engine and this disagreed by two
+            --  logits in three when only the engine loaded it.
+            if Item.Kind in Qwen3 | Qwen3_MoE | Gemma3 then
                Current.Query_Norm :=
                  Read_Vector (Layer_Name (Index, "attn_q_norm.weight"),
                               Present);
@@ -1543,7 +1567,7 @@ package body Reference_Transformer is
          Root : constant Long_Float := 0.797_884_560_802_865_4;
          Bend : constant Long_Float := 0.044_715;
       begin
-         if Item.Kind in Gemma | Gemma2 then
+         if Item.Kind in Gemma | Gemma2 | Gemma3 then
             declare
                Inner : constant Long_Float :=
                  Root * (Value + Bend * Value * Value * Value);
@@ -1599,7 +1623,7 @@ package body Reference_Transformer is
             --  flag on its kernel, and this has the addition where the
             --  formula puts it.
             Lift : constant Long_Float :=
-              (if Item.Kind in Gemma | Gemma2 then 1.0 else 0.0);
+              (if Item.Kind in Gemma | Gemma2 | Gemma3 then 1.0 else 0.0);
          begin
             for Index in Source'Range loop
                Target (Index) :=
@@ -1685,13 +1709,23 @@ package body Reference_Transformer is
 
       --  Where a pair sits in the band Yarn mixes across: one where the
       --  angle is kept as trained, zero where it is fully stretched.
-      function Ramp (Pair : Long_Float) return Long_Float is
+      --
+      --  The band's edges are worked out from the base the layer turns on,
+      --  not from the model's, because they are the dimensions that turn a
+      --  given number of times over the trained context and that depends on
+      --  the base being used. Gemma3 is the first architecture here where
+      --  the two differ; the engine passes one base into its kernel and
+      --  uses it throughout, and this used the model's for the edges and
+      --  the layer's for the frequency, which disagreed on eight logits of
+      --  a stretched fixture.
+      function Ramp (Pair : Long_Float; Base : Long_Float)
+                     return Long_Float is
          --  The dimension that turns Turns times over the trained context.
          function Edge (Turns : Long_Float) return Long_Float is
            (Long_Float (Item.Rotary)
             * Functions.Log
                 (Long_Float (Item.Trained) / (Turns * 2.0 * Ada.Numerics.Pi))
-            / (2.0 * Functions.Log (Item.Rope_Base)));
+            / (2.0 * Functions.Log (Base)));
 
          Low  : constant Long_Float :=
            Long_Float'Max (0.0, Long_Float'Floor (Edge (Item.Beta_Fast)));
@@ -1710,7 +1744,11 @@ package body Reference_Transformer is
       procedure Rotate
         (Vector   : in out Real_Vector;
          Heads    : Natural;
-         Position : Natural)
+         Position : Natural;
+
+         --  Which layer is turning, because Gemma3's windowed layers turn
+         --  on a base of their own.
+         Layer    : Natural)
       is
       begin
          for Head in 0 .. Heads - 1 loop
@@ -1722,9 +1760,21 @@ package body Reference_Transformer is
                      then Item.Rope_Factors (Item.Rope_Factors'First + Pair)
                      else 1.0);
 
+                  --  The base this layer turns on. Gemma3 gives its
+                  --  windowed layers one of their own -- a small base for a
+                  --  layer that looks a few positions back -- and the layer
+                  --  that sees everything turns on the model's.
+                  Base : constant Long_Float :=
+                    (if Item.Local_Base > 0.0
+                       and then Item.Window_Every > 0
+                       and then Layer mod Item.Window_Every
+                                /= Item.Window_Every - 1
+                     then Item.Local_Base
+                     else Item.Rope_Base);
+
                   Frequency : constant Long_Float :=
                     1.0 / Functions."**"
-                            (Item.Rope_Base,
+                            (Base,
                              2.0 * Long_Float (Pair)
                              / Long_Float (Item.Rotary))
                     / Divisor;
@@ -1744,7 +1794,7 @@ package body Reference_Transformer is
                   --  dimension gives.
                   Mixed : constant Long_Float :=
                     (if Item.Stretch /= Yarn then 0.0
-                     else Ramp (Long_Float (Pair)));
+                     else Ramp (Long_Float (Pair), Base));
 
                   Angle : constant Long_Float :=
                     (if Item.Stretch = Yarn
@@ -1813,7 +1863,7 @@ package body Reference_Transformer is
          --  computes the same number once per token from the same field.
          declare
             Lift : constant Long_Float :=
-              (if Item.Kind in Gemma | Gemma2
+              (if Item.Kind in Gemma | Gemma2 | Gemma3
                then Functions.Sqrt (Long_Float (Width))
                else 1.0);
          begin
@@ -1870,8 +1920,8 @@ package body Reference_Transformer is
                      Current.Key_Norm.all);
                end if;
 
-               Rotate (Query, Item.Heads, Step);
-               Rotate (Key_Row, Item.KV_Heads, Step);
+               Rotate (Query, Item.Heads, Step, Block);
+               Rotate (Key_Row, Item.KV_Heads, Step, Block);
 
                for Index in 0 .. KV_Width - 1 loop
                   Keys (Slot, Index) := Key_Row (Index);
@@ -1897,10 +1947,16 @@ package body Reference_Transformer is
                         --  Gemma2 windows every other layer, starting with
                         --  the first; everything else here windows all of
                         --  them or none.
+                        --  Which layers slide a window: all of them where
+                        --  the architecture states no pattern, and where it
+                        --  does, all but the last of each period -- every
+                        --  second layer for Gemma2 and every sixth for
+                        --  Gemma3.
                         Windowed : constant Boolean :=
                           Item.Window /= 0
-                          and then (Item.Kind /= Gemma2
-                                    or else Block mod 2 = 0);
+                          and then (Item.Window_Every = 0
+                                    or else Block mod Item.Window_Every
+                                            /= Item.Window_Every - 1);
 
                         First : constant Natural :=
                           (if not Windowed or else Step < Item.Window

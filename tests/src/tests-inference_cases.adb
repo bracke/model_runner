@@ -1070,6 +1070,52 @@ package body Tests.Inference_Cases is
       Assert (not Token.Is_Requested, "reset did not clear the token");
    end Interrupt_Requests_Cancellation;
 
+   ------------------------------------------------
+   -- A_Refused_Evaluation_Is_Not_A_Clean_Sweep --
+   ------------------------------------------------
+
+   --  A conformance run that could not evaluate something is not clean.
+   --
+   --  It used to be. A comparison whose evaluation ended in a diagnostic was
+   --  not counted, compared nothing, and said nothing; the only trace was
+   --  that the sweep's total came up short against what it expected to run.
+   --  Three hundred of them -- every single-token comparison of a new
+   --  architecture, failing on a buffer a head wide where an embedding was
+   --  wanted -- left exactly that trace and cost an afternoon to find.
+   --
+   --  What is tested is the verdict rather than a sweep that fails, because
+   --  arranging a failing evaluation inside the sweep means breaking the
+   --  engine on purpose, and a test that does that is a test that passes
+   --  when the engine is broken. The verdict is where the decision lives:
+   --  refused evaluations are as disqualifying as logits outside tolerance,
+   --  and a report that says otherwise is the fault this exists to catch.
+   procedure A_Refused_Evaluation_Is_Not_A_Clean_Sweep
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Said : Conformance.Report;
+   begin
+      --  A run that did everything it meant to.
+      Said.Ran := True;
+      Said.Compared := 100;
+      Assert (Conformance.Is_Clean (Said),
+              "a run that compared everything and agreed was called unclean");
+
+      --  One evaluation that never produced logits, and nothing outside
+      --  tolerance because nothing was compared -- which is exactly how this
+      --  reads when it goes wrong.
+      Said.Refused := 1;
+      Assert (not Conformance.Is_Clean (Said),
+              "a run that could not evaluate something was called clean, "
+              & "which is what let three hundred refusals hide behind a "
+              & "count nobody read");
+
+      Said.Refused := 0;
+      Assert (Conformance.Is_Clean (Said),
+              "the verdict did not come back once the refusal was gone, so "
+              & "it is not the refusal it is answering");
+   end A_Refused_Evaluation_Is_Not_A_Clean_Sweep;
+
    --  The engine agrees with an independent implementation of the same
    --  architecture, computed in a different arithmetic. This is the strongest
    --  correctness evidence available without an external model: a shared
@@ -5050,6 +5096,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Tokenizer_Round_Trip'Access,
          "text round-trips through the tiny vocabulary");
+      Register_Routine
+        (T, A_Refused_Evaluation_Is_Not_A_Clean_Sweep'Access,
+         "a conformance run that could not evaluate something is not clean");
       Register_Routine
         (T, Matches_Independent_Reference'Access,
          "logits match an independent reference implementation");

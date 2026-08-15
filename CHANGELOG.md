@@ -7,6 +7,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The `gemma3` architecture.** It keeps gemma2's two normalizations a
+  block, drops its two bounds, normalizes query and key heads as qwen3 does,
+  windows five layers in six rather than every other one, and turns those
+  five on a rotation base of their own -- so a layer's base depends on where
+  it sits in the pattern, which is the first architecture here where one
+  model turns on two.
+
+  Crossed with every format and both evaluation paths: 16290 sequences,
+  224640 logits, none outside tolerance.
+
+  The two implementations disagreed twice before they agreed, and both were
+  the same shape of mistake. The reference loaded query and key head norms
+  for qwen3 only, so it computed a model without them while the engine
+  computed one with -- 36643 logits. Then the engine turned a layer's whole
+  rotation on that layer's base while the reference used the model's base for
+  the band a stretched rotation mixes across and the layer's for the
+  frequency -- 8 logits. A base is a property of the rotation, so it decides
+  the band as well, and the reference says so now.
+
+- **A test for the conformance verdict:** a run that could not evaluate
+  something is not clean, whatever its comparisons say. The counter that
+  makes that true was added yesterday and nothing exercised it, which is the
+  absence it was written to close.
+
+### Added
+
 - **The `gemma2` architecture:** `gemma` and four more differences, each
   silent when missed. A normalization after each sublayer as well as before
   it, required where the architecture states them; a bound on the attention

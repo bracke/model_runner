@@ -128,9 +128,9 @@ package body Conformance is
       --  differences touch every part of a pass: the gain on every
       --  normalization, the scale on the embedding, and the gate in every
       --  feed-forward block, dense or mixed.
-      Crossed : constant array (1 .. 5) of Tiny_Model.Fixture_Architecture :=
+      Crossed : constant array (1 .. 6) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
-         Tiny_Model.Gemma, Tiny_Model.Gemma2];
+         Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
