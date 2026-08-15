@@ -1987,6 +1987,75 @@ package body Tests.Sampling_Cases is
       end;
    end Gemma_Differs_Where_It_Says_It_Does;
 
+   --  The centred normalization Falcon reads its weights through: the mean
+   --  subtracted, the standard deviation divided out, a gain and a bias
+   --  applied. Worked out by hand rather than against the engine, because a
+   --  test that computes the thing it is checking agrees with itself.
+   procedure Layer_Norm_Centres_And_Biases
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package K renames Model_Runner.Kernels;
+
+      --  Mean 2.5, deviations -1.5, -0.5, 0.5 and 1.5, so the variance is
+      --  1.25 and the standard deviation is 1.118033988749895. The four
+      --  normalized values are those deviations divided by it.
+      Source : constant N.Real_Array (0 .. 3) := [1.0, 2.0, 3.0, 4.0];
+      Whole  : constant N.Real_Array (0 .. 3) := [others => 1.0];
+      None   : constant N.Real_Array (0 .. 3) := [others => 0.0];
+      Twice  : constant N.Real_Array (0 .. 3) := [others => 2.0];
+      Result : N.Real_Array (0 .. 3) := [others => 9.0];
+
+      Wanted : constant N.Real_Array (0 .. 3) :=
+        [-1.341_640_786_499_874, -0.447_213_595_499_958,
+          0.447_213_595_499_958,  1.341_640_786_499_874];
+   begin
+      K.Layer_Norm (Source, Whole, None, 0.0, Result);
+      for Index in Result'Range loop
+         Assert (abs (Result (Index) - Wanted (Index)) < 1.0E-5,
+                 "the centred normalization did not produce the value"
+                 & " worked out for this input:" & N.Real'Image
+                   (Result (Index)));
+      end loop;
+
+      --  The gain multiplies what the normalization produced and the bias is
+      --  added to it, in that order: a gain of two and a bias of one give
+      --  twice the value plus one, not twice the sum.
+      K.Layer_Norm (Source, Twice, Whole, 0.0, Result);
+      for Index in Result'Range loop
+         Assert (abs (Result (Index) - (2.0 * Wanted (Index) + 1.0)) < 1.0E-5,
+                 "the gain and the bias were not applied in that order:"
+                 & N.Real'Image (Result (Index)));
+      end loop;
+
+      --  A vector with no spread at all centres to nothing, and what is left
+      --  is the bias. This is where the centred form and the root-mean-square
+      --  form differ most visibly: the latter would return the gain.
+      declare
+         Flat : constant N.Real_Array (0 .. 3) := [others => 7.0];
+      begin
+         K.Layer_Norm (Flat, Twice, Whole, 0.0, Result);
+         for Value of Result loop
+            Assert (abs (Value - 1.0) < 1.0E-5,
+                    "a vector with no spread did not centre to its bias:"
+                    & N.Real'Image (Value));
+         end loop;
+      end;
+
+      --  A bias of the wrong length is refused the way a gain of the wrong
+      --  length is: the target is left zeroed rather than read past.
+      declare
+         Short : constant N.Real_Array (0 .. 1) := [others => 1.0];
+      begin
+         K.Layer_Norm (Source, Whole, Short, 0.0, Result);
+         for Value of Result loop
+            Assert (Value = 0.0,
+                    "a bias of the wrong length left something behind in the"
+                    & " target");
+         end loop;
+      end;
+   end Layer_Norm_Centres_And_Biases;
+
    procedure Kernels_Survive_Degenerate_Input
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -2457,6 +2526,9 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Gemma_Differs_Where_It_Says_It_Does'Access,
          "the three kernels gemma needs are what they say they are");
+      Register_Routine
+        (T, Layer_Norm_Centres_And_Biases'Access,
+         "the centred normalization subtracts the mean and adds the bias");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Kernels_Survive_Degenerate_Input'Access,
          "the kernels answer degenerate input instead of trapping on it");

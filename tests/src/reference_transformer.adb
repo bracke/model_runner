@@ -836,7 +836,8 @@ package body Reference_Transformer is
          when Gemma     => "gemma.",
          when Gemma2    => "gemma2.",
          when Gemma3    => "gemma3.",
-         when Phi3      => "phi3.");
+         when Phi3      => "phi3.",
+         when Falcon    => "falcon.");
 
    procedure Load
      (Item   : in out Model;
@@ -1157,6 +1158,8 @@ package body Reference_Transformer is
             Item.Kind := Gemma3;
          elsif Named = "phi3" then
             Item.Kind := Phi3;
+         elsif Named = "falcon" then
+            Item.Kind := Falcon;
          else
             return;
          end if;
@@ -1325,6 +1328,10 @@ package body Reference_Transformer is
       Item.Words := Item.Embeddings'Length (1);
 
       Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
+      if Present and then Item.Kind = Falcon then
+         Item.Output_Norm_Bias :=
+           Read_Vector ("output_norm.bias", Present);
+      end if;
       if not Present then
          return;
       end if;
@@ -1357,6 +1364,14 @@ package body Reference_Transformer is
 
             --  Gemma2's two extra normalizations, required where the
             --  architecture states them.
+            if Item.Kind = Falcon then
+               Current.Attention_Norm_Bias :=
+                 Read_Vector (Layer_Name (Index, "attn_norm.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+            end if;
+
             if Item.Kind in Gemma2 | Gemma3 then
                Current.Post_Attention_Norm :=
                  Read_Vector
@@ -1376,7 +1391,7 @@ package body Reference_Transformer is
 
             --  Phi3's three attention projections come out of one tensor,
             --  in the order the rows are written: queries, keys, values.
-            if Item.Kind = Phi3 then
+            if Item.Kind in Phi3 | Falcon then
                Current.Query :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             0, Item.Heads * Item.Head_Size, Present);
@@ -1388,7 +1403,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind = Phi3 then
+            if Item.Kind in Phi3 | Falcon then
                Current.Key :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             Item.Heads * Item.Head_Size,
@@ -1401,7 +1416,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind = Phi3 then
+            if Item.Kind in Phi3 | Falcon then
                Current.Value :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             (Item.Heads + Item.KV_Heads) * Item.Head_Size,
@@ -1463,10 +1478,14 @@ package body Reference_Transformer is
                return;
             end if;
 
-            Current.Feed_Norm :=
-              Read_Vector (Layer_Name (Index, "ffn_norm.weight"), Present);
-            if not Present then
-               return;
+            --  Falcon has one normalization a block: its feed-forward
+            --  reads what attention read.
+            if Item.Kind /= Falcon then
+               Current.Feed_Norm :=
+                 Read_Vector (Layer_Name (Index, "ffn_norm.weight"), Present);
+               if not Present then
+                  return;
+               end if;
             end if;
 
             if Item.Experts > 0 then
@@ -1498,7 +1517,12 @@ package body Reference_Transformer is
                   return;
                end if;
             else
-               if Item.Kind = Phi3 then
+               if Item.Kind = Falcon then
+                  --  No gate at all: one projection up, a Gaussian unit,
+                  --  one projection down.
+                  Current.Gate := null;
+                  Present := True;
+               elsif Item.Kind = Phi3 then
                   Current.Gate :=
                     Read_Part (Layer_Name (Index, "ffn_up.weight"),
                                0, Item.Feed_Forward, Present);
@@ -1547,6 +1571,7 @@ package body Reference_Transformer is
          for Index in Item.Blocks'Range loop
             Free_Vector (Item.Blocks (Index).Attention_Norm);
             Free_Vector (Item.Blocks (Index).Post_Attention_Norm);
+            Free_Vector (Item.Blocks (Index).Attention_Norm_Bias);
             Free_Vector (Item.Blocks (Index).Post_Feed_Norm);
             Free_Matrix (Item.Blocks (Index).Query);
             Free_Matrix (Item.Blocks (Index).Key);
@@ -1614,6 +1639,10 @@ package body Reference_Transformer is
       State  : Real_Vector (0 .. Width - 1) := [others => 0.0];
       Normed : Real_Vector (0 .. Width - 1) := [others => 0.0];
 
+      --  What the block normalized on the way in, for the architecture whose
+      --  two sublayers both read it.
+      Held_Norm : Real_Vector (0 .. Width - 1) := [others => 0.0];
+
       --  Root-mean-square normalization with a per-element gain.
       --  The hyperbolic tangent, for the two bounds Gemma2 states.
       --
@@ -1648,7 +1677,7 @@ package body Reference_Transformer is
          Root : constant Long_Float := 0.797_884_560_802_865_4;
          Bend : constant Long_Float := 0.044_715;
       begin
-         if Item.Kind in Gemma | Gemma2 | Gemma3 then
+         if Item.Kind in Gemma | Gemma2 | Gemma3 | Falcon then
             declare
                Inner : constant Long_Float :=
                  Root * (Value + Bend * Value * Value * Value);
@@ -1681,6 +1710,42 @@ package body Reference_Transformer is
 
          return Value / (1.0 + Functions.Exp (-Value));
       end Gated;
+
+      --  Falcon centres and biases; everything else divides by the root
+      --  mean square. Written as the two formulas rather than as a flag on
+      --  one of them, because they are two different normalizations that
+      --  happen to agree on a vector whose mean is zero.
+      procedure Normalize_Centred
+        (Source : Real_Vector;
+         Gain   : Real_Vector;
+         Bias   : Vector_Access;
+         Target : out Real_Vector)
+      is
+         Mean   : Long_Float := 0.0;
+         Spread : Long_Float := 0.0;
+      begin
+         for Value of Source loop
+            Mean := Mean + Value;
+         end loop;
+         Mean := Mean / Long_Float (Source'Length);
+
+         for Value of Source loop
+            Spread := Spread + (Value - Mean) * (Value - Mean);
+         end loop;
+         Spread := Spread / Long_Float (Source'Length) + Item.Epsilon;
+
+         declare
+            Scale : constant Long_Float :=
+              (if Spread > 0.0 then 1.0 / Functions.Sqrt (Spread) else 1.0);
+         begin
+            for Index in Source'Range loop
+               Target (Index) :=
+                 (Source (Index) - Mean) * Scale * Gain (Index)
+                 + (if Bias = null then 0.0
+                    else Bias (Bias'First + Index - Source'First));
+            end loop;
+         end;
+      end Normalize_Centred;
 
       procedure Normalize
         (Source : Real_Vector;
@@ -1963,7 +2028,19 @@ package body Reference_Transformer is
                Blended : Real_Vector (0 .. B_Width - 1) := [others => 0.0];
                Slot    : constant Natural := Block * Steps + Step;
             begin
-               Normalize (State, Current.Attention_Norm.all, Normed);
+               if Item.Kind = Falcon then
+                  Normalize_Centred
+                    (State, Current.Attention_Norm.all,
+                     Current.Attention_Norm_Bias, Normed);
+               else
+                  Normalize (State, Current.Attention_Norm.all, Normed);
+               end if;
+
+               --  Kept, because Falcon's feed-forward reads this and not
+               --  what attention produced.
+               if Current.Feed_Norm = null then
+                  Held_Norm (0 .. Width - 1) := Normed (0 .. Width - 1);
+               end if;
                Project (Current.Query.all, Normed, Query);
                Project (Current.Key.all, Normed, Key_Row);
                Project (Current.Value.all, Normed, Val_Row);
@@ -2123,7 +2200,11 @@ package body Reference_Transformer is
                end loop;
 
                --  Feed-forward block.
-               Normalize (State, Current.Feed_Norm.all, Normed);
+               if Current.Feed_Norm = null then
+                  Normed (0 .. Width - 1) := Held_Norm (0 .. Width - 1);
+               else
+                  Normalize (State, Current.Feed_Norm.all, Normed);
+               end if;
 
                if Item.Experts > 0 then
                   --  A mixture: the router scores the experts, the softmax
@@ -2249,12 +2330,21 @@ package body Reference_Transformer is
                      Up   : Real_Vector (0 .. Item.Feed_Forward - 1) :=
                        [others => 0.0];
                   begin
-                     Project (Current.Gate.all, Normed, Gate);
-                     Project (Current.Up.all, Normed, Up);
+                     --  No gate is its own arrangement, not a gate of ones:
+                     --  one projection up, a Gaussian unit, one down.
+                     if Current.Gate = null then
+                        Project (Current.Up.all, Normed, Gate);
+                        for Index in Gate'Range loop
+                           Gate (Index) := Gated (Gate (Index));
+                        end loop;
+                     else
+                        Project (Current.Gate.all, Normed, Gate);
+                        Project (Current.Up.all, Normed, Up);
 
-                     for Index in Gate'Range loop
-                        Gate (Index) := Gated (Gate (Index)) * Up (Index);
-                     end loop;
+                        for Index in Gate'Range loop
+                           Gate (Index) := Gated (Gate (Index)) * Up (Index);
+                        end loop;
+                     end if;
 
                      Project (Current.Down.all, Gate, Normed);
                   end;
@@ -2276,7 +2366,12 @@ package body Reference_Transformer is
          end loop;
       end loop;
 
-      Normalize (State, Item.Output_Norm.all, Normed);
+      if Item.Kind = Falcon then
+         Normalize_Centred
+           (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
+      else
+         Normalize (State, Item.Output_Norm.all, Normed);
+      end if;
       Project (Item.Output.all, Normed, Logits);
 
       --  And the bound on the logits, which is the last thing the model

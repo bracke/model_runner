@@ -143,6 +143,64 @@ package body Model_Runner.Kernels is
       end if;
    end RMS_Norm;
 
+   -----------------
+   -- Layer_Norm --
+   -----------------
+
+   procedure Layer_Norm
+     (Source  : Real_Array;
+      Weight  : Real_Array;
+      Bias    : Real_Array;
+      Epsilon : Real;
+      Target  : out Real_Array)
+   is
+      Count : constant Element_Count := Element_Count (Source'Length);
+      Mean  : Wide_Real := 0.0;
+      Spread : Wide_Real := 0.0;
+   begin
+      Target := [others => 0.0];
+
+      if Weight'Length /= Source'Length
+        or else Bias'Length /= Source'Length
+        or else Target'Length /= Source'Length
+        or else Count = 0
+      then
+         return;
+      end if;
+
+      for Value of Source loop
+         Mean := Mean + Wide_Real (Value);
+      end loop;
+      Mean := Mean / Wide_Real (Count);
+
+      for Value of Source loop
+         declare
+            Off : constant Wide_Real := Wide_Real (Value) - Mean;
+         begin
+            Spread := Spread + Off * Off;
+         end;
+      end loop;
+      Spread := Spread / Wide_Real (Count) + Wide_Real (Epsilon);
+
+      --  A vector with no spread at all has nothing to divide by. The same
+      --  answer the root-mean-square form gives in that case: leave the
+      --  scale at one rather than divide by zero, and let the caller's
+      --  finiteness check speak if the input was already wrong.
+      declare
+         Scale : constant Wide_Real :=
+           (if Spread > 0.0 and then N.Is_Finite (Spread)
+            then 1.0 / N.Sqrt (Spread) else 1.0);
+      begin
+         for Index in 0 .. Count - 1 loop
+            Target (Target'First + Index) :=
+              Real ((Wide_Real (Source (Source'First + Index)) - Mean)
+                    * Scale
+                    * Wide_Real (Weight (Weight'First + Index)))
+              + Bias (Bias'First + Index);
+         end loop;
+      end;
+   end Layer_Norm;
+
    -------------
    -- Softmax --
    -------------

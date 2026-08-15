@@ -149,7 +149,7 @@ package body Model_Runner.Llama is
                  (case Kind is
                     when Llama => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3
-                       | Phi3 =>
+                       | Phi3 | Falcon =>
                       K.Split);
                Found := True;
             end if;
@@ -1053,7 +1053,7 @@ package body Model_Runner.Llama is
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
    is
    begin
-      if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 then
+      if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 | Falcon then
          K.GELU (Target);
       else
          K.SiLU (Target);
@@ -1111,6 +1111,27 @@ package body Model_Runner.Llama is
    --  the nine places a normalization happens cannot disagree.
    function Lifted_Norms (Item : Model'Class) return Boolean
    is (Item.Settings.Kind in Gemma | Gemma2 | Gemma3);
+
+   --  Normalize the way the architecture does, into Target.
+   --
+   --  Falcon centres and carries a bias; everything else here divides by the
+   --  root mean square and does not. One procedure rather than a test at
+   --  each of the nine places a normalization happens, because nine tests
+   --  are nine chances to write one of them the other way round.
+   procedure Normalize
+     (Item   : Model'Class;
+      Source : Real_Array;
+      Gain   : Real_Array;
+      Bias   : T.Real_Array_Access;
+      Target : out Real_Array) is
+   begin
+      if Item.Settings.Kind = Falcon and then Bias /= null then
+         K.Layer_Norm (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
+      else
+         K.RMS_Norm (Source, Gain, Item.Settings.Epsilon, Target,
+                     Lifted => Lifted_Norms (Item));
+      end if;
+   end Normalize;
 
    --  Normalize what a sublayer produced, where the architecture says so.
    --
@@ -1365,6 +1386,12 @@ package body Model_Runner.Llama is
 
          Resolve_Norm
            (Item, Source, "output_norm.weight", Width, Item.Output_Norm, Status);
+
+         if E.Is_Ok (Status) and then Item.Settings.Kind = Falcon then
+            Resolve_Norm
+              (Item, Source, "output_norm.bias", Width,
+               Item.Output_Norm_Bias, Status);
+         end if;
          if E.Is_Error (Status) then
             Fail (Status);
             return;
@@ -1442,7 +1469,14 @@ package body Model_Runner.Llama is
                --  not. The order inside the fused one is queries, then
                --  keys, then values, which is the order the rows are
                --  written in.
-               if Item.Settings.Kind = Phi3 then
+               if Item.Settings.Kind = Falcon then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_norm.bias"),
+                     Width, Current.Attention_Norm_Bias, Status);
+                  exit when E.Is_Error (Status);
+               end if;
+
+               if Item.Settings.Kind in Phi3 | Falcon then
                   Resolve_Part
                     (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
                      Wide + KV + KV_Out, Width, 0, Wide,
@@ -1523,12 +1557,32 @@ package body Model_Runner.Llama is
                   Width, Blend, Current.Attention_Out, Status, Repack);
                exit when E.Is_Error (Status);
 
-               Resolve_Norm
-                 (Item, Source, Layer_Key (Index, "ffn_norm.weight"), Width,
-                  Current.Feed_Norm, Status);
-               exit when E.Is_Error (Status);
+               --  Falcon has one normalization a block, not two: attention
+               --  and the feed-forward read the same normalized input. The
+               --  feed norm stays null and the block below reads that.
+               if Item.Settings.Kind /= Falcon then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "ffn_norm.weight"),
+                     Width, Current.Feed_Norm, Status);
+                  exit when E.Is_Error (Status);
+               end if;
 
-               if Item.Settings.Experts = 0 and then Item.Settings.Kind = Phi3
+               if Item.Settings.Kind = Falcon then
+                  --  No gate: one projection up, a Gaussian unit, one down.
+                  --  The gate stays null, and the block below reads that
+                  --  rather than the architecture.
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                     Feed, Width, Current.Up, Status, Repack);
+                  exit when E.Is_Error (Status);
+
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ffn_down.weight"),
+                     Width, Feed, Current.Down, Status, Repack);
+                  exit when E.Is_Error (Status);
+
+               elsif Item.Settings.Experts = 0
+                 and then Item.Settings.Kind = Phi3
                then
                   --  The gate and the up projection in one tensor, gate
                   --  first. Taking them the other way round is a model that
@@ -2355,6 +2409,7 @@ package body Model_Runner.Llama is
          for Index in Item.Layers.all'Range loop
             T.Free (Item.Layers.all (Index).Attention_Norm);
             T.Free (Item.Layers.all (Index).Post_Attention_Norm);
+            T.Free (Item.Layers.all (Index).Attention_Norm_Bias);
             T.Free (Item.Layers.all (Index).Post_Feed_Norm);
             T.Free (Item.Layers.all (Index).Feed_Norm);
 
@@ -2376,6 +2431,7 @@ package body Model_Runner.Llama is
       end if;
 
       T.Free (Item.Output_Norm);
+      T.Free (Item.Output_Norm_Bias);
       T.Free (Item.Rope_Factors);
 
       --  The repacked arena goes with it, and after it: by then the device
@@ -3432,7 +3488,12 @@ package body Model_Runner.Llama is
          T.Allocate (Width, Item.Activation);
          T.Allocate (Width, Item.Normalized);
 
-         if Source.Settings.Kind in Gemma2 | Gemma3 then
+         --  Room for a normalization taken out of the way. Gemma2 and
+         --  Gemma3 normalize what a sublayer produced; Falcon keeps what the
+         --  block normalized on the way in, because both of its sublayers
+         --  read it. Different uses, one buffer, and both want it as wide as
+         --  the embedding.
+         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon then
             T.Allocate (Width, Item.Post_Room);
          end if;
 
@@ -3948,10 +4009,16 @@ package body Model_Runner.Llama is
             V_Slot  : constant Element_Count := V_Base + Reserved * V_Width;
          begin
             --  Attention block.
-            K.RMS_Norm
-              (Item.Activation.all, Current.Attention_Norm.all,
-               Settings.Epsilon, Item.Normalized.all,
-               Lifted => Lifted_Norms (Source));
+            Normalize
+              (Source, Item.Activation.all, Current.Attention_Norm.all,
+               Current.Attention_Norm_Bias, Item.Normalized.all);
+
+            --  Falcon runs the feed-forward from this same normalized input
+            --  rather than from what attention produced, so it is kept
+            --  before attention overwrites the buffer it shares.
+            if Current.Feed_Norm = null then
+               Item.Post_Room.all := Item.Normalized.all;
+            end if;
 
             Product
               (Item, Current.Query, Item.Normalized, Item.Query, Status);
@@ -4066,11 +4133,19 @@ package body Model_Runner.Llama is
                        Item.Normalized.all, Item.Post_Room);
             K.Add (Item.Activation.all, Item.Normalized.all);
 
-            --  Feed-forward block.
-            K.RMS_Norm
-              (Item.Activation.all, Current.Feed_Norm.all,
-               Settings.Epsilon, Item.Normalized.all,
-               Lifted => Lifted_Norms (Source));
+            --  Feed-forward block. It reads what the layer normalized on
+            --  the way in where the architecture runs the two in parallel,
+            --  and what the residual holds now where it runs them one after
+            --  the other -- which is the whole of the difference between
+            --  the two arrangements.
+            if Current.Feed_Norm = null then
+               Item.Normalized.all := Item.Post_Room.all;
+            else
+               K.RMS_Norm
+                 (Item.Activation.all, Current.Feed_Norm.all,
+                  Settings.Epsilon, Item.Normalized.all,
+                  Lifted => Lifted_Norms (Source));
+            end if;
 
             if Settings.Experts > 0 then
                Mixture
@@ -4080,15 +4155,35 @@ package body Model_Runner.Llama is
                           Item.Mixture.all, Item.Post_Room);
                K.Add (Item.Activation.all, Item.Mixture.all);
             else
-               Product
-                 (Item, Current.Gate, Item.Normalized, Item.Gate, Status);
-               exit when E.Is_Error (Status);
-               Product
-                 (Item, Current.Up, Item.Normalized, Item.Up, Status);
-               exit when E.Is_Error (Status);
+               --  Gated or not, the two arrangements differ only in how the
+               --  buffer handed to the projection down is filled: one fills
+               --  it from two projections and a product, the other from one
+               --  projection. What follows is common, and is written once so
+               --  that it cannot be reached by one arrangement and skipped by
+               --  the other -- which is what happened when the ungated arm
+               --  was added beside a projection down that belonged to the
+               --  gated one, and Falcon then ran with its feed-forward
+               --  computed and discarded.
+               if Current.Gate.Data = null then
+                  --  No gate: up, a Gaussian unit, down. The gate being
+                  --  absent is what says so, rather than the architecture,
+                  --  so an architecture added later with the same
+                  --  arrangement needs nothing here.
+                  Product
+                    (Item, Current.Up, Item.Normalized, Item.Gate, Status);
+                  exit when E.Is_Error (Status);
+                  Gate_Activation (Source, Item.Gate.all);
+               else
+                  Product
+                    (Item, Current.Gate, Item.Normalized, Item.Gate, Status);
+                  exit when E.Is_Error (Status);
+                  Product
+                    (Item, Current.Up, Item.Normalized, Item.Up, Status);
+                  exit when E.Is_Error (Status);
 
-               Gate_Activation (Source, Item.Gate.all);
-               K.Multiply (Item.Gate.all, Item.Up.all);
+                  Gate_Activation (Source, Item.Gate.all);
+                  K.Multiply (Item.Gate.all, Item.Up.all);
+               end if;
 
                Product
                  (Item, Current.Down, Item.Gate, Item.Normalized, Status);
@@ -4105,10 +4200,9 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      K.RMS_Norm
-        (Item.Activation.all, Source.Output_Norm.all, Settings.Epsilon,
-         Item.Normalized.all,
-         Lifted => Lifted_Norms (Source));
+      Normalize
+        (Source, Item.Activation.all, Source.Output_Norm.all,
+         Source.Output_Norm_Bias, Item.Normalized.all);
 
       --  The output projection is the widest product of the token, so it is
       --  the one that most benefits from the pool. It writes into a
@@ -4176,6 +4270,11 @@ package body Model_Runner.Llama is
       --  so that a session that never batches pays nothing for the option.
       Acts   : T.Real_Array_Access := null;
       Norm   : T.Real_Array_Access := null;
+
+      --  What the block normalized on the way in, kept for the architecture
+      --  that runs both of its sublayers from it. Null for the rest, which
+      --  is what the block below reads.
+      Kept_Norm : T.Real_Array_Access := null;
       Query  : T.Real_Array_Access := null;
       Keys   : T.Real_Array_Access := null;
       Values : T.Real_Array_Access := null;
@@ -4187,6 +4286,7 @@ package body Model_Runner.Llama is
       begin
          T.Free (Acts);
          T.Free (Norm);
+         T.Free (Kept_Norm);
          T.Free (Query);
          T.Free (Keys);
          T.Free (Values);
@@ -4266,6 +4366,10 @@ package body Model_Runner.Llama is
 
       T.Allocate (Count * Width, Acts);
       T.Allocate (Count * Width, Norm);
+
+      if Source.Settings.Kind = Falcon then
+         T.Allocate (Count * Width, Kept_Norm);
+      end if;
       T.Allocate (Count * Wide, Query);
       T.Allocate (Count * KV_Width, Keys);
       T.Allocate (Count * V_Width, Values);
@@ -4326,13 +4430,23 @@ package body Model_Runner.Llama is
                declare
                   Origin : constant Element_Count := Slot (Which, Width);
                begin
-                  K.RMS_Norm
-                    (Acts.all (Origin .. Origin + Width - 1),
-                     Current.Attention_Norm.all, Settings.Epsilon,
-                     Norm.all (Origin .. Origin + Width - 1),
-                     Lifted => Lifted_Norms (Source));
+                  Normalize
+                    (Source, Acts.all (Origin .. Origin + Width - 1),
+                     Current.Attention_Norm.all,
+                     Current.Attention_Norm_Bias,
+                     Norm.all (Origin .. Origin + Width - 1));
                end;
             end loop;
+
+            --  Kept where the architecture runs its two sublayers from the
+            --  same normalized input: attention is about to overwrite the
+            --  buffer that holds it. A batch keeps all of it, which is why
+            --  this is the batch's own buffer rather than the one position
+            --  the single-token path keeps.
+            if Current.Feed_Norm = null then
+               Kept_Norm.all (0 .. Count * Width - 1) :=
+                 Norm.all (0 .. Count * Width - 1);
+            end if;
 
             --  One pass over each weight for the whole batch.
             Product_Batch
@@ -4477,11 +4591,21 @@ package body Model_Runner.Llama is
                   K.Add
                     (Acts.all (Origin .. Origin + Width - 1),
                      Norm.all (Origin .. Origin + Width - 1));
-                  K.RMS_Norm
-                    (Acts.all (Origin .. Origin + Width - 1),
-                     Current.Feed_Norm.all, Settings.Epsilon,
-                     Norm.all (Origin .. Origin + Width - 1),
-                     Lifted => Lifted_Norms (Source));
+
+                  --  What the feed-forward reads: the block's own normalized
+                  --  input where the two sublayers run in parallel, and a
+                  --  fresh normalization of the residual where they run one
+                  --  after the other.
+                  if Current.Feed_Norm = null then
+                     Norm.all (Origin .. Origin + Width - 1) :=
+                       Kept_Norm.all (Origin .. Origin + Width - 1);
+                  else
+                     K.RMS_Norm
+                       (Acts.all (Origin .. Origin + Width - 1),
+                        Current.Feed_Norm.all, Settings.Epsilon,
+                        Norm.all (Origin .. Origin + Width - 1),
+                        Lifted => Lifted_Norms (Source));
+                  end if;
                end;
             end loop;
 
@@ -4506,24 +4630,45 @@ package body Model_Runner.Llama is
                end loop;
                exit when E.Is_Error (Status);
             else
-               Product_Batch
-                 (Item, Current.Gate, Norm, Count, Gate, Status);
-               exit when E.Is_Error (Status);
-               Product_Batch
-                 (Item, Current.Up, Norm, Count, Up, Status);
-               exit when E.Is_Error (Status);
+               --  As in the single-token path: the two arrangements differ
+               --  only in how Gate is filled, and the projection down is
+               --  written once so that neither can skip it.
+               if Current.Gate.Data = null then
+                  --  No gate: up, a Gaussian unit, down. As in the
+                  --  single-token path, the gate being absent is what says
+                  --  so.
+                  Product_Batch
+                    (Item, Current.Up, Norm, Count, Gate, Status);
+                  exit when E.Is_Error (Status);
 
-               for Which in 0 .. Count - 1 loop
-                  declare
-                     Origin : constant Element_Count := Slot (Which, Feed);
-                  begin
-                     Gate_Activation
-                       (Source, Gate.all (Origin .. Origin + Feed - 1));
-                     K.Multiply
-                       (Gate.all (Origin .. Origin + Feed - 1),
-                        Up.all (Origin .. Origin + Feed - 1));
-                  end;
-               end loop;
+                  for Which in 0 .. Count - 1 loop
+                     declare
+                        Origin : constant Element_Count := Slot (Which, Feed);
+                     begin
+                        Gate_Activation
+                          (Source, Gate.all (Origin .. Origin + Feed - 1));
+                     end;
+                  end loop;
+               else
+                  Product_Batch
+                    (Item, Current.Gate, Norm, Count, Gate, Status);
+                  exit when E.Is_Error (Status);
+                  Product_Batch
+                    (Item, Current.Up, Norm, Count, Up, Status);
+                  exit when E.Is_Error (Status);
+
+                  for Which in 0 .. Count - 1 loop
+                     declare
+                        Origin : constant Element_Count := Slot (Which, Feed);
+                     begin
+                        Gate_Activation
+                          (Source, Gate.all (Origin .. Origin + Feed - 1));
+                        K.Multiply
+                          (Gate.all (Origin .. Origin + Feed - 1),
+                           Up.all (Origin .. Origin + Feed - 1));
+                     end;
+                  end loop;
+               end if;
 
                Product_Batch
                  (Item, Current.Down, Gate, Count, Norm, Status);
@@ -4565,12 +4710,11 @@ package body Model_Runner.Llama is
             declare
                Origin : constant Element_Count := Slot (Which, Width);
             begin
-               K.RMS_Norm
-                 (Acts.all (Origin .. Origin + Width - 1),
-                  Source.Output_Norm.all, Settings.Epsilon,
+               Normalize
+                 (Source, Acts.all (Origin .. Origin + Width - 1),
+                  Source.Output_Norm.all, Source.Output_Norm_Bias,
                   States.all (States.all'First + Origin
-                              .. States.all'First + Origin + Width - 1),
-                  Lifted => Lifted_Norms (Source));
+                              .. States.all'First + Origin + Width - 1));
             end;
          end loop;
       end if;
@@ -4588,11 +4732,10 @@ package body Model_Runner.Llama is
                Into   : constant Element_Count :=
                  Which * Element_Count (Settings.Vocabulary);
             begin
-               K.RMS_Norm
-                 (Acts.all (Origin .. Origin + Width - 1),
-                  Source.Output_Norm.all, Settings.Epsilon,
-                  Item.Normalized.all,
-                  Lifted => Lifted_Norms (Source));
+               Normalize
+                 (Source, Acts.all (Origin .. Origin + Width - 1),
+                  Source.Output_Norm.all, Source.Output_Norm_Bias,
+                  Item.Normalized.all);
 
                Product
                  (Item, Source.Output, Item.Normalized, Item.Logit_Row,
@@ -4615,10 +4758,15 @@ package body Model_Runner.Llama is
       declare
          Origin : constant Element_Count := Slot (Count - 1, Width);
       begin
-         K.RMS_Norm
-           (Acts.all (Origin .. Origin + Width - 1), Source.Output_Norm.all,
-            Settings.Epsilon, Item.Normalized.all,
-            Lifted => Lifted_Norms (Source));
+         --  Through the same normalization the single-token path uses, and
+         --  not the root-mean-square form directly: an architecture that
+         --  centres its normalization would otherwise be centred everywhere
+         --  but here, which is a difference only the batched path shows and
+         --  only in the logits it returns.
+         Normalize
+           (Source, Acts.all (Origin .. Origin + Width - 1),
+            Source.Output_Norm.all, Source.Output_Norm_Bias,
+            Item.Normalized.all);
       end;
 
       Product

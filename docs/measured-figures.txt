@@ -669,13 +669,33 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # published 1.28, on a machine running three other agents at a load average
 # of 2.5 on eight cores. Not republished for that reason, and the generated
 # text is unchanged: the same output digest, 7784f071e5740782.
+# 2026-08-15, falcon. The four groups that carry llama.adb moved with it and
+# are not re-measured, for two reasons and both are worth stating.
+#
+# What was added to a loop: the normalization sites now call a Normalize that
+# asks whether the architecture centres its normalization and whether a bias
+# is present, instead of calling K.RMS_Norm directly. That is two tests and a
+# call at each normalization -- twice a layer a token, and once more at the
+# end -- beside a full pass over the same vector, and the vector is the one
+# the matrix products behind it read hundreds of times over. It cannot show at
+# the resolution these figures have: two runs of the twelve-token figure an
+# hour apart on this machine differ by fifteen per cent, which is recorded a
+# few entries above. The feed-forward branch was rearranged so that the
+# projection down is written once rather than once an arrangement; it does the
+# same work. Layer_Norm is new and no architecture but falcon reaches it.
+#
+# And what stopped a measurement being taken anyway: this machine has no model
+# file on it, so `tests speed` has nothing to run. The earlier entries in this
+# file that say "re-measured anyway" were written when one was here. That is
+# recorded rather than left to be inferred from a missing figure.
+
 # load: the twelve-token figure at 1.28 rising to 1.82, 2026-08-14, and it
 #       now carries its processor time from this repository's own tool
 #       rather than from the shell. The worker-count and batch-size tables
 #       beside it was retaken too: fourteen threads and seven, both at
 #       about 1.25, 2026-08-14. The batch-size table is the last part of
 #       this group with no load recorded.
-engine F72A193C29D5907F src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 51F0DEB2C4825560 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -684,9 +704,12 @@ engine F72A193C29D5907F src/library/model_runner-llama.adb src/library/model_run
 # that was added.
 # 2026-08-12, the same two changes, and this group is a ratio between two
 # backends neither of which the memory check applies to.
+# 2026-08-15, falcon. This group carries llama.adb and moved with it. Not
+# re-measured, for the reasons written out under the engine group above.
+
 # load: 1.10 to 1.74 for the processor side and 1.25 to 1.57 for the
 #       reference side, taken minutes apart, 2026-08-14
-reference D1FE471D718C3231 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 4DD6F0917D259098 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
 # and the 111-token prompt, on both backends -- the claim that the two print
@@ -851,9 +874,12 @@ reference D1FE471D718C3231 src/library/model_runner-backend-reference.adb src/li
 # The processor column moved more between measurements than the device
 # column did, again, which is the second time that has happened and is why
 # the caveat under the table now gives all three pairs rather than one.
+# 2026-08-15, falcon. This group carries llama.adb and moved with it. Not
+# re-measured, for the reasons written out under the engine group above.
+
 # load: 1.70 rising to 2.37 for the fifteen ratios and the batched ones,
 #       2026-08-15; 1.0 to 1.9 for the two-backend table, 2026-08-14
-device 0E129D9ACC79DEF2 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 71E9DAFD20AE7EC1 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -865,8 +891,11 @@ device 0E129D9ACC79DEF2 src/shaders/row_product.comp src/library/model_runner-sh
 # the file the drafting loop is written in, so the loop could have been
 # rewritten without anything asking for a re-measure. A figure covered by a
 # group that does not name its own source is a figure covered by nothing.
+# 2026-08-15, falcon. This group carries llama.adb and moved with it. Not
+# re-measured, for the reasons written out under the engine group above.
+
 # load: 1.19 to 2.52 across the three runs, 2026-08-14
-drafting C96A808DBE437628 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting FF4B19DD0177235F src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14

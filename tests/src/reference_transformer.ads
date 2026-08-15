@@ -95,7 +95,7 @@ private
    --  than the form the engine uses, which is the whole point of a second
    --  implementation.
    type Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3);
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -109,6 +109,10 @@ private
       --  was given. Null for everything else.
       Post_Attention_Norm : Vector_Access := null;
       Post_Feed_Norm      : Vector_Access := null;
+
+      --  The bias Falcon's normalization carries. Null for every
+      --  architecture that normalizes by root mean square.
+      Attention_Norm_Bias : Vector_Access := null;
       Query          : Matrix_Access := null;
       Key            : Matrix_Access := null;
       Value          : Matrix_Access := null;
@@ -198,6 +202,10 @@ private
       Embeddings   : Matrix_Access := null;
       Output       : Matrix_Access := null;
       Output_Norm  : Vector_Access := null;
+
+      --  And its bias, for the architecture that centres rather than
+      --  scaling.
+      Output_Norm_Bias : Vector_Access := null;
 
       --  One divisor per rotated pair, when the file carries the table.
       Rope_Factors : Vector_Access := null;

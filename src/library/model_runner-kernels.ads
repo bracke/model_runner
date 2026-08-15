@@ -83,6 +83,30 @@ package Model_Runner.Kernels is
       Target  : out Real_Array;
       Lifted  : Boolean := False);
 
+   --  Layer normalization: centre, scale, then gain and bias.
+   --
+   --  Not the root-mean-square normalization above with extra steps. That
+   --  one divides by the root mean square and leaves the mean where it is;
+   --  this one subtracts the mean first, divides by the standard deviation,
+   --  and adds a bias afterwards. A model trained with one and read with the
+   --  other answers, and answers wrongly.
+   --
+   --  Falcon and the models shaped like it use this. Everything else here
+   --  uses the root-mean-square form, which is why that one is the default
+   --  and this one is asked for.
+   --
+   --  @param Source Values to normalize.
+   --  @param Weight Gain, one per element.
+   --  @param Bias Added after the gain, one per element.
+   --  @param Epsilon Added to the variance before the square root.
+   --  @param Target Receives the result; zeroed when the lengths disagree.
+   procedure Layer_Norm
+     (Source  : Real_Array;
+      Weight  : Real_Array;
+      Bias    : Real_Array;
+      Epsilon : Real;
+      Target  : out Real_Array);
+
    --  Softmax over a vector, in place.
    --
    --  The maximum is subtracted before exponentiation. A non-finite input, a

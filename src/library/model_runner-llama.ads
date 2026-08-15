@@ -141,8 +141,15 @@ package Model_Runner.Llama is
    --  differs is where the weights are, and a reader that took the first
    --  rows of a fused tensor for the whole of a projection would compute a
    --  model whose heads are somebody else's.
+   --  Falcon is the first architecture here that is not this shape with a
+   --  difference but a different arrangement of the same parts: it
+   --  normalizes by centring rather than by root mean square and carries a
+   --  bias for it, it runs attention and the feed-forward block from the
+   --  same normalized input rather than one after the other, and its
+   --  feed-forward has no gate -- one projection up, a Gaussian unit, one
+   --  projection down. Its projections are fused as phi3's are.
    type Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3);
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon);
 
    --  The identifier a file carries for an architecture.
    --
@@ -157,7 +164,8 @@ package Model_Runner.Llama is
          when Gemma     => "gemma",
          when Gemma2    => "gemma2",
          when Gemma3    => "gemma3",
-         when Phi3      => "phi3");
+         when Phi3      => "phi3",
+         when Falcon    => "falcon");
 
    --  Validated architecture configuration.
    --
@@ -911,6 +919,11 @@ private
       --  one here but Gemma2.
       Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
       Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access;
+
+      --  The bias its normalization carries, for an architecture that
+      --  centres rather than scaling. Null for every architecture that
+      --  normalizes by root mean square, which is all of them but Falcon.
+      Attention_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
       Query : aliased Model_Runner.Tensors.View;
       Key : aliased Model_Runner.Tensors.View;
       Value : aliased Model_Runner.Tensors.View;
@@ -958,6 +971,9 @@ private
       Embeddings  : aliased Model_Runner.Tensors.View;
       Output      : aliased Model_Runner.Tensors.View;
       Output_Norm : Model_Runner.Tensors.Real_Array_Access;
+
+      --  And the bias for it, for the same reason and the same architecture.
+      Output_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
 
       --  One divisor per rotated pair, when the model carries the table.
       --  Null otherwise, which is every element one. Decoded once here
