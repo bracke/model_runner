@@ -148,7 +148,7 @@ package body Model_Runner.Llama is
                Settings.Pairing :=
                  (case Kind is
                     when Llama => K.Interleaved,
-                    when Qwen2 | Qwen3 | Qwen3_MoE | Gemma => K.Split);
+                    when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 => K.Split);
                Found := True;
             end if;
          end loop;
@@ -478,6 +478,35 @@ package body Model_Runner.Llama is
                Settings.Window := Natural (Value);
             end if;
          end;
+      end if;
+
+      --  The two bounds Gemma2 states, and the window it alternates. Read
+      --  where the architecture says so rather than taken if present: a
+      --  gemma2 file without them is a file this build cannot compute, and
+      --  a file that states them under another architecture's prefix is a
+      --  file that means something else by them.
+      if Settings.Kind = Gemma2 then
+         Settings.Alternating := True;
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "attn_logit_softcapping"),
+            1.0, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Attention_Cap :=
+           (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "final_logit_softcapping"),
+            1.0, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Logit_Cap :=
+           (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
       end if;
 
       if Settings.Heads mod Settings.KV_Heads /= 0 then
@@ -932,12 +961,77 @@ package body Model_Runner.Llama is
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
    is
    begin
-      if Item.Settings.Kind = Gemma then
+      if Item.Settings.Kind in Gemma | Gemma2 then
          K.GELU (Target);
       else
          K.SiLU (Target);
       end if;
    end Gate_Activation;
+
+   --  A score held under a bound, as the architecture that states one puts
+   --  it: cap times the hyperbolic tangent of the score over the cap. Small
+   --  scores come back nearly unchanged and large ones stop just under the
+   --  cap, which is what keeps one key from taking the whole of a softmax.
+   --
+   --  A cap of zero is no cap, which is every architecture here but Gemma2.
+   function Capped (Score : Real; Cap : Real) return Real
+   is (if Cap <= 0.0 then Score
+       else Real (N.Wide_Real (Cap)
+                  * N.Tanh (N.Wide_Real (Score) / N.Wide_Real (Cap))));
+
+   --  The logits held under the bound the architecture states, if it states
+   --  one. Applied to what the caller is about to be given rather than to
+   --  the row the engine keeps, because it is part of the model's answer
+   --  and not part of its bookkeeping.
+   procedure Cap_Logits (Settings : Configuration; Values : in out Real_Array)
+   is
+   begin
+      if Settings.Logit_Cap <= 0.0 then
+         return;
+      end if;
+
+      for Value of Values loop
+         Value := Capped (Value, Settings.Logit_Cap);
+      end loop;
+   end Cap_Logits;
+
+   --  Whether this model's normalization weights are trained around zero.
+   --
+   --  Gemma's are, so its gain is one plus the stored weight; every other
+   --  architecture here trains them around one and uses the weight as it
+   --  stands. Asked of the model rather than carried in the plan, so that
+   --  the nine places a normalization happens cannot disagree.
+   function Lifted_Norms (Item : Model'Class) return Boolean
+   is (Item.Settings.Kind in Gemma | Gemma2);
+
+   --  Normalize what a sublayer produced, where the architecture says so.
+   --
+   --  Gemma2 normalizes on the way out of each sublayer as well as on the
+   --  way in; every other architecture here does nothing between the
+   --  sublayer and the residual add. Given the layer's gain, which is null
+   --  for those, so this is a call that costs a test rather than four call
+   --  sites that each have to remember.
+   procedure Post_Norm
+     (Item   : Model'Class;
+      Gain   : T.Real_Array_Access;
+      Target : in out Real_Array;
+
+      --  The scratch as a reference rather than as an array, because it is
+      --  allocated only for the architecture that needs it: passing
+      --  Room.all at a call site would dereference a null buffer for every
+      --  architecture that does not, before this procedure could decide it
+      --  had nothing to do. It did, and every model in the sweep failed as
+      --  an invariant violation.
+      Room   : T.Real_Array_Access) is
+   begin
+      if Gain = null or else Room = null then
+         return;
+      end if;
+
+      K.RMS_Norm (Target, Gain.all, Item.Settings.Epsilon, Room.all,
+                  Lifted => Lifted_Norms (Item));
+      Target := Room.all;
+   end Post_Norm;
 
    --  What the embedding row is multiplied by before the first layer.
    --
@@ -948,18 +1042,9 @@ package body Model_Runner.Llama is
    --  per token and the alternative is a field that can disagree with the
    --  architecture that decides it.
    function Embedding_Scale (Item : Model'Class) return Real
-   is (if Item.Settings.Kind = Gemma
+   is (if Item.Settings.Kind in Gemma | Gemma2
        then Real (N.Sqrt (N.Wide_Real (Item.Settings.Embedding)))
        else 1.0);
-
-   --  Whether this model's normalization weights are trained around zero.
-   --
-   --  Gemma's are, so its gain is one plus the stored weight; every other
-   --  architecture here trains them around one and uses the weight as it
-   --  stands. Asked of the model rather than carried in the plan, so that
-   --  the nine places a normalization happens cannot disagree.
-   function Lifted_Norms (Item : Model'Class) return Boolean
-   is (Item.Settings.Kind = Gemma);
 
    -------------
    -- Prepare --
@@ -1224,6 +1309,25 @@ package body Model_Runner.Llama is
                  (Item, Source, Layer_Key (Index, "attn_norm.weight"), Width,
                   Current.Attention_Norm, Status);
                exit when E.Is_Error (Status);
+
+               --  Gemma2 normalizes what each sublayer produced as well as
+               --  what it was given. Required rather than optional: a
+               --  gemma2 file without them is not one this build can
+               --  compute, and taking them if present would read such a
+               --  file as a model with two normalizations missing.
+               if Item.Settings.Kind = Gemma2 then
+                  Resolve_Norm
+                    (Item, Source,
+                     Layer_Key (Index, "post_attention_norm.weight"), Width,
+                     Current.Post_Attention_Norm, Status);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Norm
+                    (Item, Source,
+                     Layer_Key (Index, "post_ffw_norm.weight"), Width,
+                     Current.Post_Feed_Norm, Status);
+                  exit when E.Is_Error (Status);
+               end if;
 
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_q.weight"),
@@ -1768,6 +1872,9 @@ package body Model_Runner.Llama is
       First      : Element_Count;
       Last       : Element_Count;
       Scale      : Real;
+
+      --  The bound the architecture states on a score, or zero for none.
+      Cap        : Real;
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
@@ -1794,6 +1901,18 @@ package body Model_Runner.Llama is
                   Scores (Scores'First + Step) := Real (Sum) * Scale;
                end;
             end loop;
+
+            --  The bound afterwards, in a loop of its own, and only when
+            --  there is one. Applied inside the loop above it cost every
+            --  architecture a test per score -- twelve tokens went from
+            --  1.83 s to 2.07 s and the processor time with it, for a
+            --  feature one architecture of six uses.
+            if Cap > 0.0 then
+               for Step in First .. Last loop
+                  Scores (Scores'First + Step) :=
+                    Capped (Scores (Scores'First + Step), Cap);
+               end loop;
+            end if;
 
             K.Softmax
               (Scores (Scores'First + First .. Scores'First + Last), Usable);
@@ -1839,6 +1958,7 @@ package body Model_Runner.Llama is
       First      : Element_Count;
       Last       : Element_Count;
       Scale      : Real;
+      Cap        : Real;
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
@@ -1866,6 +1986,15 @@ package body Model_Runner.Llama is
                   Scores (Scores'First + Step) := Real (Sum) * Scale;
                end;
             end loop;
+
+            --  As above: the bound in a loop of its own, and only when
+            --  there is one.
+            if Cap > 0.0 then
+               for Step in First .. Last loop
+                  Scores (Scores'First + Step) :=
+                    Capped (Scores (Scores'First + Step), Cap);
+               end loop;
+            end if;
 
             K.Softmax
               (Scores (Scores'First + First .. Scores'First + Last), Usable);
@@ -2069,6 +2198,8 @@ package body Model_Runner.Llama is
       if Item.Layers /= null then
          for Index in Item.Layers.all'Range loop
             T.Free (Item.Layers.all (Index).Attention_Norm);
+            T.Free (Item.Layers.all (Index).Post_Attention_Norm);
+            T.Free (Item.Layers.all (Index).Post_Feed_Norm);
             T.Free (Item.Layers.all (Index).Feed_Norm);
 
             --  The attention biases, which nothing released: a qwen2 model
@@ -3144,6 +3275,11 @@ package body Model_Runner.Llama is
          end if;
          T.Allocate (Width, Item.Activation);
          T.Allocate (Width, Item.Normalized);
+
+         if Source.Settings.Kind = Gemma2 then
+            T.Allocate (Width, Item.Post_Room);
+         end if;
+
          T.Allocate (Wide, Item.Query);
          T.Allocate (KV, Item.Key_Row);
          T.Allocate (KV_Out, Item.Value_Row);
@@ -3232,6 +3368,7 @@ package body Model_Runner.Llama is
       T.Free (Item.Half_Values);
       T.Free (Item.Activation);
       T.Free (Item.Normalized);
+      T.Free (Item.Post_Room);
       T.Free (Item.Query);
       T.Free (Item.Key_Row);
       T.Free (Item.Value_Row);
@@ -3521,10 +3658,20 @@ package body Model_Runner.Llama is
    --  what may be seen, not what is held.
    function Earliest
      (Settings : Configuration;
-      Position : Element_Count) return Element_Count
+      Position : Element_Count;
+
+      --  Which layer is asking, because an architecture may window some of
+      --  them and not others. Gemma2 windows every other one, starting with
+      --  layer zero; every other architecture here windows all or none, and
+      --  passes whatever it likes.
+      Layer    : Natural := 0) return Element_Count
    is
       Width : constant Element_Count := Element_Count (Settings.Window);
    begin
+      if Settings.Alternating and then Layer mod 2 = 1 then
+         return 0;
+      end if;
+
       if Settings.Window = 0 or else Position < Width then
          return 0;
       else
@@ -3716,7 +3863,8 @@ package body Model_Runner.Llama is
             --  read is not the same as holding less, and this holds the
             --  same amount either way.
             declare
-               First : constant Element_Count := Earliest (Settings, Reserved);
+               First : constant Element_Count :=
+                 Earliest (Settings, Reserved, Natural (Index));
                Usable : Boolean;
             begin
                if Item.Held = Exact then
@@ -3724,15 +3872,15 @@ package body Model_Runner.Llama is
                     (Item.Query.all, Item.Keys.all, Item.Values.all,
                      Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                      Value_Size, Element_Count (Settings.Group_Size),
-                     First, Reserved, Scale, Item.Scores.all,
-                     Item.Attention.all, Usable);
+                     First, Reserved, Scale, Settings.Attention_Cap,
+                     Item.Scores.all, Item.Attention.all, Usable);
                else
                   Blend_Halved
                     (Item.Query.all, Item.Half_Keys.all, Item.Half_Values.all,
                      Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                      Value_Size, Element_Count (Settings.Group_Size),
-                     First, Reserved, Scale, Item.Scores.all,
-                     Item.Attention.all, Usable);
+                     First, Reserved, Scale, Settings.Attention_Cap,
+                     Item.Scores.all, Item.Attention.all, Usable);
                end if;
 
                if not Usable then
@@ -3747,6 +3895,8 @@ package body Model_Runner.Llama is
               (Item, Current.Attention_Out, Item.Attention,
                Item.Normalized, Status);
             exit when E.Is_Error (Status);
+            Post_Norm (Source, Current.Post_Attention_Norm,
+                       Item.Normalized.all, Item.Post_Room);
             K.Add (Item.Activation.all, Item.Normalized.all);
 
             --  Feed-forward block.
@@ -3759,6 +3909,8 @@ package body Model_Runner.Llama is
                Mixture
                  (Item, Current, Item.Normalized, Item.Mixture, Status);
                exit when E.Is_Error (Status);
+               Post_Norm (Source, Current.Post_Feed_Norm,
+                          Item.Mixture.all, Item.Post_Room);
                K.Add (Item.Activation.all, Item.Mixture.all);
             else
                Product
@@ -3774,6 +3926,8 @@ package body Model_Runner.Llama is
                Product
                  (Item, Current.Down, Item.Gate, Item.Normalized, Status);
                exit when E.Is_Error (Status);
+               Post_Norm (Source, Current.Post_Feed_Norm,
+                          Item.Normalized.all, Item.Post_Room);
                K.Add (Item.Activation.all, Item.Normalized.all);
             end if;
          end;
@@ -3800,6 +3954,7 @@ package body Model_Runner.Llama is
       end if;
 
       Logits := Item.Logit_Row.all;
+      Cap_Logits (Settings, Logits);
 
       --  Commit: the position becomes readable context only now, after every
       --  layer of this token has succeeded.
@@ -4102,7 +4257,7 @@ package body Model_Runner.Llama is
                   --  sliding window only the window's worth of those.
                   Last_Step : constant Element_Count := Reserved + Which;
                   First_Step : constant Element_Count :=
-                    Earliest (Settings, Last_Step);
+                    Earliest (Settings, Last_Step, Natural (Index));
                   Q_At      : constant Element_Count := Slot (Which, Wide);
                   B_At      : constant Element_Count := Slot (Which, Blend);
                   Usable    : Boolean;
@@ -4113,7 +4268,8 @@ package body Model_Runner.Llama is
                         Item.Keys.all, Item.Values.all,
                         Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                         Value_Size, Element_Count (Settings.Group_Size),
-                        First_Step, Last_Step, Scale, Item.Scores.all,
+                        First_Step, Last_Step, Scale,
+                        Settings.Attention_Cap, Item.Scores.all,
                         Attend.all (B_At .. B_At + Blend - 1), Usable);
                   else
                      Blend_Halved
@@ -4121,7 +4277,8 @@ package body Model_Runner.Llama is
                         Item.Half_Keys.all, Item.Half_Values.all,
                         Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                         Value_Size, Element_Count (Settings.Group_Size),
-                        First_Step, Last_Step, Scale, Item.Scores.all,
+                        First_Step, Last_Step, Scale,
+                        Settings.Attention_Cap, Item.Scores.all,
                         Attend.all (B_At .. B_At + Blend - 1), Usable);
                   end if;
 
@@ -4144,6 +4301,10 @@ package body Model_Runner.Llama is
                declare
                   Origin : constant Element_Count := Slot (Which, Width);
                begin
+                  Post_Norm
+                    (Source, Current.Post_Attention_Norm,
+                     Norm.all (Origin .. Origin + Width - 1),
+                     Item.Post_Room);
                   K.Add
                     (Acts.all (Origin .. Origin + Width - 1),
                      Norm.all (Origin .. Origin + Width - 1));
@@ -4204,6 +4365,10 @@ package body Model_Runner.Llama is
                declare
                   Origin : constant Element_Count := Slot (Which, Width);
                begin
+                  Post_Norm
+                    (Source, Current.Post_Feed_Norm,
+                     Norm.all (Origin .. Origin + Width - 1),
+                     Item.Post_Room);
                   K.Add
                     (Acts.all (Origin .. Origin + Width - 1),
                      Norm.all (Origin .. Origin + Width - 1));
@@ -4269,6 +4434,7 @@ package body Model_Runner.Llama is
                   return;
                end if;
 
+               Cap_Logits (Settings, Item.Logit_Row.all);
                Every.all (Every.all'First + Into
                           .. Every.all'First + Into
                              + Element_Count (Settings.Vocabulary) - 1) :=
@@ -4295,6 +4461,7 @@ package body Model_Runner.Llama is
       end if;
 
       Logits := Item.Logit_Row.all;
+      Cap_Logits (Settings, Logits);
 
       --  Commit every position of the batch, or none of them.
       for Which in 0 .. Count - 1 loop

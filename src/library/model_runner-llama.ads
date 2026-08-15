@@ -123,7 +123,13 @@ package Model_Runner.Llama is
    --    the feed-forward gate is a Gaussian error unit rather than a
    --    logistic one, which is close enough to SiLU to look right and
    --    different enough to be wrong.
-   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma);
+   --  Gemma2 is Gemma with four more differences, and they are of the same
+   --  kind: each is silent when missed. Two more normalizations a block,
+   --  after each sublayer rather than before it; a bound on the attention
+   --  scores and another on the logits, both applied as a scaled hyperbolic
+   --  tangent; and a sliding window on every other layer rather than on all
+   --  of them or none.
+   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2);
 
    --  The identifier a file carries for an architecture.
    --
@@ -135,7 +141,8 @@ package Model_Runner.Llama is
          when Qwen2     => "qwen2",
          when Qwen3     => "qwen3",
          when Qwen3_MoE => "qwen3moe",
-         when Gemma     => "gemma");
+         when Gemma     => "gemma",
+         when Gemma2    => "gemma2");
 
    --  Validated architecture configuration.
    --
@@ -182,6 +189,19 @@ package Model_Runner.Llama is
       --  the bound on how much each position may see. Both are needed and
       --  they are not the same number.
       Window          : Natural := 0;
+
+      --  Bounds on the attention scores and on the logits, as the scaled
+      --  hyperbolic tangent the architecture states: a score of s becomes
+      --  cap * tanh (s / cap), which leaves small values alone and holds
+      --  large ones just under the cap. Zero for an architecture that
+      --  states none, which is every one here but Gemma2.
+      Attention_Cap   : Model_Runner.Numerics.Real := 0.0;
+      Logit_Cap       : Model_Runner.Numerics.Real := 0.0;
+
+      --  Whether the sliding window applies to every other layer rather
+      --  than to all of them. Gemma2 alternates, starting with the window
+      --  on layer zero.
+      Alternating     : Boolean := False;
 
       --  How many experts each layer holds and how many of them run for one
       --  position. Zero experts is a dense model: one feed-forward block per
@@ -859,6 +879,13 @@ private
 
    type Layer is record
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
+
+      --  Applied to what a sublayer produced, before it is added back to
+      --  the residual, rather than to what it was given. Null for an
+      --  architecture that normalizes only on the way in, which is every
+      --  one here but Gemma2.
+      Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
+      Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access;
       Query : aliased Model_Runner.Tensors.View;
       Key : aliased Model_Runner.Tensors.View;
       Value : aliased Model_Runner.Tensors.View;
@@ -1000,6 +1027,14 @@ private
       --  for a dense model, which allocates none of them.
       Routing    : Model_Runner.Tensors.Real_Array_Access := null;
       Mixture    : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  Room for a normalization that happens on the way out of a
+      --  sublayer, which needs a buffer as wide as the embedding and cannot
+      --  borrow one that is holding something: the query buffer was tried
+      --  and is a head's width, so it was too small and the pass failed as
+      --  an invariant violation rather than as anything a reader could act
+      --  on. Allocated only for an architecture that normalizes that way.
+      Post_Room  : Model_Runner.Tensors.Real_Array_Access := null;
       Expert_Row : Model_Runner.Tensors.Real_Array_Access := null;
       Plan       : Model_Runner.Memory.Session_Plan;
       Team       : Model_Runner.Backend.CPU.Pool_Reference := null;

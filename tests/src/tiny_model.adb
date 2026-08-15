@@ -185,9 +185,14 @@ package body Tiny_Model is
          Values : N.Real_Array (0 .. N.Element_Count (Embedding) - 1);
          Drawn  : constant N.Real_Array :=
            Next (N.Element_Count (Embedding));
+
+         --  Around zero where the architecture's gain is one plus the
+         --  weight, as in Gain_Of and for the same reason.
+         Middle : constant N.Real :=
+           (if Kind in Gemma | Gemma2 then 0.0 else 1.0);
       begin
          for Index in Values'Range loop
-            Values (Index) := 1.0 + Drawn (Index) * 0.25;
+            Values (Index) := Middle + Drawn (Index) * 0.25;
          end loop;
          Fixtures.Add_Tensor
            (Builder, Name, [G.U64 (Embedding)], G.Type_F32,
@@ -208,7 +213,8 @@ package body Tiny_Model is
          --  answer nearly the same whether the reader lifted the gain or
          --  not, and a fixture that cannot tell two readings apart is a
          --  fixture that proves neither.
-         Middle : constant N.Real := (if Kind = Gemma then 0.0 else 1.0);
+         Middle : constant N.Real :=
+           (if Kind in Gemma | Gemma2 then 0.0 else 1.0);
       begin
          for Index in Values'Range loop
             Values (Index) := Middle + Drawn (Index) * 0.25;
@@ -237,7 +243,8 @@ package body Tiny_Model is
            when Qwen2     => "qwen2",
            when Qwen3     => "qwen3",
            when Qwen3_MoE => "qwen3moe",
-           when Gemma     => "gemma");
+           when Gemma     => "gemma",
+           when Gemma2    => "gemma2");
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
@@ -319,6 +326,17 @@ package body Tiny_Model is
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.sliding_window",
             Interfaces.Unsigned_32 (Window));
+      end if;
+
+      --  Gemma2's two bounds. Small numbers rather than the fifty and
+      --  thirty a real one carries, so that the fixture's own scores and
+      --  logits actually reach them: a bound nothing reaches is a bound
+      --  neither implementation can be shown to apply.
+      if Kind = Gemma2 then
+         Fixtures.Add_F32
+           (Builder, Prefix & ".attn_logit_softcapping", 4.0);
+         Fixtures.Add_F32
+           (Builder, Prefix & ".final_logit_softcapping", 2.0);
       end if;
 
       Fixtures.Add_String
@@ -490,6 +508,12 @@ package body Tiny_Model is
 
       for Index in 0 .. Layers - 1 loop
          Norm (Layer_Name (Index, "attn_norm.weight"));
+
+         --  Gemma2's two extra normalizations, one after each sublayer.
+         if Kind = Gemma2 then
+            Norm (Layer_Name (Index, "post_attention_norm.weight"));
+            Norm (Layer_Name (Index, "post_ffw_norm.weight"));
+         end if;
          if Merged and then Index = 0 then
             --  The same weights, plus the difference the adapter fixture
             --  describes: alpha times the outer product of its two

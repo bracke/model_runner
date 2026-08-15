@@ -94,7 +94,7 @@ private
    --  gate -- and each is written here in the form the paper gives rather
    --  than the form the engine uses, which is the whole point of a second
    --  implementation.
-   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma);
+   type Architecture is (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -103,6 +103,11 @@ private
 
    type Layer is record
       Attention_Norm : Vector_Access := null;
+
+      --  Gemma2 normalizes what each sublayer produced as well as what it
+      --  was given. Null for everything else.
+      Post_Attention_Norm : Vector_Access := null;
+      Post_Feed_Norm      : Vector_Access := null;
       Query          : Matrix_Access := null;
       Key            : Matrix_Access := null;
       Value          : Matrix_Access := null;
@@ -169,6 +174,12 @@ private
       --  implementations agree because they read the same file rather than
       --  because one was told what the other found.
       Window       : Natural := 0;
+
+      --  The two bounds Gemma2 states, as the scaled hyperbolic tangent it
+      --  applies to a score and to a logit. Zero for an architecture that
+      --  states none.
+      Attention_Cap : Long_Float := 0.0;
+      Logit_Cap     : Long_Float := 0.0;
 
       --  How many experts a layer holds, how many of them run for one
       --  position, and how wide one of them is. Zero experts is a dense

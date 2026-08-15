@@ -833,7 +833,8 @@ package body Reference_Transformer is
          when Qwen2     => "qwen2.",
          when Qwen3     => "qwen3.",
          when Qwen3_MoE => "qwen3moe.",
-         when Gemma     => "gemma.");
+         when Gemma     => "gemma.",
+         when Gemma2    => "gemma2.");
 
    procedure Load
      (Item   : in out Model;
@@ -1105,6 +1106,8 @@ package body Reference_Transformer is
             Item.Kind := Qwen3_MoE;
          elsif Named = "gemma" then
             Item.Kind := Gemma;
+         elsif Named = "gemma2" then
+            Item.Kind := Gemma2;
          else
             return;
          end if;
@@ -1141,6 +1144,27 @@ package body Reference_Transformer is
       --  because the engine does.
       Item.Window :=
         Metadata (Source, Prefix (Item) & "attention.sliding_window", 0);
+
+      --  Read as floats, because that is what they are: a bound on a score
+      --  rather than a count of anything.
+      declare
+         Value  : Model_Runner.Numerics.Wide_Real;
+         Status : Model_Runner.Errors.Error_Info;
+      begin
+         Containers.Get_Float
+           (Source, Prefix (Item) & "attn_logit_softcapping",
+            1.0, 1.0E6, Value, Status);
+         if Model_Runner.Errors.Is_Ok (Status) then
+            Item.Attention_Cap := Long_Float (Value);
+         end if;
+
+         Containers.Get_Float
+           (Source, Prefix (Item) & "final_logit_softcapping",
+            1.0, 1.0E6, Value, Status);
+         if Model_Runner.Errors.Is_Ok (Status) then
+            Item.Logit_Cap := Long_Float (Value);
+         end if;
+      end;
 
       Item.Experts := Metadata (Source, Prefix (Item) & "expert_count", 0);
       Item.Experts_Used :=
@@ -1264,6 +1288,25 @@ package body Reference_Transformer is
               Read_Vector (Layer_Name (Index, "attn_norm.weight"), Present);
             if not Present then
                return;
+            end if;
+
+            --  Gemma2's two extra normalizations, required where the
+            --  architecture states them.
+            if Item.Kind = Gemma2 then
+               Current.Post_Attention_Norm :=
+                 Read_Vector
+                   (Layer_Name (Index, "post_attention_norm.weight"),
+                    Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Post_Feed_Norm :=
+                 Read_Vector
+                   (Layer_Name (Index, "post_ffw_norm.weight"), Present);
+               if not Present then
+                  return;
+               end if;
             end if;
 
             Current.Query :=
@@ -1398,6 +1441,8 @@ package body Reference_Transformer is
       if Item.Blocks /= null then
          for Index in Item.Blocks'Range loop
             Free_Vector (Item.Blocks (Index).Attention_Norm);
+            Free_Vector (Item.Blocks (Index).Post_Attention_Norm);
+            Free_Vector (Item.Blocks (Index).Post_Feed_Norm);
             Free_Matrix (Item.Blocks (Index).Query);
             Free_Matrix (Item.Blocks (Index).Key);
             Free_Matrix (Item.Blocks (Index).Value);
@@ -1465,6 +1510,27 @@ package body Reference_Transformer is
       Normed : Real_Vector (0 .. Width - 1) := [others => 0.0];
 
       --  Root-mean-square normalization with a per-element gain.
+      --  The hyperbolic tangent, for the two bounds Gemma2 states.
+      --
+      --  Saturating past twenty rather than computing an exponential that
+      --  cannot be represented, for the reason written beside the gate: the
+      --  difference from one is below what this format holds well before
+      --  the exponential overflows.
+      function Hyperbolic (Value : Long_Float) return Long_Float is
+      begin
+         if Value > 20.0 then
+            return 1.0;
+         elsif Value < -20.0 then
+            return -1.0;
+         end if;
+
+         declare
+            Twice : constant Long_Float := Functions.Exp (2.0 * Value);
+         begin
+            return (Twice - 1.0) / (Twice + 1.0);
+         end;
+      end Hyperbolic;
+
       --  The gate this architecture was trained with, written as the two
       --  formulas rather than as a call into the engine's kernels.
       --
@@ -1477,7 +1543,7 @@ package body Reference_Transformer is
          Root : constant Long_Float := 0.797_884_560_802_865_4;
          Bend : constant Long_Float := 0.044_715;
       begin
-         if Item.Kind = Gemma then
+         if Item.Kind in Gemma | Gemma2 then
             declare
                Inner : constant Long_Float :=
                  Root * (Value + Bend * Value * Value * Value);
@@ -1533,7 +1599,7 @@ package body Reference_Transformer is
             --  flag on its kernel, and this has the addition where the
             --  formula puts it.
             Lift : constant Long_Float :=
-              (if Item.Kind = Gemma then 1.0 else 0.0);
+              (if Item.Kind in Gemma | Gemma2 then 1.0 else 0.0);
          begin
             for Index in Source'Range loop
                Target (Index) :=
@@ -1747,7 +1813,7 @@ package body Reference_Transformer is
          --  computes the same number once per token from the same field.
          declare
             Lift : constant Long_Float :=
-              (if Item.Kind = Gemma
+              (if Item.Kind in Gemma | Gemma2
                then Functions.Sqrt (Long_Float (Width))
                else 1.0);
          begin
@@ -1828,8 +1894,16 @@ package body Reference_Transformer is
                         --  The earliest position this one may look at. With
                         --  a window of four, a query at position ten reads
                         --  seven through ten.
+                        --  Gemma2 windows every other layer, starting with
+                        --  the first; everything else here windows all of
+                        --  them or none.
+                        Windowed : constant Boolean :=
+                          Item.Window /= 0
+                          and then (Item.Kind /= Gemma2
+                                    or else Block mod 2 = 0);
+
                         First : constant Natural :=
-                          (if Item.Window = 0 or else Step < Item.Window
+                          (if not Windowed or else Step < Item.Window
                            then 0 else Step - Item.Window + 1);
 
                         Scores : Real_Vector (First .. Step) :=
@@ -1849,7 +1923,17 @@ package body Reference_Transformer is
                                              Source_Head * Item.Head_Size
                                              + Component);
                               end loop;
-                              Scores (Past) := Total_Score * Scale;
+                              --  Held under the bound the architecture
+                              --  states, before the softmax reads it: a
+                              --  bound applied afterwards would be a bound
+                              --  on a probability and mean something else.
+                              Scores (Past) :=
+                                (if Item.Attention_Cap > 0.0
+                                 then Item.Attention_Cap
+                                      * Hyperbolic
+                                          (Total_Score * Scale
+                                           / Item.Attention_Cap)
+                                 else Total_Score * Scale);
                            end;
                         end loop;
 
@@ -1884,6 +1968,19 @@ package body Reference_Transformer is
                end;
 
                Project (Current.Attention_Out.all, Blended, Normed);
+
+               --  Gemma2 normalizes what the sublayer produced before it
+               --  goes back into the residual. Written where the addition
+               --  is, because that is where the architecture puts it.
+               if Current.Post_Attention_Norm /= null then
+                  declare
+                     Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
+                  begin
+                     Normalize (Normed, Current.Post_Attention_Norm.all, Room);
+                     Normed (0 .. Width - 1) := Room;
+                  end;
+               end if;
+
                for Index in 0 .. Width - 1 loop
                   State (Index) := State (Index) + Normed (Index);
                end loop;
@@ -2026,6 +2123,15 @@ package body Reference_Transformer is
                   end;
                end if;
 
+               if Current.Post_Feed_Norm /= null then
+                  declare
+                     Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
+                  begin
+                     Normalize (Normed, Current.Post_Feed_Norm.all, Room);
+                     Normed (0 .. Width - 1) := Room;
+                  end;
+               end if;
+
                for Index in 0 .. Width - 1 loop
                   State (Index) := State (Index) + Normed (Index);
                end loop;
@@ -2035,6 +2141,15 @@ package body Reference_Transformer is
 
       Normalize (State, Item.Output_Norm.all, Normed);
       Project (Item.Output.all, Normed, Logits);
+
+      --  And the bound on the logits, which is the last thing the model
+      --  does and the first thing a caller sees.
+      if Item.Logit_Cap > 0.0 then
+         for Index in Logits'Range loop
+            Logits (Index) :=
+              Item.Logit_Cap * Hyperbolic (Logits (Index) / Item.Logit_Cap);
+         end loop;
+      end if;
 
       Free_History (Keys);
       Free_History (Values);

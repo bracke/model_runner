@@ -7,6 +7,41 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The `gemma2` architecture:** `gemma` and four more differences, each
+  silent when missed. A normalization after each sublayer as well as before
+  it, required where the architecture states them; a bound on the attention
+  scores and another on the logits, each the scaled hyperbolic tangent the
+  architecture states, applied before the softmax reads a score and after the
+  last projection produces a logit; and a sliding window on every other layer
+  rather than on all of them.
+
+  Crossed with every format and both evaluation paths against the independent
+  implementation: 13575 sequences, 187200 logits, none outside tolerance.
+
+### Fixed
+
+- **A conformance sweep that passed over what it could not evaluate.** A
+  comparison whose evaluation ended in a diagnostic was not counted, nothing
+  was compared, and the only trace was that the total came up short against
+  what the sweep expected to run. Three hundred of them -- every gemma2
+  single-token comparison, failing on a buffer that was too small -- left
+  exactly that trace and nothing else. Refused evaluations are counted and
+  reported now, and a run with any of them is not clean.
+
+  Two bugs took an afternoon to find behind that silence: the post-norm
+  borrowed the query buffer, which is a head wide rather than an embedding
+  wide; and the fix for that dereferenced a buffer allocated only for the
+  architecture that needs it, at call sites reached by every architecture.
+  The first cost 300 comparisons, the second 7320.
+
+- **The attention bound cost every architecture.** Applied inside the loop
+  that forms a score it was a test per score: twelve tokens went from 1.83 s
+  to 2.07 s and the processor time from 10.5 s to 11.8 s, for a feature one
+  architecture of six uses. It runs in a loop of its own now, entered only
+  when there is a bound, and the figure is back to 1.832 s and 10.51 s.
+
+### Added
+
 - **The `gemma` architecture.** The same shape as the four already here with
   three differences, each of which produces a plausible wrong answer rather
   than a refusal when it is missed: the normalization gain is one plus the

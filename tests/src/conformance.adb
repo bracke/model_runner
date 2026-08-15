@@ -128,9 +128,9 @@ package body Conformance is
       --  differences touch every part of a pass: the gain on every
       --  normalization, the scale on the embedding, and the gate in every
       --  feed-forward block, dense or mixed.
-      Crossed : constant array (1 .. 4) of Tiny_Model.Fixture_Architecture :=
+      Crossed : constant array (1 .. 5) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
-         Tiny_Model.Gemma];
+         Tiny_Model.Gemma, Tiny_Model.Gemma2];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -298,6 +298,14 @@ package body Conformance is
                      Actual, Status => Status);
                   exit when E.Is_Error (Status);
                end loop;
+            end if;
+
+            --  An evaluation that ended in a diagnostic is counted rather
+            --  than passed over. It used to leave no trace but a total that
+            --  came up short, which is how three hundred of them hid a null
+            --  buffer for an afternoon.
+            if not E.Is_Ok (Status) then
+               Result.Refused := Result.Refused + 1;
             end if;
 
             if E.Is_Ok (Status) then

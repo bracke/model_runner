@@ -74,6 +74,15 @@ package Conformance is
       Cached_Worst_Rel : Long_Float := 0.0;
 
       Failures   : Natural := 0;
+
+      --  Comparisons whose evaluation ended in a diagnostic rather than in
+      --  logits. These used to be passed over in silence: the sequence was
+      --  not counted, nothing was compared, and the only trace was that the
+      --  total came up short against what the sweep expected to run. Three
+      --  hundred of them hid a null buffer in a new architecture for an
+      --  afternoon, so they are counted and reported now, and a run with
+      --  any of them is not clean.
+      Refused    : Natural := 0;
       Ran        : Boolean := False;
    end record;
 
@@ -82,7 +91,7 @@ package Conformance is
    --  @param Item Report to classify.
    --  @return True when the run completed and nothing exceeded tolerance.
    function Is_Clean (Item : Report) return Boolean
-   is (Item.Ran and then Item.Failures = 0);
+   is (Item.Ran and then Item.Failures = 0 and then Item.Refused = 0);
 
    --  Compare the engine against the reference on the synthetic model.
    --

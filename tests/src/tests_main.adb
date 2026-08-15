@@ -340,7 +340,8 @@ begin
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  conformance: sequences" & Natural'Image (Agreed.Sequences)
-               & ", outside tolerance" & Natural'Image (Agreed.Failures));
+               & ", outside tolerance" & Natural'Image (Agreed.Failures)
+               & ", refused" & Natural'Image (Agreed.Refused));
             if not Conformance.Is_Clean (Agreed) then
                --  Is_Clean already asks whether the comparison ran, so a
                --  reference that compared nothing fails here. Saying which of
