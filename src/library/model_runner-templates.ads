@@ -124,7 +124,8 @@ package Model_Runner.Templates is
    --  one: the help text, the name matching and the tests all read from
    --  here, so none of them can offer a format that is not carried or miss
    --  one that is. The backends are named the same way for the same reason.
-   type Chat_Format is (Format_Llama3, Format_ChatML);
+   type Chat_Format is (Format_Llama3, Format_ChatML, Format_Gemma,
+                        Format_Phi3);
 
    --  The name a caller asks for a format by.
    --
@@ -133,7 +134,9 @@ package Model_Runner.Templates is
    function Format_Name (Item : Chat_Format) return String
    is (case Item is
          when Format_Llama3 => "llama3",
-         when Format_ChatML => "chatml");
+         when Format_ChatML => "chatml",
+         when Format_Gemma  => "gemma",
+         when Format_Phi3   => "phi3");
 
    --  Compile and validate a template.
    --

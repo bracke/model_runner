@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The `gemma` and `phi3` chat formats.** `--chat-template` offered two
+  where four of the nine architectures this build reads carry templates it
+  matched neither of. Phi-3's writes the role straight into its markers.
+  Gemma's is the one format here that calls the assistant something else --
+  its turns are "user" and "model" -- so the role a caller gives is mapped
+  rather than written through, which is why it needs a comparison the other
+  three do not. The template compiler already had `==`; nothing new was
+  needed under it.
+
 - **A check that no model file sits inside the repository.** A machine that
   takes the published figures has models on it and the smallest is four
   hundred megabytes; one copied into the tree for convenience would be

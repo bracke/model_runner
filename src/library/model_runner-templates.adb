@@ -119,6 +119,32 @@ package body Model_Runner.Templates is
            & "{% if add_generation_prompt %}"
            & "<|im_start|>assistant" & LF
            & "{% endif %}";
+      elsif Name = Format_Name (Format_Gemma) then
+         --  The one format here that calls the assistant something else.
+         --  Gemma's turns are "user" and "model", so the role a caller gives
+         --  is mapped rather than written through -- which is why this needs
+         --  a comparison where the other three need none.
+         return
+           "{{ bos_token }}"
+           & "{% for message in messages %}"
+           & "<start_of_turn>"
+           & "{% if message['role'] == 'assistant' %}model"
+           & "{% else %}{{ message['role'] }}{% endif %}" & LF
+           & "{{ message['content'] }}<end_of_turn>" & LF
+           & "{% endfor %}"
+           & "{% if add_generation_prompt %}"
+           & "<start_of_turn>model" & LF
+           & "{% endif %}";
+
+      elsif Name = Format_Name (Format_Phi3) then
+         return
+           "{% for message in messages %}"
+           & "<|{{ message['role'] }}|>" & LF
+           & "{{ message['content'] }}<|end|>" & LF
+           & "{% endfor %}"
+           & "{% if add_generation_prompt %}"
+           & "<|assistant|>" & LF
+           & "{% endif %}";
       else
          return "";
       end if;
