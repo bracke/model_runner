@@ -1083,6 +1083,31 @@ device 0405429AEFCB461E src/shaders/row_product.comp src/library/model_runner-sh
 # parameter list and nothing they time, and the run above is the evidence
 # that the tool still measures what it measured.
 
+# 2026-08-16, the drafting group. Taken with both files present at last, and
+# it does not reproduce -- which is the finding rather than a failure.
+#
+#   eight bits alone  2.040 s against 1.869 published
+#   two bits alone    2.211 s against 2.660 published
+#   drafted           7.286 s against 5.705, 24 proposed and 9 accepted
+#                     against 16 proposed and 9 accepted
+#
+# The middle row is the tell: the two-bit file measured here is faster than
+# the one the table describes, so it is not the same file. Two-bit
+# quantizations of one model differ by who made them and how, and this
+# repository never recorded which one it drafted with -- so the row cannot be
+# reproduced by anyone, including me. The proposal count says the same thing
+# from the other side: a different draft model proposes differently, and
+# twenty-four proposals for nine acceptances is a worse draft than sixteen
+# for nine.
+#
+# What did hold is the property the row exists to demonstrate: the drafted
+# run printed 5abff916f9d83ca6, the same digest as the run without a draft.
+# Drafting changed the cost and not the text.
+#
+# Not republished. A figure taken with a different draft model is not the
+# published figure re-measured, and the honest fix is to record which file
+# the table means -- which needs whoever took it, not another run.
+
 # load: 1.19 to 2.52 across the three runs, 2026-08-14
 drafting 44941DAF92C6BE02 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
