@@ -77,6 +77,7 @@ en.help.run.logit_bias =   --logit-bias TOKEN=X    add X to that token's logit; 
 en.help.run.memory_limit =   --memory-limit SIZE     limit model memory; accepts K, M and G suffixes
 en.help.run.device_memory =   --device-memory SIZE    device memory for the weights; 0 reads them where they lie
 en.help.run.device_patience =   --device-patience N     seconds to wait for one product before giving up on the device
+en.help.run.device =   --device N              which of the host's devices to compute on; inspect lists them
 en.help.run.mmap =   --mmap                  require memory mapping of the model file
 en.help.run.no_mmap =   --no-mmap               never memory-map the model file
 en.help.run.quiet =   --quiet                 suppress progress, notes and warnings
@@ -269,6 +270,7 @@ en.cli.note.next_prompt = prompt {index} of {total}
 en.cli.note.draft_tokens_unused = --draft-tokens says how many a draft model may propose, and this run has no draft model; it changes nothing here
 en.cli.note.device_memory_unused = --device-memory says what the device may hold, and this run is not on a device; it changes nothing here
 en.cli.note.device_patience_unused = --device-patience says how long to wait for a device, and this run is not on one; it changes nothing here
+en.cli.note.device_unused = --device says which device to compute on, and this run is not on one; it changes nothing here
 en.diagnostic.frame = model_runner:   while {detail}
 en.diagnostic.offset = model_runner:   at file offset {offset}
 en.diagnostic.hint.usage = run 'model_runner help' for usage

@@ -1911,6 +1911,13 @@ package body Model_Runner.CLI.Execute is
          Pres.Put_Note (Screen, "cli.note.device_patience_unused");
       end if;
 
+      if Item.Device_Index_Set
+        and then Model_Runner.Backend."/=" (Item.Backend,
+                                            Model_Runner.Backend.Backend_Device)
+      then
+         Pres.Put_Note (Screen, "cli.note.device_unused");
+      end if;
+
       case Item.Backend is
       when Model_Runner.Backend.Backend_Reference =>
          --  No pool: this backend runs on the calling task and says so.
@@ -1926,7 +1933,8 @@ package body Model_Runner.CLI.Execute is
          begin
             Model_Runner.Backend.Device.Open
               (Ready, Item.Device_Memory, Item.Device_Share,
-               Patience => Item.Device_Patience);
+               Patience => Item.Device_Patience,
+               Which => Item.Device_Index);
 
             if not Ready then
                --  A condition of its own rather than a borrowed one. This
@@ -2230,7 +2238,8 @@ package body Model_Runner.CLI.Execute is
          begin
             Model_Runner.Backend.Device.Open
               (Ready, Item.Device_Memory, Item.Device_Share,
-               Patience => Item.Device_Patience);
+               Patience => Item.Device_Patience,
+               Which => Item.Device_Index);
 
             if not Ready then
                Fail (E.Make (E.Backend_No_Device));

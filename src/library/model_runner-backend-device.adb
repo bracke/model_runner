@@ -38,6 +38,11 @@ package body Model_Runner.Backend.Device is
    Opened_Slice    : Duration := 0.020;
    Opened_Patience : Duration := 60.0;
 
+   --  Which device the open one is, for the same reason the settings above
+   --  are kept: an Open naming a different device must not be answered with
+   --  this one.
+   Opened_Which : Positive := 1;
+
    Named      : String (1 .. Devices.Max_Name_Bytes) := [others => ' '];
    Named_Last : Natural := 0;
 
@@ -100,7 +105,8 @@ package body Model_Runner.Backend.Device is
       Budget     : Interfaces.Unsigned_64 := 0;
       Share_Host : Boolean := False;
       Slice      : Duration := 0.020;
-      Patience   : Duration := 60.0)
+      Patience   : Duration := 60.0;
+      Which      : Positive := 1)
    is
       Found : Boolean;
    begin
@@ -119,6 +125,7 @@ package body Model_Runner.Backend.Device is
         and then Sharing = Share_Host
         and then Opened_Slice = Slice
         and then Opened_Patience = Patience
+        and then Opened_Which = Which
       then
          Ready := True;
          return;
@@ -132,10 +139,16 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      --  The first device the host names. Choosing between several is a
-      --  thing to offer when there is a reason to prefer one, and on the
-      --  machines this has been run on the reason would be a guess.
-      Devices.Open (Opened, Held, 1, Found);
+      --  The device the caller named, counting from one in the order the
+      --  host names them, and the first of them when the caller named none.
+      --  Out of range is a refusal: a caller that asked for the second
+      --  device and silently got the first would be told the wrong thing
+      --  about what its figures describe.
+      if Which > Devices.Count (Held) then
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, Which, Found);
       if not Found then
          return;
       end if;
@@ -156,6 +169,7 @@ package body Model_Runner.Backend.Device is
       end;
 
       Sharing := Share_Host;
+      Opened_Which := Which;
       Opened_Budget := Budget;
       Opened_Slice := Slice;
       Opened_Patience := Patience;

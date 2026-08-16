@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--device N`.** Which of the host's devices to compute on, counting from
+  one in the order `inspect` already lists them. The backend opened whichever
+  the host named first and said so in a comment; a machine with an integrated
+  device beside a discrete one had no way to choose. A number past what the
+  host has is refused rather than fallen back from, and the chosen device is
+  kept beside the budget and the sharing policy in what decides whether an
+  already-open device can answer the next Open -- the same reason those are
+  kept.
+
 - **The `falcon` architecture.** The first here whose block is arranged
   differently rather than whose details differ: attention and the
   feed-forward both read what the layer normalized on the way in and both add

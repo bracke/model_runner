@@ -28,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 67) of Registry_Row :=
+   Registry : constant array (1 .. 68) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -120,6 +120,9 @@ package body Model_Runner.CLI.Options is
       (Text ("--device-patience"),
        [Command_Run | Command_Embed => True, others => False],
        Text ("device_patience")),
+      (Text ("--device"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("device")),
       (Text ("--mmap"),
        [Command_Run | Command_Embed => True, others => False], Text ("mmap")),
       (Text ("--no-mmap"), [Command_Run => True, others => False], Text ("no_mmap")),
@@ -726,6 +729,7 @@ package body Model_Runner.CLI.Options is
          Flag_DRY_Multiplier, Flag_DRY_Base, Flag_DRY_Allowed,
          Flag_Mirostat, Flag_Mirostat_Tau, Flag_Mirostat_Eta,
          Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Device_Patience,
+         Flag_Device_Index,
          Flag_Logprobs,
          Flag_Draft_Model, Flag_Draft_Tokens,
          Flag_Locale,
@@ -1733,6 +1737,41 @@ package body Model_Runner.CLI.Options is
                         --  of that are measured in the README.
                         Result.Device_Share := Result.Device_Memory = 0;
                         Result.Device_Memory_Set := True;
+                        Free_Text (Held);
+                     end;
+
+                  elsif Name = "--device" then
+                     declare
+                        Chosen : Long_Long_Integer;
+                        Parsed : Boolean;
+                     begin
+                        Mark (Flag_Device_Index, Name, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        Take_Value (Name, Value_Present, Value_First, Argument,
+                                    Held, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        To_Number (Held.all, Chosen, Parsed);
+
+                        --  Counting from one, and no further than the most
+                        --  devices this build will enumerate. A number past
+                        --  that is refused here rather than at the device,
+                        --  where the answer would be "no device" and the
+                        --  reason would be lost.
+                        if not Parsed or else Chosen < 1
+                          or else Chosen > 8
+                        then
+                           Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                           Free_Text (Held);
+                           return;
+                        end if;
+
+                        Result.Device_Index := Positive (Chosen);
+                        Result.Device_Index_Set := True;
                         Free_Text (Held);
                      end;
 

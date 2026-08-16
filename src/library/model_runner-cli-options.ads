@@ -326,6 +326,14 @@ package Model_Runner.CLI.Options is
       --  between twenty milliseconds and five.
       Device_Patience     : Duration := 60.0;
       Device_Patience_Set : Boolean := False;
+
+      --  Which of the host's devices to compute on, counting from one in the
+      --  order `inspect` lists them. A machine with one device has nothing
+      --  to choose and the default chooses it; a machine with an integrated
+      --  device beside a discrete one has a reason to say which, and before
+      --  this there was no way to.
+      Device_Index        : Positive := 1;
+      Device_Index_Set    : Boolean := False;
       Mapping      : Model_Runner.Byte_Sources.Files.Mapping_Policy :=
         Model_Runner.Byte_Sources.Files.Mapping_Automatic;
 

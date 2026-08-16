@@ -1355,6 +1355,15 @@ means none of it, and the weights are read where they already are -- the
 device is handed a pointer into this process's memory instead of a copy,
 where the device shares the host's memory and will take one.
 
+`--device N` says which of the host's devices to compute on, counting from
+one in the order `inspect` lists them. A machine with one device has nothing
+to choose and the default chooses it; a machine with an integrated device
+beside a discrete one has a reason to say which, and until now the answer was
+whichever the host named first. A number past the devices the host has is
+refused rather than fallen back from: a caller who asked for the second
+device and silently got the first would be told the wrong thing about what
+its figures describe.
+
 `--device-patience N` says how many seconds to wait for one product before
 giving up on the device. The default is a minute, which is far longer than
 any product on any machine this has run on -- and that is a guess about

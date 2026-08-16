@@ -54,12 +54,18 @@ package Model_Runner.Backend.Device is
    --    request is asked about again.
    --  @param Patience How long to wait in all before giving up on a device
    --    that has stopped answering. Zero waits not at all.
+   --  @param Which Which of the host's devices to open, counting from one in
+   --    the order the host names them -- which is the order `inspect` lists
+   --    them in. Out of range is a refusal rather than a fallback: a caller
+   --    that named a device and got another one would be told the wrong
+   --    thing about what ran.
    procedure Open
      (Ready      : out Boolean;
       Budget     : Interfaces.Unsigned_64 := 0;
       Share_Host : Boolean := False;
       Slice      : Duration := 0.020;
-      Patience   : Duration := 60.0);
+      Patience   : Duration := 60.0;
+      Which      : Positive := 1);
 
    --  Release the device and everything it holds. Idempotent.
    procedure Close;

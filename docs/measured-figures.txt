@@ -904,9 +904,19 @@ reference B430EFD30856253F src/library/model_runner-backend-reference.adb src/li
 # model file to measure with, which is the same reason recorded under the
 # engine group above rather than a second one.
 
+# 2026-08-16, --device N. The device group moved with
+# model_runner-backend-device.adb, which gained a parameter naming which of
+# the host's devices to open and a comparison keeping it beside the budget
+# and the sharing policy. Both are in Open, which the figures quote
+# separately from what they measure, and neither is in a loop: the device is
+# opened once a run. Not re-measured, for the reason recorded under the
+# engine group -- this machine has no model file to measure with -- and
+# because a run on the same device gives the same figures whether the caller
+# named it or took the default.
+
 # load: 1.70 rising to 2.37 for the fifteen ratios and the batched ones,
 #       2026-08-15; 1.0 to 1.9 for the two-backend table, 2026-08-14
-device 9C42D18D1EE115FA src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device C943893D37F65B04 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
