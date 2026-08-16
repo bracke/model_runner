@@ -21,6 +21,11 @@ Keep a Changelog and the project uses semantic versioning.
   swept backend: 24912 sequences, 21600 of them in the byte cache, none
   outside tolerance.
 
+  It runs on the device as well, on the first format the shader reads: what a
+  session rounds is its own doing, and what crossing it with a device adds is
+  whether products computed there read a rounded row back the way products
+  computed here do. 24939 sequences, 22032 of them in the byte cache.
+
   The saved-context format is unchanged: it stores four bytes an element
   whatever the session holds, so a context written by one precision restores
   into another. `Shift` handles it by decoding a row, turning it back and

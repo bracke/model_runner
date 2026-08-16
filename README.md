@@ -715,7 +715,7 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 24912, logits compared 322560,
+conformance: sequences 24939, logits compared 322560,
              worst absolute 1.80089269772310E-05,
              worst relative 5.39566401500295E-03,
              rounded logits compared 32400,
@@ -724,7 +724,7 @@ conformance: sequences 24912, logits compared 322560,
              cached logits compared 22032,
              cached worst absolute 9.22560479118539E-03,
              cached worst relative 7.98212777069768E-01,
-             byte logits compared 21600,
+             byte logits compared 22032,
              byte worst absolute 3.02788895569006E-01,
              byte worst relative 1.84939983371143E+00,
              outside tolerance 0, unlearned 0

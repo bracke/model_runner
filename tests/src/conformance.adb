@@ -772,7 +772,22 @@ package body Conformance is
                      Compare
                        (4, L.Halved, Model_Runner.Backend.Backend_Device,
                         L.No_Repack, Batched => True);
-                     On_Device := On_Device + 3;
+
+                     --  And the byte storage, for the same reason and on the
+                     --  same terms: what a session rounds is its own doing,
+                     --  and the only thing crossing it with a device adds is
+                     --  whether products computed there read a rounded row
+                     --  back the way products computed here do.
+                     Compare
+                       (3, L.Eighth, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack);
+                     Compare
+                       (4, L.Eighth, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack);
+                     Compare
+                       (4, L.Eighth, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack, Batched => True);
+                     On_Device := On_Device + 6;
                   end if;
 
                   B.Free (Image);
