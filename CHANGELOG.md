@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--kv-cache q8`: the context in one byte an element.** A third precision
+  beside the exact and halved ones, with a scale for every row -- one
+  position's keys, or its values, for one layer, which is the unit the
+  evaluator already writes and reads whole. One scale for a whole context
+  would be set by whichever position held the largest key and would quantize
+  every other position against it.
+
+  A quarter of the memory the exact cache takes. 0.303 worst absolute across
+  the sweep against 0.0092 for the halved cache and 1.8e-5 for the exact one,
+  measured over every architecture, shape and format it crosses, with a bound
+  of 0.4 rounded up from what was measured. Both evaluation paths, every
+  swept backend: 24912 sequences, 21600 of them in the byte cache, none
+  outside tolerance.
+
+  The saved-context format is unchanged: it stores four bytes an element
+  whatever the session holds, so a context written by one precision restores
+  into another. `Shift` handles it by decoding a row, turning it back and
+  packing it again -- which rounds a rounded row a second time, and the
+  README says so where it says what the storage costs.
+
 - **`--device N`.** Which of the host's devices to compute on, counting from
   one in the order `inspect` already lists them. The backend opened whichever
   the host named first and said so in a comment; a machine with an integrated

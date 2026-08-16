@@ -332,7 +332,13 @@ package body Conformance is
                        (if Scale > 0.0 then Gap / Scale else 0.0);
                   begin
 
-                     if L."=" (Cache, L.Halved) then
+                     if L."=" (Cache, L.Eighth) then
+                        Result.Eighth_Compared := Result.Eighth_Compared + 1;
+                        Result.Eighth_Worst_Abs :=
+                          Long_Float'Max (Result.Eighth_Worst_Abs, Gap);
+                        Result.Eighth_Worst_Rel :=
+                          Long_Float'Max (Result.Eighth_Worst_Rel, Relative);
+                     elsif L."=" (Cache, L.Halved) then
                         Result.Cached_Compared := Result.Cached_Compared + 1;
                         Result.Cached_Worst_Abs :=
                           Long_Float'Max (Result.Cached_Worst_Abs, Gap);
@@ -365,7 +371,10 @@ package body Conformance is
                      declare
                         Bad : Boolean := False;
                      begin
-                        if L."=" (Cache, L.Halved) then
+                        if L."=" (Cache, L.Eighth) then
+                           Bad := Gap > Eighth_Absolute_Tolerance
+                             and then Relative > Eighth_Relative_Tolerance;
+                        elsif L."=" (Cache, L.Halved) then
                            Bad := Gap > Cached_Absolute_Tolerance
                              and then Relative > Cached_Relative_Tolerance;
                         elsif Repack = L.To_BF16 then
@@ -661,8 +670,16 @@ package body Conformance is
                            Compare (3, L.Halved, Backend, Repack);
                            Compare (4, L.Halved, Backend, Repack);
 
+                           --  And the same in one byte an element, which is
+                           --  the same two procedures again with a third
+                           --  storage under them.
+                           Compare (3, L.Eighth, Backend, Repack);
+                           Compare (4, L.Eighth, Backend, Repack);
+
                            if Batches (Backend) then
                               Compare (4, L.Halved, Backend, Repack,
+                                       Batched => True);
+                              Compare (4, L.Eighth, Backend, Repack,
                                        Batched => True);
                            end if;
                         end if;
@@ -816,8 +833,10 @@ package body Conformance is
             --  windowed shapes with the weights unrounded: two sequences a
             --  backend, and one of them again through the batched path
             --  where the backend takes one.
+            --  Twice over: the halved cache and the byte one run the same
+            --  comparisons.
             Cached : constant Natural :=
-              Formats * Arches * 2 * (Backends * 2 + Batching);
+              2 * Formats * Arches * 2 * (Backends * 2 + Batching);
 
             --  The architectures with no gate, which run every shape but
             --  the mixture. Counted rather than named twice: what makes a

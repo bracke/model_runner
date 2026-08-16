@@ -512,6 +512,12 @@ begin
             & Long_Float'Image (Result.Cached_Worst_Abs)
             & ", cached worst relative"
             & Long_Float'Image (Result.Cached_Worst_Rel)
+            & ", byte logits compared"
+            & Natural'Image (Result.Eighth_Compared)
+            & ", byte worst absolute"
+            & Long_Float'Image (Result.Eighth_Worst_Abs)
+            & ", byte worst relative"
+            & Long_Float'Image (Result.Eighth_Worst_Rel)
             & ", outside tolerance" & Natural'Image (Result.Failures)
             & ", unlearned" & Natural'Image (Result.Unlearned));
 

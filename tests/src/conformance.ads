@@ -49,6 +49,15 @@ package Conformance is
    Cached_Relative_Tolerance : constant := 5.0E-2;
    Cached_Absolute_Tolerance : constant := 1.0E-1;
 
+   --  And what storing it in one byte an element is allowed to move a logit
+   --  by. A byte with a scale for its row keeps about seven bits of a
+   --  number where a binary16 keeps eleven, and what is rounded is a key or
+   --  a value that attention reads back at every later position -- so this
+   --  is the loosest bound here by some way. Measured over this sweep and
+   --  rounded up, as the two above were.
+   Eighth_Relative_Tolerance : constant := 5.0E-2;
+   Eighth_Absolute_Tolerance : constant := 4.0E-1;
+
    --  What a comparison found.
    type Report is record
       Sequences  : Natural := 0;
@@ -90,6 +99,14 @@ package Conformance is
       --  was skipped in silence and the totals came out to the digit of a
       --  run without it -- which is how an architecture's first sweep
       --  reported the figures of the sweep before it, and read as a pass.
+      --  The same, for the comparisons where the context was stored in one
+      --  byte an element. Kept apart from the halved ones for the reason
+      --  those are kept apart from the exact ones: one bound must not be
+      --  read as evidence for another.
+      Eighth_Compared  : Natural := 0;
+      Eighth_Worst_Abs : Long_Float := 0.0;
+      Eighth_Worst_Rel : Long_Float := 0.0;
+
       Unlearned  : Natural := 0;
 
       --  Sequences the sweep's own arithmetic says it should have run. Kept

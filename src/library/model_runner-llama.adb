@@ -49,7 +49,7 @@ package body Model_Runner.Llama is
    --  the README.
    Cache_Element_Bytes :
      constant array (Cache_Precision) of Interfaces.Unsigned_64 :=
-       [Exact => 4, Halved => 2];
+       [Exact => 4, Halved => 2, Eighth => 1];
 
    --  Metadata keys are built once, here, so that no other package spells a
    --  tensor or metadata name.
@@ -2280,6 +2280,147 @@ package body Model_Runner.Llama is
    --  The same, over a cache held in half precision. Every element is
    --  widened where the exact one reads it; nothing else differs, and
    --  nothing here computes in half precision.
+   --  One row of the cache, written as bytes with a scale of its own.
+   --
+   --  Symmetric around zero: the scale is the largest magnitude in the row
+   --  divided by 127, so the largest element lands on the end of the range
+   --  and zero stays zero. A row of zeros has no magnitude to scale by and
+   --  keeps a scale of one, which reads back as the zeros it was.
+   --
+   --  The unit is a row rather than the whole cache because a row is what
+   --  the evaluator writes at once and what it reads at once, and because
+   --  one scale for a whole context would be set by whichever position had
+   --  the largest key in it and would quantize every other position against
+   --  that.
+   procedure Pack_Row
+     (Source : Real_Array;
+      Into   : in out B.Byte_Array;
+      Origin : B.Byte_Count;
+      Scale  : out Real)
+   is
+      Largest : Real := 0.0;
+   begin
+      for Value of Source loop
+         Largest := Real'Max (Largest, abs Value);
+      end loop;
+
+      Scale := (if Largest > 0.0 then Largest / 127.0 else 1.0);
+
+      for Offset in 0 .. Element_Count (Source'Length) - 1 loop
+         declare
+            Step : constant Real :=
+              Real'Rounding (Source (Source'First + Offset) / Scale);
+            Held : constant Real := Real'Max (-127.0, Real'Min (127.0, Step));
+         begin
+            Into (Origin + B.Byte_Count (Offset)) :=
+              B.Byte (Integer (Held) + 128);
+         end;
+      end loop;
+   end Pack_Row;
+
+   --  One element back out of it.
+   function Unpack
+     (From  : B.Byte_Array;
+      At_By : B.Byte_Count;
+      Scale : Real) return Real
+   is (Real (Integer (From (At_By)) - 128) * Scale);
+
+   --  Attention over a cache stored as bytes and row scales.
+   --
+   --  The same arithmetic as the other two, reading through Unpack. Written
+   --  out rather than shared with them: what differs is the innermost read
+   --  of the innermost loop, and a storage chosen per session would put a
+   --  branch there rather than around it.
+   procedure Blend_Eighth
+     (Query      : Real_Array;
+      Keys       : B.Byte_Array;
+      Values     : B.Byte_Array;
+      Key_Scales : Real_Array;
+      Val_Scales : Real_Array;
+      K_Base     : Element_Count;
+      V_Base     : Element_Count;
+      Rows       : Element_Count;
+      KV_Width   : Element_Count;
+      V_Width    : Element_Count;
+      Heads      : Element_Count;
+      Head_Size  : Element_Count;
+      Value_Size : Element_Count;
+      Group_Size : Element_Count;
+      First      : Element_Count;
+      Last       : Element_Count;
+      Scale      : Real;
+      Cap        : Real;
+      Scores     : in out Real_Array;
+      Target     : out Real_Array;
+      Ok         : out Boolean) is
+   begin
+      Ok := True;
+
+      for Head in 0 .. Heads - 1 loop
+         declare
+            Group    : constant Element_Count := Head / Group_Size;
+            Q_Origin : constant Element_Count := Query'First + Head * Head_Size;
+            Usable   : Boolean;
+         begin
+            for Step in First .. Last loop
+               declare
+                  Origin : constant B.Byte_Count :=
+                    B.Byte_Count (Keys'First)
+                    + B.Byte_Count (K_Base + Step * KV_Width
+                                    + Group * Head_Size);
+                  Row    : constant Real :=
+                    Key_Scales (Key_Scales'First + Rows + Step);
+                  Sum    : N.Wide_Real := 0.0;
+               begin
+                  for Component in 0 .. Head_Size - 1 loop
+                     Sum := Sum
+                       + N.Wide_Real (Query (Q_Origin + Component))
+                         * N.Wide_Real
+                             (Unpack (Keys,
+                                      Origin + B.Byte_Count (Component), Row));
+                  end loop;
+                  Scores (Scores'First + Step) := Real (Sum) * Scale;
+               end;
+            end loop;
+
+            if Cap > 0.0 then
+               for Step in First .. Last loop
+                  Scores (Scores'First + Step) :=
+                    Capped (Scores (Scores'First + Step), Cap);
+               end loop;
+            end if;
+
+            K.Softmax
+              (Scores (Scores'First + First .. Scores'First + Last), Usable);
+            if not Usable then
+               Ok := False;
+               return;
+            end if;
+
+            for Component in 0 .. Value_Size - 1 loop
+               declare
+                  Sum : N.Wide_Real := 0.0;
+               begin
+                  for Step in First .. Last loop
+                     Sum := Sum
+                       + N.Wide_Real (Scores (Scores'First + Step))
+                         * N.Wide_Real
+                             (Unpack
+                                (Values,
+                                 B.Byte_Count (Values'First)
+                                 + B.Byte_Count (V_Base + Step * V_Width
+                                                 + Group * Value_Size
+                                                 + Component),
+                                 Val_Scales (Val_Scales'First + Rows + Step)));
+                  end loop;
+                  Target (Target'First + Head * Value_Size + Component) :=
+                    Real (Sum);
+               end;
+            end loop;
+         end;
+      end loop;
+   end Blend_Eighth;
+
    procedure Blend_Halved
      (Query      : Real_Array;
       Keys       : T.Half_Array;
@@ -3180,7 +3321,20 @@ package body Model_Runner.Llama is
               * Element_Count (Item.Context) * Element_Count (KV_Width);
          begin
             for Index in 0 .. Element_Count (Held * KV_Width) - 1 loop
-               if Item.Held = Exact then
+               if Item.Held = Eighth then
+                  --  Written as the numbers it stands for rather than as
+                  --  its bytes and scales: a saved context is read back by
+                  --  a session that may hold a different precision, and
+                  --  four bytes an element is what the format says.
+                  Put_Bits
+                    (N.Bits
+                       (Unpack
+                          (Item.Byte_Keys.all,
+                           B.Byte_Count (First + Index),
+                           Item.Key_Scales.all
+                             (First / Element_Count (KV_Width)
+                              + Index / Element_Count (KV_Width)))));
+               elsif Item.Held = Exact then
                   Put_Bits (N.Bits (Item.Keys.all (First + Index)));
                else
                   Put_Bits
@@ -3278,8 +3432,15 @@ package body Model_Runner.Llama is
       end Get_Bits;
 
       --  One run of the cache, into whichever storage the session holds.
+      --  One run of the cache, into whichever storage the session holds. A
+      --  byte cache is filled a row at a time rather than an element at a
+      --  time, because the scale a row is written with is the largest
+      --  magnitude in it and there is no such thing until the row is whole.
       procedure Get_Run
-        (Keys : Boolean; First : Element_Count; Count : Element_Count) is
+        (Keys : Boolean; First : Element_Count; Count : Element_Count)
+      is
+         Width : constant Element_Count :=
+           (if Keys then KV_Width else V_Width);
       begin
          for Index in 0 .. Count - 1 loop
             declare
@@ -3302,6 +3463,42 @@ package body Model_Runner.Llama is
                         Item.Keys.all (First + Index) := Value;
                      else
                         Item.Values.all (First + Index) := Value;
+                     end if;
+                  end;
+               elsif Item.Held = Eighth then
+                  declare
+                     Value : constant Real := N.From_Bits (Bits);
+                  begin
+                     if not N.Is_Finite (Value) then
+                        Refuse (E.Lifecycle_Cache_Unreadable, "not a number");
+                        exit;
+                     end if;
+
+                     if Keys then
+                        Item.Key_Row.all (Index mod Width) := Value;
+                     else
+                        Item.Value_Row.all (Index mod Width) := Value;
+                     end if;
+
+                     if Index mod Width = Width - 1 then
+                        declare
+                           Row : constant Element_Count :=
+                             (First + Index) / Width;
+                        begin
+                           if Keys then
+                              Pack_Row
+                                (Item.Key_Row.all (0 .. Width - 1),
+                                 Item.Byte_Keys.all,
+                                 B.Byte_Count (First + Index - Width + 1),
+                                 Item.Key_Scales.all (Row));
+                           else
+                              Pack_Row
+                                (Item.Value_Row.all (0 .. Width - 1),
+                                 Item.Byte_Values.all,
+                                 B.Byte_Count (First + Index - Width + 1),
+                                 Item.Value_Scales.all (Row));
+                           end if;
+                        end;
                      end if;
                   end;
                else
@@ -3605,17 +3802,31 @@ package body Model_Runner.Llama is
            Element_Count (Settings.KV_Heads * Settings.Value_Size);
          Deep  : constant Element_Count :=
            Element_Count (Settings.Layers) * Element_Count (Capacity);
+
+         --  One scale a row, and a row is one position of one layer.
+         Rows  : constant Element_Count := Deep;
       begin
          --  One storage or the other, never both.
          Item.Held := Cache;
 
-         if Cache = Exact then
-            T.Allocate (Deep * KV, Item.Keys);
-            T.Allocate (Deep * KV_Out, Item.Values);
-         else
-            T.Allocate (Deep * KV, Item.Half_Keys);
-            T.Allocate (Deep * KV_Out, Item.Half_Values);
-         end if;
+         case Cache is
+            when Exact =>
+               T.Allocate (Deep * KV, Item.Keys);
+               T.Allocate (Deep * KV_Out, Item.Values);
+
+            when Halved =>
+               T.Allocate (Deep * KV, Item.Half_Keys);
+               T.Allocate (Deep * KV_Out, Item.Half_Values);
+
+            when Eighth =>
+               --  The bytes, and a scale for every row of them: one row a
+               --  position a layer, for the keys and again for the values.
+               Item.Byte_Keys := new B.Byte_Array (0 .. B.Byte_Count (Deep * KV) - 1);
+               Item.Byte_Values :=
+                 new B.Byte_Array (0 .. B.Byte_Count (Deep * KV_Out) - 1);
+               T.Allocate (Rows, Item.Key_Scales);
+               T.Allocate (Rows, Item.Value_Scales);
+         end case;
          T.Allocate (Width, Item.Activation);
          T.Allocate (Width, Item.Normalized);
 
@@ -3674,6 +3885,11 @@ package body Model_Runner.Llama is
            or else (Cache = Halved
                     and then (Item.Half_Keys = null
                               or else Item.Half_Values = null))
+           or else (Cache = Eighth
+                    and then (Item.Byte_Keys = null
+                              or else Item.Byte_Values = null
+                              or else Item.Key_Scales = null
+                              or else Item.Value_Scales = null))
            or else Item.Activation = null or else Item.Normalized = null
            or else Item.Query = null or else Item.Key_Row = null
            or else Item.Value_Row = null or else Item.Attention = null
@@ -3712,6 +3928,10 @@ package body Model_Runner.Llama is
 
       T.Free (Item.Keys);
       T.Free (Item.Values);
+      B.Free (Item.Byte_Keys);
+      B.Free (Item.Byte_Values);
+      T.Free (Item.Key_Scales);
+      T.Free (Item.Value_Scales);
       T.Free (Item.Half_Keys);
       T.Free (Item.Half_Values);
       T.Free (Item.Activation);
@@ -3885,6 +4105,8 @@ package body Model_Runner.Llama is
               Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
             V_Base : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * V_Width;
+            Rows_Base : constant Element_Count :=
+              Element_Count (Index) * Element_Count (Item.Context);
          begin
             for Step in 0 .. Moved - 1 loop
                declare
@@ -3898,7 +4120,16 @@ package body Model_Runner.Llama is
                   V_Into : constant Element_Count :=
                     V_Base + Element_Count (Keep + Step) * V_Width;
                begin
-                  if Item.Held = Exact then
+                  if Item.Held = Eighth then
+                     for Offset in 0 .. KV_Width - 1 loop
+                        Item.Key_Row.all (Offset) :=
+                          Unpack (Item.Byte_Keys.all,
+                                  B.Byte_Count (From + Offset),
+                                  Item.Key_Scales.all
+                                    (Rows_Base
+                                     + Element_Count (Keep + Drop + Step)));
+                     end loop;
+                  elsif Item.Held = Exact then
                      Item.Key_Row.all (0 .. KV_Width - 1) :=
                        Item.Keys.all (From .. From + KV_Width - 1);
                   else
@@ -3915,7 +4146,30 @@ package body Model_Runner.Llama is
                      Settings.Scaling, Turns (Source),
                      Settings.Pairing, Backwards => True);
 
-                  if Item.Held = Exact then
+                  if Item.Held = Eighth then
+                     --  Turned back and written again, which is a second
+                     --  rounding of a row that was already rounded once.
+                     --  A rolling context in this storage loses a little
+                     --  more of what it keeps every time it rolls, and that
+                     --  is the price of the storage rather than a fault in
+                     --  the shift.
+                     Pack_Row
+                       (Item.Key_Row.all (0 .. KV_Width - 1),
+                        Item.Byte_Keys.all, B.Byte_Count (Into),
+                        Item.Key_Scales.all
+                          (Rows_Base + Element_Count (Keep + Step)));
+
+                     for Offset in 0 .. V_Width - 1 loop
+                        Item.Byte_Values.all
+                          (B.Byte_Count (V_Into + Offset)) :=
+                          Item.Byte_Values.all
+                            (B.Byte_Count (V_From + Offset));
+                     end loop;
+                     Item.Value_Scales.all
+                       (Rows_Base + Element_Count (Keep + Step)) :=
+                       Item.Value_Scales.all
+                         (Rows_Base + Element_Count (Keep + Drop + Step));
+                  elsif Item.Held = Exact then
                      Item.Keys.all (Into .. Into + KV_Width - 1) :=
                        Item.Key_Row.all (0 .. KV_Width - 1);
                      Item.Values.all (V_Into .. V_Into + V_Width - 1) :=
@@ -4135,6 +4389,11 @@ package body Model_Runner.Llama is
             Base    : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
             Slot    : constant Element_Count := Base + Reserved * KV_Width;
+
+            --  Where this layer's row scales begin, which is one a position
+            --  rather than one an element.
+            Rows_Base : constant Element_Count :=
+              Element_Count (Index) * Element_Count (Item.Context);
             V_Base  : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * V_Width;
             V_Slot  : constant Element_Count := V_Base + Reserved * V_Width;
@@ -4199,7 +4458,16 @@ package body Model_Runner.Llama is
 
             --  Write into the reserved slot. The slot is only readable as
             --  context once Committed is advanced, at the end of this call.
-            if Item.Held = Exact then
+            if Item.Held = Eighth then
+               Pack_Row
+                 (Item.Key_Row.all (0 .. KV_Width - 1), Item.Byte_Keys.all,
+                  B.Byte_Count (Slot),
+                  Item.Key_Scales.all (Rows_Base + Reserved));
+               Pack_Row
+                 (Item.Value_Row.all (0 .. V_Width - 1), Item.Byte_Values.all,
+                  B.Byte_Count (V_Slot),
+                  Item.Value_Scales.all (Rows_Base + Reserved));
+            elsif Item.Held = Exact then
                for Offset in 0 .. KV_Width - 1 loop
                   Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
                end loop;
@@ -4232,7 +4500,16 @@ package body Model_Runner.Llama is
                  Earliest (Settings, Reserved, Natural (Index));
                Usable : Boolean;
             begin
-               if Item.Held = Exact then
+               if Item.Held = Eighth then
+                  Blend_Eighth
+                    (Item.Query.all, Item.Byte_Keys.all, Item.Byte_Values.all,
+                     Item.Key_Scales.all, Item.Value_Scales.all,
+                     Base, V_Base, Rows_Base, KV_Width, V_Width, Heads,
+                     Head_Size, Value_Size,
+                     Element_Count (Settings.Group_Size),
+                     First, Reserved, Scale, Settings.Attention_Cap,
+                     Item.Scores.all, Item.Attention.all, Usable);
+               elsif Item.Held = Exact then
                   Blend_Exact
                     (Item.Query.all, Item.Keys.all, Item.Values.all,
                      Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
@@ -4570,6 +4847,8 @@ package body Model_Runner.Llama is
             Current : Layer renames Source.Layers.all (Index);
             Base    : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
+            Rows_Base : constant Element_Count :=
+              Element_Count (Index) * Element_Count (Item.Context);
             V_Base  : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * V_Width;
          begin
@@ -4658,7 +4937,16 @@ package body Model_Runner.Llama is
                      Settings.Scaling, Turns (Source),
                      Settings.Pairing);
 
-                  if Item.Held = Exact then
+                  if Item.Held = Eighth then
+                     Pack_Row
+                       (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                        Item.Byte_Keys.all, B.Byte_Count (Place),
+                        Item.Key_Scales.all (Rows_Base + Reserved + Which));
+                     Pack_Row
+                       (Values.all (V_At .. V_At + V_Width - 1),
+                        Item.Byte_Values.all, B.Byte_Count (V_Place),
+                        Item.Value_Scales.all (Rows_Base + Reserved + Which));
+                  elsif Item.Held = Exact then
                      for Offset in 0 .. KV_Width - 1 loop
                         Item.Keys.all (Place + Offset) :=
                           Keys.all (KV_At + Offset);
@@ -4692,7 +4980,18 @@ package body Model_Runner.Llama is
                   B_At      : constant Element_Count := Slot (Which, Blend);
                   Usable    : Boolean;
                begin
-                  if Item.Held = Exact then
+                  if Item.Held = Eighth then
+                     Blend_Eighth
+                       (Query.all (Q_At .. Q_At + Wide - 1),
+                        Item.Byte_Keys.all, Item.Byte_Values.all,
+                        Item.Key_Scales.all, Item.Value_Scales.all,
+                        Base, V_Base, Rows_Base, KV_Width, V_Width, Heads,
+                        Head_Size, Value_Size,
+                        Element_Count (Settings.Group_Size),
+                        First_Step, Last_Step, Scale,
+                        Settings.Attention_Cap, Item.Scores.all,
+                        Attend.all (B_At .. B_At + Blend - 1), Usable);
+                  elsif Item.Held = Exact then
                      Blend_Exact
                        (Query.all (Q_At .. Q_At + Wide - 1),
                         Item.Keys.all, Item.Values.all,

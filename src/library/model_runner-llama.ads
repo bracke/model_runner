@@ -305,7 +305,13 @@ package Model_Runner.Llama is
    --  eleven mantissa bits, which for a long context is the difference
    --  between a session that fits and one that does not. It is lossy and it
    --  is measured; the README says by how much.
-   type Cache_Precision is (Exact, Halved);
+   --  Eighth stores each element as one signed byte with a scale for the
+   --  row it belongs to: a quarter of the bytes, and the coarsest thing this
+   --  program does to a number it will read back. A row is one position's
+   --  keys, or its values, for one layer -- which is the unit the evaluator
+   --  already writes and reads whole, and the smallest unit that has a
+   --  magnitude of its own to scale by.
+   type Cache_Precision is (Exact, Halved, Eighth);
 
    --  The identifier a caller names a cache precision by.
    --
@@ -314,7 +320,8 @@ package Model_Runner.Llama is
    function Cache_Name (Item : Cache_Precision) return String
    is (case Item is
          when Exact  => "f32",
-         when Halved => "f16");
+         when Halved => "f16",
+         when Eighth => "q8");
 
    --  The word a caller types for a repacking mode.
    --
@@ -1065,6 +1072,15 @@ private
       Values     : Model_Runner.Tensors.Real_Array_Access := null;
       Half_Keys  : Model_Runner.Tensors.Half_Array_Access := null;
       Half_Values : Model_Runner.Tensors.Half_Array_Access := null;
+
+      --  And the third storage: one byte an element, with one scale for
+      --  every row. The bytes hold a signed value biased by 128, so that a
+      --  cache written by this build is bytes rather than a signed type the
+      --  file format would have to name.
+      Byte_Keys    : Model_Runner.Bytes.Byte_Array_Access := null;
+      Byte_Values  : Model_Runner.Bytes.Byte_Array_Access := null;
+      Key_Scales   : Model_Runner.Tensors.Real_Array_Access := null;
+      Value_Scales : Model_Runner.Tensors.Real_Array_Access := null;
       History    : Token_History_Access := null;
       Activation : Model_Runner.Tensors.Real_Array_Access := null;
       Normalized : Model_Runner.Tensors.Real_Array_Access := null;

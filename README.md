@@ -715,7 +715,7 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 23562, logits compared 322560,
+conformance: sequences 24912, logits compared 322560,
              worst absolute 1.80089269772310E-05,
              worst relative 5.39566401500295E-03,
              rounded logits compared 32400,
@@ -724,6 +724,9 @@ conformance: sequences 23562, logits compared 322560,
              cached logits compared 22032,
              cached worst absolute 9.22560479118539E-03,
              cached worst relative 7.98212777069768E-01,
+             byte logits compared 21600,
+             byte worst absolute 3.02788895569006E-01,
+             byte worst relative 1.84939983371143E+00,
              outside tolerance 0, unlearned 0
 ```
 
@@ -812,6 +815,23 @@ than rounding the weights, which is what one would expect from where each
 rounding happens -- a weight is rounded once and read into every product, a
 key is rounded once and read back by every later position. Both evaluation
 paths are compared, because the two storages are two procedures.
+
+`--kv-cache q8` stores it in one byte an element instead, with a scale for
+each row -- a row being one position's keys, or its values, for one layer,
+which is the unit the evaluator already writes and reads whole. A quarter of
+the memory the exact cache takes, and **0.303** worst absolute on these
+fixtures, which is thirty times what the halved cache costs and four
+thousand times the exact one. The bound this sweep holds it to is 0.4,
+measured over every architecture, shape and format it crosses and rounded up.
+It is the coarsest thing this program does to a number it will read back,
+and it is offered for the case the halved cache does not fit rather than as
+a default: nothing chooses it unless asked.
+
+A rolling context in that storage loses a little more of what it keeps every
+time it rolls. `Shift` turns the surviving keys back by the angle it dropped,
+which means decoding a row that was already rounded and rounding it again --
+the price of the storage rather than a fault in the shift, and worth knowing
+before running a long conversation on it.
 
 The rounded figures are `--repack bf16`, counted apart because mixing them in
 would let the lossy path's error hide the exact path's. They are the number
