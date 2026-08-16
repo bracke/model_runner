@@ -6308,6 +6308,91 @@ package body Checks is
          end if;
       end;
 
+      --  Every English message key has a pseudo-locale counterpart.
+      --
+      --  The suite already fails when one does not, in four assertions that
+      --  name the symptom -- a key renders identically under pseudo-
+      --  translation, a partial locale will not load -- and a fifth about a
+      --  backend, because a catalog that will not load takes everything
+      --  downstream with it. None of them says "you added a key and not its
+      --  twin", which is the whole of what happened, three times, to me.
+      declare
+         Path : constant String :=
+           Root & "/resources/messages/catalog.txt";
+
+         --  The pseudo-locale's keys, gathered in one pass and asked in the
+         --  next. Two passes over the file rather than a search inside a
+         --  search: the same file cannot be open twice, which is how the
+         --  first version of this ended.
+         Twins   : Ada.Strings.Unbounded.Unbounded_String;
+         English : Natural := 0;
+
+         --  The key of a line, or the empty string where there is none.
+         function Key_Of (Line : String; Prefix : String) return String is
+         begin
+            if Line'Length <= Prefix'Length
+              or else Line (Line'First .. Line'First + Prefix'Length - 1)
+                      /= Prefix
+            then
+               return "";
+            end if;
+
+            for I in Line'First + Prefix'Length .. Line'Last loop
+               if Line (I) = ' ' or else Line (I) = '=' then
+                  return Line (Line'First + Prefix'Length .. I - 1);
+               end if;
+            end loop;
+
+            return "";
+         end Key_Of;
+
+         File : Ada.Text_IO.File_Type;
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if Ada.Directories.Exists (Path) then
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+            while not Ada.Text_IO.End_Of_File (File) loop
+               declare
+                  Key : constant String :=
+                    Key_Of (Ada.Text_IO.Get_Line (File), "qps.");
+               begin
+                  if Key /= "" then
+                     Ada.Strings.Unbounded.Append (Twins, "|" & Key & "|");
+                  end if;
+               end;
+            end loop;
+            Ada.Text_IO.Close (File);
+
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+            while not Ada.Text_IO.End_Of_File (File) loop
+               declare
+                  Key : constant String :=
+                    Key_Of (Ada.Text_IO.Get_Line (File), "en.");
+               begin
+                  if Key /= "" then
+                     English := English + 1;
+
+                     if not Project_Tools.Text.Contains
+                              (Ada.Strings.Unbounded.To_String (Twins),
+                               "|" & Key & "|")
+                     then
+                        Fail ("the catalog has en." & Key & " and no qps."
+                              & Key & "; a key without its pseudo-locale twin "
+                              & "is an untranslated string nothing can see");
+                     end if;
+                  end if;
+               end;
+            end loop;
+            Ada.Text_IO.Close (File);
+
+            if English = 0 then
+               Fail ("no English message keys were found in the catalog, so "
+                     & "whether each has a pseudo-locale twin was not asked");
+            end if;
+         end if;
+      end;
+
       --  No model file inside the repository, tracked or not.
       --
       --  A machine that runs the published figures has models on it, and the

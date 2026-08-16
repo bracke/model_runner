@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A check that every message key has its pseudo-locale twin.** Three keys
+  went in without one over the last few commits, and what said so was four
+  assertions naming symptoms -- a key renders identically under
+  pseudo-translation, a partial locale will not load -- plus a fifth about a
+  backend, because a catalog that will not load takes everything downstream
+  with it. None of them said "you added a key and not its twin". This one
+  does, by name, at check time.
+
+- **Each built-in chat format held against the turns its architecture
+  reads.** The four renderings are written out rather than derived, because a
+  rendering derived from the template it checks agrees with itself. The test
+  also fails when a format is added to the enumeration and not to it.
+
 - **The `gemma` and `phi3` chat formats.** `--chat-template` offered two
   where four of the nine architectures this build reads carry templates it
   matched neither of. Phi-3's writes the role straight into its markers.

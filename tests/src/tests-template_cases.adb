@@ -94,6 +94,92 @@ package body Tests.Template_Cases is
    --
    --  Without this the refusals below would be satisfied by an engine that
    --  refuses everything.
+   --  Each built-in chat format renders the turns its architecture expects.
+   --
+   --  Written out here rather than derived, because a rendering derived from
+   --  the template it is checking agrees with itself. What these strings are
+   --  is what a llama3, chatml, gemma or phi3 model was trained to read, and
+   --  a format that renders something else produces fluent text answering a
+   --  conversation the model was never shown.
+   procedure Built_In_Formats_Render_Their_Turns
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF : constant Character := Character'Val (10);
+
+      type Expectation is record
+         Which : Tmpl.Chat_Format;
+         Text  : access constant String;
+      end record;
+
+      Llama3_Text : aliased constant String :=
+        "<s><|start_header_id|>user<|end_header_id|>" & LF & LF
+        & "hi<|eot_id|><|start_header_id|>assistant<|end_header_id|>" & LF & LF
+        & "yo<|eot_id|><|start_header_id|>assistant<|end_header_id|>" & LF & LF;
+
+      ChatML_Text : aliased constant String :=
+        "<|im_start|>user" & LF & "hi<|im_end|>" & LF
+        & "<|im_start|>assistant" & LF & "yo<|im_end|>" & LF
+        & "<|im_start|>assistant" & LF;
+
+      --  The assistant is called "model", which is the whole reason this
+      --  format needs a comparison the others do not.
+      Gemma_Text : aliased constant String :=
+        "<s><start_of_turn>user" & LF & "hi<end_of_turn>" & LF
+        & "<start_of_turn>model" & LF & "yo<end_of_turn>" & LF
+        & "<start_of_turn>model" & LF;
+
+      Phi3_Text : aliased constant String :=
+        "<|user|>" & LF & "hi<|end|>" & LF
+        & "<|assistant|>" & LF & "yo<|end|>" & LF
+        & "<|assistant|>" & LF;
+
+      Wanted : constant array (1 .. 4) of Expectation :=
+        [(Tmpl.Format_Llama3, Llama3_Text'Access),
+         (Tmpl.Format_ChatML, ChatML_Text'Access),
+         (Tmpl.Format_Gemma, Gemma_Text'Access),
+         (Tmpl.Format_Phi3, Phi3_Text'Access)];
+
+      Item     : Tmpl.Compiled;
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Target   : String (1 .. 512);
+      Last     : Natural;
+   begin
+      --  Every format the enumeration has, so one added without a rendering
+      --  here fails rather than passes unexamined.
+      Assert (Wanted'Length = Tmpl.Chat_Format'Pos (Tmpl.Chat_Format'Last) + 1,
+              "a chat format was added and this test was not told");
+
+      for Each of Wanted loop
+         declare
+            Name : constant String := Tmpl.Format_Name (Each.Which);
+         begin
+            Tmpl.Compile (Item, Tmpl.Built_In (Name), Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the " & Name & " template did not compile: "
+                    & E.Error_Code'Image (Status.Code));
+
+            Conv.Open (Messages, Status => Status);
+            Conv.Append (Messages, Conv.User_Role, "hi", Status);
+            Conv.Append (Messages, Conv.Assistant_Role, "yo", Status);
+
+            Tmpl.Render
+              (Item, Messages, "<s>", "</s>", True, Target, Last, Status);
+            Assert (E.Is_Ok (Status),
+                    "the " & Name & " template did not render: "
+                    & E.Error_Code'Image (Status.Code));
+            Assert (Target (1 .. Last) = Each.Text.all,
+                    "the " & Name & " format rendered [" & Target (1 .. Last)
+                    & "] where [" & Each.Text.all & "] is what that "
+                    & "architecture reads");
+
+            Conv.Close (Messages);
+            Tmpl.Close (Item);
+         end;
+      end loop;
+   end Built_In_Formats_Render_Their_Turns;
+
    procedure Ordinary_Template_Renders
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -829,6 +915,9 @@ package body Tests.Template_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Built_In_Formats_Render_Their_Turns'Access,
+         "each built-in chat format renders the turns its architecture reads");
       Register_Routine
         (T, Any_Template_Is_Answered'Access,
          "any template is answered and a failed render writes nothing");
