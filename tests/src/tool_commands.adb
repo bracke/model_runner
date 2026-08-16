@@ -3,6 +3,7 @@ package body Tool_Commands is
    Name_Test           : aliased constant String := "test";
    Name_Check          : aliased constant String := "check";
    Name_Conformance    : aliased constant String := "conformance";
+   Name_Fixture_Check  : aliased constant String := "fixture-check";
    Name_Fuzz           : aliased constant String := "fuzz";
    Name_Speed          : aliased constant String := "speed";
    Name_Benchmark      : aliased constant String := "benchmark";
@@ -58,6 +59,8 @@ package body Tool_Commands is
      & " campaign";
    Says_Conformance : aliased constant String :=
      "compare the engine against the independent reference transformer";
+   Says_Fixture_Check : aliased constant String :=
+     "move every tensor of every fixture and report the ones nothing reads";
    Says_Fuzz : aliased constant String :=
      "throw malformed containers at the reader";
    Says_Speed : aliased constant String :=
@@ -82,12 +85,14 @@ package body Tool_Commands is
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
 
-   Held : constant array (1 .. 14) of Command :=
+   Held : constant array (1 .. 15) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
        Opts_Check'Access),
       (Name_Conformance'Access, Nothing'Access, Says_Conformance'Access,
+       Opts_None'Access),
+      (Name_Fixture_Check'Access, Nothing'Access, Says_Fixture_Check'Access,
        Opts_None'Access),
       (Name_Fuzz'Access, Takes_Fuzz'Access, Says_Fuzz'Access,
        Opts_Fuzz'Access),

@@ -689,13 +689,22 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # file that say "re-measured anyway" were written when one was here. That is
 # recorded rather than left to be inferred from a missing figure.
 
+# 2026-08-15, phi2. The same four groups moved with llama.adb again. What
+# was added to a loop this time is an addition: a bias is added to what a
+# projection produced, at four places a layer and once at the end, and each
+# addition is one pass over a vector the projection had just written
+# hundreds of products into. Every architecture but this one has a null
+# there and tests it once. Not re-measured, and this machine still has no
+# model file to measure with, which is the same reason recorded under the
+# engine group above rather than a second one.
+
 # load: the twelve-token figure at 1.28 rising to 1.82, 2026-08-14, and it
 #       now carries its processor time from this repository's own tool
 #       rather than from the shell. The worker-count and batch-size tables
 #       beside it was retaken too: fourteen threads and seven, both at
 #       about 1.25, 2026-08-14. The batch-size table is the last part of
 #       this group with no load recorded.
-engine 51F0DEB2C4825560 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 2450DBB2827453DF src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -707,9 +716,18 @@ engine 51F0DEB2C4825560 src/library/model_runner-llama.adb src/library/model_run
 # 2026-08-15, falcon. This group carries llama.adb and moved with it. Not
 # re-measured, for the reasons written out under the engine group above.
 
+# 2026-08-15, phi2. The same four groups moved with llama.adb again. What
+# was added to a loop this time is an addition: a bias is added to what a
+# projection produced, at four places a layer and once at the end, and each
+# addition is one pass over a vector the projection had just written
+# hundreds of products into. Every architecture but this one has a null
+# there and tests it once. Not re-measured, and this machine still has no
+# model file to measure with, which is the same reason recorded under the
+# engine group above rather than a second one.
+
 # load: 1.10 to 1.74 for the processor side and 1.25 to 1.57 for the
 #       reference side, taken minutes apart, 2026-08-14
-reference 4DD6F0917D259098 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference B430EFD30856253F src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
 # and the 111-token prompt, on both backends -- the claim that the two print
@@ -877,9 +895,18 @@ reference 4DD6F0917D259098 src/library/model_runner-backend-reference.adb src/li
 # 2026-08-15, falcon. This group carries llama.adb and moved with it. Not
 # re-measured, for the reasons written out under the engine group above.
 
+# 2026-08-15, phi2. The same four groups moved with llama.adb again. What
+# was added to a loop this time is an addition: a bias is added to what a
+# projection produced, at four places a layer and once at the end, and each
+# addition is one pass over a vector the projection had just written
+# hundreds of products into. Every architecture but this one has a null
+# there and tests it once. Not re-measured, and this machine still has no
+# model file to measure with, which is the same reason recorded under the
+# engine group above rather than a second one.
+
 # load: 1.70 rising to 2.37 for the fifteen ratios and the batched ones,
 #       2026-08-15; 1.0 to 1.9 for the two-backend table, 2026-08-14
-device 71E9DAFD20AE7EC1 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 9C42D18D1EE115FA src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -894,8 +921,17 @@ device 71E9DAFD20AE7EC1 src/shaders/row_product.comp src/library/model_runner-sh
 # 2026-08-15, falcon. This group carries llama.adb and moved with it. Not
 # re-measured, for the reasons written out under the engine group above.
 
+# 2026-08-15, phi2. The same four groups moved with llama.adb again. What
+# was added to a loop this time is an addition: a bias is added to what a
+# projection produced, at four places a layer and once at the end, and each
+# addition is one pass over a vector the projection had just written
+# hundreds of products into. Every architecture but this one has a null
+# there and tests it once. Not re-measured, and this machine still has no
+# model file to measure with, which is the same reason recorded under the
+# engine group above rather than a second one.
+
 # load: 1.19 to 2.52 across the three runs, 2026-08-14
-drafting FF4B19DD0177235F src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting AB2CE61DFF54D378 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14

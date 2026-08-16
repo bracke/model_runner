@@ -149,7 +149,7 @@ package body Model_Runner.Llama is
                  (case Kind is
                     when Llama => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3
-                       | Phi3 | Falcon =>
+                       | Phi3 | Falcon | Phi2 =>
                       K.Split);
                Found := True;
             end if;
@@ -919,6 +919,47 @@ package body Model_Runner.Llama is
       end if;
    end Resolve_Norm;
 
+   --  Resolve part of a one-dimensional tensor several projections share.
+   --
+   --  The same arrangement the matrices are in: an architecture that writes
+   --  its queries, keys and values as one tensor writes their biases as one
+   --  vector too, and each is a run of elements at an offset. Copied out
+   --  rather than made a view, because a bias is a few hundred numbers that
+   --  are added to a row and nothing gains from sharing them.
+   --
+   --  @param Whole Elements the whole vector holds.
+   --  @param First Element the part starts at.
+   --  @param Count Elements the part holds.
+   procedure Resolve_Norm_Part
+     (Item   : in out Model;
+      Source : Containers.Container;
+      Name   : String;
+      Whole  : Element_Count;
+      First  : Element_Count;
+      Count  : Element_Count;
+      Result : out T.Real_Array_Access;
+      Status : out E.Error_Info)
+   is
+      Entire : T.Real_Array_Access;
+   begin
+      Result := null;
+      Resolve_Norm (Item, Source, Name, Whole, Entire, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      T.Allocate (Count, Result);
+      if Result = null then
+         T.Free (Entire);
+         Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+         return;
+      end if;
+
+      Result.all := Entire.all (First .. First + Count - 1);
+      T.Free (Entire);
+   end Resolve_Norm_Part;
+
    --  Resolve a layer's router and the stack of expert matrices behind it.
    --
    --  A file writes the experts of one layer as a single tensor with the
@@ -1053,7 +1094,7 @@ package body Model_Runner.Llama is
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
    is
    begin
-      if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 | Falcon then
+      if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 then
          K.GELU (Target);
       else
          K.SiLU (Target);
@@ -1103,6 +1144,29 @@ package body Model_Runner.Llama is
       end loop;
    end Cap_Logits;
 
+   --  The last two things done to a row of logits: the bias the output
+   --  projection carries, and the bound the architecture puts on what it
+   --  produced. Written once and called from each of the three places that
+   --  produce logits -- a token at a time, every position of a batch, and
+   --  the last position of one -- because the alternative is three copies
+   --  and a fourth place that forgets one of them. That is not a
+   --  hypothetical either: an architecture whose feed-forward result was
+   --  discarded, and a batched path normalized one way where the rest of the
+   --  program normalized another, were both a step written beside a branch
+   --  rather than after it.
+   procedure Finish_Logits
+     (Source : Model'Class;
+      Values : in out Real_Array) is
+   begin
+      if Source.Output_Bias /= null
+        and then Source.Output_Bias.all'Length = Values'Length
+      then
+         K.Add (Values, Source.Output_Bias.all);
+      end if;
+
+      Cap_Logits (Source.Settings, Values);
+   end Finish_Logits;
+
    --  Whether this model's normalization weights are trained around zero.
    --
    --  Gemma's are, so its gain is one plus the stored weight; every other
@@ -1114,7 +1178,7 @@ package body Model_Runner.Llama is
 
    --  Normalize the way the architecture does, into Target.
    --
-   --  Falcon centres and carries a bias; everything else here divides by the
+   --  Falcon and Phi2 centre and carry a bias; everything else divides by the
    --  root mean square and does not. One procedure rather than a test at
    --  each of the nine places a normalization happens, because nine tests
    --  are nine chances to write one of them the other way round.
@@ -1125,7 +1189,7 @@ package body Model_Runner.Llama is
       Bias   : T.Real_Array_Access;
       Target : out Real_Array) is
    begin
-      if Item.Settings.Kind = Falcon and then Bias /= null then
+      if Item.Settings.Kind in Falcon | Phi2 and then Bias /= null then
          K.Layer_Norm (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
       else
          K.RMS_Norm (Source, Gain, Item.Settings.Epsilon, Target,
@@ -1387,7 +1451,8 @@ package body Model_Runner.Llama is
          Resolve_Norm
            (Item, Source, "output_norm.weight", Width, Item.Output_Norm, Status);
 
-         if E.Is_Ok (Status) and then Item.Settings.Kind = Falcon then
+         if E.Is_Ok (Status) and then Item.Settings.Kind in Falcon | Phi2
+         then
             Resolve_Norm
               (Item, Source, "output_norm.bias", Width,
                Item.Output_Norm_Bias, Status);
@@ -1426,6 +1491,19 @@ package body Model_Runner.Llama is
             if E.Is_Error (Status) then
                Fail (Status);
                return;
+            end if;
+
+            --  And the bias on it, which Phi2 alone carries. It is added
+            --  after the last projection, so it is the last thing between
+            --  the model and the caller.
+            if Item.Settings.Kind = Phi2 then
+               Resolve_Norm
+                 (Item, Source, "output.bias", Vocab,
+                  Item.Output_Bias, Status);
+               if E.Is_Error (Status) then
+                  Fail (Status);
+                  return;
+               end if;
             end if;
          end if;
 
@@ -1469,14 +1547,14 @@ package body Model_Runner.Llama is
                --  not. The order inside the fused one is queries, then
                --  keys, then values, which is the order the rows are
                --  written in.
-               if Item.Settings.Kind = Falcon then
+               if Item.Settings.Kind in Falcon | Phi2 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_norm.bias"),
                      Width, Current.Attention_Norm_Bias, Status);
                   exit when E.Is_Error (Status);
                end if;
 
-               if Item.Settings.Kind in Phi3 | Falcon then
+               if Item.Settings.Kind in Phi3 | Falcon | Phi2 then
                   Resolve_Part
                     (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
                      Wide + KV + KV_Out, Width, 0, Wide,
@@ -1517,6 +1595,31 @@ package body Model_Runner.Llama is
                --  this cannot evaluate, and reading it as though the biases
                --  were zero would produce plausible text that is not what
                --  the model says.
+               --  Phi2 biases the same three projections, and writes the
+               --  three biases in one vector as it writes the three matrices
+               --  in one tensor. Each part is taken from the same offset its
+               --  matrix is taken from, so a reader that splits the matrices
+               --  correctly and the biases some other way would be wrong
+               --  only in what it adds -- which reads as a model that has
+               --  drifted rather than one that has broken.
+               if Item.Settings.Kind = Phi2 then
+                  Resolve_Norm_Part
+                    (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
+                     Wide + KV + KV_Out, 0, Wide, Current.Query_Bias, Status);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Norm_Part
+                    (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
+                     Wide + KV + KV_Out, Wide, KV, Current.Key_Bias, Status);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Norm_Part
+                    (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
+                     Wide + KV + KV_Out, Wide + KV, KV_Out,
+                     Current.Value_Bias, Status);
+                  exit when E.Is_Error (Status);
+               end if;
+
                if Item.Settings.Kind = Qwen2 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_q.bias"),
@@ -1557,17 +1660,26 @@ package body Model_Runner.Llama is
                   Width, Blend, Current.Attention_Out, Status, Repack);
                exit when E.Is_Error (Status);
 
+               --  And the bias on the way out of attention, which only Phi2
+               --  has here.
+               if Item.Settings.Kind = Phi2 then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_output.bias"),
+                     Width, Current.Out_Bias, Status);
+                  exit when E.Is_Error (Status);
+               end if;
+
                --  Falcon has one normalization a block, not two: attention
                --  and the feed-forward read the same normalized input. The
                --  feed norm stays null and the block below reads that.
-               if Item.Settings.Kind /= Falcon then
+               if Item.Settings.Kind not in Falcon | Phi2 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "ffn_norm.weight"),
                      Width, Current.Feed_Norm, Status);
                   exit when E.Is_Error (Status);
                end if;
 
-               if Item.Settings.Kind = Falcon then
+               if Item.Settings.Kind in Falcon | Phi2 then
                   --  No gate: one projection up, a Gaussian unit, one down.
                   --  The gate stays null, and the block below reads that
                   --  rather than the architecture.
@@ -1580,6 +1692,21 @@ package body Model_Runner.Llama is
                     (Item, Source, Layer_Key (Index, "ffn_down.weight"),
                      Width, Feed, Current.Down, Status, Repack);
                   exit when E.Is_Error (Status);
+
+                  --  A bias on each side of the block, which Phi2 has and
+                  --  Falcon does not, so the arrangement they share is not
+                  --  what decides this.
+                  if Item.Settings.Kind = Phi2 then
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ffn_up.bias"),
+                        Feed, Current.Up_Bias, Status);
+                     exit when E.Is_Error (Status);
+
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ffn_down.bias"),
+                        Width, Current.Down_Bias, Status);
+                     exit when E.Is_Error (Status);
+                  end if;
 
                elsif Item.Settings.Experts = 0
                  and then Item.Settings.Kind = Phi3
@@ -2422,6 +2549,9 @@ package body Model_Runner.Llama is
             T.Free (Item.Layers.all (Index).Query_Bias);
             T.Free (Item.Layers.all (Index).Key_Bias);
             T.Free (Item.Layers.all (Index).Value_Bias);
+            T.Free (Item.Layers.all (Index).Out_Bias);
+            T.Free (Item.Layers.all (Index).Up_Bias);
+            T.Free (Item.Layers.all (Index).Down_Bias);
 
             if Item.Layers.all (Index).Experts /= null then
                Deallocate_Experts (Item.Layers.all (Index).Experts);
@@ -2432,6 +2562,7 @@ package body Model_Runner.Llama is
 
       T.Free (Item.Output_Norm);
       T.Free (Item.Output_Norm_Bias);
+      T.Free (Item.Output_Bias);
       T.Free (Item.Rope_Factors);
 
       --  The repacked arena goes with it, and after it: by then the device
@@ -3493,7 +3624,7 @@ package body Model_Runner.Llama is
          --  block normalized on the way in, because both of its sublayers
          --  read it. Different uses, one buffer, and both want it as wide as
          --  the embedding.
-         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon then
+         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon | Phi2 then
             T.Allocate (Width, Item.Post_Room);
          end if;
 
@@ -4129,6 +4260,10 @@ package body Model_Runner.Llama is
               (Item, Current.Attention_Out, Item.Attention,
                Item.Normalized, Status);
             exit when E.Is_Error (Status);
+
+            if Current.Out_Bias /= null then
+               K.Add (Item.Normalized.all, Current.Out_Bias.all);
+            end if;
             Post_Norm (Source, Current.Post_Attention_Norm,
                        Item.Normalized.all, Item.Post_Room);
             K.Add (Item.Activation.all, Item.Normalized.all);
@@ -4172,6 +4307,13 @@ package body Model_Runner.Llama is
                   Product
                     (Item, Current.Up, Item.Normalized, Item.Gate, Status);
                   exit when E.Is_Error (Status);
+
+                  --  The bias belongs to the projection, so it is added
+                  --  before the unit rather than after it.
+                  if Current.Up_Bias /= null then
+                     K.Add (Item.Gate.all, Current.Up_Bias.all);
+                  end if;
+
                   Gate_Activation (Source, Item.Gate.all);
                else
                   Product
@@ -4188,6 +4330,11 @@ package body Model_Runner.Llama is
                Product
                  (Item, Current.Down, Item.Gate, Item.Normalized, Status);
                exit when E.Is_Error (Status);
+
+               if Current.Down_Bias /= null then
+                  K.Add (Item.Normalized.all, Current.Down_Bias.all);
+               end if;
+
                Post_Norm (Source, Current.Post_Feed_Norm,
                           Item.Normalized.all, Item.Post_Room);
                K.Add (Item.Activation.all, Item.Normalized.all);
@@ -4215,7 +4362,7 @@ package body Model_Runner.Llama is
       end if;
 
       Logits := Item.Logit_Row.all;
-      Cap_Logits (Settings, Logits);
+      Finish_Logits (Source, Logits);
 
       --  Commit: the position becomes readable context only now, after every
       --  layer of this token has succeeded.
@@ -4367,7 +4514,7 @@ package body Model_Runner.Llama is
       T.Allocate (Count * Width, Acts);
       T.Allocate (Count * Width, Norm);
 
-      if Source.Settings.Kind = Falcon then
+      if Source.Settings.Kind in Falcon | Phi2 then
          T.Allocate (Count * Width, Kept_Norm);
       end if;
       T.Allocate (Count * Wide, Query);
@@ -4580,6 +4727,17 @@ package body Model_Runner.Llama is
               (Item, Current.Attention_Out, Attend, Count, Norm, Status);
             exit when E.Is_Error (Status);
 
+            if Current.Out_Bias /= null then
+               for Which in 0 .. Count - 1 loop
+                  declare
+                     Origin : constant Element_Count := Slot (Which, Width);
+                  begin
+                     K.Add (Norm.all (Origin .. Origin + Width - 1),
+                            Current.Out_Bias.all);
+                  end;
+               end loop;
+            end if;
+
             for Which in 0 .. Count - 1 loop
                declare
                   Origin : constant Element_Count := Slot (Which, Width);
@@ -4645,6 +4803,12 @@ package body Model_Runner.Llama is
                      declare
                         Origin : constant Element_Count := Slot (Which, Feed);
                      begin
+                        --  Before the unit, as in the single-token path.
+                        if Current.Up_Bias /= null then
+                           K.Add (Gate.all (Origin .. Origin + Feed - 1),
+                                  Current.Up_Bias.all);
+                        end if;
+
                         Gate_Activation
                           (Source, Gate.all (Origin .. Origin + Feed - 1));
                      end;
@@ -4673,6 +4837,17 @@ package body Model_Runner.Llama is
                Product_Batch
                  (Item, Current.Down, Gate, Count, Norm, Status);
                exit when E.Is_Error (Status);
+
+               if Current.Down_Bias /= null then
+                  for Which in 0 .. Count - 1 loop
+                     declare
+                        Origin : constant Element_Count := Slot (Which, Width);
+                     begin
+                        K.Add (Norm.all (Origin .. Origin + Width - 1),
+                               Current.Down_Bias.all);
+                     end;
+                  end loop;
+               end if;
             end if;
 
             for Which in 0 .. Count - 1 loop
@@ -4746,7 +4921,7 @@ package body Model_Runner.Llama is
                   return;
                end if;
 
-               Cap_Logits (Settings, Item.Logit_Row.all);
+               Finish_Logits (Source, Item.Logit_Row.all);
                Every.all (Every.all'First + Into
                           .. Every.all'First + Into
                              + Element_Count (Settings.Vocabulary) - 1) :=
@@ -4778,7 +4953,7 @@ package body Model_Runner.Llama is
       end if;
 
       Logits := Item.Logit_Row.all;
-      Cap_Logits (Settings, Logits);
+      Finish_Logits (Source, Logits);
 
       --  Commit every position of the batch, or none of them.
       for Which in 0 .. Count - 1 loop

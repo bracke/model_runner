@@ -128,10 +128,10 @@ package body Conformance is
       --  differences touch every part of a pass: the gain on every
       --  normalization, the scale on the embedding, and the gate in every
       --  feed-forward block, dense or mixed.
-      Crossed : constant array (1 .. 8) of Tiny_Model.Fixture_Architecture :=
+      Crossed : constant array (1 .. 9) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
          Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3,
-         Tiny_Model.Phi3, Tiny_Model.Falcon];
+         Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -170,6 +170,7 @@ package body Conformance is
 
          R.Load (Second, Parsed, Held, Loaded);
          if not Loaded then
+            Result.Unlearned := Result.Unlearned + 1;
             Containers.Close (Parsed);
             return;
          end if;
@@ -183,6 +184,10 @@ package body Conformance is
 
             R.Run (Second, Tokens_R, Expected (Which), Produced);
             Known (Which) := Produced;
+
+            if not Produced then
+               Result.Unlearned := Result.Unlearned + 1;
+            end if;
          end;
 
          R.Close (Second);
@@ -516,6 +521,23 @@ package body Conformance is
                         --  the figure published for a full-attention one.
                         --  Comparing it here would assert a tolerance nobody
                         --  has grounds for; the docs say the cost instead.
+                        --  A mixture belongs to an architecture that has a
+                        --  gate to route to. Falcon and Phi2 have none: one
+                        --  projection up, a unit and one down is what their
+                        --  feed-forward is, so a router in front of experts
+                        --  that are not there describes no model anyone
+                        --  publishes. The fixture wrote one all the same and
+                        --  the engine would not load it, so every comparison
+                        --  of that shape returned before it compared
+                        --  anything -- nine hundred of them, counted by the
+                        --  arithmetic below and run by nobody.
+                        if Shape = Mixed
+                          and then Crossed (Which_Arch)
+                                   in Tiny_Model.Falcon | Tiny_Model.Phi2
+                        then
+                           goto Next_Repack;
+                        end if;
+
                         if Shape = Windowed and then Repack = L.To_BF16 then
                            goto Next_Repack;
                         end if;
@@ -770,11 +792,30 @@ package body Conformance is
             Cached : constant Natural :=
               Formats * Arches * 2 * (Backends * 2 + Batching);
 
-            Expected : constant Natural :=
-              Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached
-              + On_Device;
+            --  The architectures with no gate, which run every shape but
+            --  the mixture. Counted rather than named twice: what makes a
+            --  mixture impossible for them is the absent gate, and the sweep
+            --  skips the shape on the same grounds.
+            Ungated : Natural := 0;
+
+            Expected : Natural := 0;
 
          begin
+            for Kind of Crossed loop
+               if Kind in Tiny_Model.Falcon | Tiny_Model.Phi2 then
+                  Ungated := Ungated + 1;
+               end if;
+            end loop;
+
+            --  The mixture shape runs every repack mode but the rounded one,
+            --  which is skipped for every architecture; an ungated one runs
+            --  none of them at all.
+            Expected :=
+              Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached
+              + On_Device
+              - Formats * Ungated * (Repacks - 1) * Per_Model;
+
+            Result.Wanted := Expected;
             Result.Ran := Result.Sequences = Expected;
          end;
       end;

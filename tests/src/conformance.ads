@@ -83,6 +83,19 @@ package Conformance is
       --  afternoon, so they are counted and reported now, and a run with
       --  any of them is not clean.
       Refused    : Natural := 0;
+
+      --  Fixtures the independent implementation would not load or would not
+      --  run. A comparison whose reference has no answer returns before it
+      --  compares anything, so an architecture the reference could not read
+      --  was skipped in silence and the totals came out to the digit of a
+      --  run without it -- which is how an architecture's first sweep
+      --  reported the figures of the sweep before it, and read as a pass.
+      Unlearned  : Natural := 0;
+
+      --  Sequences the sweep's own arithmetic says it should have run. Kept
+      --  so that a run which came up short can say by how much: "compared
+      --  nothing" was all the gate could report, whatever the shortfall.
+      Wanted     : Natural := 0;
       Ran        : Boolean := False;
    end record;
 
@@ -91,7 +104,8 @@ package Conformance is
    --  @param Item Report to classify.
    --  @return True when the run completed and nothing exceeded tolerance.
    function Is_Clean (Item : Report) return Boolean
-   is (Item.Ran and then Item.Failures = 0 and then Item.Refused = 0);
+   is (Item.Ran and then Item.Failures = 0 and then Item.Refused = 0
+       and then Item.Unlearned = 0);
 
    --  Compare the engine against the reference on the synthetic model.
    --

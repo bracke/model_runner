@@ -149,7 +149,8 @@ package Model_Runner.Llama is
    --  feed-forward has no gate -- one projection up, a Gaussian unit, one
    --  projection down. Its projections are fused as phi3's are.
    type Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon);
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
+      Phi2);
 
    --  The identifier a file carries for an architecture.
    --
@@ -165,7 +166,8 @@ package Model_Runner.Llama is
          when Gemma2    => "gemma2",
          when Gemma3    => "gemma3",
          when Phi3      => "phi3",
-         when Falcon    => "falcon");
+         when Falcon    => "falcon",
+         when Phi2      => "phi2");
 
    --  Validated architecture configuration.
    --
@@ -922,7 +924,8 @@ private
 
       --  The bias its normalization carries, for an architecture that
       --  centres rather than scaling. Null for every architecture that
-      --  normalizes by root mean square, which is all of them but Falcon.
+      --  normalizes by root mean square, which is all of them but Falcon
+      --  and Phi2.
       Attention_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
       Query : aliased Model_Runner.Tensors.View;
       Key : aliased Model_Runner.Tensors.View;
@@ -939,6 +942,15 @@ private
       Query_Norm     : Model_Runner.Tensors.Real_Array_Access;
       Key_Norm       : Model_Runner.Tensors.Real_Array_Access;
       Attention_Out : aliased Model_Runner.Tensors.View;
+
+      --  Added to what a projection produced, for an architecture that
+      --  biases every projection rather than only the three that make the
+      --  queries, keys and values. Null everywhere but Phi2, which is the
+      --  first architecture here to carry one on the way out of attention
+      --  and on both sides of the feed-forward.
+      Out_Bias       : Model_Runner.Tensors.Real_Array_Access;
+      Up_Bias        : Model_Runner.Tensors.Real_Array_Access;
+      Down_Bias      : Model_Runner.Tensors.Real_Array_Access;
       Feed_Norm      : Model_Runner.Tensors.Real_Array_Access;
       Gate : aliased Model_Runner.Tensors.View;
       Up : aliased Model_Runner.Tensors.View;
@@ -974,6 +986,12 @@ private
 
       --  And the bias for it, for the same reason and the same architecture.
       Output_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
+
+      --  Added to every logit, for an architecture whose output projection
+      --  carries a bias. Null everywhere but Phi2. It is the last thing the
+      --  model does, so leaving it out shifts every logit by a fixed amount
+      --  and changes which token is chosen wherever two were close.
+      Output_Bias : Model_Runner.Tensors.Real_Array_Access;
 
       --  One divisor per rotated pair, when the model carries the table.
       --  Null otherwise, which is every element one. Decoded once here

@@ -261,7 +261,8 @@ package body Tiny_Model is
            when Gemma2    => "gemma2",
            when Gemma3    => "gemma3",
            when Phi3      => "phi3",
-           when Falcon    => "falcon");
+           when Falcon    => "falcon",
+           when Phi2      => "phi2");
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
@@ -564,7 +565,7 @@ package body Tiny_Model is
                   [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
                   G.Type_F32, Fixtures.Encode_F32 (Values));
             end;
-         elsif Kind in Phi3 | Falcon then
+         elsif Kind in Phi3 | Falcon | Phi2 then
             --  One tensor holding all three, in the order a reader has to
             --  take them out: queries, then keys, then values -- and drawn
             --  as three, in the order every other architecture draws them,
@@ -596,7 +597,7 @@ package body Tiny_Model is
          --  carried both would say two different things about the same
          --  projection, and a reader that preferred one would agree with a
          --  reader that preferred the other about nothing.
-         if Kind not in Phi3 | Falcon then
+         if Kind not in Phi3 | Falcon | Phi2 then
             Weight (Layer_Name (Index, "attn_k.weight"),
                     [G.U64 (Embedding), G.U64 (KV_Heads * Key_Size)]);
             Weight (Layer_Name (Index, "attn_v.weight"),
@@ -615,8 +616,42 @@ package body Tiny_Model is
          --  Falcon's normalization carries a bias, which is a different
          --  thing from the projection biases Qwen2 has: it belongs to the
          --  normalization and every falcon file has one.
-         if Kind = Falcon then
+         if Kind in Falcon | Phi2 then
             Norm_Of (Layer_Name (Index, "attn_norm.bias"), Embedding);
+         end if;
+
+         --  Phi2 biases the three projections as Qwen2 does and writes the
+         --  three in one vector, as it writes the three matrices in one
+         --  tensor. Drawn as three in the order the unfused architectures
+         --  draw them, for the reason Weight_Of exists.
+         if Kind = Phi2 then
+            declare
+               use type N.Real_Array;
+
+               Q : constant N.Real_Array :=
+                 Next (N.Element_Count (Heads * Key_Size));
+               K : constant N.Real_Array :=
+                 Next (N.Element_Count (KV_Heads * Key_Size));
+               V : constant N.Real_Array :=
+                 Next (N.Element_Count (KV_Heads * Value_Size));
+               Whole : constant N.Real_Array := Q & K & V;
+               Eased : N.Real_Array (Whole'Range);
+            begin
+               for Index in Whole'Range loop
+                  Eased (Index) := Whole (Index) * 0.125;
+               end loop;
+
+               --  In binary32 whatever the matrices are in, as a real
+               --  file writes a bias: quantizing it made every reader that
+               --  asks for a plain vector refuse the model, which is a
+               --  refusal the sweep counted as an architecture it had
+               --  nothing to say about.
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "attn_qkv.bias"),
+                  [G.U64 (Heads * Key_Size + KV_Heads * Key_Size
+                          + KV_Heads * Value_Size)],
+                  G.Type_F32, Fixtures.Encode_F32 (Eased));
+            end;
          end if;
 
          if Kind in Qwen3 | Qwen3_MoE | Gemma3
@@ -630,7 +665,11 @@ package body Tiny_Model is
                  [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
          --  One normalization a block where the two sublayers run in
          --  parallel; two where they run one after the other.
-         if Kind /= Falcon then
+         if Kind = Phi2 then
+            Norm_Of (Layer_Name (Index, "attn_output.bias"), Embedding);
+         end if;
+
+         if Kind not in Falcon | Phi2 then
             Norm (Layer_Name (Index, "ffn_norm.weight"));
          end if;
 
@@ -646,12 +685,19 @@ package body Tiny_Model is
                     [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Experts)]);
             Weight (Layer_Name (Index, "ffn_down_exps.weight"),
                     [G.U64 (Expert_Feed), G.U64 (Embedding), G.U64 (Experts)]);
-         elsif Kind = Falcon then
+         elsif Kind in Falcon | Phi2 then
             --  No gate: one projection up and one down.
             Weight (Layer_Name (Index, "ffn_up.weight"),
                     [G.U64 (Embedding), G.U64 (Feed_Forward)]);
             Weight (Layer_Name (Index, "ffn_down.weight"),
                     [G.U64 (Feed_Forward), G.U64 (Embedding)]);
+
+            --  And a bias on each side of it, which Phi2 has and Falcon
+            --  does not: the arrangement they share does not decide this.
+            if Kind = Phi2 then
+               Norm_Of (Layer_Name (Index, "ffn_up.bias"), Feed_Forward);
+               Norm_Of (Layer_Name (Index, "ffn_down.bias"), Embedding);
+            end if;
          elsif Kind = Phi3 then
             --  The gate and the up projection in one tensor, gate first,
             --  and drawn as two for the same reason.
@@ -681,10 +727,16 @@ package body Tiny_Model is
       end loop;
 
       Norm ("output_norm.weight");
-      if Kind = Falcon then
+      if Kind in Falcon | Phi2 then
          Norm ("output_norm.bias");
       end if;
       Weight ("output.weight", [G.U64 (Embedding), Vocabulary]);
+
+      --  Phi2's output projection carries a bias, so the last thing this
+      --  writes is the last thing the model adds.
+      if Kind = Phi2 then
+         Norm_Of ("output.bias", Natural (Vocabulary));
+      end if;
 
       Fixtures.Build (Builder, Result);
    end Build;

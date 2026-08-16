@@ -837,7 +837,8 @@ package body Reference_Transformer is
          when Gemma2    => "gemma2.",
          when Gemma3    => "gemma3.",
          when Phi3      => "phi3.",
-         when Falcon    => "falcon.");
+         when Falcon    => "falcon.",
+         when Phi2      => "phi2.");
 
    procedure Load
      (Item   : in out Model;
@@ -1089,6 +1090,14 @@ package body Reference_Transformer is
          end;
       end Read_Part;
 
+      --  A run of elements of a one-dimensional tensor, for the
+      --  architectures whose fused projections carry a fused bias. Written
+      --  here rather than shared with the engine's own splitting, for the
+      --  reason the whole of this file exists.
+      function Read_Vector_Part
+        (Name : String; First, Count : Natural; Present : out Boolean)
+        return Vector_Access;
+
       function Read_Vector (Name : String; Present : out Boolean)
         return Vector_Access
       is
@@ -1119,6 +1128,36 @@ package body Reference_Transformer is
             return Result;
          end;
       end Read_Vector;
+
+      function Read_Vector_Part
+        (Name : String; First, Count : Natural; Present : out Boolean)
+        return Vector_Access
+      is
+         Whole : Vector_Access := Read_Vector (Name, Present);
+      begin
+         if not Present or else Whole = null then
+            Present := False;
+            return null;
+         end if;
+
+         if Whole'Length < First + Count then
+            Free_Vector (Whole);
+            Present := False;
+            return null;
+         end if;
+
+         declare
+            Part : constant Vector_Access :=
+              new Real_Vector (0 .. Count - 1);
+         begin
+            for Index in Part'Range loop
+               Part (Index) := Whole (Whole'First + First + Index);
+            end loop;
+            Free_Vector (Whole);
+            Present := True;
+            return Part;
+         end;
+      end Read_Vector_Part;
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digits_Text : constant String := Natural'Image (Index);
@@ -1160,6 +1199,8 @@ package body Reference_Transformer is
             Item.Kind := Phi3;
          elsif Named = "falcon" then
             Item.Kind := Falcon;
+         elsif Named = "phi2" then
+            Item.Kind := Phi2;
          else
             return;
          end if;
@@ -1328,7 +1369,7 @@ package body Reference_Transformer is
       Item.Words := Item.Embeddings'Length (1);
 
       Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
-      if Present and then Item.Kind = Falcon then
+      if Present and then Item.Kind in Falcon | Phi2 then
          Item.Output_Norm_Bias :=
            Read_Vector ("output_norm.bias", Present);
       end if;
@@ -1348,6 +1389,11 @@ package body Reference_Transformer is
       if not Present then
          --  A tied model reuses the embedding table as the output projection.
          Item.Output := Item.Embeddings;
+      elsif Item.Kind = Phi2 then
+         Item.Output_Bias := Read_Vector ("output.bias", Present);
+         if not Present then
+            return;
+         end if;
       end if;
 
       Item.Blocks := new Layer_Array (0 .. Item.Layers - 1);
@@ -1364,7 +1410,7 @@ package body Reference_Transformer is
 
             --  Gemma2's two extra normalizations, required where the
             --  architecture states them.
-            if Item.Kind = Falcon then
+            if Item.Kind in Falcon | Phi2 then
                Current.Attention_Norm_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_norm.bias"), Present);
                if not Present then
@@ -1391,7 +1437,7 @@ package body Reference_Transformer is
 
             --  Phi3's three attention projections come out of one tensor,
             --  in the order the rows are written: queries, keys, values.
-            if Item.Kind in Phi3 | Falcon then
+            if Item.Kind in Phi3 | Falcon | Phi2 then
                Current.Query :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             0, Item.Heads * Item.Head_Size, Present);
@@ -1403,7 +1449,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi3 | Falcon then
+            if Item.Kind in Phi3 | Falcon | Phi2 then
                Current.Key :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             Item.Heads * Item.Head_Size,
@@ -1416,7 +1462,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi3 | Falcon then
+            if Item.Kind in Phi3 | Falcon | Phi2 then
                Current.Value :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             (Item.Heads + Item.KV_Heads) * Item.Head_Size,
@@ -1431,6 +1477,36 @@ package body Reference_Transformer is
 
             --  The projection biases, required for the architecture that
             --  has them and absent from the one that does not.
+            --  Phi2 carries the same three biases in one vector, taken at
+            --  the offsets its matrices are taken at.
+            if Item.Kind = Phi2 then
+               Current.Query_Bias :=
+                 Read_Vector_Part
+                   (Layer_Name (Index, "attn_qkv.bias"),
+                    0, Item.Heads * Item.Head_Size, Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Key_Bias :=
+                 Read_Vector_Part
+                   (Layer_Name (Index, "attn_qkv.bias"),
+                    Item.Heads * Item.Head_Size,
+                    Item.KV_Heads * Item.Head_Size, Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Value_Bias :=
+                 Read_Vector_Part
+                   (Layer_Name (Index, "attn_qkv.bias"),
+                    (Item.Heads + Item.KV_Heads) * Item.Head_Size,
+                    Item.KV_Heads * Item.Value_Size, Present);
+               if not Present then
+                  return;
+               end if;
+            end if;
+
             if Item.Kind = Qwen2 then
                Current.Query_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_q.bias"), Present);
@@ -1478,9 +1554,17 @@ package body Reference_Transformer is
                return;
             end if;
 
-            --  Falcon has one normalization a block: its feed-forward
-            --  reads what attention read.
-            if Item.Kind /= Falcon then
+            if Item.Kind = Phi2 then
+               Current.Out_Bias :=
+                 Read_Vector (Layer_Name (Index, "attn_output.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+            end if;
+
+            --  Falcon and Phi2 have one normalization a block: their
+            --  feed-forward reads what attention read.
+            if Item.Kind not in Falcon | Phi2 then
                Current.Feed_Norm :=
                  Read_Vector (Layer_Name (Index, "ffn_norm.weight"), Present);
                if not Present then
@@ -1517,7 +1601,7 @@ package body Reference_Transformer is
                   return;
                end if;
             else
-               if Item.Kind = Falcon then
+               if Item.Kind in Falcon | Phi2 then
                   --  No gate at all: one projection up, a Gaussian unit,
                   --  one projection down.
                   Current.Gate := null;
@@ -1551,6 +1635,22 @@ package body Reference_Transformer is
                  Read_Matrix (Layer_Name (Index, "ffn_down.weight"), Present);
                if not Present then
                   return;
+               end if;
+
+               --  A bias on each side of the block, which Phi2 has and
+               --  Falcon does not.
+               if Item.Kind = Phi2 then
+                  Current.Up_Bias :=
+                    Read_Vector (Layer_Name (Index, "ffn_up.bias"), Present);
+                  if not Present then
+                     return;
+                  end if;
+
+                  Current.Down_Bias :=
+                    Read_Vector (Layer_Name (Index, "ffn_down.bias"), Present);
+                  if not Present then
+                     return;
+                  end if;
                end if;
             end if;
          end;
@@ -1677,7 +1777,7 @@ package body Reference_Transformer is
          Root : constant Long_Float := 0.797_884_560_802_865_4;
          Bend : constant Long_Float := 0.044_715;
       begin
-         if Item.Kind in Gemma | Gemma2 | Gemma3 | Falcon then
+         if Item.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 then
             declare
                Inner : constant Long_Float :=
                  Root * (Value + Bend * Value * Value * Value);
@@ -2028,7 +2128,7 @@ package body Reference_Transformer is
                Blended : Real_Vector (0 .. B_Width - 1) := [others => 0.0];
                Slot    : constant Natural := Block * Steps + Step;
             begin
-               if Item.Kind = Falcon then
+               if Item.Kind in Falcon | Phi2 then
                   Normalize_Centred
                     (State, Current.Attention_Norm.all,
                      Current.Attention_Norm_Bias, Normed);
@@ -2183,6 +2283,13 @@ package body Reference_Transformer is
 
                Project (Current.Attention_Out.all, Blended, Normed);
 
+               if Current.Out_Bias /= null then
+                  for Index in 0 .. Width - 1 loop
+                     Normed (Index) :=
+                       Normed (Index) + Current.Out_Bias.all (Index);
+                  end loop;
+               end if;
+
                --  Gemma2 normalizes what the sublayer produced before it
                --  goes back into the residual. Written where the addition
                --  is, because that is where the architecture puts it.
@@ -2334,6 +2441,16 @@ package body Reference_Transformer is
                      --  one projection up, a Gaussian unit, one down.
                      if Current.Gate = null then
                         Project (Current.Up.all, Normed, Gate);
+
+                        --  The bias belongs to the projection, so it is
+                        --  added before the unit rather than after it.
+                        if Current.Up_Bias /= null then
+                           for Index in Gate'Range loop
+                              Gate (Index) :=
+                                Gate (Index) + Current.Up_Bias.all (Index);
+                           end loop;
+                        end if;
+
                         for Index in Gate'Range loop
                            Gate (Index) := Gated (Gate (Index));
                         end loop;
@@ -2347,6 +2464,13 @@ package body Reference_Transformer is
                      end if;
 
                      Project (Current.Down.all, Gate, Normed);
+
+                     if Current.Down_Bias /= null then
+                        for Index in 0 .. Width - 1 loop
+                           Normed (Index) :=
+                             Normed (Index) + Current.Down_Bias.all (Index);
+                        end loop;
+                     end if;
                   end;
                end if;
 
@@ -2366,13 +2490,22 @@ package body Reference_Transformer is
          end loop;
       end loop;
 
-      if Item.Kind = Falcon then
+      if Item.Kind in Falcon | Phi2 then
          Normalize_Centred
            (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
       else
          Normalize (State, Item.Output_Norm.all, Normed);
       end if;
       Project (Item.Output.all, Normed, Logits);
+
+      if Item.Output_Bias /= null then
+         for Index in Logits'Range loop
+            Logits (Index) :=
+              Logits (Index)
+              + Item.Output_Bias.all
+                  (Item.Output_Bias'First + Index - Logits'First);
+         end loop;
+      end if;
 
       --  And the bound on the logits, which is the last thing the model
       --  does and the first thing a caller sees.

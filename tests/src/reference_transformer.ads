@@ -95,7 +95,8 @@ private
    --  than the form the engine uses, which is the whole point of a second
    --  implementation.
    type Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon);
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
+      Phi2);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -110,8 +111,9 @@ private
       Post_Attention_Norm : Vector_Access := null;
       Post_Feed_Norm      : Vector_Access := null;
 
-      --  The bias Falcon's normalization carries. Null for every
-      --  architecture that normalizes by root mean square.
+      --  The bias the centred normalization carries, which Falcon and Phi2
+      --  have. Null for every architecture that normalizes by root mean
+      --  square.
       Attention_Norm_Bias : Vector_Access := null;
       Query          : Matrix_Access := null;
       Key            : Matrix_Access := null;
@@ -124,6 +126,12 @@ private
       Query_Norm     : Vector_Access := null;
       Key_Norm       : Vector_Access := null;
       Attention_Out  : Matrix_Access := null;
+
+      --  What Phi2 adds to a projection that is not one of the three above:
+      --  on the way out of attention, and on each side of the feed-forward.
+      Out_Bias       : Vector_Access := null;
+      Up_Bias        : Vector_Access := null;
+      Down_Bias      : Vector_Access := null;
       Feed_Norm      : Vector_Access := null;
       Gate           : Matrix_Access := null;
       Up             : Matrix_Access := null;
@@ -206,6 +214,9 @@ private
       --  And its bias, for the architecture that centres rather than
       --  scaling.
       Output_Norm_Bias : Vector_Access := null;
+
+      --  Added to every logit. Phi2's output projection carries one.
+      Output_Bias      : Vector_Access := null;
 
       --  One divisor per rotated pair, when the file carries the table.
       Rope_Factors : Vector_Access := null;

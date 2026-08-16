@@ -16,6 +16,7 @@ with AUnit.Run;
 with Tests.Suite;
 with Checks;
 with Conformance;
+with Fixture_Mutation;
 with External_Model;
 with Docs_Generation;
 with Shader_Generation;
@@ -276,8 +277,18 @@ begin
             else "..");
          Result : Checks.Report;
          Agreed : Conformance.Report;
+         Moved  : Fixture_Mutation.Report;
          Fuzzed : Fuzzing.Report;
          Failed : Boolean := False;
+
+         --  What the fixture check says about each tensor nothing read. The
+         --  package reports counts and hands the naming back here, because
+         --  where a line goes is this program's business rather than its.
+         procedure Complain (Line : String) is
+         begin
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, "  fail: " & Line);
+         end Complain;
 
          --  Whether to run only the part that asks about this host.
          --
@@ -350,9 +361,27 @@ begin
                if not Agreed.Ran then
                   Ada.Text_IO.Put_Line
                     (Ada.Text_IO.Standard_Error,
-                     "  fail: the conformance run compared nothing, so the "
-                     & "engine was not checked against the reference");
+                     "  fail: the conformance run ran"
+                     & Natural'Image (Agreed.Sequences)
+                     & " sequences where its own arithmetic expects"
+                     & Natural'Image (Agreed.Wanted)
+                     & ", so what it did not compare is unaccounted for");
                end if;
+               Failed := True;
+            end if;
+
+            --  And whether the fixtures those comparisons run on can fail
+            --  at all. A tensor nothing reads makes every comparison over
+            --  that fixture weaker than its count suggests, and nothing here
+            --  asked until a fixture wrote one projection twice and the two
+            --  readers took different halves of it.
+            Fixture_Mutation.Run (Moved, Say => Complain'Access);
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "  fixtures: tensors moved" & Natural'Image (Moved.Examined)
+               & ", unread" & Natural'Image (Moved.Unread)
+               & ", refused" & Natural'Image (Moved.Refused));
+            if not Fixture_Mutation.Is_Clean (Moved) then
                Failed := True;
             end if;
 
@@ -425,6 +454,30 @@ begin
          end if;
       end;
 
+   elsif Command = "fixture-check" then
+      --  The fixture check on its own, for looking at one architecture's
+      --  file rather than passing the gate.
+      declare
+         Moved : Fixture_Mutation.Report;
+
+         procedure Complain (Line : String) is
+         begin
+            Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Line);
+         end Complain;
+      begin
+         Fixture_Mutation.Run (Moved, Say => Complain'Access);
+
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "fixtures: tensors moved" & Natural'Image (Moved.Examined)
+            & ", unread" & Natural'Image (Moved.Unread)
+            & ", refused" & Natural'Image (Moved.Refused));
+
+         if not Fixture_Mutation.Is_Clean (Moved) then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
    elsif Command = "conformance" then
       --  Compare the engine against the independent reference implementation
       --  on the synthetic model. Needs no external model and no network.
@@ -451,7 +504,8 @@ begin
             & Long_Float'Image (Result.Cached_Worst_Abs)
             & ", cached worst relative"
             & Long_Float'Image (Result.Cached_Worst_Rel)
-            & ", outside tolerance" & Natural'Image (Result.Failures));
+            & ", outside tolerance" & Natural'Image (Result.Failures)
+            & ", unlearned" & Natural'Image (Result.Unlearned));
 
          if not Conformance.Is_Clean (Result) then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);

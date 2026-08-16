@@ -7,6 +7,82 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The `falcon` architecture.** The first here whose block is arranged
+  differently rather than whose details differ: attention and the
+  feed-forward both read what the layer normalized on the way in and both add
+  to the same residual, so there is one normalization a block instead of two.
+  That normalization subtracts the mean and divides by the standard deviation
+  and carries a bias beside its gain, which is a different computation from
+  the root-mean-square form the others use rather than a parameter of it. The
+  feed-forward has no gate: one projection up, a Gaussian error unit, one
+  projection down. Queries, keys and values are fused as phi3 fuses them.
+
+  Crossed with every format and both evaluation paths: none outside
+  tolerance.
+
+- **The `phi2` architecture.** Falcon's arrangement -- one normalization a
+  block, attention and the feed-forward reading it in parallel, a centred
+  normalization carrying a bias, no gate -- with a bias on every projection
+  rather than on none. The three attention biases are one vector as their
+  matrices are one tensor, taken at the same offsets; attention's output and
+  both sides of the feed-forward carry one each; and the output projection
+  carries one that is added to every logit. That last one is added where the
+  bound on the logits is applied, in the single place all three paths that
+  produce logits call, rather than beside each of them.
+
+  Crossed with every format and both evaluation paths: 23535 sequences,
+  322560 logits, none outside tolerance.
+
+- **A check that asks whether a fixture can fail.** Every tensor of every
+  architecture's fixture is moved in turn and the model evaluated again; a
+  tensor no logit answers to is reported and fails the gate. A comparison is
+  worth what its fixture is worth, and a tensor nothing reads makes every
+  comparison over that fixture weaker than its count suggests. `tests
+  fixture-check` runs it alone; the gate runs it after the conformance
+  sweep.
+
+  It found what it was written for immediately: phi2's first fixture wrote
+  its fused bias in the format of its weights, so a quantized phi2 file
+  carried a bias no reader that asks for a plain vector would take.
+
+### Fixed
+
+- **A feed-forward that was computed and discarded.** The ungated arm ended
+  after the activation, and the projection down and the residual add sat
+  inside the gated arm below it, so falcon ran with attention only -- in both
+  the single-token and the batched path. The two arms differ only in how they
+  fill the buffer now, and what follows is written once where neither can
+  skip it. The batched path's last normalization, the one that produces the
+  logits it returns, had the same shape of mistake: it called the
+  root-mean-square kernel directly, so falcon was centred everywhere except
+  in its answer.
+
+- **A fixture that said two things about one projection.** The falcon fixture
+  wrote its queries, keys and values fused into one tensor and then wrote
+  separate key and value tensors beside them, because the guard that skipped
+  those named an architecture rather than naming the arrangement.
+
+- **A conformance sweep that skipped an architecture in silence.** A
+  comparison whose reference has no answer returned before it compared
+  anything, so an architecture the independent implementation could not load
+  was passed over without a trace -- and the totals came out identical, to
+  fifteen digits, to a run without it. Phi2's first sweep reported falcon's
+  figures and read as a pass. Fixtures the reference will not load or run
+  are counted now, reported beside the tolerance count, and a run with any
+  of them is not clean.
+
+- **A displacement that could not move a centred model.** The fixture check
+  first moved every element of a tensor the same way, which adds a constant
+  to each row a projection produces -- exactly what a normalization that
+  subtracts the mean removes. The two architectures that centre reported
+  their output projections, their down projections and their embedding table
+  as read by nobody. Alternating the sign failed the same way, because a row
+  of even length holds the same alternation as every other row. The
+  displacement follows a hash of the element's index now, which has no
+  period to line up with a row length.
+
+### Added
+
 - **The `phi3` architecture.** Nothing in its arithmetic differs; everything
   about where its weights are does. The queries, keys and values are one
   tensor and the gate and up projection another, and a part is taken out as a
