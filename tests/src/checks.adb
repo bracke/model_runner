@@ -6308,6 +6308,65 @@ package body Checks is
          end if;
       end;
 
+      --  No model file inside the repository, tracked or not.
+      --
+      --  A machine that runs the published figures has models on it, and the
+      --  smallest of them is four hundred megabytes. One copied into the
+      --  tree for convenience would be ignored by git today and packaged by
+      --  the release tomorrow, and nothing here asked. The generated
+      --  fixtures are the exception the ignore file already names: they are
+      --  kilobytes and this program writes them itself.
+      declare
+         Found : Natural := 0;
+
+         procedure Walk (Where : String) is
+            Search : Ada.Directories.Search_Type;
+            Item   : Ada.Directories.Directory_Entry_Type;
+         begin
+            if not Ada.Directories.Exists (Where) then
+               return;
+            end if;
+
+            Ada.Directories.Start_Search
+              (Search, Where, "",
+               [Ada.Directories.Ordinary_File => True,
+                Ada.Directories.Directory => True,
+                others => False]);
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Item);
+               declare
+                  Simple : constant String :=
+                    Ada.Directories.Simple_Name (Item);
+                  Full   : constant String :=
+                    Ada.Directories.Full_Name (Item);
+               begin
+                  if Simple /= "." and then Simple /= ".."
+                    and then Simple /= ".git"
+                    and then Simple /= "fixtures"
+                    and then Simple /= "obj"
+                  then
+                     if Ada.Directories."=" (Ada.Directories.Kind (Full),
+                                             Ada.Directories.Directory)
+                     then
+                        Walk (Full);
+                     elsif Simple'Length > 5
+                       and then Simple (Simple'Last - 4 .. Simple'Last)
+                                = ".gguf"
+                     then
+                        Found := Found + 1;
+                        Fail ("a model file sits inside the repository at "
+                              & Full & "; models belong beside it, not in it");
+                     end if;
+                  end if;
+               end;
+            end loop;
+            Ada.Directories.End_Search (Search);
+         end Walk;
+      begin
+         Result.Performed := Result.Performed + 1;
+         Walk (Root);
+      end;
+
       --  enough above zero that a run which stops checking cannot pass.
       declare
          Fewest_Checks : constant := 3_000;

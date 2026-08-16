@@ -96,6 +96,7 @@ en.help.inspect.metadata =   --metadata              list metadata keys, types a
 en.help.inspect.tensors =   --tensors               list tensor names, shapes and formats
 en.help.inspect.threads =   --threads N             worker tasks the run would use; 0 chooses
 en.help.inspect.backend =   --backend NAME          backend the run would use: {value}
+en.help.inspect.kv_cache =   --kv-cache MODE         report the session memory for this cache storage: {value}
 en.help.inspect.validate =   --validate              validate only, reporting nothing else
 en.help.inspect.quiet =   --quiet                 suppress progress, notes and warnings
 en.help.inspect.verbose =   --verbose               report progress and detail on standard error

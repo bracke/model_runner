@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A check that no model file sits inside the repository.** A machine that
+  takes the published figures has models on it and the smallest is four
+  hundred megabytes; one copied into the tree for convenience would be
+  ignored by git today and packaged by the release tomorrow, and nothing
+  asked. The generated fixtures stay exempt: they are kilobytes and this
+  program writes them itself.
+
+  It found nothing, and the run that added it found something else -- the
+  check that every option a command takes is documented caught `inspect
+  --kv-cache`, which I had added without a help line.
+
 - **`inspect --kv-cache MODE`.** It reported what a session would take at the
   default precision only, so the two lossy storages could say what they saved
   in arithmetic and not in a number the program produced. On

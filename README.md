@@ -804,6 +804,13 @@ more terms in every dot product to accumulate eight mantissa bits of error
 over. Use `--repack
 f32`, which is exact and costs memory instead.
 
+One thing to know before taking any of these figures again: `tests speed`
+and the `run` command do not count a prompt's tokens the same way. The
+checked-in long prompt is 110 tokens as the tool counts it and 130 as the
+command reports it, because the command counts what a chat run adds and the
+tool counts what the figure describes. Every prompt length quoted here is the
+tool's count.
+
 The cached figures are `--kv-cache f16`, which stores what a session has
 committed as binary16 rather than binary32: half the memory for the context,
 and **0.0327** worst absolute on these fixtures against 2.2e-05 for the exact
