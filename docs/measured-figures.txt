@@ -1006,16 +1006,31 @@ reference 01FE8BE9DEC71615 src/library/model_runner-backend-reference.adb src/li
 # parameter list and nothing they time, and the run above is the evidence
 # that the tool still measures what it measured.
 
-# 2026-08-16, the device group, part of it. The twelve-token pair was taken
-# again on TinyLlama-1.1B-Chat Q8_0, at the length the table actually
-# publishes this time. The device read 1.248 s wall -- 0.175 s evaluating the
-# prompt and 1.072 s generating -- against the 1.262 s published, which is as
-# close as this machine gets. The processor row beside it read 2.128 s
-# against 1.777 s at a load rising to 1.93, which is the machine and not the
-# code: both runs printed 5abff916f9d83ca6, the digest the table publishes.
-# Neither is republished, because the pair is only half of the table -- the
-# 110-token prompt row was not taken -- and half a table measured twice is
-# not a table.
+# 2026-08-16, the device group, all four rows. Taken again on
+# TinyLlama-1.1B-Chat Q8_0, at the lengths the table publishes and with the
+# prompt the repository checks in:
+#
+#   twelve tokens   device 1.248 s against 1.262 published
+#                   processor 2.128 s against 1.777, at a load rising to 1.93
+#   110-token prompt device 2.539 s against 2.504 published
+#                   processor 6.366 s against 6.295 published
+#
+# Three of the four are within three per cent. The fourth is the processor's
+# twelve-token row on a machine that was busy, and it is the machine rather
+# than the code: every one of the eight runs printed the digest the table
+# publishes -- 5abff916f9d83ca6 for the short pair, cbf29ce484222325 for the
+# long one -- which is what says they answered the same question.
+#
+# Not republished, because nothing moved: the figures the table carries are
+# the figures this machine takes, and rewriting 1.262 as 1.248 would be
+# noise dressed as news.
+#
+# One thing worth recording about reproducing it. The long prompt is
+# tests/fixtures/speed-prompt.txt and it is 110 tokens as the tool counts
+# them; asking the command for the same file reports 130, because the
+# command adds what a chat run adds and the tool measures what the figure
+# describes. I chased the difference for a while before noticing which of
+# the two was doing the counting.
 
 # load: 1.70 rising to 2.37 for the fifteen ratios and the batched ones,
 #       2026-08-15; 1.0 to 1.9 for the two-backend table, 2026-08-14
