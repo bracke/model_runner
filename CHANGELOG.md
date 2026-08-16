@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`inspect --kv-cache MODE`.** It reported what a session would take at the
+  default precision only, so the two lossy storages could say what they saved
+  in arithmetic and not in a number the program produced. On
+  TinyLlama-1.1B-Chat Q8_0 at 2048 tokens: 97,251,904 bytes exact, 48,807,695
+  halved, 24,585,588 in bytes. `Plan_For` had taken the precision all along;
+  `inspect` was the one caller that never passed it.
+
 - **What the byte cache costs in time, measured.** Twelve tokens of
   TinyLlama-1.1B Q8_0: 1.912 s with it against 1.871 s without, which is
   inside what two runs of the same figure differ by on this machine. What it

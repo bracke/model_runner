@@ -1023,7 +1023,12 @@ package body Model_Runner.CLI.Execute is
                Plan   : Model_Runner.Memory.Session_Plan;
                Detail2 : E.Error_Info;
             begin
-               L.Plan_For (Settings, Item.Context_Size, Plan, Detail2);
+               --  In the storage the caller named, so that what a session
+               --  would take can be asked of each of them rather than only
+               --  of the one this defaults to. A storage offered for what it
+               --  saves should be able to say what it saves.
+               L.Plan_For (Settings, Item.Context_Size, Plan, Detail2,
+                           Cache => Item.Cache);
                Pres.Put_Heading (Screen, "cli.inspect.heading.memory", Pres.Answer);
                Pres.Put_Field
                  (Screen, "cli.inspect.label.model_bytes",

@@ -1006,6 +1006,17 @@ reference 01FE8BE9DEC71615 src/library/model_runner-backend-reference.adb src/li
 # parameter list and nothing they time, and the run above is the evidence
 # that the tool still measures what it measured.
 
+# 2026-08-16, the device group, part of it. The twelve-token pair was taken
+# again on TinyLlama-1.1B-Chat Q8_0, at the length the table actually
+# publishes this time. The device read 1.248 s wall -- 0.175 s evaluating the
+# prompt and 1.072 s generating -- against the 1.262 s published, which is as
+# close as this machine gets. The processor row beside it read 2.128 s
+# against 1.777 s at a load rising to 1.93, which is the machine and not the
+# code: both runs printed 5abff916f9d83ca6, the digest the table publishes.
+# Neither is republished, because the pair is only half of the table -- the
+# 110-token prompt row was not taken -- and half a table measured twice is
+# not a table.
+
 # load: 1.70 rising to 2.37 for the fifteen ratios and the batched ones,
 #       2026-08-15; 1.0 to 1.9 for the two-backend table, 2026-08-14
 device 0405429AEFCB461E src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb

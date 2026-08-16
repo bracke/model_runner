@@ -827,6 +827,13 @@ It is the coarsest thing this program does to a number it will read back,
 and it is offered for the case the halved cache does not fit rather than as
 a default: nothing chooses it unless asked.
 
+What it saves is now a number the program will tell you rather than one this
+document works out: `inspect --kv-cache` reports what a session would take in
+each storage, and on TinyLlama-1.1B-Chat Q8_0 at its full 2048-token context
+that is **97,251,904** bytes exact, **48,807,695** halved and **24,585,588**
+in bytes -- a little under a quarter, the difference being the buffers a
+session holds whatever it stores its context in, and the scales.
+
 What it costs in time is nothing this machine can measure: twelve tokens of
 TinyLlama-1.1B Q8_0 take **1.912 s** with the byte cache against **1.871 s**
 with the exact one, and two runs of the same figure an hour apart on this
