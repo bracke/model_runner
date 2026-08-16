@@ -283,6 +283,10 @@ package body Fixture_Mutation is
          Ok     : Boolean;
          Status : E.Error_Info;
 
+         --  Tensors of this fixture whose answer is smaller than a
+         --  disagreement.
+         Hushed : Natural := 0;
+
          --  What a report has to name to be acted on: the same fixture has to
          --  be findable again out of nine hundred of them.
          function Where return String
@@ -333,6 +337,11 @@ package body Fixture_Mutation is
                Other : Logit_Row := [others => 0.0];
                Heard : Boolean := False;
                Fine  : Boolean;
+
+               --  The largest a logit moved, which answers both questions
+               --  this asks: whether anything moved at all, and whether what
+               --  moved would be called a disagreement.
+               Moved_By : N.Real := 0.0;
             begin
                Displace (Moved.all, Parsed, Index);
 
@@ -351,13 +360,17 @@ package body Fixture_Mutation is
                   Heard := True;
                else
                   for Which in Given'Range loop
-                     if not N.Is_Finite (Other (Which))
-                       or else abs (Given (Which) - Other (Which))
-                               > N.Real (Noticed)
-                     then
-                        Heard := True;
+                     if not N.Is_Finite (Other (Which)) then
+                        Heard    := True;
+                        Moved_By := N.Real'Last;
+                     else
+                        Moved_By :=
+                          N.Real'Max
+                            (Moved_By, abs (Given (Which) - Other (Which)));
                      end if;
                   end loop;
+
+                  Heard := Moved_By > N.Real (Noticed);
                end if;
 
                --  A tensor that did not answer is asked again, moved
@@ -402,6 +415,15 @@ package body Fixture_Mutation is
                   end;
                end if;
 
+               --  Read, but by less than a comparison would call a
+               --  disagreement. Counted where the fixture is named, so that
+               --  a run says which fixture holds them rather than only how
+               --  many there are.
+               if Heard and then Moved_By <= N.Real (Disagreement) then
+                  Result.Quiet := Result.Quiet + 1;
+                  Hushed := Hushed + 1;
+               end if;
+
                if not Heard then
                   Result.Unread := Result.Unread + 1;
 
@@ -413,6 +435,17 @@ package body Fixture_Mutation is
                end if;
             end;
          end loop;
+
+         --  Said once for the fixture rather than once for each tensor:
+         --  what is worth knowing is which fixture is the quiet one and how
+         --  much of it is quiet, and a line a tensor would bury that in
+         --  hundreds.
+         if Hushed > 0 and then Say /= null then
+            Say (Where & ":" & Natural'Image (Hushed) & " of"
+                 & Natural'Image (Containers.Tensor_Count (Parsed))
+                 & " tensors move a logit by less than a comparison would"
+                 & " call a disagreement");
+         end if;
 
          Containers.Close (Parsed);
          B.Free (Image);

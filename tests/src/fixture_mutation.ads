@@ -48,6 +48,17 @@ package Fixture_Mutation is
    --  read by nobody.
    Noticed : constant := 1.0E-9;
 
+   --  What a comparison would call a disagreement rather than agreement.
+   --
+   --  The conformance sweep's own absolute tolerance. A tensor moved by
+   --  Displacement whose logits move by less than this is read -- Noticed
+   --  above settles that -- but a mistake of that size in it would pass the
+   --  sweep unremarked, which is a different and equally worth knowing
+   --  thing. It was the threshold for being read at all until it hid six
+   --  tensors that were read; it is a measurement in its own right now
+   --  rather than a test, and Quiet below is what it measures.
+   Disagreement : constant := 1.0E-4;
+
    --  What a run found.
    type Report is record
       --  Tensors moved, across every architecture.
@@ -56,13 +67,21 @@ package Fixture_Mutation is
       --  Of those, the ones no logit answered to.
       Unread   : Natural := 0;
 
-      --  And the ones that answered only to a move sixteen times the size.
-      --  Read, so not a failure, but worth a count: a tensor a fixture makes
-      --  this insensitive to is one that fixture's comparisons would not
-      --  notice a small mistake in. It read twenty-nine while the deep
-      --  fixture's attention was saturated, and reads zero now that the
-      --  queries and keys it draws are drawn to suit its width.
+      --  And the ones that answered only to a move sixty-four times the
+      --  size. Read, so not a failure, but worth a count on its own: a
+      --  tensor whose first answer is nothing at all and whose second is
+      --  something has a response this fixture reaches only at the far end
+      --  of it.
       Faint    : Natural := 0;
+
+      --  Tensors that answered, but by less than a comparison would call a
+      --  disagreement. Not a failure either, and not a defect in the engine:
+      --  it says that a mistake the size of this displacement, in this
+      --  tensor, in this fixture, would pass the conformance sweep without
+      --  being remarked on. That is the measure the sweep cannot take of
+      --  itself, and the reason it is taken here is that this is the only
+      --  place that moves a tensor on purpose and watches what comes out.
+      Quiet    : Natural := 0;
 
       --  Fixtures that could not be built, parsed or evaluated at all. A
       --  run that cannot evaluate its own fixture has not checked anything,

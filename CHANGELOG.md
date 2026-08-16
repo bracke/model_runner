@@ -66,6 +66,27 @@ Keep a Changelog and the project uses semantic versioning.
   check with the reason, counted separately, and reported on every run so that
   it stays visible; anything else that stops answering fails the gate.
 
+### Added
+
+- **The halved cache is compared with products computed on a device.** Every
+  comparison of it had been against a processor: the cache is the session's
+  doing rather than the backend's, so nothing had crossed the two. It runs on
+  the first format the shader reads, a token at a time and in one pass --
+  once rather than fifteen times, because what a weight is encoded in has
+  nothing to do with what the session rounds. 23562 sequences now, 22032 of
+  them cached, none outside tolerance.
+
+- **The fixture check measures sensitivity again, as its own question.** Its
+  threshold for a logit having moved was the sweep's absolute tolerance until
+  that hid six tensors which had moved; the threshold sits at the noise floor
+  now, and what the old one accidentally measured was left unmeasured. A
+  tensor that answers by less than a comparison would call a disagreement is
+  counted as quiet and the fixture holding it is named: a mistake of that
+  size, in that tensor, in that fixture, would pass the sweep unremarked.
+  Sixty-five of the 22195 are quiet, across thirty-eight fixtures. It is not
+  a failure and does not fail the gate -- it is the measure the sweep cannot
+  take of itself.
+
 ### Fixed
 
 - **Gemma3 is built with six blocks, so the layer that sees everything

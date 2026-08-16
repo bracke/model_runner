@@ -24,6 +24,7 @@ package body Conformance is
    package L renames Model_Runner.Llama;
 
    use type L.Repack_Mode;
+   use type Tiny_Model.Weight_Format;
    package N renames Model_Runner.Numerics;
    package R renames Reference_Transformer;
 
@@ -732,6 +733,30 @@ package body Conformance is
                     (4, L.Exact, Model_Runner.Backend.Backend_Device,
                      L.No_Repack, Batched => True, Chunk => 3);
                   On_Device := On_Device + 2;
+
+                  --  And the same with the session storing what it commits
+                  --  in half precision, on the first format only.
+                  --
+                  --  What the cache holds has nothing to do with how a
+                  --  weight is encoded: it is keys and values the session
+                  --  wrote, and rounding them is the session's doing rather
+                  --  than the backend's. Crossing it with all fifteen
+                  --  formats would run the same halving fifteen times. What
+                  --  had never run at all is the halved cache with products
+                  --  computed on a device -- every comparison of it was
+                  --  against a processor -- and once is what that costs.
+                  if Format = Device_Formats (Device_Formats'First) then
+                     Compare
+                       (3, L.Halved, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack);
+                     Compare
+                       (4, L.Halved, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack);
+                     Compare
+                       (4, L.Halved, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack, Batched => True);
+                     On_Device := On_Device + 3;
+                  end if;
 
                   B.Free (Image);
                end loop;
