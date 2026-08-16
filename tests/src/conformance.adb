@@ -148,10 +148,14 @@ package body Conformance is
       --  already known. Loading the reference decodes every matrix of the
       --  model into Long_Float, which is most of what this costs, so it too
       --  happens once for a fixture rather than once for a comparison.
+      --  The fixture is read where it is rather than copied into this
+      --  frame. The copy was a whole file on the stack, which is nothing at
+      --  two blocks of eight elements and a storage error at six blocks of
+      --  two hundred and fifty-six with a mixture behind each -- which is
+      --  what gemma3's fixture became when it grew the block that sees
+      --  everything.
       procedure Learn (Which : Sequence_Index) is
-         Held   : aliased constant B.Byte_Array := Image.all;
-         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
-           (Held'Access);
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
          Parsed : Containers.Container;
          Second : R.Model;
          Status : E.Error_Info;
@@ -168,7 +172,7 @@ package body Conformance is
             return;
          end if;
 
-         R.Load (Second, Parsed, Held, Loaded);
+         R.Load (Second, Parsed, Image.all, Loaded);
          if not Loaded then
             Result.Unlearned := Result.Unlearned + 1;
             Containers.Close (Parsed);
@@ -211,9 +215,7 @@ package body Conformance is
          --  sequence at once and never cross that seam.
          Chunk   : Natural := 0)
       is
-         Held      : aliased constant B.Byte_Array := Image.all;
-         Source    : Model_Runner.Byte_Sources.Memory.Buffer_Source
-           (Held'Access);
+         Source    : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
          Parsed    : Containers.Container;
          Engine    : L.Model;
          Session   : L.Session;

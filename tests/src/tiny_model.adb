@@ -118,6 +118,17 @@ package body Tiny_Model is
       --  square root of the width carries in the residual, so gemma3's second
       --  layer stopped answering at all. What a score is made of is what has
       --  to shrink.
+      --  How many blocks this fixture holds.
+      --
+      --  Two for every architecture but gemma3, which is enough to show that
+      --  a layer reads what the layer before it wrote. Gemma3 needs six: its
+      --  window falls on five layers in six and the sixth sees everything,
+      --  and with two blocks that sixth layer is never built -- so the layer
+      --  that attends to the whole context, and the rotation base it turns
+      --  on, were described in the engine, described again in the
+      --  independent implementation, and compared by nothing.
+      Blocks : constant Natural := (if Kind = Gemma3 then 6 else Layers);
+
       Score_Amplitude : constant N.Real :=
         0.5 * N.Real
                 (N.Sqrt
@@ -340,7 +351,9 @@ package body Tiny_Model is
         (Builder, Prefix & ".context_length", Interfaces.Unsigned_32 (Room));
       Fixtures.Add_U32
         (Builder, Prefix & ".embedding_length", Interfaces.Unsigned_32 (Embedding));
-      Fixtures.Add_U32 (Builder, Prefix & ".block_count", Layers);
+      Fixtures.Add_U32
+        (Builder, Prefix & ".block_count",
+         Interfaces.Unsigned_32 (Blocks));
       Fixtures.Add_U32
         (Builder, Prefix & ".feed_forward_length", Interfaces.Unsigned_32 (Feed_Forward));
       Fixtures.Add_U32 (Builder, Prefix & ".attention.head_count", Heads);
@@ -591,7 +604,7 @@ package body Tiny_Model is
 
       Weight ("token_embd.weight", [G.U64 (Embedding), Vocabulary]);
 
-      for Index in 0 .. Layers - 1 loop
+      for Index in 0 .. Blocks - 1 loop
          Norm (Layer_Name (Index, "attn_norm.weight"));
 
          --  Gemma2's two extra normalizations, one after each sublayer.

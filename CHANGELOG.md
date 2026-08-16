@@ -68,6 +68,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Gemma3 is built with six blocks, so the layer that sees everything
+  exists.** Its window falls on five layers in six and the sixth attends to
+  the whole context on a rotation base of its own. Every fixture had two
+  blocks, so that sixth layer was never built: the engine described it, the
+  independent implementation described it again, and nothing compared them.
+  The check that moves tensors is what said so -- there was no `blk.5` to
+  move.
+
+- **The fixture check asks whether a tensor is read, not whether the sweep
+  would catch a mistake in it.** A logit counted as having moved when it
+  moved by more than the conformance sweep's own absolute tolerance, which
+  conflated two questions and hid six tensors of gemma3's sixth block whose
+  logits moved by two parts in a hundred thousand -- eleven orders of
+  magnitude above what binary32 does on its own, and reported as read by
+  nobody. An evaluation here is deterministic, so a logit that differs at all
+  differs because the model did; the threshold is just above the noise now.
+  What the old one measured is what the faint count already reports.
+
+- **The check copied whole files onto the stack.** Every evaluation copied
+  the image into a frame constant and every mutation copied it again. At two
+  blocks of eight elements that is nothing; at six blocks of two hundred and
+  fifty-six with a mixture behind each it is a storage error rather than a
+  slow test. Both copies are on the heap now, and freed.
+
 - **A fixture whose attention had already decided.** The deep fixture the
   superblock formats are built at draws its weights over two hundred and
   fifty-six elements, and an attention score is the product of two

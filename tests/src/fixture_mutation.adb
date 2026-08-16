@@ -84,16 +84,19 @@ package body Fixture_Mutation is
       end Raise_Fixture;
 
       --  Evaluate one image and report the logits it produced.
+      --  The image is taken by reference rather than by value. It used to be
+      --  copied into a constant of this frame, which is a copy of the whole
+      --  file on the stack: at two blocks of eight elements that is nothing,
+      --  and at six blocks of two hundred and fifty-six with a mixture behind
+      --  each it is a storage error rather than a slow test.
       procedure Answer
-        (Image   : B.Byte_Array;
+        (Image   : not null B.Byte_Array_Access;
          Backend : Model_Runner.Backend.Backend_Kind;
          Batched : Boolean;
          Logits  : out Logit_Row;
          Ok      : out Boolean)
       is
-         Held    : aliased constant B.Byte_Array := Image;
-         Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
-           (Held'Access);
+         Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
          Parsed  : Containers.Container;
          Engine  : L.Model;
          Session : L.Session;
@@ -172,11 +175,13 @@ package body Fixture_Mutation is
            Containers.Tensor_Format (Parsed, Index)
              = Model_Runner.GGUF.Type_F32;
 
-         --  How far to move it. The second pass moves it sixteen times as
-         --  far, for the tensors a fixture is too insensitive to notice the
-         --  first pass in.
+         --  How far to move it. The second pass moves it sixty-four times
+         --  as far, for the tensors a fixture is too insensitive to notice
+         --  the first pass in -- a router that ranks four experts needs
+         --  enough to change the ranking, not merely enough to change the
+         --  scores.
          Reach : constant N.Real :=
-           (if Harder then 16.0 * N.Real (Displacement)
+           (if Harder then 64.0 * N.Real (Displacement)
             else N.Real (Displacement));
          Mask  : constant Interfaces.Unsigned_8 :=
            (if Harder then 16#30# else 16#03#);
@@ -295,9 +300,7 @@ package body Fixture_Mutation is
          end if;
 
          declare
-            Held   : aliased constant B.Byte_Array := Image.all;
-            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
-              (Held'Access);
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
          begin
             Containers.Reader.Parse (Parsed, Source, Status => Status);
          end;
@@ -308,7 +311,7 @@ package body Fixture_Mutation is
             return;
          end if;
 
-         Answer (Image.all, Backend, Batched, Given, Ok);
+         Answer (Image, Backend, Batched, Given, Ok);
 
          if not Ok then
             Result.Refused := Result.Refused + 1;
@@ -324,14 +327,17 @@ package body Fixture_Mutation is
 
          for Index in 1 .. Containers.Tensor_Count (Parsed) loop
             declare
-               Moved : B.Byte_Array := Image.all;
+               --  On the heap, for the reason the image is not copied
+               --  onto the stack above.
+               Moved : B.Byte_Array_Access := new B.Byte_Array'(Image.all);
                Other : Logit_Row := [others => 0.0];
                Heard : Boolean := False;
                Fine  : Boolean;
             begin
-               Displace (Moved, Parsed, Index);
+               Displace (Moved.all, Parsed, Index);
 
                Answer (Moved, Backend, Batched, Other, Fine);
+               B.Free (Moved);
 
                Result.Examined := Result.Examined + 1;
 
@@ -368,12 +374,14 @@ package body Fixture_Mutation is
                --  are worth less than their count.
                if not Heard then
                   declare
-                     Further : B.Byte_Array := Image.all;
+                     Further : B.Byte_Array_Access :=
+                       new B.Byte_Array'(Image.all);
                      Again   : Logit_Row := [others => 0.0];
                      Sound   : Boolean;
                   begin
-                     Displace (Further, Parsed, Index, Harder => True);
+                     Displace (Further.all, Parsed, Index, Harder => True);
                      Answer (Further, Backend, Batched, Again, Sound);
+                     B.Free (Further);
 
                      if not Sound then
                         Heard := True;

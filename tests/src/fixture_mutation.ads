@@ -31,11 +31,22 @@ package Fixture_Mutation is
    --  saturating.
    Displacement : constant := 0.25;
 
-   --  A logit has moved when it moves by more than this. The threshold is
-   --  the conformance sweep's own absolute tolerance: anything smaller is
-   --  what that sweep already calls agreement, so it cannot count as a
-   --  tensor having been read.
-   Noticed : constant := 1.0E-4;
+   --  A logit has moved when it moves by more than this.
+   --
+   --  Just above what binary32 arithmetic does on its own, and deliberately
+   --  far below anything a comparison would call a disagreement. An
+   --  evaluation here is deterministic -- one task, one partitioning, the
+   --  same input -- so a logit that differs at all differs because the model
+   --  did, and that is the whole of the question this asks.
+   --
+   --  It was the conformance sweep's absolute tolerance, 1.0E-4, which
+   --  conflated two questions: whether the program reads a tensor, and
+   --  whether that sweep would catch a mistake in it. The second is what
+   --  Faint below counts. Reading the first as the second hid six tensors of
+   --  gemma3's sixth block, whose logits moved by two parts in a hundred
+   --  thousand -- eleven orders of magnitude above the noise, and reported as
+   --  read by nobody.
+   Noticed : constant := 1.0E-9;
 
    --  What a run found.
    type Report is record
