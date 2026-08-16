@@ -934,6 +934,20 @@ begin
             --  takes, so that a reader who saw --repack in the README does
             --  not have to guess whether it is a flag here.
             Repack      => Mode_Of (Option ("--repack", "none")),
+
+            --  The storage the session keeps its context in, named the way
+            --  the command names it: f32, f16 or q8.
+            Cache       =>
+              (declare
+                 Named : constant String := Option ("--kv-cache", "f32");
+               begin
+                 (if Named = Model_Runner.Llama.Cache_Name
+                              (Model_Runner.Llama.Halved)
+                  then Model_Runner.Llama.Halved
+                  elsif Named = Model_Runner.Llama.Cache_Name
+                                  (Model_Runner.Llama.Eighth)
+                  then Model_Runner.Llama.Eighth
+                  else Model_Runner.Llama.Exact)),
             Backend     => Backend_Of (Option ("--backend", "cpu")),
             Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
             Draft       => Option ("--draft-model", ""),

@@ -98,6 +98,12 @@ package Speed_Run is
    --    selects. The published comparison between the stored layout
    --    and the repacked one was taken by hand before this existed, which
    --    is the same gap the reference-backend ratio had.
+   --  @param Cache What the session stores its context in, as --kv-cache
+   --    names it. Varied here because a storage holding a quarter of the
+   --    bytes is offered for what it saves, and what it saved in time was
+   --    arithmetic about memory and nothing about time until this could
+   --    take the figure. The published figures are taken at the default,
+   --    which is the exact storage.
    --  @param Backend Which backend evaluates the model, as --backend
    --    selects. The device figures were taken by hand before this existed,
    --    which is the same gap the reference-backend ratio had and the same
@@ -122,6 +128,8 @@ package Speed_Run is
       Threads     : Positive;
       Batch       : Positive;
       Repack      : Model_Runner.Llama.Repack_Mode;
+      Cache       : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Penalty     : Model_Runner.Numerics.Real := 1.1;

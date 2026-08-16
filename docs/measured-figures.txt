@@ -707,13 +707,29 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # Not re-measured, and this machine still has no model file to measure with,
 # which is the reason recorded under the engine group above.
 
+# 2026-08-16, --kv-cache in the timing tool. All four groups list
+# speed_run.adb, which gained a parameter naming the storage a session keeps
+# its context in. No engine source moved with it.
+#
+# And a model file exists on this machine at last, so the reason recorded
+# three times above -- that there was nothing to measure with -- no longer
+# holds. The engine group's twelve-token figure was taken again on
+# TinyLlama-1.1B-Chat Q8_0, the model every one of these figures describes:
+# 1.871 s wall against the published 1.88, 10.76 s of processor time, at a
+# load of 1.44 rising to 2.12, and the generated text is the same digest the
+# README publishes -- 5abff916f9d83ca6. The figure holds.
+#
+# The other three groups are not re-measured. What moved is the tool's
+# parameter list and nothing they time, and the run above is the evidence
+# that the tool still measures what it measured.
+
 # load: the twelve-token figure at 1.28 rising to 1.82, 2026-08-14, and it
 #       now carries its processor time from this repository's own tool
 #       rather than from the shell. The worker-count and batch-size tables
 #       beside it was retaken too: fourteen threads and seven, both at
 #       about 1.25, 2026-08-14. The batch-size table is the last part of
 #       this group with no load recorded.
-engine 43E82D82F08CF15C src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 507EB86CD2BA323D src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -743,9 +759,25 @@ engine 43E82D82F08CF15C src/library/model_runner-llama.adb src/library/model_run
 # Not re-measured, and this machine still has no model file to measure with,
 # which is the reason recorded under the engine group above.
 
+# 2026-08-16, --kv-cache in the timing tool. All four groups list
+# speed_run.adb, which gained a parameter naming the storage a session keeps
+# its context in. No engine source moved with it.
+#
+# And a model file exists on this machine at last, so the reason recorded
+# three times above -- that there was nothing to measure with -- no longer
+# holds. The engine group's twelve-token figure was taken again on
+# TinyLlama-1.1B-Chat Q8_0, the model every one of these figures describes:
+# 1.871 s wall against the published 1.88, 10.76 s of processor time, at a
+# load of 1.44 rising to 2.12, and the generated text is the same digest the
+# README publishes -- 5abff916f9d83ca6. The figure holds.
+#
+# The other three groups are not re-measured. What moved is the tool's
+# parameter list and nothing they time, and the run above is the evidence
+# that the tool still measures what it measured.
+
 # load: 1.10 to 1.74 for the processor side and 1.25 to 1.57 for the
 #       reference side, taken minutes apart, 2026-08-14
-reference BB2E6CC5066B50E4 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 01FE8BE9DEC71615 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
 # and the 111-token prompt, on both backends -- the claim that the two print
@@ -941,9 +973,25 @@ reference BB2E6CC5066B50E4 src/library/model_runner-backend-reference.adb src/li
 # Not re-measured, and this machine still has no model file to measure with,
 # which is the reason recorded under the engine group above.
 
+# 2026-08-16, --kv-cache in the timing tool. All four groups list
+# speed_run.adb, which gained a parameter naming the storage a session keeps
+# its context in. No engine source moved with it.
+#
+# And a model file exists on this machine at last, so the reason recorded
+# three times above -- that there was nothing to measure with -- no longer
+# holds. The engine group's twelve-token figure was taken again on
+# TinyLlama-1.1B-Chat Q8_0, the model every one of these figures describes:
+# 1.871 s wall against the published 1.88, 10.76 s of processor time, at a
+# load of 1.44 rising to 2.12, and the generated text is the same digest the
+# README publishes -- 5abff916f9d83ca6. The figure holds.
+#
+# The other three groups are not re-measured. What moved is the tool's
+# parameter list and nothing they time, and the run above is the evidence
+# that the tool still measures what it measured.
+
 # load: 1.70 rising to 2.37 for the fifteen ratios and the batched ones,
 #       2026-08-15; 1.0 to 1.9 for the two-backend table, 2026-08-14
-device 615449CC7C8A563F src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 0405429AEFCB461E src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -976,8 +1024,24 @@ device 615449CC7C8A563F src/shaders/row_product.comp src/library/model_runner-sh
 # Not re-measured, and this machine still has no model file to measure with,
 # which is the reason recorded under the engine group above.
 
+# 2026-08-16, --kv-cache in the timing tool. All four groups list
+# speed_run.adb, which gained a parameter naming the storage a session keeps
+# its context in. No engine source moved with it.
+#
+# And a model file exists on this machine at last, so the reason recorded
+# three times above -- that there was nothing to measure with -- no longer
+# holds. The engine group's twelve-token figure was taken again on
+# TinyLlama-1.1B-Chat Q8_0, the model every one of these figures describes:
+# 1.871 s wall against the published 1.88, 10.76 s of processor time, at a
+# load of 1.44 rising to 2.12, and the generated text is the same digest the
+# README publishes -- 5abff916f9d83ca6. The figure holds.
+#
+# The other three groups are not re-measured. What moved is the tool's
+# parameter list and nothing they time, and the run above is the evidence
+# that the tool still measures what it measured.
+
 # load: 1.19 to 2.52 across the three runs, 2026-08-14
-drafting 44DDC02A898D750F src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting 44941DAF92C6BE02 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14

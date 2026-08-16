@@ -827,6 +827,23 @@ It is the coarsest thing this program does to a number it will read back,
 and it is offered for the case the halved cache does not fit rather than as
 a default: nothing chooses it unless asked.
 
+What it costs in time is nothing this machine can measure: twelve tokens of
+TinyLlama-1.1B Q8_0 take **1.912 s** with the byte cache against **1.871 s**
+with the exact one, and two runs of the same figure an hour apart on this
+machine differ by more than that. Packing a row is one pass over what a
+projection had just written hundreds of products into, and unpacking is a
+multiply where a read used to be, so this is what one would expect rather
+than a surprise -- but it was arithmetic about memory until it was a
+measurement about time, and those are different claims.
+
+What it costs in what the model says is not nothing. The same twelve tokens
+come out as a different digest -- `7d3e2df2d776ba62` against
+`5abff916f9d83ca6` -- so at eleven hundred million parameters and twelve
+tokens the byte cache has already changed the text. The exact and halved
+caches agree with each other on that run; this one does not agree with
+either. A storage offered for the case the halved cache does not fit is a
+storage whose output is its own.
+
 A rolling context in that storage loses a little more of what it keeps every
 time it rolls. `Shift` turns the surviving keys back by the angle it dropped,
 which means decoding a row that was already rounded and rounding it again --

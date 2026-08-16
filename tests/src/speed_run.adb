@@ -130,6 +130,7 @@ package body Speed_Run is
       Threads     : Positive;
       Batch       : Positive;
       Repack      : L.Repack_Mode;
+      Cache       : L.Cache_Precision := L.Exact;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Penalty     : Model_Runner.Numerics.Real := 1.1;
@@ -328,7 +329,8 @@ package body Speed_Run is
                   Outcome : Gen.Result;
                   Local   : E.Error_Info;
                begin
-                  L.Open (Session, Engine, Workers => Where, Status => Local);
+                  L.Open (Session, Engine, Workers => Where,
+                          Cache => Cache, Status => Local);
                   exit when E.Is_Error (Local);
 
                   if Drafting then

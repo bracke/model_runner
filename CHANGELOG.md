@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **What the byte cache costs in time, measured.** Twelve tokens of
+  TinyLlama-1.1B Q8_0: 1.912 s with it against 1.871 s without, which is
+  inside what two runs of the same figure differ by on this machine. What it
+  does change is the text -- the same twelve tokens come out as
+  `7d3e2df2d776ba62` against `5abff916f9d83ca6`, so at this size the storage
+  has already moved what the model says. `tests speed` takes `--kv-cache
+  MODE` now, because a figure about a storage has to be taken by the tool
+  that takes every other figure rather than by a stopwatch beside it.
+
 - **`--kv-cache q8`: the context in one byte an element.** A third precision
   beside the exact and halved ones, with a scale for every row -- one
   position's keys, or its values, for one layer, which is the unit the
