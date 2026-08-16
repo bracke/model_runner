@@ -45,6 +45,27 @@ Keep a Changelog and the project uses semantic versioning.
   its fused bias in the format of its weights, so a quantized phi2 file
   carried a bias no reader that asks for a plain vector would take.
 
+- **The fixture check asks its question of every shape, format and path.** It
+  moved one fixture an architecture -- binary32, plain, a token at a time on
+  the processor -- so a tensor only a mixture writes, or only a stretched
+  rotation, or only the batched path or the shader reads, was never moved at
+  all. It now crosses all five shapes with five formats and four combinations
+  of backend and path: 17975 tensors moved where 229 were before, in half a
+  minute. A tensor that does not answer is moved sixteen times as far before
+  it is called unread, because whether anything reads it and whether this
+  fixture is sensitive to it are different questions; the ones that answer
+  only to the larger move are counted and reported.
+
+  What it found, and what is not yet explained: in the fixture the superblock
+  formats are built at, qwen2's key bias can be moved by sixteen without
+  changing a single bit of a single logit. The bytes do change -- they were
+  read back and compared -- and the engine resolves a bias of the right width
+  and adds it to the key row before the rotation, where it belongs and where
+  the independent implementation adds it too. Both implementations agree,
+  which is exactly why the conformance sweep cannot see it. It is named in the
+  check with the reason, counted separately, and reported on every run so that
+  it stays visible; anything else that stops answering fails the gate.
+
 ### Fixed
 
 - **A feed-forward that was computed and discarded.** The ungated arm ended

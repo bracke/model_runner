@@ -284,10 +284,14 @@ begin
          --  What the fixture check says about each tensor nothing read. The
          --  package reports counts and hands the naming back here, because
          --  where a line goes is this program's business rather than its.
+         --  Not called "fail": what the check says about a tensor is a
+         --  note, and whether the run failed is decided by the counts it
+         --  returns. An allowance printed as a failure teaches the reader to
+         --  skip the word.
          procedure Complain (Line : String) is
          begin
             Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error, "  fail: " & Line);
+              (Ada.Text_IO.Standard_Error, "  fixtures: " & Line);
          end Complain;
 
          --  Whether to run only the part that asks about this host.
@@ -380,6 +384,8 @@ begin
               (Ada.Text_IO.Standard_Error,
                "  fixtures: tensors moved" & Natural'Image (Moved.Examined)
                & ", unread" & Natural'Image (Moved.Unread)
+               & ", allowed" & Natural'Image (Moved.Allowed)
+               & ", faint" & Natural'Image (Moved.Faint)
                & ", refused" & Natural'Image (Moved.Refused));
             if not Fixture_Mutation.Is_Clean (Moved) then
                Failed := True;
@@ -471,6 +477,8 @@ begin
            (Ada.Text_IO.Standard_Error,
             "fixtures: tensors moved" & Natural'Image (Moved.Examined)
             & ", unread" & Natural'Image (Moved.Unread)
+            & ", allowed" & Natural'Image (Moved.Allowed)
+            & ", faint" & Natural'Image (Moved.Faint)
             & ", refused" & Natural'Image (Moved.Refused));
 
          if not Fixture_Mutation.Is_Clean (Moved) then

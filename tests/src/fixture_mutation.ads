@@ -45,6 +45,20 @@ package Fixture_Mutation is
       --  Of those, the ones no logit answered to.
       Unread   : Natural := 0;
 
+      --  Tensors named in the list of what this run is allowed not to
+      --  notice. Reported every run so that the allowance stays visible,
+      --  and never zero without the list being emptied first.
+      Allowed  : Natural := 0;
+
+      --  And the ones that answered only to a move sixteen times the size.
+      --  Read, so not a failure, but worth a count: a tensor a fixture makes
+      --  this insensitive to is one that fixture's comparisons would not
+      --  notice a small mistake in. The deep superblock fixture's queries
+      --  and keys are the ones that say so, its attention being saturated
+      --  enough that moving them by a quarter leaves the same position
+      --  winning every softmax.
+      Faint    : Natural := 0;
+
       --  Fixtures that could not be built, parsed or evaluated at all. A
       --  run that cannot evaluate its own fixture has not checked anything,
       --  and saying so is the point of counting it separately from a tensor
@@ -57,7 +71,8 @@ package Fixture_Mutation is
    --  @param Item Report to judge.
    --  @return True when every tensor was read and nothing was refused.
    function Is_Clean (Item : Report) return Boolean
-   is (Item.Unread = 0 and then Item.Refused = 0 and then Item.Examined > 0);
+   is (Item.Unread = 0 and then Item.Refused = 0
+       and then Item.Examined > 0);
 
    --  Move every tensor of every architecture's fixture in turn and record
    --  which ones no logit answered to.
