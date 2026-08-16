@@ -45,18 +45,12 @@ package Fixture_Mutation is
       --  Of those, the ones no logit answered to.
       Unread   : Natural := 0;
 
-      --  Tensors named in the list of what this run is allowed not to
-      --  notice. Reported every run so that the allowance stays visible,
-      --  and never zero without the list being emptied first.
-      Allowed  : Natural := 0;
-
       --  And the ones that answered only to a move sixteen times the size.
       --  Read, so not a failure, but worth a count: a tensor a fixture makes
       --  this insensitive to is one that fixture's comparisons would not
-      --  notice a small mistake in. The deep superblock fixture's queries
-      --  and keys are the ones that say so, its attention being saturated
-      --  enough that moving them by a quarter leaves the same position
-      --  winning every softmax.
+      --  notice a small mistake in. It read twenty-nine while the deep
+      --  fixture's attention was saturated, and reads zero now that the
+      --  queries and keys it draws are drawn to suit its width.
       Faint    : Natural := 0;
 
       --  Fixtures that could not be built, parsed or evaluated at all. A

@@ -16,6 +16,7 @@ package body Tiny_Model is
    use type Interfaces.Unsigned_64;
    use type N.Element_Count;
    use type N.Real;
+   use type N.Wide_Real;
 
    Hex : constant String := "0123456789ABCDEF";
 
@@ -93,11 +94,48 @@ package body Tiny_Model is
       Seed    : Interfaces.Unsigned_64 := 12_345;
 
       --  Draw the next weight block from the fixed sequence.
+      --  How large the two projections that make an attention score are
+      --  drawn, which is not a free choice once the fixture is wide.
+      --
+      --  A projection sums over the embedding, so an element of a query or a
+      --  key grows as the square root of the width and their product grows as
+      --  the width itself. At eight elements a score is a small number and
+      --  the softmax over three positions is a distribution. At two hundred
+      --  and fifty-six it was not: the deep fixture's scores read 32.3
+      --  against 20.2, which is a softmax that has already decided, and one
+      --  position carried the whole of every head.
+      --
+      --  A model like that cannot feel a small mistake. Moving a key bias by
+      --  sixteen left every logit bit for bit the same, because the winner of
+      --  a one-hot softmax does not change and nothing else is read -- so the
+      --  comparisons that fixture ran said less than their count suggested,
+      --  and the check that moves tensors is what said so.
+      --
+      --  Only the queries and the keys are drawn smaller. Scaling every
+      --  weight this way was the first attempt and it moved the problem: the
+      --  scores came back to size, and the whole of what a layer contributes
+      --  went under what an architecture that multiplies its embedding by the
+      --  square root of the width carries in the residual, so gemma3's second
+      --  layer stopped answering at all. What a score is made of is what has
+      --  to shrink.
+      Score_Amplitude : constant N.Real :=
+        0.5 * N.Real
+                (N.Sqrt
+                   (N.Wide_Real (Tiny_Model.Embedding)
+                    / N.Wide_Real (Embedding)));
+
       function Next (Count : N.Element_Count) return N.Real_Array is
       begin
          Seed := Seed + 7919;
          return Fixtures.Sequence (Count, Seed, 0.5);
       end Next;
+
+      --  The same draw at the amplitude a query or a key is drawn at.
+      function Next_Score (Count : N.Element_Count) return N.Real_Array is
+      begin
+         Seed := Seed + 7919;
+         return Fixtures.Sequence (Count, Seed, Score_Amplitude);
+      end Next_Score;
 
       --  Append a tensor whose contents are given rather than drawn, which
       --  is what an architecture writing several projections into one tensor
@@ -181,6 +219,21 @@ package body Tiny_Model is
       end Weight_Of;
 
       --  The ordinary case: one tensor, drawn as it is written.
+      --  Whether a tensor of this name is one of the two a score is made
+      --  of. Asked by name so that every architecture's queries and keys are
+      --  drawn the same way, whatever else it writes beside them.
+      function Makes_A_Score (Name : String) return Boolean
+      is (Name'Length >= 13
+          and then (Name (Name'Last - 12 .. Name'Last) = "attn_q.weight"
+                    or else Name (Name'Last - 12 .. Name'Last)
+                            = "attn_k.weight"));
+
+      function Biases_A_Score (Name : String) return Boolean
+      is (Name'Length >= 11
+          and then (Name (Name'Last - 10 .. Name'Last) = "attn_q.bias"
+                    or else Name (Name'Last - 10 .. Name'Last)
+                            = "attn_k.bias"));
+
       procedure Weight
         (Name       : String;
          Dimensions : Fixtures.Dimension_List)
@@ -190,7 +243,12 @@ package body Tiny_Model is
          for Extent of Dimensions loop
             Total := Total * N.Element_Count (Extent);
          end loop;
-         Weight_Of (Name, Dimensions, Next (Total));
+
+         if Makes_A_Score (Name) then
+            Weight_Of (Name, Dimensions, Next_Score (Total));
+         else
+            Weight_Of (Name, Dimensions, Next (Total));
+         end if;
       end Weight;
 
       --  Append a normalization weight, which is kept near one so that the
@@ -241,7 +299,9 @@ package body Tiny_Model is
       --  A one-dimensional tensor of a given width, for the biases.
       procedure Norm_Of (Name : String; Width : Positive) is
          Values : N.Real_Array (0 .. N.Element_Count (Width) - 1);
-         Drawn  : constant N.Real_Array := Next (N.Element_Count (Width));
+         Drawn  : constant N.Real_Array :=
+           (if Biases_A_Score (Name) then Next_Score (N.Element_Count (Width))
+            else Next (N.Element_Count (Width)));
       begin
          for Index in Values'Range loop
             Values (Index) := Drawn (Index) * 0.125;
@@ -575,9 +635,9 @@ package body Tiny_Model is
                use type N.Real_Array;
 
                Q : constant N.Real_Array :=
-                 Next (N.Element_Count (Embedding * Heads * Key_Size));
+                 Next_Score (N.Element_Count (Embedding * Heads * Key_Size));
                K : constant N.Real_Array :=
-                 Next (N.Element_Count (Embedding * KV_Heads * Key_Size));
+                 Next_Score (N.Element_Count (Embedding * KV_Heads * Key_Size));
                V : constant N.Real_Array :=
                  Next (N.Element_Count (Embedding * KV_Heads * Value_Size));
             begin
@@ -629,9 +689,9 @@ package body Tiny_Model is
                use type N.Real_Array;
 
                Q : constant N.Real_Array :=
-                 Next (N.Element_Count (Heads * Key_Size));
+                 Next_Score (N.Element_Count (Heads * Key_Size));
                K : constant N.Real_Array :=
-                 Next (N.Element_Count (KV_Heads * Key_Size));
+                 Next_Score (N.Element_Count (KV_Heads * Key_Size));
                V : constant N.Real_Array :=
                  Next (N.Element_Count (KV_Heads * Value_Size));
                Whole : constant N.Real_Array := Q & K & V;

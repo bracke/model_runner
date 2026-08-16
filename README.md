@@ -716,14 +716,14 @@ therefore cannot be common to both.
 
 ```
 conformance: sequences 23535, logits compared 322560,
-             worst absolute 6.61448463254999E-05,
-             worst relative 1.04214844164070E-02,
+             worst absolute 1.80089269772310E-05,
+             worst relative 5.39566401500295E-03,
              rounded logits compared 32400,
-             rounded worst absolute 2.16431257370146E-01,
-             rounded worst relative 1.83560177726357E+00,
+             rounded worst absolute 1.04444242613750E-01,
+             rounded worst relative 1.88480300374975E+00,
              cached logits compared 21600,
-             cached worst absolute 5.38178472786255E-02,
-             cached worst relative 7.58894010584198E-01,
+             cached worst absolute 9.22560479118539E-03,
+             cached worst relative 7.98212777069768E-01,
              outside tolerance 0, unlearned 0
 ```
 

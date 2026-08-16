@@ -68,6 +68,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A fixture whose attention had already decided.** The deep fixture the
+  superblock formats are built at draws its weights over two hundred and
+  fifty-six elements, and an attention score is the product of two
+  projections summed over that width: its scores read 32.3 against 20.2,
+  which is a softmax at about a hundred and sixty thousand to one. One
+  position carried every head, so the queries and keys of that fixture could
+  be moved almost freely without changing a logit -- which is why qwen2's key
+  bias could be moved by sixteen and come out bit for bit the same, and why
+  sixteen other tensors answered only to a move sixteen times the size. It
+  was not a defect in the engine: both implementations add that bias where it
+  belongs, and agreeing is why the conformance sweep could not see it.
+
+  The queries and the keys are now drawn with an amplitude that falls with
+  the square root of the width, which keeps a score the size it is in the
+  narrow fixture. Only those two: scaling every weight that way was the first
+  attempt, and it moved the problem rather than fixing it -- the scores came
+  back to size and the whole of what a layer contributes went under what
+  gemma3 carries in its residual from multiplying the embedding by the square
+  root of the width, so its second layer stopped answering at all. What a
+  score is made of is what had to shrink.
+
+  Every one of the 17975 tensors the fixture check moves now answers to the
+  ordinary displacement: none unread, none faint, and the named allowance the
+  check carried is gone rather than merely unused. The comparisons tightened
+  with it -- the worst exact divergence across the sweep fell from 6.6e-5 to
+  1.8e-5, the halved-cache one from 5.4e-2 to 9.2e-3, and the rounded one
+  from 2.2e-1 to 1.0e-1. A fixture that cannot feel a mistake was also a
+  fixture whose agreement meant less than it looked.
+
 - **A feed-forward that was computed and discarded.** The ungated arm ended
   after the activation, and the projection down and the residual add sat
   inside the gated arm below it, so falcon ran with attention only -- in both

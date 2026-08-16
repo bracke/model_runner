@@ -394,42 +394,7 @@ package body Fixture_Mutation is
                   end;
                end if;
 
-               --  What this run is allowed not to notice, named exactly and
-               --  with the reason beside it.
-               --
-               --  Qwen2's key bias, in the fixture the superblock formats are
-               --  built at, moves a hundred and twenty-eight numbers by as
-               --  much as sixteen and changes no logit by anything at all --
-               --  the same bits come out. The bytes do change: they were read
-               --  back and compared. The engine resolves a bias of the right
-               --  width and adds it to a key row of the right width before
-               --  the rotation, which is where it belongs and where the
-               --  independent implementation adds it too. Why the answer does
-               --  not move is not known, and a guess written here would read
-               --  as a finding. It is not this check's doing: it predates it,
-               --  both implementations agree about it, and agreeing is
-               --  exactly why the conformance sweep cannot see it.
-               --
-               --  Named rather than passed over so that the next run says it
-               --  again, and so that anything else that stops answering fails
-               --  the gate rather than joining a silence.
-               if not Heard
-                 and then Kind = Tiny_Model.Qwen2
-                 and then Format = Tiny_Model.Q4_K
-                 and then Containers.Tensor_Name (Parsed, Index)
-                          = "blk.0.attn_k.bias"
-               then
-                  Result.Allowed := Result.Allowed + 1;
-
-                  if Say /= null then
-                     Say (Where & " writes "
-                          & Containers.Tensor_Name (Parsed, Index)
-                          & ", which no logit answers to and which this run"
-                          & " is allowed not to notice; the reason is beside"
-                          & " the list");
-                  end if;
-
-               elsif not Heard then
+               if not Heard then
                   Result.Unread := Result.Unread + 1;
 
                   if Say /= null then
