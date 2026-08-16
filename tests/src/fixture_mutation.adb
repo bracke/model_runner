@@ -1,3 +1,4 @@
+with Ada.Strings.Unbounded;
 with Ada.Unchecked_Conversion;
 
 with Interfaces;
@@ -284,8 +285,11 @@ package body Fixture_Mutation is
          Status : E.Error_Info;
 
          --  Tensors of this fixture whose answer is smaller than a
-         --  disagreement.
+         --  disagreement, and which ones. Named rather than counted alone:
+         --  a count says a fixture is quiet somewhere, and what is worth
+         --  acting on is which part of it.
          Hushed : Natural := 0;
+         Named  : Ada.Strings.Unbounded.Unbounded_String;
 
          --  What a report has to name to be acted on: the same fixture has to
          --  be findable again out of nine hundred of them.
@@ -422,6 +426,10 @@ package body Fixture_Mutation is
                if Heard and then Moved_By <= N.Real (Disagreement) then
                   Result.Quiet := Result.Quiet + 1;
                   Hushed := Hushed + 1;
+                  Ada.Strings.Unbounded.Append
+                    (Named,
+                     (if Hushed > 1 then ", " else " ")
+                     & Containers.Tensor_Name (Parsed, Index));
                end if;
 
                if not Heard then
@@ -444,7 +452,8 @@ package body Fixture_Mutation is
             Say (Where & ":" & Natural'Image (Hushed) & " of"
                  & Natural'Image (Containers.Tensor_Count (Parsed))
                  & " tensors move a logit by less than a comparison would"
-                 & " call a disagreement");
+                 & " call a disagreement --"
+                 & Ada.Strings.Unbounded.To_String (Named));
          end if;
 
          Containers.Close (Parsed);

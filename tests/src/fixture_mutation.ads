@@ -75,7 +75,24 @@ package Fixture_Mutation is
       Faint    : Natural := 0;
 
       --  Tensors that answered, but by less than a comparison would call a
-      --  disagreement. Not a failure either, and not a defect in the engine:
+      --  disagreement.
+      --
+      --  All sixty-five of them are gemma3's, and nearly all are the
+      --  queries, the keys and the gains that normalize their heads, in its
+      --  last two blocks. That is quiet for a reason rather than a fixture
+      --  that wants fixing: gemma3 normalizes every query head and every key
+      --  head against itself before the rotation, which removes exactly the
+      --  magnitude a displacement changes and leaves only the direction, and
+      --  it is the only architecture here that does that and is also built
+      --  deep enough for the effect to show -- six blocks, because its
+      --  window pattern needs them. A fixture cannot be made to feel a
+      --  change the architecture is designed to divide out without
+      --  misrepresenting the architecture.
+      --
+      --  What that means for the sweep is worth stating plainly: an error in
+      --  gemma3's late query and key projections has to be larger than a
+      --  quarter before those comparisons would report it. Every other
+      --  architecture's every tensor answers louder than that. Not a failure either, and not a defect in the engine:
       --  it says that a mistake the size of this displacement, in this
       --  tensor, in this fixture, would pass the conformance sweep without
       --  being remarked on. That is the measure the sweep cannot take of

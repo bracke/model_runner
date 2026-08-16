@@ -83,9 +83,22 @@ Keep a Changelog and the project uses semantic versioning.
   tensor that answers by less than a comparison would call a disagreement is
   counted as quiet and the fixture holding it is named: a mistake of that
   size, in that tensor, in that fixture, would pass the sweep unremarked.
-  Sixty-five of the 22195 are quiet, across thirty-eight fixtures. It is not
-  a failure and does not fail the gate -- it is the measure the sweep cannot
-  take of itself.
+  Sixty-five of the 22195 are quiet, across thirty-eight fixtures, and each
+  is named beside its fixture rather than only counted: what is worth acting
+  on is which part of a fixture is quiet.
+
+  All sixty-five are gemma3's, and nearly all are the queries, the keys and
+  the gains that normalize their heads, in its last two blocks. That is quiet
+  for a reason rather than a fixture wanting repair: gemma3 normalizes every
+  query head and every key head against itself before the rotation, which
+  removes exactly the magnitude a displacement changes, and it is the only
+  architecture here that does that and is also built deep enough for the
+  effect to show. What it means for the sweep is written where the measure
+  is: an error in gemma3's late query and key projections has to be larger
+  than a quarter before those comparisons would report it, and every other
+  architecture's every tensor answers louder than that. It is not a failure
+  and does not fail the gate -- it is the measure the sweep cannot take of
+  itself.
 
 ### Fixed
 
