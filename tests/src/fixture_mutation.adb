@@ -3,8 +3,8 @@ with Ada.Unchecked_Conversion;
 
 with Interfaces;
 
-with Model_Runner.Backend;
 with Model_Runner.Backend.Device;
+with Model_Runner.Backend;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
@@ -13,11 +13,14 @@ with Model_Runner.Llama;
 with Model_Runner.Numerics;
 with Model_Runner.Tokenizer;
 
+with Project_Tools.Text;
+with Reference_Transformer;
 with Tiny_Model;
 
 package body Fixture_Mutation is
 
    use type Interfaces.Unsigned_8;
+   use type Model_Runner.Backend.Backend_Kind;
    use type Tiny_Model.Fixture_Architecture;
    use type Tiny_Model.Weight_Format;
    use type Interfaces.Unsigned_32;
@@ -31,6 +34,7 @@ package body Fixture_Mutation is
    package E renames Model_Runner.Errors;
    package L renames Model_Runner.Llama;
    package N renames Model_Runner.Numerics;
+   package R renames Reference_Transformer;
 
    --  A binary32 and the word holding its bits are the same four bytes; the
    --  conversion says so where the compiler can see it.
@@ -317,6 +321,41 @@ package body Fixture_Mutation is
             Result.Refused := Result.Refused + 1;
             B.Free (Image);
             return;
+         end if;
+
+         --  What the independent implementation asks this file for, against
+         --  what the file holds. Asked once a fixture rather than once a
+         --  tensor: the list is the same however the file is read.
+         if Backend = Model_Runner.Backend.Backend_CPU and then not Batched
+         then
+            declare
+               Names  : aliased Ada.Strings.Unbounded.Unbounded_String;
+               Second : R.Model;
+               Loaded : Boolean;
+            begin
+               R.Load (Second, Parsed, Image.all, Loaded, Names'Access);
+               R.Close (Second);
+
+               for Index in 1 .. Containers.Tensor_Count (Parsed) loop
+                  declare
+                     Name : constant String :=
+                       Containers.Tensor_Name (Parsed, Index);
+                  begin
+                     if not Project_Tools.Text.Contains
+                              (Ada.Strings.Unbounded.To_String (Names),
+                               Name & Character'Val (10))
+                     then
+                        Result.Unwanted := Result.Unwanted + 1;
+
+                        if Say /= null then
+                           Say (Where & " writes " & Name
+                                & ", which the independent implementation "
+                                & "never asks for");
+                        end if;
+                     end if;
+                  end;
+               end loop;
+            end;
          end if;
 
          Answer (Image, Backend, Batched, Given, Ok);

@@ -27,7 +27,22 @@
 # from it, for as long as it had existed, and nothing here noticed because
 # nothing here was watching the thing doing the measuring.
 #
-# The "# covers:" line before a group says which published figures it stands
+# The "# The host every figure below was taken on, which none of them said.
+#
+#   processor  AMD Ryzen 7 7840U with Radeon 780M Graphics, 16 hardware
+#              threads
+#   device     AMD Radeon 780M Graphics (RADV PHOENIX), integrated, one
+#              queue in the family the engine computes on. A second device
+#              is listed, llvmpipe, which is a software renderer and not
+#              what any of these figures used.
+#   system     Linux 6.17.0, GNAT from the toolchain this repository pins
+#
+# A figure without its host is a figure about nothing: 1.871 s for twelve
+# tokens says something only beside the machine that took 1.871 s. The load
+# each run carried has been recorded here for months and what carried it
+# never was, which is half a condition written down twice.
+
+# covers:" line before a group says which published figures it stands
 # for, and the check prints it when that group fails. A group whose figures
 # are not named is a group nobody can answer: the reader learns that something
 # changed and is left to guess what to measure again. If you add a figure to

@@ -844,17 +844,28 @@ package body Reference_Transformer is
      (Item   : in out Model;
       Source : Containers.Container;
       Image  : B.Byte_Array;
-      Ok     : out Boolean)
+      Ok     : out Boolean;
+      Asked  : access Ada.Strings.Unbounded.Unbounded_String := null)
    is
       use type Model_Runner.GGUF.Tensor_Type;
 
       --  Read a two-dimensional tensor. GGUF dimension 1 is contiguous and is
       --  the input width; the remaining extent is the output width.
+      --  Every lookup goes through one of the two readers below, so
+      --  recording the name here records every name this asked for.
+      procedure Note (Name : String) is
+      begin
+         if Asked /= null then
+            Ada.Strings.Unbounded.Append (Asked.all, Name & Character'Val (10));
+         end if;
+      end Note;
+
       function Read_Matrix (Name : String; Present : out Boolean)
         return Matrix_Access
       is
          Index : constant Natural := Containers.Find_Tensor (Source, Name);
       begin
+         Note (Name);
          Present := False;
 
          if Index = 0
@@ -1103,6 +1114,7 @@ package body Reference_Transformer is
       is
          Index : constant Natural := Containers.Find_Tensor (Source, Name);
       begin
+         Note (Name);
          Present := False;
 
          if Index = 0

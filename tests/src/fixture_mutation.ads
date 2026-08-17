@@ -100,6 +100,13 @@ package Fixture_Mutation is
       --  place that moves a tensor on purpose and watches what comes out.
       Quiet    : Natural := 0;
 
+      --  Tensors a fixture writes that the independent implementation never
+      --  asks the container for. Not the same question as Unread: a tensor
+      --  the engine reads and the reference does not is a disagreement about
+      --  what the architecture carries, and one the sweep cannot report
+      --  because it compares answers rather than appetites.
+      Unwanted : Natural := 0;
+
       --  Fixtures that could not be built, parsed or evaluated at all. A
       --  run that cannot evaluate its own fixture has not checked anything,
       --  and saying so is the point of counting it separately from a tensor
@@ -113,7 +120,7 @@ package Fixture_Mutation is
    --  @return True when every tensor was read and nothing was refused.
    function Is_Clean (Item : Report) return Boolean
    is (Item.Unread = 0 and then Item.Refused = 0
-       and then Item.Examined > 0);
+       and then Item.Unwanted = 0 and then Item.Examined > 0);
 
    --  Move every tensor of every architecture's fixture in turn and record
    --  which ones no logit answered to.

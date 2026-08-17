@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The fixture check asks whether the set of tensors is right, not only
+  whether each is read.** A tensor the engine reads and the independent
+  implementation never asks for is a disagreement about what an architecture
+  carries, and the sweep cannot report it because it compares answers rather
+  than appetites. `Load` records every name it asks the container for, and
+  the check holds the file's tensor list against that. It reads zero, which
+  is the answer I wanted and not the one I expected: the falcon fixture wrote
+  a projection twice for a week and this is the check that would have said so
+  on the first run.
+
+- **The figures record the host that took them.** An AMD Ryzen 7 7840U with
+  sixteen threads, and an integrated Radeon 780M whose compute family has one
+  queue. The load each run carried has been written down for months and what
+  carried it never was, which is half a condition recorded twice.
+
 - **A run on a device says how many queues its family has.** The number was
   read to choose the family, kept last commit, and visible only to a test.
   Now the run prints it, and the answer on this host is one -- so submitting

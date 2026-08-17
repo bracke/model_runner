@@ -1,3 +1,4 @@
+with Ada.Strings.Unbounded;
 with Interfaces;
 
 with Model_Runner.Bytes;
@@ -44,11 +45,18 @@ package Reference_Transformer is
    --  @param Source Parsed container.
    --  @param Image File bytes the container was parsed from.
    --  @param Ok True when the model is float32 throughout and complete.
+   --  @param Asked Every tensor name this asked the container for, in the
+   --    order it asked, newline separated and each terminated by one, or
+   --    null to record none. Written for the check that a fixture holds the
+   --    set an architecture carries: whether a tensor is read is one
+   --    question and whether the right tensors are there is another, and
+   --    only this side knows what it asked for.
    procedure Load
      (Item   : in out Model;
       Source : Model_Runner.GGUF.Containers.Container;
       Image  : Model_Runner.Bytes.Byte_Array;
-      Ok     : out Boolean);
+      Ok     : out Boolean;
+      Asked  : access Ada.Strings.Unbounded.Unbounded_String := null);
 
    --  Release a model. Idempotent.
    --
