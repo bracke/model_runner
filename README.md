@@ -730,6 +730,10 @@ conformance: sequences 24939, logits compared 322560,
              outside tolerance 0, unlearned 0
 ```
 
+The run above crossed 9 architectures, in 15 formats and 5 shapes, of which
+864 ran on a device -- which is the same claim the paragraph below makes in
+words, and is checked against the run rather than kept by hand.
+
 Nine architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon` and `phi2` -- in
 each of the five shapes a supported model comes in: dense, sliding-window, a mixture of
 experts, a stretched rotation, and heads wider than the embedding implies with

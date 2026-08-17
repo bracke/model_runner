@@ -115,6 +115,17 @@ procedure Tests_Main is
    --  Every number the conformance summary prints, as it prints it.
    function Conformance_Fields (Item : Conformance.Report) return Field_List
    is ([new String'("sequences" & Natural'Image (Item.Sequences)),
+
+        --  The shape behind the totals, held to the README as the totals
+        --  are: a published count of architectures that no longer matches
+        --  what ran is the same kind of stale as a published tolerance,
+        --  and it was stale once already.
+        new String'("crossed" & Natural'Image (Item.Architectures)
+                    & " architectures"),
+        new String'("in" & Natural'Image (Item.Formats) & " formats"),
+        new String'("and" & Natural'Image (Item.Shapes) & " shapes"),
+        new String'("of which" & Natural'Image (Item.On_Device)
+                    & " ran on a device"),
         new String'("logits compared" & Natural'Image (Item.Compared)),
         new String'("worst absolute" & Long_Float'Image (Item.Worst_Abs)),
         new String'("worst relative" & Long_Float'Image (Item.Worst_Rel)),
