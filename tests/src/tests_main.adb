@@ -382,6 +382,11 @@ begin
             Report_Stage ("conformance");
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
+               "  of which: fixtures built" & Duration'Image (Agreed.Built)
+               & " s, reference" & Duration'Image (Agreed.Learned)
+               & " s, the rest is the engine");
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
                "  conformance: sequences" & Natural'Image (Agreed.Sequences)
                & ", outside tolerance" & Natural'Image (Agreed.Failures)
                & ", refused" & Natural'Image (Agreed.Refused));

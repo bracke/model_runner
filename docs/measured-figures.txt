@@ -42,6 +42,25 @@
 # each run carried has been recorded here for months and what carried it
 # never was, which is half a condition written down twice.
 
+# 2026-08-17, where the sweep's twenty-four minutes go, which it now says:
+#
+#   fixtures built          59.9 s    4 per cent
+#   the reference         1206.9 s   85 per cent
+#   the engine             ~157   s   11 per cent
+#
+# The independent implementation is eighty-five per cent of the sweep, and
+# the sweep is ninety-four per cent of the gate: four fifths of every gate
+# run is one binary64 transformer computing what a binary32 one has already
+# computed. That is the price of having a second implementation and it is
+# the point of having one, so it is not waste -- but anybody who sets out to
+# make the gate faster should know they are being asked to make the
+# reference faster, and nothing else will matter.
+#
+# It already runs once a fixture rather than once a comparison: caching that
+# took the sweep from nine minutes to two when it was written. What is left
+# is four sequences a fixture, each independent of the others and each on one
+# task.
+#
 # 2026-08-17, what the gate costs, stage by stage, as it now says itself:
 #
 #   repository checks     10.1 s

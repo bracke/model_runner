@@ -107,6 +107,15 @@ package Conformance is
       Eighth_Worst_Abs : Long_Float := 0.0;
       Eighth_Worst_Rel : Long_Float := 0.0;
 
+      --  Where the sweep's time goes, in seconds. Building fixtures,
+      --  loading and running the independent implementation, and everything
+      --  else -- which is the engine loading each fixture and evaluating it.
+      --  Measured because the sweep is most of the gate and nobody knew
+      --  which part of it was most of the sweep.
+      Built      : Duration := 0.0;
+      Learned    : Duration := 0.0;
+      Evaluated  : Duration := 0.0;
+
       Unlearned  : Natural := 0;
 
       --  Sequences the sweep's own arithmetic says it should have run. Kept

@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Platform;
 with Model_Runner.Bytes;
@@ -16,6 +17,7 @@ with Tiny_Model;
 
 package body Conformance is
 
+   use type Ada.Calendar.Time;
    use type Model_Runner.Numerics.Element_Count;
 
    package B renames Model_Runner.Bytes;
@@ -34,6 +36,9 @@ package body Conformance is
 
    procedure Run (Result : out Report) is
       Image : B.Byte_Array_Access;
+
+      --  When the part now being timed began.
+      Since : Ada.Calendar.Time := Ada.Calendar.Clock;
 
       --  The sequences to compare. Lengths differ so that the comparison
       --  covers one token, a short context, and a context long enough that
@@ -173,6 +178,7 @@ package body Conformance is
             return;
          end if;
 
+         Since := Ada.Calendar.Clock;
          R.Load (Second, Parsed, Image.all, Loaded);
          if not Loaded then
             Result.Unlearned := Result.Unlearned + 1;
@@ -197,6 +203,7 @@ package body Conformance is
 
          R.Close (Second);
          Containers.Close (Parsed);
+         Result.Learned := Result.Learned + (Ada.Calendar.Clock - Since);
       end Learn;
 
       procedure Compare
@@ -486,6 +493,7 @@ package body Conformance is
                      --  That each of them changes the answer at all, and
                      --  that linear does too, is asserted where a fixture can
                      --  hold one thing still -- in the inference tests.
+                     Since := Ada.Calendar.Clock;
                      Tiny_Model.Build
                        (Image, Format, Kind => Crossed (Which_Arch),
                         Window =>
@@ -510,6 +518,8 @@ package body Conformance is
 
                      --  A new fixture, so the expectations belonging to the
                      --  last one are gone.
+                     Result.Built := Result.Built
+                       + (Ada.Calendar.Clock - Since);
                      Forget;
 
                      for Repack in L.Repack_Mode loop
@@ -728,8 +738,11 @@ package body Conformance is
          if Device_Ready then
             for Which_Arch in Crossed'Range loop
                for Format of Device_Formats loop
+                  Since := Ada.Calendar.Clock;
                   Tiny_Model.Build
                     (Image, Format, Kind => Crossed (Which_Arch));
+                  Result.Built := Result.Built
+                    + (Ada.Calendar.Clock - Since);
                   Forget;
 
                   for Which in Sequence_Index loop
