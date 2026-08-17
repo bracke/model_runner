@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Every figure group names the model it was taken with, and a check
+  requires it.** The drafting row is unreproducible because its second model
+  was requantized locally and nothing recorded the source or the tool; six
+  groups had the same silence and only the external-model record named its
+  file. Each group now carries a `# model:` line -- "none" being the answer
+  for the groups that time kernels on tensors this tool builds itself -- and
+  a group without one fails the gate.
+
+- **The device reports how many queues its family offers.** This program
+  submits to one and waits on it. Whether it could submit to two is a fact
+  about the host, and the layer already read the number to decide the family
+  was usable and then dropped it. It is kept and asserted now, which is the
+  question that comes before the policy rather than the policy.
+
 - **A check that every message key has its pseudo-locale twin.** Three keys
   went in without one over the last few commits, and what said so was four
   assertions naming symptoms -- a key renders identically under

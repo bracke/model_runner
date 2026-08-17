@@ -527,6 +527,7 @@
 # they were taken under are not recorded anywhere -- unlike every figure
 # taken from here on.
 # load: 1.70 rising to 2.37, one `tests benchmark` run, 2026-08-15
+# model: none. These figures time kernels on tensors this tool builds itself.
 kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb
 
 # covers: the twelve-token figure, the worker-count and share-count
@@ -729,6 +730,7 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 #       beside it was retaken too: fourteen threads and seven, both at
 #       about 1.25, 2026-08-14. The batch-size table is the last part of
 #       this group with no load recorded.
+# model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
 engine 507EB86CD2BA323D src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
@@ -794,6 +796,7 @@ engine 507EB86CD2BA323D src/library/model_runner-llama.adb src/library/model_run
 
 # load: 1.10 to 1.74 for the processor side and 1.25 to 1.57 for the
 #       reference side, taken minutes apart, 2026-08-14
+# model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
 reference 01FE8BE9DEC71615 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
@@ -1034,6 +1037,7 @@ reference 01FE8BE9DEC71615 src/library/model_runner-backend-reference.adb src/li
 
 # load: 1.70 rising to 2.37 for the fifteen ratios and the batched ones,
 #       2026-08-15; 1.0 to 1.9 for the two-backend table, 2026-08-14
+# model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
 device 0405429AEFCB461E src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -1127,10 +1131,12 @@ device 0405429AEFCB461E src/shaders/row_product.comp src/library/model_runner-sh
 # drafting row's second model, which is neither.
 
 # load: 1.19 to 2.52 across the three runs, 2026-08-14
+# model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
 drafting 44941DAF92C6BE02 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
+# model: none. These figures time the worker pool on tensors this tool builds itself.
 scaling 592E96BC24CA22DF src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
@@ -1153,4 +1159,5 @@ scaling 592E96BC24CA22DF src/library/model_runner-backend-cpu.adb src/library/mo
 # load: 1.12, one `tests benchmark` run, 2026-08-14. The 25.5 s that says
 #       why the bound exists is history and needs the commit before it; it
 #       is not reproducible and is quoted as a reason rather than a figure.
+# model: none. This figure times the tokenizer on text this tool builds itself.
 tokenizer C31707CC57513F4B src/library/model_runner-tokenizer.adb

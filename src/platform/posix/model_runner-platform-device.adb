@@ -581,6 +581,13 @@ package body Model_Runner.Platform.Device is
               and then Room (Which).Count > 0
             then
                Chosen := Which - 1;
+
+               --  How many queues that family offers, which decides whether
+               --  a second one is a thing this host could have at all. Kept
+               --  rather than acted on: submitting to two is a policy, and
+               --  knowing whether two exist is the question that comes
+               --  first.
+               Item.Queues := Natural (Room (Which).Count);
             end if;
          end loop;
 
@@ -846,6 +853,8 @@ package body Model_Runner.Platform.Device is
    is (Item.Logical /= System.Null_Address);
 
    function Queue_Family (Item : Context) return Natural is (Item.Family);
+
+   function Queue_Count (Item : Context) return Natural is (Item.Queues);
 
    function Shares_Memory (Item : Context) return Boolean is (Item.Shared);
 

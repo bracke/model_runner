@@ -125,6 +125,17 @@ package Model_Runner.Platform.Device is
    --  @return Family number, or zero when the context is not open.
    function Queue_Family (Item : Context) return Natural;
 
+   --  How many queues the chosen family offers.
+   --
+   --  One is common and two or more is not rare. This program submits to a
+   --  single queue and waits on it; whether it could submit to two is
+   --  decided here rather than guessed, and reported by `inspect` so the
+   --  answer is a fact about the host rather than an assumption in a plan.
+   --
+   --  @param Item Open context.
+   --  @return Queues the family has, or zero when no context is open.
+   function Queue_Count (Item : Context) return Natural;
+
    --  Whether the memory the processor writes is also the memory the device
    --  reads.
    --
@@ -196,6 +207,7 @@ private
       Queue    : System.Address := System.Null_Address;
 
       Family   : Natural := 0;
+      Queues   : Natural := 0;
       Upload   : Natural := 0;
       Fast     : Natural := 0;
       Shared   : Boolean := False;

@@ -6308,6 +6308,65 @@ package body Checks is
          end if;
       end;
 
+      --  Every figure group names the model it was taken with.
+      --
+      --  The drafting row cannot be reproduced by anyone, because the second
+      --  model it drafts with was requantized locally and nothing recorded
+      --  which source or which tool. A figure that describes a model and does
+      --  not name it is a figure only its author can check, and this
+      --  repository had six of those and one -- the external-model record --
+      --  that named its file precisely. The rule is now the same everywhere:
+      --  a group says what it ran on, and "none" is an answer for the groups
+      --  that time kernels on tensors this tool builds itself.
+      declare
+         Path  : constant String := Root & "/docs/measured-figures.txt";
+         File  : Ada.Text_IO.File_Type;
+         Named : Natural := 0;
+         Groups : Natural := 0;
+         Ready  : Boolean := False;
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if Ada.Directories.Exists (Path) then
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+            while not Ada.Text_IO.End_Of_File (File) loop
+               declare
+                  Line : constant String := Ada.Text_IO.Get_Line (File);
+               begin
+                  if Project_Tools.Text.Starts_With (Line, "# model:") then
+                     Named := Named + 1;
+                     Ready := True;
+
+                  elsif Line'Length > 18
+                    and then Line (Line'First) not in ' ' | '#'
+                  then
+                     --  A fingerprint line: a name, a sixteen-digit digest
+                     --  and the sources behind it.
+                     Groups := Groups + 1;
+
+                     if not Ready then
+                        Fail ("a figure group in docs/measured-figures.txt "
+                              & "has no '# model:' line before it, so what "
+                              & "it was measured on is not recorded: "
+                              & Line (Line'First
+                                      .. Natural'Min (Line'Last,
+                                                      Line'First + 20)));
+                     end if;
+
+                     Ready := False;
+                  end if;
+               end;
+            end loop;
+            Ada.Text_IO.Close (File);
+
+            if Groups = 0 then
+               Fail ("no figure groups were found in "
+                     & "docs/measured-figures.txt, so whether each names its "
+                     & "model was not asked");
+            end if;
+         end if;
+      end;
+
       --  Every English message key has a pseudo-locale counterpart.
       --
       --  The suite already fails when one does not, in four assertions that

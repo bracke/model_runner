@@ -78,6 +78,8 @@ package body Model_Runner.Platform.Device is
 
    function Queue_Family (Item : Context) return Natural is (Item.Family);
 
+   function Queue_Count (Item : Context) return Natural is (Item.Queues);
+
    function Shares_Memory (Item : Context) return Boolean is (Item.Shared);
 
    ------------------------

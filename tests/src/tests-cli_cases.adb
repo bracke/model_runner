@@ -379,6 +379,17 @@ package body Tests.CLI_Cases is
             Devices.Open (Opened, Held, Which, Ready);
 
             if Ready then
+               --  A family this program can compute on has at least one
+               --  queue, because having one is what made it a candidate.
+               --  Whether it has two is what would decide if this program
+               --  could ever submit to two, and it is asked here rather than
+               --  assumed in a plan.
+               Assert (Devices.Queue_Count (Opened) >= 1,
+                       "an open device reports a queue family with no queues,"
+                       & " which is not how it was chosen");
+            end if;
+
+            if Ready then
                Products.Open (Engine, Opened, Ready);
             end if;
 
