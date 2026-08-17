@@ -108,7 +108,7 @@ package Tiny_Model is
    --  the convention wrongly still gives the right answer.
    type Fixture_Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2);
+      Phi2, GPT2);
 
    --  How the fixture stretches the rotation. Plain is a model that says
    --  nothing, which rotates as it was trained.

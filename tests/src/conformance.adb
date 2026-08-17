@@ -26,6 +26,7 @@ package body Conformance is
    package L renames Model_Runner.Llama;
 
    use type L.Repack_Mode;
+   use type Tiny_Model.Fixture_Architecture;
    use type Tiny_Model.Weight_Format;
    package N renames Model_Runner.Numerics;
    package R renames Reference_Transformer;
@@ -39,6 +40,7 @@ package body Conformance is
 
       --  When the part now being timed began.
       Since : Ada.Calendar.Time := Ada.Calendar.Clock;
+
       Ran_At : Ada.Calendar.Time := Ada.Calendar.Clock;
 
       --  The sequences to compare. Lengths differ so that the comparison
@@ -135,10 +137,11 @@ package body Conformance is
       --  differences touch every part of a pass: the gain on every
       --  normalization, the scale on the embedding, and the gate in every
       --  feed-forward block, dense or mixed.
-      Crossed : constant array (1 .. 9) of Tiny_Model.Fixture_Architecture :=
+      Crossed : constant array (1 .. 10) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
          Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3,
-         Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2];
+         Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2,
+         Tiny_Model.GPT2];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -293,6 +296,13 @@ package body Conformance is
            (Engine, Parsed, Source, Backend => Backend, Repack => Repack,
             Status => Status);
          if E.Is_Error (Status) then
+            --  A model that will not load is counted, as an evaluation that
+            --  will not run has been since three hundred of those hid a null
+            --  buffer. This one returned in silence instead, so a fixture
+            --  the engine refused outright vanished from the totals and only
+            --  the expected count noticed -- which is how gpt2 came to be
+            --  nine hundred sequences short with nothing saying why.
+            Result.Refused := Result.Refused + 1;
             Containers.Close (Parsed);
             return;
          end if;
@@ -601,9 +611,24 @@ package body Conformance is
                         --  of that shape returned before it compared
                         --  anything -- nine hundred of them, counted by the
                         --  arithmetic below and run by nobody.
+                        --  A stretched rotation on a model that does not
+                        --  rotate. GPT2 learns where a token is instead, so
+                        --  its rotary count is zero and the table of
+                        --  per-dimension divisors a stretch carries has zero
+                        --  elements -- which the engine refuses as a shape,
+                        --  correctly. Skipped on the same grounds the
+                        --  mixture is skipped for an architecture with no
+                        --  gate: it describes no model anyone publishes.
+                        if Shape = Stretched
+                          and then Crossed (Which_Arch) = Tiny_Model.GPT2
+                        then
+                           goto Next_Repack;
+                        end if;
+
                         if Shape = Mixed
                           and then Crossed (Which_Arch)
                                    in Tiny_Model.Falcon | Tiny_Model.Phi2
+                                    | Tiny_Model.GPT2
                         then
                            goto Next_Repack;
                         end if;
@@ -920,12 +945,22 @@ package body Conformance is
             --  skips the shape on the same grounds.
             Ungated : Natural := 0;
 
+            --  And the architectures that do not rotate, which run every
+            --  shape but the stretched one.
+            Unrotated : Natural := 0;
+
             Expected : Natural := 0;
 
          begin
             for Kind of Crossed loop
-               if Kind in Tiny_Model.Falcon | Tiny_Model.Phi2 then
+               if Kind in Tiny_Model.Falcon | Tiny_Model.Phi2
+                        | Tiny_Model.GPT2
+               then
                   Ungated := Ungated + 1;
+               end if;
+
+               if Kind = Tiny_Model.GPT2 then
+                  Unrotated := Unrotated + 1;
                end if;
             end loop;
 
@@ -935,7 +970,8 @@ package body Conformance is
             Expected :=
               Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached
               + On_Device
-              - Formats * Ungated * (Repacks - 1) * Per_Model;
+              - Formats * Ungated * (Repacks - 1) * Per_Model
+              - Formats * Unrotated * (Repacks - 1) * Per_Model;
 
             Result.Formats := Formats;
             Result.Architectures := Arches;

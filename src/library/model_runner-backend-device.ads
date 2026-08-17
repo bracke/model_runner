@@ -78,7 +78,6 @@ package Model_Runner.Backend.Device is
    --
    --  @return Slices taken by the last product, or zero before any.
 
-
    function Waited return Natural;
 
    --  How many queues the open device's family offers.
@@ -90,7 +89,6 @@ package Model_Runner.Backend.Device is
    --
    --  @return Queues the family has, or zero when no device is open.
    function Queues return Natural;
-
 
    --  Give back every matrix the device holds, and stay open.
    --

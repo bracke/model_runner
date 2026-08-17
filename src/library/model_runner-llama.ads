@@ -150,7 +150,7 @@ package Model_Runner.Llama is
    --  projection down. Its projections are fused as phi3's are.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2);
+      Phi2, GPT2);
 
    --  The identifier a file carries for an architecture.
    --
@@ -167,7 +167,8 @@ package Model_Runner.Llama is
          when Gemma3    => "gemma3",
          when Phi3      => "phi3",
          when Falcon    => "falcon",
-         when Phi2      => "phi2");
+         when Phi2      => "phi2",
+         when GPT2      => "gpt2");
 
    --  Validated architecture configuration.
    --
@@ -988,6 +989,13 @@ private
       Repacked    : Model_Runner.Bytes.Byte_Array_Access := null;
       Layers      : Layer_Array_Access := null;
       Embeddings  : aliased Model_Runner.Tensors.View;
+
+      --  One row a position, added to the token's row before the first
+      --  layer. GPT2 learns where a token is instead of rotating for it, so
+      --  this is the whole of its position handling and there is no rotation
+      --  anywhere in the model. Absent -- and never read -- for every
+      --  architecture that rotates.
+      Positions   : aliased Model_Runner.Tensors.View;
       Output      : aliased Model_Runner.Tensors.View;
       Output_Norm : Model_Runner.Tensors.Real_Array_Access;
 

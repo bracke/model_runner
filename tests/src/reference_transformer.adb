@@ -838,7 +838,8 @@ package body Reference_Transformer is
          when Gemma3    => "gemma3.",
          when Phi3      => "phi3.",
          when Falcon    => "falcon.",
-         when Phi2      => "phi2.");
+         when Phi2      => "phi2.",
+         when GPT2      => "gpt2.");
 
    procedure Load
      (Item   : in out Model;
@@ -1213,6 +1214,8 @@ package body Reference_Transformer is
             Item.Kind := Falcon;
          elsif Named = "phi2" then
             Item.Kind := Phi2;
+         elsif Named = "gpt2" then
+            Item.Kind := GPT2;
          else
             return;
          end if;
@@ -1380,8 +1383,17 @@ package body Reference_Transformer is
       end if;
       Item.Words := Item.Embeddings'Length (1);
 
+      --  The table of positions, for the architecture that learns where a
+      --  token is rather than rotating for it.
+      if Item.Kind = GPT2 then
+         Item.Positions := Read_Matrix ("position_embd.weight", Present);
+         if not Present then
+            return;
+         end if;
+      end if;
+
       Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
-      if Present and then Item.Kind in Falcon | Phi2 then
+      if Present and then Item.Kind in Falcon | Phi2 | GPT2 then
          Item.Output_Norm_Bias :=
            Read_Vector ("output_norm.bias", Present);
       end if;
@@ -1401,7 +1413,7 @@ package body Reference_Transformer is
       if not Present then
          --  A tied model reuses the embedding table as the output projection.
          Item.Output := Item.Embeddings;
-      elsif Item.Kind = Phi2 then
+      elsif Item.Kind in Phi2 | GPT2 then
          Item.Output_Bias := Read_Vector ("output.bias", Present);
          if not Present then
             return;
@@ -1422,7 +1434,7 @@ package body Reference_Transformer is
 
             --  Gemma2's two extra normalizations, required where the
             --  architecture states them.
-            if Item.Kind in Falcon | Phi2 then
+            if Item.Kind in Falcon | Phi2 | GPT2 then
                Current.Attention_Norm_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_norm.bias"), Present);
                if not Present then
@@ -1449,7 +1461,7 @@ package body Reference_Transformer is
 
             --  Phi3's three attention projections come out of one tensor,
             --  in the order the rows are written: queries, keys, values.
-            if Item.Kind in Phi3 | Falcon | Phi2 then
+            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 then
                Current.Query :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             0, Item.Heads * Item.Head_Size, Present);
@@ -1461,7 +1473,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi3 | Falcon | Phi2 then
+            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 then
                Current.Key :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             Item.Heads * Item.Head_Size,
@@ -1474,7 +1486,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi3 | Falcon | Phi2 then
+            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 then
                Current.Value :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             (Item.Heads + Item.KV_Heads) * Item.Head_Size,
@@ -1491,7 +1503,7 @@ package body Reference_Transformer is
             --  has them and absent from the one that does not.
             --  Phi2 carries the same three biases in one vector, taken at
             --  the offsets its matrices are taken at.
-            if Item.Kind = Phi2 then
+            if Item.Kind in Phi2 | GPT2 then
                Current.Query_Bias :=
                  Read_Vector_Part
                    (Layer_Name (Index, "attn_qkv.bias"),
@@ -1566,7 +1578,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind = Phi2 then
+            if Item.Kind in Phi2 | GPT2 then
                Current.Out_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_output.bias"), Present);
                if not Present then
@@ -1613,7 +1625,7 @@ package body Reference_Transformer is
                   return;
                end if;
             else
-               if Item.Kind in Falcon | Phi2 then
+               if Item.Kind in Falcon | Phi2 | GPT2 then
                   --  No gate at all: one projection up, a Gaussian unit,
                   --  one projection down.
                   Current.Gate := null;
@@ -1651,7 +1663,7 @@ package body Reference_Transformer is
 
                --  A bias on each side of the block, which Phi2 has and
                --  Falcon does not.
-               if Item.Kind = Phi2 then
+               if Item.Kind in Phi2 | GPT2 then
                   Current.Up_Bias :=
                     Read_Vector (Layer_Name (Index, "ffn_up.bias"), Present);
                   if not Present then
@@ -1789,7 +1801,7 @@ package body Reference_Transformer is
          Root : constant Long_Float := 0.797_884_560_802_865_4;
          Bend : constant Long_Float := 0.044_715;
       begin
-         if Item.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 then
+         if Item.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 then
             declare
                Inner : constant Long_Float :=
                  Root * (Value + Bend * Value * Value * Value);
@@ -2129,6 +2141,17 @@ package body Reference_Transformer is
                State (Index) :=
                  Item.Embeddings (Tokens (Tokens'First + Step), Index) * Lift;
             end loop;
+
+            --  And where the token is, for the architecture that learns it.
+            --  A model with a table of positions has no rotation and a model
+            --  with rotation has no table, so this and Rotate below are
+            --  never both at work.
+            if Item.Positions /= null then
+               for Index in 0 .. Width - 1 loop
+                  State (Index) :=
+                    State (Index) + Item.Positions (Step, Index);
+               end loop;
+            end if;
          end;
 
          for Block in 0 .. Item.Layers - 1 loop
@@ -2140,7 +2163,7 @@ package body Reference_Transformer is
                Blended : Real_Vector (0 .. B_Width - 1) := [others => 0.0];
                Slot    : constant Natural := Block * Steps + Step;
             begin
-               if Item.Kind in Falcon | Phi2 then
+               if Item.Kind in Falcon | Phi2 | GPT2 then
                   Normalize_Centred
                     (State, Current.Attention_Norm.all,
                      Current.Attention_Norm_Bias, Normed);
@@ -2502,7 +2525,7 @@ package body Reference_Transformer is
          end loop;
       end loop;
 
-      if Item.Kind in Falcon | Phi2 then
+      if Item.Kind in Falcon | Phi2 | GPT2 then
          Normalize_Centred
            (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
       else

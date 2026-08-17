@@ -333,7 +333,8 @@ package body Tiny_Model is
            when Gemma3    => "gemma3",
            when Phi3      => "phi3",
            when Falcon    => "falcon",
-           when Phi2      => "phi2");
+           when Phi2      => "phi2",
+           when GPT2      => "gpt2");
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
@@ -361,7 +362,8 @@ package body Tiny_Model is
       Fixtures.Add_F32
         (Builder, Prefix & ".attention.layer_norm_rms_epsilon", 1.0E-5);
       Fixtures.Add_U32
-        (Builder, Prefix & ".rope.dimension_count", Interfaces.Unsigned_32 (Head_Size));
+        (Builder, Prefix & ".rope.dimension_count",
+         (if Kind = GPT2 then 0 else Interfaces.Unsigned_32 (Head_Size)));
 
       --  The head widths, when the file states them apart.
       if Apart_Widths then
@@ -638,7 +640,7 @@ package body Tiny_Model is
                   [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
                   G.Type_F32, Fixtures.Encode_F32 (Values));
             end;
-         elsif Kind in Phi3 | Falcon | Phi2 then
+         elsif Kind in Phi3 | Falcon | Phi2 | GPT2 then
             --  One tensor holding all three, in the order a reader has to
             --  take them out: queries, then keys, then values -- and drawn
             --  as three, in the order every other architecture draws them,
@@ -670,7 +672,7 @@ package body Tiny_Model is
          --  carried both would say two different things about the same
          --  projection, and a reader that preferred one would agree with a
          --  reader that preferred the other about nothing.
-         if Kind not in Phi3 | Falcon | Phi2 then
+         if Kind not in Phi3 | Falcon | Phi2 | GPT2 then
             Weight (Layer_Name (Index, "attn_k.weight"),
                     [G.U64 (Embedding), G.U64 (KV_Heads * Key_Size)]);
             Weight (Layer_Name (Index, "attn_v.weight"),
@@ -689,7 +691,7 @@ package body Tiny_Model is
          --  Falcon's normalization carries a bias, which is a different
          --  thing from the projection biases Qwen2 has: it belongs to the
          --  normalization and every falcon file has one.
-         if Kind in Falcon | Phi2 then
+         if Kind in Falcon | Phi2 | GPT2 then
             Norm_Of (Layer_Name (Index, "attn_norm.bias"), Embedding);
          end if;
 
@@ -697,7 +699,7 @@ package body Tiny_Model is
          --  three in one vector, as it writes the three matrices in one
          --  tensor. Drawn as three in the order the unfused architectures
          --  draw them, for the reason Weight_Of exists.
-         if Kind = Phi2 then
+         if Kind in Phi2 | GPT2 then
             declare
                use type N.Real_Array;
 
@@ -738,7 +740,7 @@ package body Tiny_Model is
                  [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
          --  One normalization a block where the two sublayers run in
          --  parallel; two where they run one after the other.
-         if Kind = Phi2 then
+         if Kind in Phi2 | GPT2 then
             Norm_Of (Layer_Name (Index, "attn_output.bias"), Embedding);
          end if;
 
@@ -758,7 +760,7 @@ package body Tiny_Model is
                     [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Experts)]);
             Weight (Layer_Name (Index, "ffn_down_exps.weight"),
                     [G.U64 (Expert_Feed), G.U64 (Embedding), G.U64 (Experts)]);
-         elsif Kind in Falcon | Phi2 then
+         elsif Kind in Falcon | Phi2 | GPT2 then
             --  No gate: one projection up and one down.
             Weight (Layer_Name (Index, "ffn_up.weight"),
                     [G.U64 (Embedding), G.U64 (Feed_Forward)]);
@@ -767,7 +769,7 @@ package body Tiny_Model is
 
             --  And a bias on each side of it, which Phi2 has and Falcon
             --  does not: the arrangement they share does not decide this.
-            if Kind = Phi2 then
+            if Kind in Phi2 | GPT2 then
                Norm_Of (Layer_Name (Index, "ffn_up.bias"), Feed_Forward);
                Norm_Of (Layer_Name (Index, "ffn_down.bias"), Embedding);
             end if;
@@ -800,14 +802,20 @@ package body Tiny_Model is
       end loop;
 
       Norm ("output_norm.weight");
-      if Kind in Falcon | Phi2 then
+      if Kind in Falcon | Phi2 | GPT2 then
          Norm ("output_norm.bias");
       end if;
+      --  One row a position, which is what GPT2 has instead of a rotation.
+      if Kind = GPT2 then
+         Weight ("position_embd.weight",
+                 [G.U64 (Embedding), G.U64 (Room)]);
+      end if;
+
       Weight ("output.weight", [G.U64 (Embedding), Vocabulary]);
 
       --  Phi2's output projection carries a bias, so the last thing this
       --  writes is the last thing the model adds.
-      if Kind = Phi2 then
+      if Kind in Phi2 | GPT2 then
          Norm_Of ("output.bias", Natural (Vocabulary));
       end if;
 

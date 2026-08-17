@@ -104,7 +104,7 @@ private
    --  implementation.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2);
+      Phi2, GPT2);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -225,6 +225,10 @@ private
 
       --  Added to every logit. Phi2's output projection carries one.
       Output_Bias      : Vector_Access := null;
+
+      --  One row a position, added to the token's row before the first
+      --  layer. GPT2 learns where a token is instead of rotating for it.
+      Positions        : Matrix_Access := null;
 
       --  One divisor per rotated pair, when the file carries the table.
       Rope_Factors : Vector_Access := null;

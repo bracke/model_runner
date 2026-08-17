@@ -149,7 +149,7 @@ package body Model_Runner.Llama is
                  (case Kind is
                     when Llama => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3
-                       | Phi3 | Falcon | Phi2 =>
+                       | Phi3 | Falcon | Phi2 | GPT2 =>
                       K.Split);
                Found := True;
             end if;
@@ -579,7 +579,12 @@ package body Model_Runner.Llama is
         (if E.Is_Ok (Local) then Natural (Number) else Settings.Head_Size);
 
       Containers.Get_Integer
-        (Source, Model_Key (Settings.Kind, "rope.dimension_count"), 1,
+        --  From zero, not from one. Zero is what an architecture that
+        --  learns where a token is rather than rotating for it states, and
+        --  it is a fact about the model rather than a missing key: GPT2
+        --  carries a table of positions and no rotation, and a reader that
+        --  refused the zero would refuse the model.
+        (Source, Model_Key (Settings.Kind, "rope.dimension_count"), 0,
          Long_Long_Integer (Settings.Head_Size), Number, Local);
       if Present_And_Wrong (Local) then
          Status := Local;
@@ -652,6 +657,13 @@ package body Model_Runner.Llama is
    begin
       Add (Item.Embeddings'Unchecked_Access);
       Add (Item.Output'Unchecked_Access);
+
+      --  And the table of positions, which is a matrix like any other and
+      --  has to be rewritten when the weights are: a view left pointing at
+      --  the file's bytes while everything around it moved into the
+      --  repacked buffer reads a row that is not there. Empty for every
+      --  architecture that rotates, and Add ignores an empty view.
+      Add (Item.Positions'Unchecked_Access);
 
       for Index in Item.Layers'Range loop
          Add (Item.Layers (Index).Query'Unchecked_Access);
@@ -1094,7 +1106,8 @@ package body Model_Runner.Llama is
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
    is
    begin
-      if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 then
+      if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2
+      then
          K.GELU (Target);
       else
          K.SiLU (Target);
@@ -1189,7 +1202,9 @@ package body Model_Runner.Llama is
       Bias   : T.Real_Array_Access;
       Target : out Real_Array) is
    begin
-      if Item.Settings.Kind in Falcon | Phi2 and then Bias /= null then
+      if Item.Settings.Kind in Falcon | Phi2 | GPT2
+        and then Bias /= null
+      then
          K.Layer_Norm (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
       else
          K.RMS_Norm (Source, Gain, Item.Settings.Epsilon, Target,
@@ -1443,6 +1458,18 @@ package body Model_Runner.Llama is
          Resolve
            (Item, Source, "token_embd.weight", Vocab, Width,
             Item.Embeddings, Status, Repack);
+
+         --  And the table of positions, for the architecture that learns
+         --  where a token is rather than rotating for it. One row a
+         --  position, as wide as the embedding, and read exactly once a
+         --  token -- there is no rotation anywhere in such a model, so this
+         --  is the whole of its position handling.
+         if E.Is_Ok (Status) and then Item.Settings.Kind = GPT2 then
+            Resolve
+              (Item, Source, "position_embd.weight",
+               Element_Count (Item.Settings.Context_Length), Width,
+               Item.Positions, Status, Repack);
+         end if;
          if E.Is_Error (Status) then
             Fail (Status);
             return;
@@ -1451,7 +1478,8 @@ package body Model_Runner.Llama is
          Resolve_Norm
            (Item, Source, "output_norm.weight", Width, Item.Output_Norm, Status);
 
-         if E.Is_Ok (Status) and then Item.Settings.Kind in Falcon | Phi2
+         if E.Is_Ok (Status)
+           and then Item.Settings.Kind in Falcon | Phi2 | GPT2
          then
             Resolve_Norm
               (Item, Source, "output_norm.bias", Width,
@@ -1496,7 +1524,7 @@ package body Model_Runner.Llama is
             --  And the bias on it, which Phi2 alone carries. It is added
             --  after the last projection, so it is the last thing between
             --  the model and the caller.
-            if Item.Settings.Kind = Phi2 then
+            if Item.Settings.Kind in Phi2 | GPT2 then
                Resolve_Norm
                  (Item, Source, "output.bias", Vocab,
                   Item.Output_Bias, Status);
@@ -1547,14 +1575,14 @@ package body Model_Runner.Llama is
                --  not. The order inside the fused one is queries, then
                --  keys, then values, which is the order the rows are
                --  written in.
-               if Item.Settings.Kind in Falcon | Phi2 then
+               if Item.Settings.Kind in Falcon | Phi2 | GPT2 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_norm.bias"),
                      Width, Current.Attention_Norm_Bias, Status);
                   exit when E.Is_Error (Status);
                end if;
 
-               if Item.Settings.Kind in Phi3 | Falcon | Phi2 then
+               if Item.Settings.Kind in Phi3 | Falcon | Phi2 | GPT2 then
                   Resolve_Part
                     (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
                      Wide + KV + KV_Out, Width, 0, Wide,
@@ -1602,7 +1630,7 @@ package body Model_Runner.Llama is
                --  correctly and the biases some other way would be wrong
                --  only in what it adds -- which reads as a model that has
                --  drifted rather than one that has broken.
-               if Item.Settings.Kind = Phi2 then
+               if Item.Settings.Kind in Phi2 | GPT2 then
                   Resolve_Norm_Part
                     (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
                      Wide + KV + KV_Out, 0, Wide, Current.Query_Bias, Status);
@@ -1662,7 +1690,7 @@ package body Model_Runner.Llama is
 
                --  And the bias on the way out of attention, which only Phi2
                --  has here.
-               if Item.Settings.Kind = Phi2 then
+               if Item.Settings.Kind in Phi2 | GPT2 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_output.bias"),
                      Width, Current.Out_Bias, Status);
@@ -1679,7 +1707,7 @@ package body Model_Runner.Llama is
                   exit when E.Is_Error (Status);
                end if;
 
-               if Item.Settings.Kind in Falcon | Phi2 then
+               if Item.Settings.Kind in Falcon | Phi2 | GPT2 then
                   --  No gate: one projection up, a Gaussian unit, one down.
                   --  The gate stays null, and the block below reads that
                   --  rather than the architecture.
@@ -1696,7 +1724,7 @@ package body Model_Runner.Llama is
                   --  A bias on each side of the block, which Phi2 has and
                   --  Falcon does not, so the arrangement they share is not
                   --  what decides this.
-                  if Item.Settings.Kind = Phi2 then
+                  if Item.Settings.Kind in Phi2 | GPT2 then
                      Resolve_Norm
                        (Item, Source, Layer_Key (Index, "ffn_up.bias"),
                         Feed, Current.Up_Bias, Status);
@@ -4376,6 +4404,22 @@ package body Model_Runner.Llama is
          end loop;
       end if;
 
+      --  Where the token is, added to what the token is. GPT2 learns this
+      --  instead of rotating, so a model with a position table has no
+      --  rotation and a model with rotation has no table; the two are never
+      --  both read.
+      if Source.Settings.Kind = GPT2 then
+         T.Dequantize_Row
+           (Source.Positions, Element_Count (Item.Committed),
+            Item.Normalized.all, Status);
+         if E.Is_Error (Status) then
+            Item.Current := Failed;
+            return;
+         end if;
+
+         K.Add (Item.Activation.all, Item.Normalized.all);
+      end if;
+
       for Index in Source.Layers.all'Range loop
          if C.Is_Cancelled (Cancel) then
             --  The reserved position was never committed, so the cache still
@@ -4826,6 +4870,22 @@ package body Model_Runner.Llama is
                   Value := Value * Embedding_Scale (Source);
                end loop;
             end if;
+
+            --  As in the single-token path: where the token is, added to
+            --  what it is. Its position is the committed count plus its
+            --  place in this batch.
+            if Source.Settings.Kind = GPT2 then
+               T.Dequantize_Row
+                 (Source.Positions,
+                  Element_Count (Item.Committed) + Which,
+                  Item.Normalized.all, Status);
+
+               if E.Is_Ok (Status) then
+                  K.Add (Acts.all (Origin .. Origin + Width - 1),
+                         Item.Normalized.all);
+               end if;
+            end if;
+
             if E.Is_Error (Status) then
                Release;
                Item.Current := Failed;

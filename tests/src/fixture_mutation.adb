@@ -99,7 +99,11 @@ package body Fixture_Mutation is
          Backend : Model_Runner.Backend.Backend_Kind;
          Batched : Boolean;
          Logits  : out Logit_Row;
-         Ok      : out Boolean)
+         Ok      : out Boolean;
+
+         --  Why not, when not. The caller used to print its own status,
+         --  which was the parse's and always clean.
+         Why     : out E.Error_Info)
       is
          Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
          Parsed  : Containers.Container;
@@ -109,21 +113,25 @@ package body Fixture_Mutation is
       begin
          Logits := [others => 0.0];
          Ok     := False;
+         Why    := E.Success;
 
          Containers.Reader.Parse (Parsed, Source, Status => Status);
          if E.Is_Error (Status) then
+            Why := Status;
             return;
          end if;
 
          L.Prepare (Engine, Parsed, Source, Backend => Backend,
                     Status => Status);
          if E.Is_Error (Status) then
+            Why := Status;
             Containers.Close (Parsed);
             return;
          end if;
 
          L.Open (Session, Engine, Status => Status);
          if E.Is_Error (Status) then
+            Why := Status;
             L.Close (Engine, Status);
             Containers.Close (Parsed);
             return;
@@ -144,7 +152,8 @@ package body Fixture_Mutation is
             end loop;
          end if;
 
-         Ok := E.Is_Ok (Status);
+         Ok  := E.Is_Ok (Status);
+         Why := Status;
 
          L.Close (Session);
          L.Close (Engine, Status);
@@ -293,6 +302,7 @@ package body Fixture_Mutation is
          --  a count says a fixture is quiet somewhere, and what is worth
          --  acting on is which part of it.
          Hushed : Natural := 0;
+         Refusal : E.Error_Info;
          Named  : Ada.Strings.Unbounded.Unbounded_String;
 
          --  What a report has to name to be acted on: the same fixture has to
@@ -358,13 +368,15 @@ package body Fixture_Mutation is
             end;
          end if;
 
-         Answer (Image, Backend, Batched, Given, Ok);
+         Answer (Image, Backend, Batched, Given, Ok, Refusal);
 
          if not Ok then
             Result.Refused := Result.Refused + 1;
 
             if Say /= null then
-               Say (Where & " would not evaluate, so nothing was asked of it");
+               Say (Where & " would not evaluate: "
+                    & E.Error_Code'Image (Refusal.Code)
+                    & ", so nothing was asked of it");
             end if;
 
             Containers.Close (Parsed);
@@ -388,7 +400,7 @@ package body Fixture_Mutation is
             begin
                Displace (Moved.all, Parsed, Index);
 
-               Answer (Moved, Backend, Batched, Other, Fine);
+               Answer (Moved, Backend, Batched, Other, Fine, Refusal);
                B.Free (Moved);
 
                Result.Examined := Result.Examined + 1;
@@ -436,7 +448,7 @@ package body Fixture_Mutation is
                      Sound   : Boolean;
                   begin
                      Displace (Further.all, Parsed, Index, Harder => True);
-                     Answer (Further, Backend, Batched, Again, Sound);
+                     Answer (Further, Backend, Batched, Again, Sound, Refusal);
                      B.Free (Further);
 
                      if not Sound then
@@ -539,6 +551,7 @@ package body Fixture_Mutation is
             --  every time says nothing about which tensors are read.
             if Shape = Mixed
               and then Kind in Tiny_Model.Falcon | Tiny_Model.Phi2
+                             | Tiny_Model.GPT2
             then
                null;
             else

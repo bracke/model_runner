@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The `gpt2` architecture.** The oldest shape here and the only one that
+  does not rotate: it learns where a token is, one row a position added to
+  the token's row before the first layer. Everything else it needs already
+  existed -- `phi2`'s biases on every projection and centred normalization,
+  llama's two normalizations a block, a feed-forward with no gate.
+
+  Crossed with every format and both evaluation paths: 26910 sequences, none
+  outside tolerance, none unlearned.
+
+  It found a third defect, and the oldest. The table of positions is a matrix
+  like any other and repacking rewrites every matrix it knows about -- this
+  one was not on the list, so with --repack the view still pointed into the
+  file bytes while everything around it had moved, and 689 evaluations were
+  refused for reading a row that was not there. Every refusal carried a
+  repack and none carried NO_REPACK, which is what said so.
+
+  It found a defect of this build's own on the way in. `rope.dimension_count`
+  was read with a minimum of one, so a model stating zero -- which is what a
+  model with no rotation states -- was refused before anything else could
+  happen. Any gpt2-family file would have been turned away, and nothing here
+  had ever stated a zero to find out.
+
 - **The fixture check asks whether the set of tensors is right, not only
   whether each is read.** A tensor the engine reads and the independent
   implementation never asks for is a disagreement about what an architecture
