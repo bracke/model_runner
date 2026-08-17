@@ -1941,6 +1941,20 @@ package body Model_Runner.CLI.Execute is
                Patience => Item.Device_Patience,
                Which => Item.Device_Index);
 
+            --  What the host offered, said once where a device was
+            --  actually opened. The engine uses one queue; whether the
+            --  family has more is a fact worth printing rather than a
+            --  number only a test ever reads.
+            if Ready then
+               Screen.Put_Message
+                 ("cli.note.device_queues",
+                  [Loc.Named
+                     ("value",
+                      Model_Runner.Text.Image
+                        (Long_Long_Integer
+                           (Model_Runner.Backend.Device.Queues)))]);
+            end if;
+
             if not Ready then
                --  A condition of its own rather than a borrowed one. This
                --  used to report a missing capability with no capability

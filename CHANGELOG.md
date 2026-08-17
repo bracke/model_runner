@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A run on a device says how many queues its family has.** The number was
+  read to choose the family, kept last commit, and visible only to a test.
+  Now the run prints it, and the answer on this host is one -- so submitting
+  to a second queue is not something this machine could be made to do, and a
+  figure comparing one against two cannot be taken here at all. That is worth
+  more than the feature would have been: it says the work is not merely
+  unwritten but untestable here.
+
 - **Every figure group names the model it was taken with, and a check
   requires it.** The drafting row is unreproducible because its second model
   was requantized locally and nothing recorded the source or the tool; six

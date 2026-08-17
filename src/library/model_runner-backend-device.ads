@@ -77,7 +77,20 @@ package Model_Runner.Backend.Device is
    --  whether the caller wanted to stop.
    --
    --  @return Slices taken by the last product, or zero before any.
+
+
    function Waited return Natural;
+
+   --  How many queues the open device's family offers.
+   --
+   --  The engine submits to one and waits on it. Whether it could submit to
+   --  two is a fact about the host rather than a plan, and a run that used a
+   --  device says what it found rather than leaving the number where only a
+   --  test can see it.
+   --
+   --  @return Queues the family has, or zero when no device is open.
+   function Queues return Natural;
+
 
    --  Give back every matrix the device holds, and stay open.
    --

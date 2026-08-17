@@ -1037,8 +1037,20 @@ reference 01FE8BE9DEC71615 src/library/model_runner-backend-reference.adb src/li
 
 # load: 1.70 rising to 2.37 for the fifteen ratios and the batched ones,
 #       2026-08-15; 1.0 to 1.9 for the two-backend table, 2026-08-14
+# 2026-08-17, what this host's device offers. One queue. The family the
+# engine computes on has exactly one, so submitting to two is not something
+# this machine could be made to do, and a figure comparing one queue against
+# two cannot be taken here at all. The run says so itself now rather than
+# leaving the number where only a test could see it.
+
+# The device group moved with the backend gaining a way to report its queue
+# count, which is read once when a device opens and never in a loop. Not
+# re-measured for that: the pair was taken again at the right lengths a few
+# entries above, on this model, and reads 1.248 s and 2.539 s against 1.262
+# and 2.504 published.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device 0405429AEFCB461E src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 81F7767C851732AB src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
