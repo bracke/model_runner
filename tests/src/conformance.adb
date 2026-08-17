@@ -39,6 +39,7 @@ package body Conformance is
 
       --  When the part now being timed began.
       Since : Ada.Calendar.Time := Ada.Calendar.Clock;
+      Ran_At : Ada.Calendar.Time := Ada.Calendar.Clock;
 
       --  The sequences to compare. Lengths differ so that the comparison
       --  covers one token, a short context, and a context long enough that
@@ -188,7 +189,14 @@ package body Conformance is
          end if;
 
          Since := Ada.Calendar.Clock;
-         R.Load (Second, Parsed, Image.all, Loaded);
+
+         declare
+            Opened : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+         begin
+            R.Load (Second, Parsed, Image.all, Loaded);
+            Result.Decoded :=
+              Result.Decoded + (Ada.Calendar.Clock - Opened);
+         end;
          if not Loaded then
             Result.Unlearned := Result.Unlearned + 1;
             Containers.Close (Parsed);
@@ -202,7 +210,9 @@ package body Conformance is
                Tokens_R (Index) := Tokens (Index);
             end loop;
 
+            Ran_At := Ada.Calendar.Clock;
             R.Run (Second, Tokens_R, Expected (Which), Produced);
+            Result.Computed := Result.Computed + (Ada.Calendar.Clock - Ran_At);
             Known (Which) := Produced;
 
             if not Produced then
@@ -222,7 +232,9 @@ package body Conformance is
                      Held (Index) := Also (Index);
                   end loop;
 
+                  Ran_At := Ada.Calendar.Clock;
                   R.Run (Second, Held, Expected (Other), Made);
+                  Result.Computed := Result.Computed + (Ada.Calendar.Clock - Ran_At);
                   Known (Other) := Made;
 
                   if not Made then

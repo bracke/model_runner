@@ -124,6 +124,13 @@ package Conformance is
       --  something is per-fixture rather than per-sequence, and that is what
       --  it found.
       Per_Length : Sequence_Cost := [others => 0.0];
+
+      --  And what the reference spends on decoding a fixture into binary64
+      --  against what it spends computing with it. The four-times load is
+      --  gone; this says what the one remaining load costs beside the work
+      --  it enables.
+      Decoded    : Duration := 0.0;
+      Computed   : Duration := 0.0;
       Learned    : Duration := 0.0;
       Evaluated  : Duration := 0.0;
 

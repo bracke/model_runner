@@ -280,6 +280,8 @@ begin
          Agreed : Conformance.Report;
          Moved  : Fixture_Mutation.Report;
 
+         Failed : Boolean := False;
+
          --  When the stage now running began, and how to say what it took.
          --
          --  Ada.Calendar rather than Host_Load.Now: that one is the host's
@@ -288,17 +290,35 @@ begin
          --  eight hundredths of a second.
          Started : Ada.Calendar.Time := Ada.Calendar.Clock;
 
-         procedure Report_Stage (Named : String) is
+         --  What each stage took when it was last measured on the host the
+         --  figures name, and roughly twice that as the bound. Twice,
+         --  because a machine under load takes half again as long and that
+         --  is not news; a stage that doubles has had something added to it
+         --  rather than been unlucky, and the gate grew from half an hour to
+         --  an hour once with nothing saying so.
+         procedure Report_Stage (Named : String; Budget : Duration) is
             use type Ada.Calendar.Time;
             Ended : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+            Took  : constant Duration := Ended - Started;
          begin
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
-               "  took: " & Named & Duration'Image (Ended - Started) & " s");
+               "  took: " & Named & Duration'Image (Took) & " s");
+
+            if Took > Budget then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "  fail: " & Named & " took" & Duration'Image (Took)
+                  & " s against a bound of" & Duration'Image (Budget)
+                  & " s, at a load of" & Long_Float'Image (Host_Load.Now)
+                  & "; either the machine was busy or the stage grew, and "
+                  & "the bound is in tests_main beside this message");
+               Failed := True;
+            end if;
+
             Started := Ended;
          end Report_Stage;
          Fuzzed : Fuzzing.Report;
-         Failed : Boolean := False;
 
          --  What the fixture check says about each tensor nothing read. The
          --  package reports counts and hands the naming back here, because
@@ -364,7 +384,7 @@ begin
          Started := Ada.Calendar.Clock;
 
          Checks.Run (Root, Result, Record_Warnings => Recording);
-         Report_Stage ("repository checks");
+         Report_Stage ("repository checks", 30.0);
          Failed := Failed or else not Checks.Is_Clean (Result);
 
          --  The gate runs the two things that were commands somebody had to
@@ -379,12 +399,16 @@ begin
          --  to leave either out.
          if not Repository_Only then
             Conformance.Run (Agreed);
-            Report_Stage ("conformance");
+            Report_Stage ("conformance", 1250.0);
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  of which: fixtures built" & Duration'Image (Agreed.Built)
                & " s, reference" & Duration'Image (Agreed.Learned)
                & " s, the rest is the engine");
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "  the reference: decoding" & Duration'Image (Agreed.Decoded)
+               & " s, computing" & Duration'Image (Agreed.Computed) & " s");
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  conformance: sequences" & Natural'Image (Agreed.Sequences)
@@ -413,7 +437,7 @@ begin
             --  asked until a fixture wrote one projection twice and the two
             --  readers took different halves of it.
             Fixture_Mutation.Run (Moved, Say => Complain'Access);
-            Report_Stage ("fixtures");
+            Report_Stage ("fixtures", 200.0);
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  fixtures: tensors moved" & Natural'Image (Moved.Examined)
@@ -430,7 +454,7 @@ begin
             --  the parser still refuses what it should, not searching for a new
             --  way to break it. 'tests fuzz' with a larger count is the search.
             Fuzzing.Run (1, 200, Fuzzed);
-            Report_Stage ("fuzzing");
+            Report_Stage ("fuzzing", 10.0);
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  fuzz: cases" & Natural'Image (Fuzzed.Cases)

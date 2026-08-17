@@ -42,6 +42,21 @@
 # each run carried has been recorded here for months and what carried it
 # never was, which is half a condition written down twice.
 
+# 2026-08-17, what the reference's remaining time is. With one load a
+# fixture, its 397 s divides into 274.7 s decoding each fixture into
+# binary64 and 122.7 s computing with it -- so decoding is sixty-nine per
+# cent of the reference and about forty-five per cent of the whole sweep,
+# and it is already one pass a fixture. That is the floor of having a second
+# implementation in a wider format, and it is where it should be rather than
+# somewhere nobody looked.
+#
+# The gate holds each stage to roughly twice what it took here and fails
+# when one exceeds it -- repository checks 30 s, conformance 1250 s,
+# fixtures 200 s, fuzzing 10 s. Twice, because a busy machine takes half
+# again as long and that is not news, while a stage that doubles has had
+# something added to it. The gate went from half an hour to an hour once and
+# nothing said so until somebody timed it by hand.
+
 # 2026-08-17, the sweep loaded the reference four times a fixture. Splitting
 # its cost by sequence is what found it: the four sequences cost 281, 289,
 # 310 and 333 seconds across a sweep though they are one, two, five and eight
