@@ -169,6 +169,15 @@ package body Conformance is
 
          Tokens : constant Sequence := Chosen (Which);
       begin
+         --  All four sequences, from one load.
+         --
+         --  This used to load the model for the one sequence it was asked
+         --  about and close it again, which meant decoding every matrix into
+         --  binary64 four times a fixture. The measurement that found it is
+         --  the reason it is written down: the four sequences cost 281, 289,
+         --  310 and 333 seconds across the sweep though they are one, two,
+         --  five and eight tokens long. Costs that flat under an eightfold
+         --  difference in work are not the work.
          if Known (Which) then
             return;
          end if;
@@ -201,9 +210,36 @@ package body Conformance is
             end if;
          end;
 
+         --  And the other three, on the model already loaded.
+         for Other in Sequence_Index loop
+            if not Known (Other) then
+               declare
+                  Also : constant Sequence := Chosen (Other);
+                  Held : R.Token_Vector (Also'Range);
+                  Made : Boolean;
+               begin
+                  for Index in Also'Range loop
+                     Held (Index) := Also (Index);
+                  end loop;
+
+                  R.Run (Second, Held, Expected (Other), Made);
+                  Known (Other) := Made;
+
+                  if not Made then
+                     Result.Unlearned := Result.Unlearned + 1;
+                  end if;
+               end;
+            end if;
+         end loop;
+
          R.Close (Second);
          Containers.Close (Parsed);
-         Result.Learned := Result.Learned + (Ada.Calendar.Clock - Since);
+         declare
+            Took : constant Duration := Ada.Calendar.Clock - Since;
+         begin
+            Result.Learned := Result.Learned + Took;
+            Result.Per_Length (Which) := Result.Per_Length (Which) + Took;
+         end;
       end Learn;
 
       procedure Compare

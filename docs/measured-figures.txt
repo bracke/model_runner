@@ -42,6 +42,22 @@
 # each run carried has been recorded here for months and what carried it
 # never was, which is half a condition written down twice.
 
+# 2026-08-17, the sweep loaded the reference four times a fixture. Splitting
+# its cost by sequence is what found it: the four sequences cost 281, 289,
+# 310 and 333 seconds across a sweep though they are one, two, five and eight
+# tokens long. Costs that flat under an eightfold difference in work are not
+# the work -- they are the load, which is every matrix of the fixture decoded
+# into binary64, done once for each sequence asked about.
+#
+# One load a fixture now, running all four. The sweep went from 1431 s to
+# 599 s, and the reference within it from 1213 s to 386 s, on the same
+# figures to the digit: 24939 sequences, none outside tolerance, none
+# unlearned. The gate is about eleven minutes where it was twenty-five.
+#
+# The parallelism I had written down as the next thing is not needed for
+# this, and would have bought a quarter of what a second glance at the
+# measurement did.
+
 # 2026-08-17, where the sweep's twenty-four minutes go, which it now says:
 #
 #   fixtures built          59.9 s    4 per cent

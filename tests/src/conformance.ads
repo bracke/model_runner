@@ -59,6 +59,9 @@ package Conformance is
    Eighth_Absolute_Tolerance : constant := 4.0E-1;
 
    --  What a comparison found.
+   --  What the reference cost on each of the four sequences.
+   type Sequence_Cost is array (1 .. 4) of Duration;
+
    type Report is record
       Sequences  : Natural := 0;
       Compared   : Natural := 0;
@@ -113,6 +116,14 @@ package Conformance is
       --  Measured because the sweep is most of the gate and nobody knew
       --  which part of it was most of the sweep.
       Built      : Duration := 0.0;
+
+      --  What the reference cost on each sequence. It answered its question
+      --  and now answers a different one: since one load computes all four,
+      --  the whole of a fixture's cost lands on whichever sequence was asked
+      --  for first. Kept because the split is still the way to find out that
+      --  something is per-fixture rather than per-sequence, and that is what
+      --  it found.
+      Per_Length : Sequence_Cost := [others => 0.0];
       Learned    : Duration := 0.0;
       Evaluated  : Duration := 0.0;
 
