@@ -107,6 +107,15 @@ package Fixture_Mutation is
       --  because it compares answers rather than appetites.
       Unwanted : Natural := 0;
 
+      --  Between Unread and Unwanted the two appetites are both covered,
+      --  and a third count asking what the engine asks for would say
+      --  nothing either of these does not. A tensor the reference asks for
+      --  and the engine ignores moves no logit, so Unread reports it; a
+      --  tensor the engine reads and the reference never asks for is
+      --  reported by Unwanted. The pair is the whole of the question, which
+      --  is worth writing down because a third counter is the obvious thing
+      --  to add next and it would only cost a run.
+      --
       --  Fixtures that could not be built, parsed or evaluated at all. A
       --  run that cannot evaluate its own fixture has not checked anything,
       --  and saying so is the point of counting it separately from a tensor

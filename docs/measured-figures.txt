@@ -42,6 +42,21 @@
 # each run carried has been recorded here for months and what carried it
 # never was, which is half a condition written down twice.
 
+# 2026-08-17, what the fixture check costs the gate. 78.3 s, the median of
+# three on the host above: 76.30, 78.28 and 78.35, of which about 67 s is
+# user time. It moves 22195 tensors, evaluating a tiny model twice for each.
+#
+# It cost 28 s when it was written, three days ago, and grew for two reasons
+# worth separating: gemma3 is built with six blocks now rather than two,
+# which is a third of the tensors it moves; and every fixture is also loaded
+# by the independent implementation once, to compare what the file holds
+# against what that implementation asks for.
+#
+# Not a measured figure in the sense the others are -- nothing publishes it
+# and no fingerprint covers it -- but a gate that grew from thirty minutes
+# is a thing somebody should be able to find the cause of, and 78 s of it is
+# here.
+
 # covers:" line before a group says which published figures it stands
 # for, and the check prints it when that group fails. A group whose figures
 # are not named is a group nobody can answer: the reader learns that something
