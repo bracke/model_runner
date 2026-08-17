@@ -42,6 +42,16 @@
 # each run carried has been recorded here for months and what carried it
 # never was, which is half a condition written down twice.
 
+# 2026-08-17, the shape behind the sweep's totals, which it now prints: nine
+# architectures, fifteen formats and five shapes, with 864 of the 24939
+# sequences run on a device. A total says nothing about what it covers, and
+# what it covers is the whole of the claim the number is quoted for.
+#
+# The gate is bounded as a whole as well as stage by stage -- 1500 s against
+# the twelve minutes it takes -- because four stages each inside their own
+# bound still add to a run nobody notices growing, which is exactly how half
+# an hour became an hour.
+
 # 2026-08-17, what the reference's remaining time is. With one load a
 # fixture, its 397 s divides into 274.7 s decoding each fixture into
 # binary64 and 122.7 s computing with it -- so decoding is sixty-nine per

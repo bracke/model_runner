@@ -282,6 +282,13 @@ begin
 
          Failed : Boolean := False;
 
+         --  When the gate began, against a bound on the whole of it. Four
+         --  stages each inside their own bound can still add to a run
+         --  nobody notices growing, which is how a half-hour gate became an
+         --  hour without any one part of it looking wrong.
+         Whole  : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+         Bound  : constant Duration := 1_500.0;
+
          --  When the stage now running began, and how to say what it took.
          --
          --  Ada.Calendar rather than Host_Load.Now: that one is the host's
@@ -407,6 +414,13 @@ begin
                & " s, the rest is the engine");
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
+               "  the sweep crossed" & Natural'Image (Agreed.Architectures)
+               & " architectures," & Natural'Image (Agreed.Formats)
+               & " formats and" & Natural'Image (Agreed.Shapes)
+               & " shapes;" & Natural'Image (Agreed.On_Device)
+               & " sequences ran on a device");
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
                "  the reference: decoding" & Duration'Image (Agreed.Decoded)
                & " s, computing" & Duration'Image (Agreed.Computed) & " s");
             Ada.Text_IO.Put_Line
@@ -449,6 +463,20 @@ begin
             if not Fixture_Mutation.Is_Clean (Moved) then
                Failed := True;
             end if;
+
+            declare
+               use type Ada.Calendar.Time;
+               Spent : constant Duration := Ada.Calendar.Clock - Whole;
+            begin
+               if Spent > Bound then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "  fail: the gate took" & Duration'Image (Spent)
+                     & " s against a bound of" & Duration'Image (Bound)
+                     & " s, though every stage was inside its own");
+                  Failed := True;
+               end if;
+            end;
 
             --  A short campaign, not the long one: the gate is asking whether
             --  the parser still refuses what it should, not searching for a new

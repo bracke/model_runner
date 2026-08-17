@@ -134,6 +134,15 @@ package Conformance is
       Learned    : Duration := 0.0;
       Evaluated  : Duration := 0.0;
 
+      --  The shape of the sweep behind its totals: how many formats,
+      --  architectures and shapes were crossed, and how many of the
+      --  sequences ran on a device. A total of twenty-four thousand says
+      --  nothing about what it covers, and what it covers is the claim.
+      Formats       : Natural := 0;
+      Architectures : Natural := 0;
+      Shapes        : Natural := 0;
+      On_Device     : Natural := 0;
+
       Unlearned  : Natural := 0;
 
       --  Sequences the sweep's own arithmetic says it should have run. Kept

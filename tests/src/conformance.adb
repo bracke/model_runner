@@ -937,6 +937,10 @@ package body Conformance is
               + On_Device
               - Formats * Ungated * (Repacks - 1) * Per_Model;
 
+            Result.Formats := Formats;
+            Result.Architectures := Arches;
+            Result.Shapes := Shapes;
+            Result.On_Device := On_Device;
             Result.Wanted := Expected;
             Result.Ran := Result.Sequences = Expected;
          end;
