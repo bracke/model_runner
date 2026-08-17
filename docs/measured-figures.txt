@@ -42,6 +42,24 @@
 # each run carried has been recorded here for months and what carried it
 # never was, which is half a condition written down twice.
 
+# 2026-08-17, what the gate costs, stage by stage, as it now says itself:
+#
+#   repository checks     10.1 s
+#   conformance         1425.1 s
+#   fixtures              77.4 s
+#   fuzzing                0.1 s
+#
+# Conformance is ninety-four per cent of it. That is worth knowing before
+# anybody optimizes anything else: the fixture check's seventy-eight seconds
+# looked like the thing that grew the gate, and it is five per cent of it.
+#
+# It also settles a question I had written down as work to do -- running the
+# gate's halves in parallel. Overlapping the repository checks, the fixture
+# check and both fuzzing campaigns with each other would save at most eighty-
+# seven seconds of a twenty-five minute run, and they contend for the device
+# besides. The only parallelism worth having is inside the conformance sweep,
+# which is a different piece of work with a different argument.
+#
 # 2026-08-17, what the fixture check costs the gate. 78.3 s, the median of
 # three on the host above: 76.30, 78.28 and 78.35, of which about 67 s is
 # user time. It moves 22195 tensors, evaluating a tiny model twice for each.

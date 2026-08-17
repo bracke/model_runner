@@ -1,3 +1,4 @@
+with Ada.Calendar;
 --  SIGINT is reserved by the GNAT runtime unless a partition says otherwise.
 --  model_runner attaches its own handler so that an interrupt requests a clean
 --  cancellation -- releasing every resource and committing no cache position --
@@ -278,6 +279,24 @@ begin
          Result : Checks.Report;
          Agreed : Conformance.Report;
          Moved  : Fixture_Mutation.Report;
+
+         --  When the stage now running began, and how to say what it took.
+         --
+         --  Ada.Calendar rather than Host_Load.Now: that one is the host's
+         --  load average and not a clock, which the first version of this
+         --  subtracted from itself and reported a stage as taking minus
+         --  eight hundredths of a second.
+         Started : Ada.Calendar.Time := Ada.Calendar.Clock;
+
+         procedure Report_Stage (Named : String) is
+            use type Ada.Calendar.Time;
+            Ended : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+         begin
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "  took: " & Named & Duration'Image (Ended - Started) & " s");
+            Started := Ended;
+         end Report_Stage;
          Fuzzed : Fuzzing.Report;
          Failed : Boolean := False;
 
@@ -337,7 +356,15 @@ begin
             Failed := True;
          end if;
 
+         --  What each half of the gate costs, said as it goes. The gate
+         --  grew from half an hour to the best part of an hour over three
+         --  days and no line of its own output said where the time went;
+         --  the fixture check's seventy-eight seconds had to be measured
+         --  from outside to be known at all.
+         Started := Ada.Calendar.Clock;
+
          Checks.Run (Root, Result, Record_Warnings => Recording);
+         Report_Stage ("repository checks");
          Failed := Failed or else not Checks.Is_Clean (Result);
 
          --  The gate runs the two things that were commands somebody had to
@@ -352,6 +379,7 @@ begin
          --  to leave either out.
          if not Repository_Only then
             Conformance.Run (Agreed);
+            Report_Stage ("conformance");
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  conformance: sequences" & Natural'Image (Agreed.Sequences)
@@ -380,6 +408,7 @@ begin
             --  asked until a fixture wrote one projection twice and the two
             --  readers took different halves of it.
             Fixture_Mutation.Run (Moved, Say => Complain'Access);
+            Report_Stage ("fixtures");
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  fixtures: tensors moved" & Natural'Image (Moved.Examined)
@@ -396,6 +425,7 @@ begin
             --  the parser still refuses what it should, not searching for a new
             --  way to break it. 'tests fuzz' with a larger count is the search.
             Fuzzing.Run (1, 200, Fuzzed);
+            Report_Stage ("fuzzing");
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  fuzz: cases" & Natural'Image (Fuzzed.Cases)
