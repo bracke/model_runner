@@ -1108,6 +1108,24 @@ device 0405429AEFCB461E src/shaders/row_product.comp src/library/model_runner-sh
 # published figure re-measured, and the honest fix is to record which file
 # the table means -- which needs whoever took it, not another run.
 
+# 2026-08-17, which two-bit file the drafting table means. History answers
+# it as far as it can be answered: the external-model record in this
+# repository names its own model as "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+# (requantized locally)", so the practice here was to requantize rather than
+# to download, and the two-bit draft was almost certainly made the same way.
+# Nothing records which source it came from or which tool made it, and a
+# locally requantized file is not a thing anyone else can obtain by name.
+#
+# So the row stands as unreproducible, and what is worth fixing is not this
+# row but the rule that let it happen: a figure that describes a model should
+# name the file it was taken with, precisely enough to get that file again.
+# The external-model record does; these groups do not, and the difference is
+# that one of them was written by somebody who had already been bitten.
+#
+# Every figure in this file now describes TinyLlama-1.1B-Chat Q8_0 as
+# TheBloke published it, which is nameable and obtainable, except the
+# drafting row's second model, which is neither.
+
 # load: 1.19 to 2.52 across the three runs, 2026-08-14
 drafting 44941DAF92C6BE02 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
