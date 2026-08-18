@@ -1077,6 +1077,41 @@ reference 482EEE66C7F19A12 src/library/model_runner-backend-reference.adb src/li
 # arithmetic is untouched here, and the conformance sweep compares it against
 # the engine twenty-six thousand times a gate.
 
+# 2026-08-18, what device-side normalization would be worth: nothing this
+# machine can measure. Written down because the question looks obviously
+# worth a yes, and the answer is no for a reason that only a measurement
+# gives.
+#
+# The instrument was to run the attention normalization eight times a layer
+# instead of once, on every layer of every token, and see what it cost:
+#
+#   one normalization a layer      0.385 s generating
+#   eight normalizations a layer   0.385 s and 0.388 s generating
+#
+# Seven extra normalizations of every layer of every token cost nothing that
+# shows. So the most that moving them to a device could win is the host time
+# they take, and that time is below the floor. TinyLlama is 2048 wide and
+# twenty-two deep, so a token's normalizations are about 270 thousand
+# operations against 55 milliseconds of generating -- half a per cent would
+# be a generous ceiling and the instrument says it is smaller.
+#
+# There is no round trip to remove either, which is the part that is easy to
+# get wrong from an armchair. The normalized vector is uploaded once today; a
+# device-side normalization would upload the activation once instead. Same
+# bytes, same submission. A normalization can only join a submission already
+# happening if its output feeds the next step without coming back, and that
+# is chaining machinery built for a gain measured at zero.
+#
+# Where the time actually is, from the figures above: removing three
+# submissions a layer bought 0.083 s over seven tokens and twenty-two layers,
+# which is about 0.18 ms a submission. A layer still costs four -- the
+# queries, keys and values; the attention output; the gate and up; the down
+# projection -- and the last three cannot be grouped because each waits for
+# the one before. Collapsing those needs the dependent chain to stay on the
+# device: the rotation, the attention, the softmax and the residual adds, not
+# the normalizations by themselves. That is the shape of the next gain, and
+# normalizations are a small component of it rather than a step toward it.
+
 # 2026-08-18, the feed-forward joins in. The gate and the up projection of a
 # gated block read the same normalized input with nothing between them, so
 # they go to a device together as the queries, keys and values already did.
