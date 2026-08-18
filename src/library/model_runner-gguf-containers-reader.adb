@@ -4,6 +4,7 @@ with Model_Runner.UTF8;
 
 package body Model_Runner.GGUF.Containers.Reader is
 
+   use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Arithmetic.Checked;
@@ -929,6 +930,12 @@ package body Model_Runner.GGUF.Containers.Reader is
    --  check that no two ranges overlap.
    procedure Validate_Ranges
      (Item   : in out Container;
+
+      --  The bytes themselves, because the padding a file may end with has
+      --  to be looked at rather than assumed: this used to judge the tail by
+      --  its length alone, which cannot tell padding from an undeclared run
+      --  of anything.
+      Source : in out Model_Runner.Byte_Sources.Source'Class;
       Status : out E.Error_Info)
    is
       Count   : constant Natural := Natural (Item.Tensors.Length);
@@ -1043,15 +1050,50 @@ package body Model_Runner.GGUF.Containers.Reader is
       Item.Data_Bytes :=
         (if Highest >= Item.Data_Start then Highest - Item.Data_Start else 0);
 
+      --  Bytes after the last tensor, of which there are two kinds.
+      --
+      --  A file whose data section is padded to its own alignment ends with
+      --  fewer than one alignment unit of zeroes, and that is a real file:
+      --  gpt2 as published carries sixteen such bytes against an alignment
+      --  of thirty-two, and this refused to read it. Anything longer than
+      --  the padding could be, or anything that is not zero, is data nobody
+      --  declared and is refused as before -- an undeclared run of bytes
+      --  inside a file this program maps is exactly what this check is for.
       if not Item.Bounds.Allow_Trailing_Data
         and then Highest < Item.Total_Size
       then
-         Status := E.Make (E.GGUF_Trailing_Data);
-         E.Add_Integer
-           (Status, "offset", Reportable (Highest), E.Param_Offset);
-         E.Add_Integer
-           (Status, "extra", Reportable (Item.Total_Size - Highest),
-            E.Param_Bytes);
+         declare
+            Extra   : constant Interfaces.Unsigned_64 :=
+              Item.Total_Size - Highest;
+            Padding : Boolean := Extra < Item.Align;
+         begin
+            if Padding then
+               for Offset in 0 .. Extra - 1 loop
+                  declare
+                     Tail : B.Byte_Array (0 .. 0) := [others => 0];
+                     Read : E.Error_Info;
+                  begin
+                     Source.Read
+                       (B.Byte_Count (Highest + Offset), Tail, Read);
+
+                     if E.Is_Error (Read)
+                       or else Tail (0) /= 0
+                     then
+                        Padding := False;
+                        exit;
+                     end if;
+                  end;
+               end loop;
+            end if;
+
+            if not Padding then
+               Status := E.Make (E.GGUF_Trailing_Data);
+               E.Add_Integer
+                 (Status, "offset", Reportable (Highest), E.Param_Offset);
+               E.Add_Integer
+                 (Status, "extra", Reportable (Extra), E.Param_Bytes);
+            end if;
+         end;
       end if;
    end Validate_Ranges;
 
@@ -1262,7 +1304,7 @@ package body Model_Runner.GGUF.Containers.Reader is
          return;
       end if;
 
-      Validate_Ranges (Item, Status);
+      Validate_Ranges (Item, Source, Status);
       if E.Is_Error (Status) then
          Fail (Status);
          return;

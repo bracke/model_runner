@@ -286,6 +286,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A file that ends in padding is read.** GPT-2 as published carries sixteen
+  bytes after its last tensor against an alignment of thirty-two, and this
+  refused it outright: `MR-GGUF-0025`, a real file no other runtime objects
+  to. Trailing bytes are accepted now when there are fewer of them than one
+  alignment unit *and* every one is zero, which is what padding is; anything
+  longer, or anything non-zero, is still an undeclared run of bytes inside a
+  mapped file and still refused.
+
+  The zero test needed the reader to look at the bytes rather than judge the
+  tail by its length, so the validation now takes the source it is
+  validating. Both fuzzing campaigns run over it: 200 containers and 300 text
+  cases, nothing escaping.
+
 - **Gemma3 is built with six blocks, so the layer that sees everything
   exists.** Its window falls on five layers in six and the sixth attends to
   the whole context on a rotation base of its own. Every fixture had two
