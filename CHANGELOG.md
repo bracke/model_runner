@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Six of the ten architectures have now been read from published files.**
+  llama, gpt2, qwen2, qwen3, gemma3 and phi2, each loaded, generated from,
+  and checked for determinism and thread-stability by `tests external-model`.
+  It was two this morning. The other four -- gemma, gemma2, phi3, falcon --
+  remain attested by fixtures written here, and the figures file says which
+  is which, because that distinction is what the gpt2 output bias turned on.
+
 - **A figure for gpt2, on a published gpt2.** Twelve tokens in 0.253 s
   against TinyLlama-1.1B's 1.871 s, and `external-model` validates it:
   deterministic and thread-stable, 149 tensors, 163 million parameters. The

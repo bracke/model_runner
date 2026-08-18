@@ -151,6 +151,26 @@
 # that isolated it would have to hold the size fixed, which no pair of
 # published models does.
 
+# 2026-08-18, which architectures have been read from a file somebody else
+# wrote. Six of the ten this build claims, validated with `tests
+# external-model` -- it loads the file, generates, and checks that two runs
+# agree and that the worker count does not change the answer:
+#
+#   llama   TinyLlama-1.1B-Chat Q8_0        201 tensors, deterministic
+#   gpt2    gpt2 Q8_0 (mradermacher)        149 tensors, deterministic
+#   qwen2   Qwen2-0.5B-Instruct Q8_0        290 tensors, deterministic
+#   qwen3   Qwen3-0.6B Q8_0                 310 tensors, deterministic
+#   gemma3  gemma-3-1b-it Q4_K_M (unsloth)  340 tensors, deterministic
+#   phi2    phi-2 Q4_K_M (TheBloke)         325 tensors, deterministic
+#
+# The other four -- gemma, gemma2, phi3, falcon -- are still attested only by
+# fixtures written here. Two of the four were downloading when this was
+# recorded and falcon's smallest published file is behind a gate. That
+# distinction is worth keeping visible: a fixture and an engine can agree
+# about a model nobody ships, which is what gpt2's output bias was, and no
+# amount of agreement between two implementations reading the same fixture
+# will say so.
+
 # covers:" line before a group says which published figures it stands
 # for, and the check prints it when that group fails. A group whose figures
 # are not named is a group nobody can answer: the reader learns that something
