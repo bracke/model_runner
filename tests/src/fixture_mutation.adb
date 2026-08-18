@@ -49,6 +49,24 @@ package body Fixture_Mutation is
    --  not claim to have asked about.
    type Shape_Kind is (Plain, Windowed, Mixed, Stretched, Apart);
 
+   --  Which architecture cannot be built in which shape, and why.
+   --
+   --  Both entries were found by something breaking rather than by anyone
+   --  asking: falcon and phi2 got a router in front of experts they have no
+   --  gate to route to, and gpt2 got a stretched rotation though it has no
+   --  rotation -- its table of per-dimension divisors then has no elements,
+   --  which the engine refuses as a shape and rightly. The sweep skips these
+   --  pairs; this says so out loud, and checks both directions, so the next
+   --  architecture meets the question instead of the failure.
+   function Cannot_Hold
+     (Kind : Tiny_Model.Fixture_Architecture; Shape : Shape_Kind)
+      return Boolean
+   is (case Shape is
+         when Mixed =>
+           Kind in Tiny_Model.Falcon | Tiny_Model.Phi2 | Tiny_Model.GPT2,
+         when Stretched => Kind = Tiny_Model.GPT2,
+         when others => False);
+
    ---------
    -- Run --
    ---------
@@ -77,6 +95,13 @@ package body Fixture_Mutation is
          Shape  : Shape_Kind;
          Format : Tiny_Model.Weight_Format) is
       begin
+         --  Exactly as the conformance sweep builds it, down to the table
+         --  of per-dimension divisors a stretched rotation carries. This
+         --  used to omit that table, so "stretched" meant one thing here and
+         --  another there, and a stretched gpt2 -- whose divisor table has
+         --  no elements, its rotation having no dimensions -- passed this
+         --  check and refused to load in the sweep. Two builders of the same
+         --  shape have to build the same shape.
          Tiny_Model.Build
            (Image, Format, Kind => Kind,
             Window => (if Shape = Windowed then 3 else 0),
@@ -85,6 +110,7 @@ package body Fixture_Mutation is
             Stretch =>
               (if Shape = Stretched then Tiny_Model.Yarn
                else Tiny_Model.Plain),
+            Rope_Table => Shape = Stretched,
             Apart_Widths => Shape = Apart);
       end Raise_Fixture;
 
@@ -549,11 +575,36 @@ package body Fixture_Mutation is
             --  The two with none would be handed a router in front of experts
             --  that are not there, which the engine refuses -- and a refusal
             --  every time says nothing about which tensors are read.
-            if Shape = Mixed
-              and then Kind in Tiny_Model.Falcon | Tiny_Model.Phi2
-                             | Tiny_Model.GPT2
-            then
-               null;
+            if Cannot_Hold (Kind, Shape) then
+               --  Declared unable to hold this shape, so it is built and
+               --  required to refuse. A pair that starts loading is as much
+               --  a finding as one that stops: it means a skip is being
+               --  taken that nothing needs any more, and every skip costs
+               --  the sweep comparisons it could have made.
+               declare
+                  Image  : B.Byte_Array_Access;
+                  Logits : Logit_Row := [others => 0.0];
+                  Ok     : Boolean;
+                  Why    : E.Error_Info;
+               begin
+                  Raise_Fixture (Image, Kind, Shape, Tiny_Model.F32);
+
+                  if Image /= null then
+                     Answer (Image, Model_Runner.Backend.Backend_CPU,
+                             False, Logits, Ok, Why);
+                     Result.Declared := Result.Declared + 1;
+
+                     if Ok and then Say /= null then
+                        Say (Tiny_Model.Fixture_Architecture'Image (Kind)
+                             & " " & Shape_Kind'Image (Shape)
+                             & " is declared a shape this architecture "
+                             & "cannot hold, and it loaded");
+                        Result.Unread := Result.Unread + 1;
+                     end if;
+
+                     B.Free (Image);
+                  end if;
+               end;
             else
                for Format of Formats loop
                   for Read of Readings loop

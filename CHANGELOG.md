@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The fixture check asks which shapes an architecture cannot hold.** Both
+  of gpt2's skips were found by something breaking: a mixture handed to an
+  architecture with no gate to route to, and a stretched rotation handed to
+  one with no rotation, whose table of per-dimension divisors then has no
+  elements. The four pairs are declared now, with the reason beside each, and
+  the check tests both directions -- a pair outside the table that refuses
+  fails, and a pair inside it that loads fails too, because a skip nothing
+  needs costs the sweep comparisons it could have made.
+
+  It also found why this check had been blind to the second one: it built a
+  stretched fixture without the divisor table the sweep builds, so "stretched"
+  meant one thing here and another there. Two builders of one shape have to
+  build the same shape, and now they do.
+
 - **The `gpt2` architecture.** The oldest shape here and the only one that
   does not rotate: it learns where a token is, one row a position added to
   the token's row before the first layer. Everything else it needs already

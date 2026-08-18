@@ -469,6 +469,7 @@ begin
                & ", unread" & Natural'Image (Moved.Unread)
                & ", quiet" & Natural'Image (Moved.Quiet)
                & ", unwanted" & Natural'Image (Moved.Unwanted)
+               & ", declared" & Natural'Image (Moved.Declared)
                & ", faint" & Natural'Image (Moved.Faint)
                & ", refused" & Natural'Image (Moved.Refused));
             if not Fixture_Mutation.Is_Clean (Moved) then
@@ -578,6 +579,7 @@ begin
             & ", unread" & Natural'Image (Moved.Unread)
             & ", quiet" & Natural'Image (Moved.Quiet)
             & ", unwanted" & Natural'Image (Moved.Unwanted)
+            & ", declared" & Natural'Image (Moved.Declared)
             & ", faint" & Natural'Image (Moved.Faint)
             & ", refused" & Natural'Image (Moved.Refused));
 

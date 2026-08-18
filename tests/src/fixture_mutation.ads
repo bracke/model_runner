@@ -107,6 +107,11 @@ package Fixture_Mutation is
       --  because it compares answers rather than appetites.
       Unwanted : Natural := 0;
 
+      --  Pairs of architecture and shape declared impossible and built to
+      --  confirm it. Counted so that a run says how many it asked about: a
+      --  declaration nobody exercises is a comment.
+      Declared : Natural := 0;
+
       --  Between Unread and Unwanted the two appetites are both covered,
       --  and a third count asking what the engine asks for would say
       --  nothing either of these does not. A tensor the reference asks for
