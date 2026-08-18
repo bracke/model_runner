@@ -94,7 +94,8 @@ package body Conformance is
       --  not independent of each other in what they are worth crossing: each
       --  is a different route through the evaluator and each is worth every
       --  format, backend and repack mode on its own.
-      type Model_Shape is (Plain, Windowed, Mixed, Stretched, Apart);
+      subtype Model_Shape is Tiny_Model.Fixture_Shape;
+      use all type Tiny_Model.Fixture_Shape;
 
       --  The formats the device reads without being repacked into one, which
       --  since the shader gained the other twelve branches is all of them.
@@ -575,27 +576,11 @@ package body Conformance is
                      --  that linear does too, is asserted where a fixture can
                      --  hold one thing still -- in the inference tests.
                      Since := Ada.Calendar.Clock;
-                     Tiny_Model.Build
-                       (Image, Format, Kind => Crossed (Which_Arch),
-                        Window =>
-                          (case Shape is
-                             when Windowed => 3,
-                             when others => 0),
-                        Experts =>
-                          (case Shape is
-                             when Mixed => 4,
-                             when others => 0),
-                        Experts_Used =>
-                          (case Shape is
-                             when Mixed => 2,
-                             when others => 0),
-                        Stretch =>
-                          (case Shape is
-                             when Stretched => Tiny_Model.Yarn,
-                             when Plain | Windowed | Mixed | Apart =>
-                               Tiny_Model.Plain),
-                        Rope_Table => Shape = Stretched,
-                        Apart_Widths => Shape = Apart);
+
+                     --  Through the one mapping that says what a shape is,
+                     --  which the fixture check builds through as well.
+                     Tiny_Model.Build_Shaped
+                       (Image, Format, Crossed (Which_Arch), Shape);
 
                      --  A new fixture, so the expectations belonging to the
                      --  last one are gone.

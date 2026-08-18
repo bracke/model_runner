@@ -150,6 +150,33 @@ package Tiny_Model is
       Rank    : Positive := 1;
       Apart   : Boolean := False);
 
+   --  The shapes a supported model comes in, and the one place that says
+   --  what each of them means.
+   --
+   --  Both the conformance sweep and the fixture check build every
+   --  architecture in every shape, and they used to say separately what a
+   --  shape was: the sweep gave a stretched fixture its table of
+   --  per-dimension divisors and the check did not, so "stretched" named two
+   --  different files for a week. The check then passed a shape the sweep
+   --  refused, and four hundred and fifty comparisons went missing while
+   --  both halves reported themselves clean. One mapping, used by both, is
+   --  the only version of this that cannot drift.
+   type Fixture_Shape is (Plain, Windowed, Mixed, Stretched, Apart);
+
+   --  Write a fixture in one of those shapes.
+   --
+   --  @param Result Bytes of the model, allocated here.
+   --  @param Format Weight format to encode the matrices in.
+   --  @param Kind   Architecture to write.
+   --  @param Shape  Which shape, which decides the window, the experts, the
+   --    rotation's stretch and its table, and whether the head widths are
+   --    stated apart.
+   procedure Build_Shaped
+     (Result : out Model_Runner.Bytes.Byte_Array_Access;
+      Format : Weight_Format := F32;
+      Kind   : Fixture_Architecture := Llama;
+      Shape  : Fixture_Shape := Plain);
+
    --  Build the fixture in memory.
    --
    --  @param Result Newly allocated file bytes; the caller frees them.

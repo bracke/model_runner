@@ -33,6 +33,26 @@ package body Tiny_Model is
    function Adapter_Column (Index : Natural) return N.Real
    is (0.02 * N.Real (Index mod 7) - 0.05);
 
+   ------------------
+   -- Build_Shaped --
+   ------------------
+
+   procedure Build_Shaped
+     (Result : out Model_Runner.Bytes.Byte_Array_Access;
+      Format : Weight_Format := F32;
+      Kind   : Fixture_Architecture := Llama;
+      Shape  : Fixture_Shape := Plain) is
+   begin
+      Build
+        (Result, Format, Kind => Kind,
+         Window => (if Shape = Windowed then 3 else 0),
+         Experts => (if Shape = Mixed then 4 else 0),
+         Experts_Used => (if Shape = Mixed then 2 else 0),
+         Stretch => (if Shape = Stretched then Yarn else Plain),
+         Rope_Table => Shape = Stretched,
+         Apart_Widths => Shape = Apart);
+   end Build_Shaped;
+
    procedure Build
      (Result    : out Model_Runner.Bytes.Byte_Array_Access;
       Format    : Weight_Format := F32;

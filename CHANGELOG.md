@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **One place says what a shape is.** The conformance sweep and the fixture
+  check each built every architecture in every shape, and each said
+  separately what a shape meant -- the sweep gave a stretched fixture its
+  table of per-dimension divisors and the check did not, so `stretched` named
+  two different files. The check passed a shape the sweep refused, 450
+  comparisons went missing, and both halves reported themselves clean.
+  `Tiny_Model.Build_Shaped` is the mapping now and both build through it, so
+  the two cannot drift rather than being checked for drift.
+
 - **The sweep declares the shapes it skips, in one place.** Its two skips
   were `goto` statements with comments, and the expected-sequence arithmetic
   restated the same fact in two more terms -- one added when falcon needed it

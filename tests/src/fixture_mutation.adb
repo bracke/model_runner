@@ -47,7 +47,8 @@ package body Fixture_Mutation is
    --  from the conformance sweep because the two ask different questions of
    --  the same fixtures, and a shape this cannot build is a shape this must
    --  not claim to have asked about.
-   type Shape_Kind is (Plain, Windowed, Mixed, Stretched, Apart);
+   subtype Shape_Kind is Tiny_Model.Fixture_Shape;
+   use all type Tiny_Model.Fixture_Shape;
 
    --  Which architecture cannot be built in which shape, and why.
    --
@@ -95,23 +96,10 @@ package body Fixture_Mutation is
          Shape  : Shape_Kind;
          Format : Tiny_Model.Weight_Format) is
       begin
-         --  Exactly as the conformance sweep builds it, down to the table
-         --  of per-dimension divisors a stretched rotation carries. This
-         --  used to omit that table, so "stretched" meant one thing here and
-         --  another there, and a stretched gpt2 -- whose divisor table has
-         --  no elements, its rotation having no dimensions -- passed this
-         --  check and refused to load in the sweep. Two builders of the same
-         --  shape have to build the same shape.
-         Tiny_Model.Build
-           (Image, Format, Kind => Kind,
-            Window => (if Shape = Windowed then 3 else 0),
-            Experts => (if Shape = Mixed then 4 else 0),
-            Experts_Used => (if Shape = Mixed then 2 else 0),
-            Stretch =>
-              (if Shape = Stretched then Tiny_Model.Yarn
-               else Tiny_Model.Plain),
-            Rope_Table => Shape = Stretched,
-            Apart_Widths => Shape = Apart);
+         --  Through the one mapping that says what a shape is, which the
+         --  conformance sweep builds through as well. They said it
+         --  separately once and disagreed about the stretched one.
+         Tiny_Model.Build_Shaped (Image, Format, Kind, Shape);
       end Raise_Fixture;
 
       --  Evaluate one image and report the logits it produced.
