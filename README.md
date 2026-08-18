@@ -845,6 +845,13 @@ that is **97,251,904** bytes exact, **48,807,695** halved and **24,585,588**
 in bytes -- a little under a quarter, the difference being the buffers a
 session holds whatever it stores its context in, and the scales.
 
+On the device it is the same story and worth stating separately, because a
+storage that halves what crosses to a device might have been expected to pay
+there: twelve tokens read **1.169 s** with the byte cache against **1.151 s**
+without, which is inside the spread between two runs. What the device reads
+back is a row it decodes on the host either way, so there is nothing here for
+it to save.
+
 What it costs in time is nothing this machine can measure: twelve tokens of
 TinyLlama-1.1B Q8_0 take **1.912 s** with the byte cache against **1.871 s**
 with the exact one, and two runs of the same figure an hour apart on this

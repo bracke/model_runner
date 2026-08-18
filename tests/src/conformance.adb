@@ -144,29 +144,6 @@ package body Conformance is
          Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2,
          Tiny_Model.GPT2];
 
-      --  Which architecture cannot be built in which shape, and why.
-      --
-      --  Falcon, Phi2 and GPT2 have no gate, so a mixture would hand them a
-      --  router in front of experts they cannot route to. GPT2 has no
-      --  rotation, so a stretched one gives it a table of per-dimension
-      --  divisors with no elements, which the engine refuses as a shape and
-      --  rightly.
-      --
-      --  Said once, because the skip below and the expected count further
-      --  down are two statements of the same fact and were two hand-kept
-      --  copies of it. The fixture check declares the same pairs with the
-      --  same reasons and tests both directions of the declaration; this is
-      --  the sweep's half of that, and the two lists agreeing is a thing
-      --  somebody has to keep true.
-      function Unbuildable
-        (Kind : Tiny_Model.Fixture_Architecture; Shape : Model_Shape)
-         return Boolean
-      is (case Shape is
-            when Mixed =>
-              Kind in Tiny_Model.Falcon | Tiny_Model.Phi2 | Tiny_Model.GPT2,
-            when Stretched => Kind = Tiny_Model.GPT2,
-            when others => False);
-
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
       --  A pool for the half of the sweep that runs in parallel. Made once
@@ -621,7 +598,7 @@ package body Conformance is
                         --  arithmetic below and run by nobody.
                         --  A shape this architecture cannot hold, named
                         --  where the reasons are.
-                        if Unbuildable (Crossed (Which_Arch), Shape) then
+                        if Tiny_Model.Cannot_Hold (Crossed (Which_Arch), Shape) then
                            goto Next_Repack;
                         end if;
 
@@ -948,7 +925,7 @@ package body Conformance is
          begin
             for Kind of Crossed loop
                for Shape in Model_Shape loop
-                  if Unbuildable (Kind, Shape) then
+                  if Tiny_Model.Cannot_Hold (Kind, Shape) then
                      Skipped := Skipped + 1;
                   end if;
                end loop;

@@ -21,7 +21,6 @@ package body Fixture_Mutation is
 
    use type Interfaces.Unsigned_8;
    use type Model_Runner.Backend.Backend_Kind;
-   use type Tiny_Model.Fixture_Architecture;
    use type Tiny_Model.Weight_Format;
    use type Interfaces.Unsigned_32;
    use type Model_Runner.GGUF.Tensor_Type;
@@ -49,24 +48,6 @@ package body Fixture_Mutation is
    --  not claim to have asked about.
    subtype Shape_Kind is Tiny_Model.Fixture_Shape;
    use all type Tiny_Model.Fixture_Shape;
-
-   --  Which architecture cannot be built in which shape, and why.
-   --
-   --  Both entries were found by something breaking rather than by anyone
-   --  asking: falcon and phi2 got a router in front of experts they have no
-   --  gate to route to, and gpt2 got a stretched rotation though it has no
-   --  rotation -- its table of per-dimension divisors then has no elements,
-   --  which the engine refuses as a shape and rightly. The sweep skips these
-   --  pairs; this says so out loud, and checks both directions, so the next
-   --  architecture meets the question instead of the failure.
-   function Cannot_Hold
-     (Kind : Tiny_Model.Fixture_Architecture; Shape : Shape_Kind)
-      return Boolean
-   is (case Shape is
-         when Mixed =>
-           Kind in Tiny_Model.Falcon | Tiny_Model.Phi2 | Tiny_Model.GPT2,
-         when Stretched => Kind = Tiny_Model.GPT2,
-         when others => False);
 
    ---------
    -- Run --
@@ -563,7 +544,7 @@ package body Fixture_Mutation is
             --  The two with none would be handed a router in front of experts
             --  that are not there, which the engine refuses -- and a refusal
             --  every time says nothing about which tensors are read.
-            if Cannot_Hold (Kind, Shape) then
+            if Tiny_Model.Cannot_Hold (Kind, Shape) then
                --  Declared unable to hold this shape, so it is built and
                --  required to refuse. A pair that starts loading is as much
                --  a finding as one that stops: it means a skip is being

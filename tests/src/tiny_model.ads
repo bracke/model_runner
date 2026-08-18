@@ -163,6 +163,29 @@ package Tiny_Model is
    --  the only version of this that cannot drift.
    type Fixture_Shape is (Plain, Windowed, Mixed, Stretched, Apart);
 
+   --  Whether an architecture can be built in a shape at all.
+   --
+   --  Falcon, Phi2 and GPT2 have no gate, so a mixture would hand them a
+   --  router in front of experts they cannot route to. GPT2 has no rotation,
+   --  so a stretched one gives it a table of per-dimension divisors with no
+   --  elements, which the engine refuses as a shape and rightly.
+   --
+   --  Both pairs were found by something breaking rather than by anyone
+   --  asking, and both were then declared twice -- once in the sweep that
+   --  skips them and once in the check that confirms they refuse. Twice is
+   --  one more than can be kept true by hand, so it is said here, beside the
+   --  mapping that says what a shape is, and both read it.
+   --
+   --  @param Kind  Architecture to ask about.
+   --  @param Shape Shape to ask about.
+   --  @return True when that architecture cannot be built in that shape.
+   function Cannot_Hold
+     (Kind : Fixture_Architecture; Shape : Fixture_Shape) return Boolean
+   is (case Shape is
+         when Mixed => Kind in Falcon | Phi2 | GPT2,
+         when Stretched => Kind = GPT2,
+         when others => False);
+
    --  Write a fixture in one of those shapes.
    --
    --  @param Result Bytes of the model, allocated here.

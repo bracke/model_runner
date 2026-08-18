@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **What the byte cache costs on a device, measured.** 1.169 s against
+  1.151 s for twelve tokens -- inside the spread between two runs, as on the
+  processor. It had been agreeing there since the crossing was added and
+  nothing had timed it.
+
+- **One place says which architecture cannot hold which shape.** The sweep
+  and the fixture check each declared the same four pairs, one to skip them
+  and one to confirm they refuse, and two hand-kept copies of a fact is one
+  more than can be kept true. `Tiny_Model.Cannot_Hold` is that fact now,
+  beside the mapping that says what a shape is, and both read it.
+
 - **One place says what a shape is.** The conformance sweep and the fixture
   check each built every architecture in every shape, and each said
   separately what a shape meant -- the sweep gave a stretched fixture its
