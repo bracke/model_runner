@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A figure for gpt2, on a published gpt2.** Twelve tokens in 0.253 s
+  against TinyLlama-1.1B's 1.871 s, and `external-model` validates it:
+  deterministic and thread-stable, 149 tensors, 163 million parameters. The
+  comparison measures size rather than the absence of a rotation -- seven
+  times faster on about a seventh of the parameters -- and the figures file
+  says so, because a figure quoted for the wrong reason is worse than none.
+
 - **What the byte cache costs on a device, measured.** 1.169 s against
   1.151 s for twelve tokens -- inside the spread between two runs, as on the
   processor. It had been agreeing there since the crossing was added and

@@ -135,6 +135,22 @@
 # is a thing somebody should be able to find the cause of, and 78 s of it is
 # here.
 
+# 2026-08-18, gpt2 on a published file. Six prompt tokens and twelve
+# generated: 0.253 s wall -- 0.045 s evaluating the prompt and 0.210 s
+# generating -- and 1.28 s of processor time, loading in 0.235 s, digest
+# 6260472a109d3651.
+#
+# model: gpt2 Q8_0 as mradermacher published it -- gpt2.Q8_0.gguf,
+# 177669376 bytes, 149 tensors, 163 million parameters, context 1024.
+#
+# Against TinyLlama-1.1B Q8_0's 1.871 s for the same twelve tokens. Worth
+# saying what that does and does not show: it is seven times faster and has
+# about a seventh of the parameters, so what the figure measures is size. It
+# is the first architecture here that does not rotate, and the rotation is
+# too small a part of a token's work to see at this distance -- a figure
+# that isolated it would have to hold the size fixed, which no pair of
+# published models does.
+
 # covers:" line before a group says which published figures it stands
 # for, and the check prints it when that group fails. A group whose figures
 # are not named is a group nobody can answer: the reader learns that something
