@@ -566,8 +566,13 @@ package body Tests.Accounting_Cases is
       declare
          Nothing : constant B.Byte_Array (1 .. 0) := [];
       begin
+         --  The flag is read, but only when the left operand holds, and
+         --  the release profile cannot see that far. Suppressed here rather
+         --  than restructured: the pair is the check.
+         pragma Warnings (Off, "possibly useless assignment*");
          Assert (B.Get_U8 (Nothing, 0, Ok) = 0 and then not Ok,
                  "a byte was read from an empty buffer");
+         pragma Warnings (On, "possibly useless assignment*");
       end;
    end Byte_Readers_Decode_And_Refuse;
 

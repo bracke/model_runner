@@ -141,6 +141,11 @@ private
       Up_Bias        : Vector_Access := null;
       Down_Bias      : Vector_Access := null;
       Feed_Norm      : Vector_Access := null;
+
+      --  The shift beside that gain, where the architecture centres. Null
+      --  for every architecture that does not, and for a file that carries
+      --  no such tensor.
+      Feed_Norm_Bias : Vector_Access := null;
       Gate           : Matrix_Access := null;
       Up             : Matrix_Access := null;
       Down           : Matrix_Access := null;

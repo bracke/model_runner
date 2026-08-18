@@ -2993,8 +2993,12 @@ package body Tests.GGUF_Cases is
                  "a binary64 was read out of a one-byte buffer");
          Assert (not B.Get_Bool (Short, 1, Ok) and then not Ok,
                  "a boolean was read past the end of a buffer");
+         --  As above: read behind an `and then`, which the release
+         --  profile's flow analysis does not follow.
+         pragma Warnings (Off, "possibly useless assignment*");
          Assert (B.Get_I8 (Short, 1, Ok) = 0 and then not Ok,
                  "a byte was read past the end of a buffer");
+         pragma Warnings (On, "possibly useless assignment*");
       end;
    end Typed_Readers_Decode_What_The_Bytes_Say;
 

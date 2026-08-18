@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests fixture-likeness`, which compares a fixture against a real file.**
+  Everything else here compares two implementations written together against
+  a fixture written to suit them. This asks the other question: does the
+  fixture resemble a model anybody ships? It folds layer indices together and
+  reports names each side has and the other does not.
+
+### Fixed
+
+- **gpt2's feed-forward normalization ran without its shift, and uncentred.**
+  Every published gpt2 carries `blk.N.ffn_norm.bias`; the engine read every
+  other layer-norm shift and not that one, and took the root-mean-square path
+  where the architecture centres. Found by `fixture-likeness` on its first
+  run, on the first file it was pointed at. The sweep could not see it: the
+  reference did not read the tensor either and the fixture did not write one.
+
 - **Every architecture the sweep crosses has now been read from a published
   file.** llama, gpt2, qwen2, qwen3, gemma, gemma2, gemma3, phi2, phi3 and
   falcon, each loaded, generated from, and checked for determinism and

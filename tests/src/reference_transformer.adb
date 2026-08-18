@@ -1594,6 +1594,15 @@ package body Reference_Transformer is
                if not Present then
                   return;
                end if;
+
+               --  The shift beside it, for the architectures that centre.
+               --  Optional: a file need not carry one, and this reads what
+               --  is there rather than what a fixture happens to write.
+               if Item.Kind = GPT2 then
+                  Current.Feed_Norm_Bias :=
+                    Read_Vector
+                      (Layer_Name (Index, "ffn_norm.bias"), Present);
+               end if;
             end if;
 
             if Item.Experts > 0 then
@@ -1704,6 +1713,7 @@ package body Reference_Transformer is
             Free_Vector (Item.Blocks (Index).Key_Norm);
             Free_Matrix (Item.Blocks (Index).Attention_Out);
             Free_Vector (Item.Blocks (Index).Feed_Norm);
+            Free_Vector (Item.Blocks (Index).Feed_Norm_Bias);
             Free_Matrix (Item.Blocks (Index).Router);
             Free_Matrix (Item.Blocks (Index).Gate_Experts);
             Free_Matrix (Item.Blocks (Index).Up_Experts);
@@ -2344,6 +2354,10 @@ package body Reference_Transformer is
                --  Feed-forward block.
                if Current.Feed_Norm = null then
                   Normed (0 .. Width - 1) := Held_Norm (0 .. Width - 1);
+               elsif Item.Kind in Falcon | Phi2 | GPT2 then
+                  Normalize_Centred
+                    (State, Current.Feed_Norm.all,
+                     Current.Feed_Norm_Bias, Normed);
                else
                   Normalize (State, Current.Feed_Norm.all, Normed);
                end if;

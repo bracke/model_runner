@@ -766,6 +766,16 @@ package body Tiny_Model is
 
          if Kind not in Falcon | Phi2 then
             Norm (Layer_Name (Index, "ffn_norm.weight"));
+
+            --  The shift beside it, which a centring architecture carries
+            --  and this fixture did not write. Every published gpt2 has
+            --  one, the engine did not read it, and nothing here could see
+            --  that because the fixture the engine was checked against had
+            --  no such tensor either. Falcon and phi2 never reach this:
+            --  they have one normalization a block.
+            if Kind = GPT2 then
+               Norm_Of (Layer_Name (Index, "ffn_norm.bias"), Embedding);
+            end if;
          end if;
 
          if Experts > 0 then

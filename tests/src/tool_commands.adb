@@ -15,6 +15,7 @@ package body Tool_Commands is
    Name_Package        : aliased constant String := "package";
    Name_Pristine       : aliased constant String := "pristine";
    Name_Schema         : aliased constant String := "schema";
+   Name_Likeness       : aliased constant String := "fixture-likeness";
 
    Nothing : aliased constant String := "";
 
@@ -30,6 +31,7 @@ package body Tool_Commands is
      " --model --prompt --max-tokens --threads --expect --repack --backend"
      & " --draft-model --draft-tokens ";
    Opts_Tokenize  : aliased constant String := " --model --prompt ";
+   Opts_Likeness  : aliased constant String := " --model --names ";
 
    Takes_Check     : aliased constant String := "[ROOT] [--repository] [--record-warnings]";
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
@@ -51,7 +53,11 @@ package body Tool_Commands is
    Takes_Package   : aliased constant String := "[ROOT] [INTO]";
    Takes_Pristine  : aliased constant String := "[ROOT]";
    Takes_Schema    : aliased constant String := "SCHEMA";
+   Takes_Likeness  : aliased constant String := "--model PATH [--names]";
 
+   Says_Likeness : aliased constant String :=
+     "compare a published model's tensor list against the fixture this"
+     & " repository builds for its architecture";
    Says_Test : aliased constant String :=
      "run the mandatory suite";
    Says_Check : aliased constant String :=
@@ -85,7 +91,7 @@ package body Tool_Commands is
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
 
-   Held : constant array (1 .. 15) of Command :=
+   Held : constant array (1 .. 16) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -115,7 +121,9 @@ package body Tool_Commands is
       (Name_Pristine'Access, Takes_Pristine'Access, Says_Pristine'Access,
        Opts_None'Access),
       (Name_Schema'Access, Takes_Schema'Access, Says_Schema'Access,
-       Opts_None'Access)];
+       Opts_None'Access),
+      (Name_Likeness'Access, Takes_Likeness'Access, Says_Likeness'Access,
+       Opts_Likeness'Access)];
 
    -----------
    -- Count --

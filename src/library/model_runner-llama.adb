@@ -1711,6 +1711,28 @@ package body Model_Runner.Llama is
                     (Item, Source, Layer_Key (Index, "ffn_norm.weight"),
                      Width, Current.Feed_Norm, Status);
                   exit when E.Is_Error (Status);
+
+                  --  The shift beside it, where the architecture centres.
+                  --  Falcon and phi2 never reach here -- they have one
+                  --  normalization a block -- so this is gpt2's, and it was
+                  --  missing: the file carries it, the engine read every
+                  --  other layer-norm shift, and the feed-forward ran off a
+                  --  normalization that was neither centred nor shifted.
+                  --  Optional, and deliberately so. Requiring it would
+                  --  refuse a file that does not carry one, which is the
+                  --  trap this architecture's output bias already fell
+                  --  into: the loader asked for a tensor because the
+                  --  fixture wrote it, and a published model was refused.
+                  if Item.Settings.Kind in Falcon | Phi2 | GPT2
+                    and then Containers.Find_Tensor
+                               (Source, Layer_Key (Index, "ffn_norm.bias"))
+                             /= 0
+                  then
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ffn_norm.bias"),
+                        Width, Current.Feed_Norm_Bias, Status);
+                     exit when E.Is_Error (Status);
+                  end if;
                end if;
 
                if Item.Settings.Kind in Falcon | Phi2 | GPT2 then
@@ -2714,6 +2736,7 @@ package body Model_Runner.Llama is
             T.Free (Item.Layers.all (Index).Attention_Norm_Bias);
             T.Free (Item.Layers.all (Index).Post_Feed_Norm);
             T.Free (Item.Layers.all (Index).Feed_Norm);
+            T.Free (Item.Layers.all (Index).Feed_Norm_Bias);
 
             --  The attention biases, which nothing released: a qwen2 model
             --  held three vectors a layer past its own closing, and only
@@ -4603,10 +4626,9 @@ package body Model_Runner.Llama is
             if Current.Feed_Norm = null then
                Item.Normalized.all := Item.Post_Room.all;
             else
-               K.RMS_Norm
-                 (Item.Activation.all, Current.Feed_Norm.all,
-                  Settings.Epsilon, Item.Normalized.all,
-                  Lifted => Lifted_Norms (Source));
+               Normalize
+                 (Source, Item.Activation.all, Current.Feed_Norm.all,
+                  Current.Feed_Norm_Bias, Item.Normalized.all);
             end if;
 
             if Settings.Experts > 0 then
@@ -5123,11 +5145,10 @@ package body Model_Runner.Llama is
                      Norm.all (Origin .. Origin + Width - 1) :=
                        Kept_Norm.all (Origin .. Origin + Width - 1);
                   else
-                     K.RMS_Norm
-                       (Acts.all (Origin .. Origin + Width - 1),
-                        Current.Feed_Norm.all, Settings.Epsilon,
-                        Norm.all (Origin .. Origin + Width - 1),
-                        Lifted => Lifted_Norms (Source));
+                     Normalize
+                       (Source, Acts.all (Origin .. Origin + Width - 1),
+                        Current.Feed_Norm.all, Current.Feed_Norm_Bias,
+                        Norm.all (Origin .. Origin + Width - 1));
                   end if;
                end;
             end loop;

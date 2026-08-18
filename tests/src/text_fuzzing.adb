@@ -201,9 +201,14 @@ package body Text_Fuzzing is
          declare
             Back : constant String := Vocab.Decode (Words, Tokens (1 .. Last));
          begin
+            --  The call is the check -- it must not raise -- and what it
+            --  returns is deliberately unconstrained. Naming the result is
+            --  what keeps the call from being discarded.
+            pragma Warnings (Off, "if statement has no effect");
             if Back'Length > 0 or else Last = 0 then
                null;
             end if;
+            pragma Warnings (On, "if statement has no effect");
          end;
 
          return Encoded;

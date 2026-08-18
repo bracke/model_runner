@@ -960,6 +960,12 @@ private
       Up_Bias        : Model_Runner.Tensors.Real_Array_Access;
       Down_Bias      : Model_Runner.Tensors.Real_Array_Access;
       Feed_Norm      : Model_Runner.Tensors.Real_Array_Access;
+
+      --  The shift beside that gain, for the architectures whose
+      --  normalization is a centred one. Null everywhere else, and null for
+      --  a centred architecture whose two sublayers run in parallel, which
+      --  has no separate feed normalization to bias.
+      Feed_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
       Gate : aliased Model_Runner.Tensors.View;
       Up : aliased Model_Runner.Tensors.View;
       Down : aliased Model_Runner.Tensors.View;

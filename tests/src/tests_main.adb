@@ -19,6 +19,7 @@ with Checks;
 with Conformance;
 with Fixture_Mutation;
 with External_Model;
+with Fixture_Likeness;
 with Docs_Generation;
 with Shader_Generation;
 with Benchmarks;
@@ -863,6 +864,86 @@ begin
          end if;
 
          Ada.Text_IO.Put_Line (Room (1 .. Last));
+      end;
+
+   elsif Command = "fixture-likeness" then
+      --  Compare a published file's tensor list against the fixture this
+      --  repository builds for its architecture. Everything else here
+      --  compares two implementations written together against a fixture
+      --  written to suit them; this is the one check that asks whether the
+      --  fixture resembles a model anybody ships.
+      declare
+         use type Fixture_Likeness.Outcome;
+         Found : Fixture_Likeness.Report;
+         --  Read an option's value.
+         --
+         --  @param Name Option to look for.
+         --  @param Default What to return when it is absent.
+         --  @return The word after the option, or the default.
+         function Option (Name : String; Default : String) return String;
+
+         --  Report whether a flag was given.
+         --
+         --  @param Name Flag to look for.
+         --  @return Whether it appears among the arguments.
+         function Given (Name : String) return Boolean;
+
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         function Given (Name : String) return Boolean is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Given;
+
+         Path    : constant String := Option ("--model", "");
+         Verbose : constant Boolean := Given ("--names");
+
+         --  Print one name and which side carries it.
+         procedure Show
+           (Name : String; In_File : Boolean; In_Fixture : Boolean);
+
+         procedure Show
+           (Name : String; In_File : Boolean; In_Fixture : Boolean) is
+         begin
+            Ada.Text_IO.Put_Line
+              ("  " & (if In_File then "file" else "    ")
+               & " " & (if In_Fixture then "fixture" else "       ")
+               & "  " & Name);
+         end Show;
+      begin
+         if Path = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "usage: tests fixture-likeness MODEL.gguf [--names]");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         else
+            Fixture_Likeness.Compare (Path, Found);
+            Ada.Text_IO.Put_Line
+              ("fixture-likeness: " & Fixture_Likeness.Summary (Found));
+            if Verbose then
+               declare
+                  procedure Walk is new Fixture_Likeness.Each_Name (Show);
+               begin
+                  Walk;
+               end;
+            end if;
+            if Found.Result = Fixture_Likeness.Rejected then
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            end if;
+         end if;
       end;
 
    elsif Command = "shader" then
