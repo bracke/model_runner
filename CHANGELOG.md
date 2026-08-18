@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The sweep declares the shapes it skips, in one place.** Its two skips
+  were `goto` statements with comments, and the expected-sequence arithmetic
+  restated the same fact in two more terms -- one added when falcon needed it
+  and another when gpt2 did, so a third architecture would have wanted a
+  third. The pairs are declared once now, and both the skip and the count
+  read that declaration. Same figures to the digit: 26910 sequences, none
+  outside tolerance.
+
 - **The fixture check asks which shapes an architecture cannot hold.** Both
   of gpt2's skips were found by something breaking: a mixture handed to an
   architecture with no gate to route to, and a stretched rotation handed to

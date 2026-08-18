@@ -143,6 +143,29 @@ package body Conformance is
          Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2,
          Tiny_Model.GPT2];
 
+      --  Which architecture cannot be built in which shape, and why.
+      --
+      --  Falcon, Phi2 and GPT2 have no gate, so a mixture would hand them a
+      --  router in front of experts they cannot route to. GPT2 has no
+      --  rotation, so a stretched one gives it a table of per-dimension
+      --  divisors with no elements, which the engine refuses as a shape and
+      --  rightly.
+      --
+      --  Said once, because the skip below and the expected count further
+      --  down are two statements of the same fact and were two hand-kept
+      --  copies of it. The fixture check declares the same pairs with the
+      --  same reasons and tests both directions of the declaration; this is
+      --  the sweep's half of that, and the two lists agreeing is a thing
+      --  somebody has to keep true.
+      function Unbuildable
+        (Kind : Tiny_Model.Fixture_Architecture; Shape : Model_Shape)
+         return Boolean
+      is (case Shape is
+            when Mixed =>
+              Kind in Tiny_Model.Falcon | Tiny_Model.Phi2 | Tiny_Model.GPT2,
+            when Stretched => Kind = Tiny_Model.GPT2,
+            when others => False);
+
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
       --  A pool for the half of the sweep that runs in parallel. Made once
@@ -611,25 +634,9 @@ package body Conformance is
                         --  of that shape returned before it compared
                         --  anything -- nine hundred of them, counted by the
                         --  arithmetic below and run by nobody.
-                        --  A stretched rotation on a model that does not
-                        --  rotate. GPT2 learns where a token is instead, so
-                        --  its rotary count is zero and the table of
-                        --  per-dimension divisors a stretch carries has zero
-                        --  elements -- which the engine refuses as a shape,
-                        --  correctly. Skipped on the same grounds the
-                        --  mixture is skipped for an architecture with no
-                        --  gate: it describes no model anyone publishes.
-                        if Shape = Stretched
-                          and then Crossed (Which_Arch) = Tiny_Model.GPT2
-                        then
-                           goto Next_Repack;
-                        end if;
-
-                        if Shape = Mixed
-                          and then Crossed (Which_Arch)
-                                   in Tiny_Model.Falcon | Tiny_Model.Phi2
-                                    | Tiny_Model.GPT2
-                        then
+                        --  A shape this architecture cannot hold, named
+                        --  where the reasons are.
+                        if Unbuildable (Crossed (Which_Arch), Shape) then
                            goto Next_Repack;
                         end if;
 
@@ -943,25 +950,23 @@ package body Conformance is
             --  the mixture. Counted rather than named twice: what makes a
             --  mixture impossible for them is the absent gate, and the sweep
             --  skips the shape on the same grounds.
-            Ungated : Natural := 0;
-
-            --  And the architectures that do not rotate, which run every
-            --  shape but the stretched one.
-            Unrotated : Natural := 0;
+            --  Pairs the loops above skipped, counted from the same
+            --  declaration they were skipped by rather than described a
+            --  second time here. Two hand-kept statements of one fact is
+            --  what this replaces: falcon's arrived first, gpt2's needed a
+            --  second term beside it, and a third architecture would have
+            --  needed a third.
+            Skipped : Natural := 0;
 
             Expected : Natural := 0;
 
          begin
             for Kind of Crossed loop
-               if Kind in Tiny_Model.Falcon | Tiny_Model.Phi2
-                        | Tiny_Model.GPT2
-               then
-                  Ungated := Ungated + 1;
-               end if;
-
-               if Kind = Tiny_Model.GPT2 then
-                  Unrotated := Unrotated + 1;
-               end if;
+               for Shape in Model_Shape loop
+                  if Unbuildable (Kind, Shape) then
+                     Skipped := Skipped + 1;
+                  end if;
+               end loop;
             end loop;
 
             --  The mixture shape runs every repack mode but the rounded one,
@@ -970,8 +975,7 @@ package body Conformance is
             Expected :=
               Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached
               + On_Device
-              - Formats * Ungated * (Repacks - 1) * Per_Model
-              - Formats * Unrotated * (Repacks - 1) * Per_Model;
+              - Formats * Skipped * (Repacks - 1) * Per_Model;
 
             Result.Formats := Formats;
             Result.Architectures := Arches;
