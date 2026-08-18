@@ -937,7 +937,7 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # processor time, at a load of 1.47 rising to 2.15. The figure holds.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-engine 7985A6B7EA0EB025 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 895DFF97C79399B4 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -1016,7 +1016,7 @@ engine 7985A6B7EA0EB025 src/library/model_runner-llama.adb src/library/model_run
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-reference 3D27812B2C7D0E6F src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 482EEE66C7F19A12 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -1067,13 +1067,33 @@ reference 3D27812B2C7D0E6F src/library/model_runner-backend-reference.adb src/li
 # subprogram they did before. Re-measured anyway, on this machine, at a load
 # under 1.50:
 #
-#   twelve tokens, processor   1.688 s wall, 1.504 s generating
-#   twelve tokens, drafted     5.672 s wall
+#   twelve tokens, processor   1.679 s wall, 1.491 s generating
+#   twelve tokens, drafted     5.738 s wall
 #
-# Against 1.682 s and 5.800 s taken earlier the same day. The reference group
+# Against 1.682 s and 5.800 s taken earlier the same day, and unchanged again
+# when the feed-forward joined the grouping: the processor reads the group one
+# matrix at a time, which is what it did when they were separate calls. The reference group
 # is not separately re-timed: a reference run of a 1.1B model is minutes, its
 # arithmetic is untouched here, and the conformance sweep compares it against
 # the engine twenty-six thousand times a gate.
+
+# 2026-08-18, the feed-forward joins in. The gate and the up projection of a
+# gated block read the same normalized input with nothing between them, so
+# they go to a device together as the queries, keys and values already did.
+# The entry point was generalized to a group rather than gaining a second
+# fixed shape.
+#
+#   seven tokens, device, three sent apart   0.468 s generating
+#   seven tokens, device, q/k/v together     0.397 s generating
+#   seven tokens, device, and the gate too   0.385 s generating
+#
+# The second saving is much the smaller, and the honest reason is arithmetic:
+# grouping three products removes two submissions a layer, grouping two
+# removes one. Three runs of the last figure at a load between 1.39 and 1.44
+# read 0.393, 0.385 and 0.365 s, so three per cent is the middle of a spread
+# that touches the measurement floor -- worth taking and not worth
+# advertising. The digest is unchanged at 5709b12b0517c8c5, which is the part
+# that is not a matter of degree.
 
 # 2026-08-18, the layer asks for the sequence. A block's queries, keys and
 # values are three matrices read against one normalized input with nothing
@@ -1356,7 +1376,7 @@ reference 3D27812B2C7D0E6F src/library/model_runner-backend-reference.adb src/li
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device 6152FA649ABDA003 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 824E741935011034 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -1463,7 +1483,7 @@ device 6152FA649ABDA003 src/shaders/row_product.comp src/library/model_runner-sh
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
-drafting 8F263823963D1704 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting CC21C3DB8D0A7085 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14

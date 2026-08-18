@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The gated feed-forward's two projections go to a device together too.**
+  The gate and the up projection read the same normalized input and neither
+  waits for the other. The device entry point generalized to a group of any
+  size rather than gaining a second fixed shape. Seven tokens went from
+  0.397 s generating to 0.385 s -- a smaller saving than the queries, keys
+  and values gave, because grouping two products removes one submission a
+  layer where grouping three removes two.
+
 - **A layer's queries, keys and values now reach a device in one submission.**
   They read the same normalized input and none waits for another, so they are
   recorded together: one upload, one command buffer, one fence, three

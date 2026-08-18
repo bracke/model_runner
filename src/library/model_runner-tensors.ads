@@ -58,6 +58,18 @@ package Model_Runner.Tensors is
    --  package stays free of allocation.
    type Real_Array_Access is access Real_Array;
 
+   --  Several matrices, and somewhere to put what each produces.
+   --
+   --  For the places a model reads more than one matrix against the same
+   --  activation with nothing between them -- a block's queries, keys and
+   --  values; the gate and the up projection of a gated feed-forward. A
+   --  backend that can do something with that knowledge is told; one that
+   --  cannot does them in order and is none the wiser.
+   type View_Group is array (Positive range <>) of View;
+
+   type Target_Group is
+     array (Positive range <>) of Real_Array_Access;
+
    subtype Half_Array is Model_Runner.Numerics.Half_Array;
    type Half_Array_Access is access Half_Array;
 

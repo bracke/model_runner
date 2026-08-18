@@ -610,16 +610,16 @@ package body Tests.CLI_Cases is
                   Vector : constant Model_Runner.Tensors.Real_Array_Access :=
                     new N.Real_Array (0 .. N.Element_Count (Cols) - 1);
 
-                  Apart : constant array (1 .. 3) of
-                    Model_Runner.Tensors.Real_Array_Access :=
+                  Apart : constant Model_Runner.Tensors.Target_Group
+                    (1 .. 3) :=
                       [others => new N.Real_Array
                                        (0 .. N.Element_Count (Rows) - 1)];
-                  Together : constant array (1 .. 3) of
-                    Model_Runner.Tensors.Real_Array_Access :=
+                  Together : constant Model_Runner.Tensors.Target_Group
+                    (1 .. 3) :=
                       [others => new N.Real_Array
                                        (0 .. N.Element_Count (Rows) - 1)];
 
-                  Views : array (1 .. 3) of Model_Runner.Tensors.View;
+                  Views : Model_Runner.Tensors.View_Group (1 .. 3);
                   Ready : Boolean;
                   Why   : Model_Runner.Errors.Error_Info;
                begin
@@ -667,9 +667,9 @@ package body Tests.CLI_Cases is
                                 "a device refused a single projection");
                      end loop;
 
-                     Model_Runner.Backend.Device.Dispatch_Three
-                       (Views (1), Views (2), Views (3), Vector,
-                        Together (1), Together (2), Together (3), Why);
+                     Model_Runner.Backend.Device.Dispatch_Group
+                       (Views, Vector,
+                        Together, Why);
                      Assert (not Model_Runner.Errors.Is_Error (Why),
                              "a device refused three projections together");
 

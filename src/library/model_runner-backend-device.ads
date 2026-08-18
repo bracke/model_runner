@@ -162,43 +162,35 @@ package Model_Runner.Backend.Device is
       Status : out Model_Runner.Errors.Error_Info;
       Cancel : Model_Runner.Cancellation.Token_Reference := null);
 
-   --  Three products of the same activation, in one submission.
+   --  Several products of the same activation, in one submission.
    --
    --  A layer's queries, keys and values are three matrices read against one
-   --  normalized input, and nothing between them waits for anything. Sent one
-   --  at a time they cost three uploads of that input, three command buffers,
-   --  three submissions and three fence waits; sent together they cost one of
-   --  each and three dispatches. This is the entry point that says they may
-   --  go together -- it is not a general batching facility, it is the shape
-   --  attention actually has.
+   --  normalized input, and the gate and up projection of a gated
+   --  feed-forward are two more; nothing between any of them waits for
+   --  anything. Sent one at a time they cost an upload of that input, a
+   --  command buffer, a submission and a fence each; sent together they cost
+   --  one of each and a dispatch apiece.
    --
-   --  The three matrices must agree about how wide the activation is, which
-   --  they do by construction: they all read the same one. They may differ in
-   --  every other way, and for the architectures that fuse them into one
-   --  tensor they are three views of it.
+   --  The matrices must agree about how wide the activation is, which they do
+   --  by construction: they all read the same one. They may differ in every
+   --  other way, and for the architectures that fuse their projections into
+   --  one tensor they are several views of it.
    --
    --  A caller with no device, or one whose device refuses, gets the same
    --  diagnostics the single dispatch gives.
    --
-   --  @param First Matrix for the queries.
-   --  @param Second Matrix for the keys.
-   --  @param Third Matrix for the values.
-   --  @param Vector The activation all three read.
-   --  @param Into_First Receives the queries.
-   --  @param Into_Second Receives the keys.
-   --  @param Into_Third Receives the values.
+   --  @param Weights The matrices, in the order their results are wanted.
+   --  @param Vector The activation all of them read.
+   --  @param Into Receives each matrix's result, one array apiece and in the
+   --    same order.
    --  @param Status Success, or why not.
    --  @param Cancel Token a caller may set to ask for a stop.
-   procedure Dispatch_Three
-     (First       : Model_Runner.Tensors.View;
-      Second      : Model_Runner.Tensors.View;
-      Third       : Model_Runner.Tensors.View;
-      Vector      : Model_Runner.Tensors.Real_Array_Access;
-      Into_First  : Model_Runner.Tensors.Real_Array_Access;
-      Into_Second : Model_Runner.Tensors.Real_Array_Access;
-      Into_Third  : Model_Runner.Tensors.Real_Array_Access;
-      Status      : out Model_Runner.Errors.Error_Info;
-      Cancel      : Model_Runner.Cancellation.Token_Reference := null);
+   procedure Dispatch_Group
+     (Weights : Model_Runner.Tensors.View_Group;
+      Vector  : Model_Runner.Tensors.Real_Array_Access;
+      Into    : Model_Runner.Tensors.Target_Group;
+      Status  : out Model_Runner.Errors.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
 
    --  The same product for each vector of a batch.
    --

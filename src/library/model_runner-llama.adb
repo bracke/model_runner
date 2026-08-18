@@ -2208,58 +2208,47 @@ package body Model_Runner.Llama is
       end case;
    end Product;
 
-   --  A layer's queries, keys and values, as one thing where that is worth
-   --  something.
+   --  Several matrices against one activation, as one thing where that is
+   --  worth something.
    --
-   --  The three read the same normalized input and none of them waits for
-   --  another, which a device can be told: one upload of that input, one
-   --  command buffer, one submission, one wait. The processor and the
-   --  reference gain nothing from being told -- their work is the
-   --  arithmetic, not the errand -- so they do what they did, three products
-   --  one after another, and the difference stays inside here rather than
-   --  becoming a shape every backend has to answer for.
+   --  The places a block reads more than one matrix from the same input with
+   --  nothing between them: its queries, keys and values, and the gate and up
+   --  projection of a gated feed-forward. A device can be told, and then it
+   --  costs one upload of that input, one command buffer, one submission and
+   --  one wait instead of one of each per matrix. The processor and the
+   --  reference gain nothing from being told -- their work is the arithmetic,
+   --  not the errand -- so they do what they did, one product after another,
+   --  and the difference stays inside here rather than becoming a shape every
+   --  backend has to answer for.
    --
    --  @param Item Session the layer belongs to.
-   --  @param Queries Matrix for the queries.
-   --  @param Keys Matrix for the keys.
-   --  @param Values Matrix for the values.
-   --  @param Vector The normalized input all three read.
-   --  @param Into_Queries Receives the queries.
-   --  @param Into_Keys Receives the keys.
-   --  @param Into_Values Receives the values.
-   --  @param Status Success, or the first refusal of the three.
-   procedure Product_Three
-     (Item         : Session;
-      Queries      : T.View;
-      Keys         : T.View;
-      Values       : T.View;
-      Vector       : T.Real_Array_Access;
-      Into_Queries : T.Real_Array_Access;
-      Into_Keys    : T.Real_Array_Access;
-      Into_Values  : T.Real_Array_Access;
-      Status       : out E.Error_Info)
+   --  @param Weights The matrices, in the order their results are wanted.
+   --  @param Vector The activation all of them read.
+   --  @param Into Receives each matrix's result, in the same order.
+   --  @param Status Success, or the first refusal among them.
+   procedure Product_Group
+     (Item    : Session;
+      Weights : T.View_Group;
+      Vector  : T.Real_Array_Access;
+      Into    : T.Target_Group;
+      Status  : out E.Error_Info)
    is
       use type Model_Runner.Backend.Backend_Kind;
    begin
       if Item.Owner.Able.Kind = Model_Runner.Backend.Backend_Device then
-         Model_Runner.Backend.Device.Dispatch_Three
-           (Queries, Keys, Values, Vector,
-            Into_Queries, Into_Keys, Into_Values, Status, Item.Stopping);
+         Model_Runner.Backend.Device.Dispatch_Group
+           (Weights, Vector, Into, Status, Item.Stopping);
          return;
       end if;
 
-      Product (Item, Queries, Vector, Into_Queries, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      Product (Item, Keys, Vector, Into_Keys, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      Product (Item, Values, Vector, Into_Values, Status);
-   end Product_Three;
+      Status := E.Success;
+      for Index in Weights'Range loop
+         Product
+           (Item, Weights (Index), Vector,
+            Into (Into'First + (Index - Weights'First)), Status);
+         exit when E.Is_Error (Status);
+      end loop;
+   end Product_Group;
 
    procedure Product_Batch
      (Item    : Session;
@@ -4536,9 +4525,11 @@ package body Model_Runner.Llama is
                Item.Post_Room.all := Item.Normalized.all;
             end if;
 
-            Product_Three
-              (Item, Current.Query, Current.Key, Current.Value,
-               Item.Normalized, Item.Query, Item.Key_Row, Item.Value_Row,
+            Product_Group
+              (Item,
+               [Current.Query, Current.Key, Current.Value],
+               Item.Normalized,
+               [Item.Query, Item.Key_Row, Item.Value_Row],
                Status);
             exit when E.Is_Error (Status);
 
@@ -4713,11 +4704,12 @@ package body Model_Runner.Llama is
 
                   Gate_Activation (Source, Item.Gate.all);
                else
-                  Product
-                    (Item, Current.Gate, Item.Normalized, Item.Gate, Status);
-                  exit when E.Is_Error (Status);
-                  Product
-                    (Item, Current.Up, Item.Normalized, Item.Up, Status);
+                  --  The gate and the up projection read the same
+                  --  normalized input and neither waits for the other, so
+                  --  they go together where a backend can use that.
+                  Product_Group
+                    (Item, [Current.Gate, Current.Up], Item.Normalized,
+                     [Item.Gate, Item.Up], Status);
                   exit when E.Is_Error (Status);
 
                   Gate_Activation (Source, Item.Gate.all);

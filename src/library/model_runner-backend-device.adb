@@ -446,25 +446,17 @@ package body Model_Runner.Backend.Device is
       Compute (Weight, Vector, 1, Target, Status, Cancel);
    end Dispatch;
 
-   ---------------------
-   -- Dispatch_Three --
-   ---------------------
+   --------------------
+   -- Dispatch_Group --
+   --------------------
 
-   procedure Dispatch_Three
-     (First       : T.View;
-      Second      : T.View;
-      Third       : T.View;
-      Vector      : T.Real_Array_Access;
-      Into_First  : T.Real_Array_Access;
-      Into_Second : T.Real_Array_Access;
-      Into_Third  : T.Real_Array_Access;
-      Status      : out E.Error_Info;
-      Cancel      : Model_Runner.Cancellation.Token_Reference := null)
+   procedure Dispatch_Group
+     (Weights : T.View_Group;
+      Vector  : T.Real_Array_Access;
+      Into    : T.Target_Group;
+      Status  : out E.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
    is
-      Three : constant array (1 .. 3) of T.View := [First, Second, Third];
-      Into  : constant array (1 .. 3) of T.Real_Array_Access :=
-        [Into_First, Into_Second, Into_Third];
-
       Steps  : Products.Sequence;
       Wanted : Model_Runner.Numerics.Element_Count := 0;
       Added  : Boolean;
@@ -478,11 +470,19 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
+      --  One result for each matrix, said the same way round. A caller who
+      --  passes a different number of each is refused rather than served the
+      --  shorter of the two.
+      if Weights'Length = 0 or else Weights'Length /= Into'Length then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
       Products.Open_Sequence (Steps);
 
-      for Index in Three'Range loop
+      for Index in Weights'Range loop
          declare
-            This : T.View renames Three (Index);
+            This : T.View renames Weights (Index);
 
             Packing : Products.Weight_Packing;
             Known   : Boolean;
@@ -501,9 +501,10 @@ package body Model_Runner.Backend.Device is
 
             if This.Data = null
               or else Vector = null
-              or else Into (Index) = null
+              or else Into (Into'First + (Index - Weights'First)) = null
               or else Vector.all'Length < This.Columns
-              or else Into (Index).all'Length < This.Rows
+              or else Into (Into'First + (Index - Weights'First)).all'Length
+                        < This.Rows
             then
                Status := E.Make (E.Tensor_Shape_Mismatch);
                return;
@@ -561,15 +562,21 @@ package body Model_Runner.Backend.Device is
          At_Value : Model_Runner.Numerics.Element_Count :=
            Landing.all'First;
       begin
-         for Index in Three'Range loop
-            Into (Index).all
-              (Into (Index).all'First
-               .. Into (Index).all'First + Three (Index).Rows - 1) :=
-              Landing.all (At_Value .. At_Value + Three (Index).Rows - 1);
-            At_Value := At_Value + Three (Index).Rows;
+         for Index in Weights'Range loop
+            declare
+               Mine : T.Real_Array_Access renames
+                 Into (Into'First + (Index - Weights'First));
+            begin
+               Mine.all
+                 (Mine.all'First
+                  .. Mine.all'First + Weights (Index).Rows - 1) :=
+                 Landing.all
+                   (At_Value .. At_Value + Weights (Index).Rows - 1);
+               At_Value := At_Value + Weights (Index).Rows;
+            end;
          end loop;
       end;
-   end Dispatch_Three;
+   end Dispatch_Group;
 
    --------------------
    -- Dispatch_Batch --
