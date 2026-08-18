@@ -1521,10 +1521,16 @@ package body Model_Runner.Llama is
                return;
             end if;
 
-            --  And the bias on it, which Phi2 alone carries. It is added
-            --  after the last projection, so it is the last thing between
-            --  the model and the caller.
-            if Item.Settings.Kind in Phi2 | GPT2 then
+            --  And the bias on it, which Phi2 carries and GPT2 does not.
+            --  It is added after the last projection, so it is the last
+            --  thing between the model and the caller.
+            --
+            --  GPT2 was here until a published gpt2 file was read and had no
+            --  such tensor. The fixture wrote one because this asked for
+            --  one, so the sweep agreed with itself about a model nobody
+            --  ships -- which is the failure mode a synthetic fixture has
+            --  and a real file does not.
+            if Item.Settings.Kind = Phi2 then
                Resolve_Norm
                  (Item, Source, "output.bias", Vocab,
                   Item.Output_Bias, Status);

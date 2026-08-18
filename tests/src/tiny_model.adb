@@ -834,8 +834,9 @@ package body Tiny_Model is
       Weight ("output.weight", [G.U64 (Embedding), Vocabulary]);
 
       --  Phi2's output projection carries a bias, so the last thing this
-      --  writes is the last thing the model adds.
-      if Kind in Phi2 | GPT2 then
+      --  writes is the last thing the model adds. GPT2's does not, which a
+      --  published gpt2 file said and this fixture had been contradicting.
+      if Kind = Phi2 then
          Norm_Of ("output.bias", Natural (Vocabulary));
       end if;
 

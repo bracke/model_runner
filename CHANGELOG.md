@@ -286,6 +286,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **GPT-2 has no output bias, and now this build agrees.** The loader
+  required one because the synthetic fixture wrote one, so the sweep agreed
+  with itself about a model nobody ships: a real gpt2 file refused to load
+  with `MR-ARCH-0010`. The loader, the independent implementation and the
+  fixture all say the same thing now, and a published gpt2 -- 149 tensors,
+  163 million parameters -- loads and generates.
+
+  A fixture and an engine can share a wrong idea, and no amount of agreement
+  between them will say so. Only a real file will.
+
 - **A file that ends in padding is read.** GPT-2 as published carries sixteen
   bytes after its last tensor against an alignment of thirty-two, and this
   refused it outright: `MR-GGUF-0025`, a real file no other runtime objects

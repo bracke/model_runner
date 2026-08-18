@@ -1413,7 +1413,7 @@ package body Reference_Transformer is
       if not Present then
          --  A tied model reuses the embedding table as the output projection.
          Item.Output := Item.Embeddings;
-      elsif Item.Kind in Phi2 | GPT2 then
+      elsif Item.Kind = Phi2 then
          Item.Output_Bias := Read_Vector ("output.bias", Present);
          if not Present then
             return;

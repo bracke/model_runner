@@ -845,8 +845,14 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # re-measured on that account, and the twelve-token figure was taken again
 # on this model two days ago at 1.871 s against the published 1.88.
 
+# 2026-08-18, gpt2's output bias. The four groups carry llama.adb, which
+# stopped asking gpt2 for an output.bias -- one enumeration value removed
+# from one test at load time, in a branch no published figure's model takes.
+# Not re-measured on that account. The twelve-token figure was taken on this
+# model two days ago at 1.871 s against the published 1.88.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-engine B7D85278009C5C97 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine AF6288CD684F1348 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -918,8 +924,14 @@ engine B7D85278009C5C97 src/library/model_runner-llama.adb src/library/model_run
 # re-measured on that account, and the twelve-token figure was taken again
 # on this model two days ago at 1.871 s against the published 1.88.
 
+# 2026-08-18, gpt2's output bias. The four groups carry llama.adb, which
+# stopped asking gpt2 for an output.bias -- one enumeration value removed
+# from one test at load time, in a branch no published figure's model takes.
+# Not re-measured on that account. The twelve-token figure was taken on this
+# model two days ago at 1.871 s against the published 1.88.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-reference 0B64265A79CB2B41 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 34C40EAE1E1EE0B2 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the two-row table under "The device backend" -- the seven-token run
 # and the 111-token prompt, on both backends -- the claim that the two print
@@ -1178,8 +1190,14 @@ reference 0B64265A79CB2B41 src/library/model_runner-backend-reference.adb src/li
 # re-measured on that account, and the twelve-token figure was taken again
 # on this model two days ago at 1.871 s against the published 1.88.
 
+# 2026-08-18, gpt2's output bias. The four groups carry llama.adb, which
+# stopped asking gpt2 for an output.bias -- one enumeration value removed
+# from one test at load time, in a branch no published figure's model takes.
+# Not re-measured on that account. The twelve-token figure was taken on this
+# model two days ago at 1.871 s against the published 1.88.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device 2F23643B4B1C5633 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 4420D1E88DBB8C58 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -1279,8 +1297,14 @@ device 2F23643B4B1C5633 src/shaders/row_product.comp src/library/model_runner-sh
 # re-measured on that account, and the twelve-token figure was taken again
 # on this model two days ago at 1.871 s against the published 1.88.
 
+# 2026-08-18, gpt2's output bias. The four groups carry llama.adb, which
+# stopped asking gpt2 for an output.bias -- one enumeration value removed
+# from one test at load time, in a branch no published figure's model takes.
+# Not re-measured on that account. The twelve-token figure was taken on this
+# model two days ago at 1.871 s against the published 1.88.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
-drafting 4DD6BD7A52970CBA src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting 1CCD88AA66BD31A9 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
