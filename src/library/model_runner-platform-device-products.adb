@@ -1328,11 +1328,16 @@ package body Model_Runner.Platform.Device.Products is
       return Interfaces.Unsigned_64 (Columns / Per) * Block (Packing);
    end Row_Bytes;
 
-   ---------------
-   -- Multiply --
-   ---------------
+   -----------------
+   -- One_Product --
+   -----------------
 
-   procedure Multiply
+   --  One matrix against one or more activations: the whole of what a
+   --  product on a device is, unchanged. Both the single call and a
+   --  sequence's Run reach the device through here, so there is one copy of
+   --  the buffer handling, the descriptor update, the dispatch and the wait
+   --  rather than two that could drift apart.
+   procedure One_Product
      (Item    : in out Engine;
       Weights : Model_Runner.Bytes.Byte_Array;
       At_Byte : Model_Runner.Bytes.Byte_Count;
@@ -1831,7 +1836,128 @@ package body Model_Runner.Platform.Device.Products is
 
       Release_Borrowed;
       Ok := True;
+   end One_Product;
+
+   --------------
+   -- Multiply --
+   --------------
+
+   procedure Multiply
+     (Item    : in out Engine;
+      Weights : Model_Runner.Bytes.Byte_Array;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Vectors : Model_Runner.Numerics.Real_Array;
+      Count   : Positive;
+      Target  : out Model_Runner.Numerics.Real_Array;
+      Ok      : out Boolean;
+      Cancelled : out Boolean;
+      Key     : System.Address := System.Null_Address;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null) is
+   begin
+      --  A product of one, which is what a sequence of one performs. Kept as
+      --  its own entry point because every caller has one matrix in hand and
+      --  nothing to gain from naming a sequence to hold it.
+      One_Product
+        (Item, Weights, At_Byte, Packing, Rows, Columns, Vectors, Count,
+         Target, Ok, Cancelled, Key, Cancel);
    end Multiply;
+
+   -------------------
+   -- Open_Sequence --
+   -------------------
+
+   procedure Open_Sequence (Steps : out Sequence) is
+   begin
+      Steps.Held := 0;
+   end Open_Sequence;
+
+   ------------
+   -- Length --
+   ------------
+
+   function Length (Steps : Sequence) return Natural is (Steps.Held);
+
+   -----------------
+   -- Add_Product --
+   -----------------
+
+   procedure Add_Product
+     (Steps   : in out Sequence;
+      Weights : Model_Runner.Bytes.Byte_Array_Access;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Added   : out Boolean;
+      Key     : System.Address := System.Null_Address)
+   is
+      use type Model_Runner.Bytes.Byte_Array_Access;
+   begin
+      if Steps.Held = Sequence_Limit or else Weights = null then
+         Added := False;
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Weights => Weights, At_Byte => At_Byte, Packing => Packing,
+         Rows => Rows, Columns => Columns, Key => Key);
+      Added := True;
+   end Add_Product;
+
+   ---------
+   -- Run --
+   ---------
+
+   procedure Run
+     (Item      : in out Engine;
+      Steps     : Sequence;
+      Vectors   : Model_Runner.Numerics.Real_Array;
+      Count     : Positive;
+      Target    : out Model_Runner.Numerics.Real_Array;
+      Ok        : out Boolean;
+      Cancelled : out Boolean;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Filled : Model_Runner.Numerics.Element_Count := Target'First;
+   begin
+      Ok := Steps.Held > 0;
+      Cancelled := False;
+
+      for Index in 1 .. Steps.Held loop
+         declare
+            This : Step renames Steps.Items (Index);
+
+            Wanted : constant Model_Runner.Numerics.Element_Count :=
+              Model_Runner.Numerics.Element_Count (This.Rows)
+              * Model_Runner.Numerics.Element_Count (Count);
+         begin
+            --  Refused rather than truncated. A caller who sized the target
+            --  for one product and named two would otherwise get the first
+            --  and no word about the second.
+            if Filled + Wanted - 1 > Target'Last then
+               Ok := False;
+               return;
+            end if;
+
+            One_Product
+              (Item, This.Weights.all, This.At_Byte, This.Packing,
+               This.Rows, This.Columns, Vectors, Count,
+               Target (Filled .. Filled + Wanted - 1),
+               Ok, Cancelled, This.Key, Cancel);
+
+            --  Each result still comes back to the host before the next
+            --  product is recorded. That is what makes this sequence of
+            --  several exactly as fast as the several calls it replaces,
+            --  and it is the thing the next change removes.
+            exit when not Ok or else Cancelled;
+            Filled := Filled + Wanted;
+         end;
+      end loop;
+   end Run;
 
    ---------------
    -- Multiply --

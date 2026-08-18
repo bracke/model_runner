@@ -231,6 +231,93 @@ package Model_Runner.Platform.Device.Products is
       Ok      : out Boolean;
       Key     : System.Address := System.Null_Address);
 
+   --  A run of products the engine performs in order.
+   --
+   --  Every product today is its own call: the activation goes to the device,
+   --  one matrix runs, and the result comes back before the next matrix is
+   --  named. For a matrix of any size that upload and download disappear
+   --  beside the arithmetic, and for the small operations of a layer --
+   --  normalizations, softmaxes, rotations -- they would not: the round trip
+   --  costs more than the work. Naming several products before any of them
+   --  runs is what lets an activation stay where it is between them.
+   --
+   --  This is the recording half. A sequence of one behaves exactly as the
+   --  single call it replaces, which is what makes the change to the caller
+   --  provable before anything new is built on it; a sequence of several
+   --  still returns each result to the host today, and hoisting that is the
+   --  next change rather than this one.
+   --
+   --  Task safety: a sequence belongs to the task that opened it.
+
+   --  Products one sequence may hold. A layer of a large model names fewer
+   --  than a dozen matrices, and a bound that cannot be reached is a bound
+   --  nothing has to grow.
+   Sequence_Limit : constant := 32;
+
+   type Sequence is limited private;
+
+   --  Empty a sequence so that products may be added to it.
+   --
+   --  @param Steps Sequence to empty.
+   procedure Open_Sequence (Steps : out Sequence);
+
+   --  How many products a sequence holds.
+   --
+   --  @param Steps Sequence to read.
+   --  @return The count, which is zero for a sequence just opened.
+   function Length (Steps : Sequence) return Natural;
+
+   --  Name one product for a sequence to perform.
+   --
+   --  The weights are held by reference: a sequence names matrices the model
+   --  already has and copies none of them, which is the same arrangement the
+   --  single call has and the reason a device reads a model's own storage.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Weights Storage the matrix lies in.
+   --  @param At_Byte Where in that storage the matrix begins.
+   --  @param Packing How each row is packed.
+   --  @param Rows Number of rows.
+   --  @param Columns Number of columns.
+   --  @param Key Identifies the matrix so the device may keep it, as it does
+   --    for a single product.
+   --  @param Added False when the sequence is full, which is a refusal to
+   --    record rather than a silent truncation.
+   procedure Add_Product
+     (Steps   : in out Sequence;
+      Weights : Model_Runner.Bytes.Byte_Array_Access;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Added   : out Boolean;
+      Key     : System.Address := System.Null_Address);
+
+   --  Perform every product a sequence holds, in the order they were named.
+   --
+   --  Each product reads the same activation and writes its own result, one
+   --  after another into Target: a sequence naming two matrices of R rows
+   --  fills the first R values from the first and the next R from the
+   --  second. A sequence of one fills Target exactly as the single call does.
+   --
+   --  @param Item Ready engine.
+   --  @param Steps Sequence to perform.
+   --  @param Vectors Count activations, one after another.
+   --  @param Count How many activations each product is given.
+   --  @param Target Receives every product's rows, product by product.
+   --  @param Ok True when the device computed all of them.
+   --  @param Cancelled True when a caller asked to stop partway.
+   --  @param Cancel Token a caller may set to ask for a stop.
+   procedure Run
+     (Item      : in out Engine;
+      Steps     : Sequence;
+      Vectors   : Model_Runner.Numerics.Real_Array;
+      Count     : Positive;
+      Target    : out Model_Runner.Numerics.Real_Array;
+      Ok        : out Boolean;
+      Cancelled : out Boolean;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null);
+
    --  Bytes one row of a matrix takes.
    --
    --  @param Packing How the row is packed.
@@ -427,6 +514,22 @@ private
       Result_Buffer : System.Address := System.Null_Address;
       Result_Memory : System.Address := System.Null_Address;
       Result_Bytes  : Interfaces.Unsigned_64 := 0;
+   end record;
+
+   type Step is record
+      Weights : Model_Runner.Bytes.Byte_Array_Access := null;
+      At_Byte : Model_Runner.Bytes.Byte_Count := 0;
+      Packing : Weight_Packing := Weight_Packing'First;
+      Rows    : Natural := 0;
+      Columns : Natural := 0;
+      Key     : System.Address := System.Null_Address;
+   end record;
+
+   type Step_Array is array (1 .. Sequence_Limit) of Step;
+
+   type Sequence is limited record
+      Held  : Natural := 0;
+      Items : Step_Array;
    end record;
 
 end Model_Runner.Platform.Device.Products;

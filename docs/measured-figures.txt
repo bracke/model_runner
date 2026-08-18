@@ -1031,6 +1031,14 @@ reference 9C004603FF48E6CC src/library/model_runner-backend-reference.adb src/li
 # claim the two-row table rests on and the one worth re-checking after a
 # change to the normalization every layer of every token goes through.
 
+# 2026-08-18, the device sequence. products.adb gained a recording half --
+# Open_Sequence, Add_Product, Run -- and the body that performs one product
+# became One_Product, which both the single call and Run reach. Nothing about
+# what reaches the device changed, and the seven-token run says so: the same
+# digest 5709b12b0517c8c5, at 0.696 s wall against the 0.570 s taken earlier
+# the same day on a quieter machine. Re-measured because the file is named by
+# this group, not because anything in the loop moved.
+
 # covers: the two-row table under "The device backend" -- the seven-token run
 # and the 111-token prompt, on both backends -- the claim that the two print
 # the same digest, the five per-format ratios in the table under it, which
@@ -1295,7 +1303,7 @@ reference 9C004603FF48E6CC src/library/model_runner-backend-reference.adb src/li
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device 6662702E21C24926 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 6F89E544CCD90AB4 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived

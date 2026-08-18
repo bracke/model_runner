@@ -467,6 +467,125 @@ package body Tests.CLI_Cases is
                   end;
                end loop;
 
+               --  A sequence of one is the single call, and a sequence
+               --  of several is those calls one after another. Both are
+               --  asserted against the entry point they are meant to
+               --  reproduce rather than against arithmetic worked out here:
+               --  what is being checked is that the recording changes
+               --  nothing, and the product itself is checked above.
+               declare
+                  use type Model_Runner.Bytes.Byte_Count;
+                  use type Interfaces.Unsigned_32;
+
+                  Rows : constant Natural := 8;
+                  Cols : constant Natural := 16;
+
+                  Values : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count (Rows * Cols * 4);
+
+                  --  Two matrices one after another in one storage, which
+                  --  is how a model holds them.
+                  Held : constant Model_Runner.Bytes.Byte_Array_Access :=
+                    new Model_Runner.Bytes.Byte_Array (1 .. Values * 2);
+
+                  Vector : N.Real_Array (0 .. N.Element_Count (Cols) - 1);
+
+                  Alone  : N.Real_Array (0 .. N.Element_Count (Rows) - 1);
+                  Second : N.Real_Array (0 .. N.Element_Count (Rows) - 1);
+                  Both   : N.Real_Array (0 .. N.Element_Count (Rows) * 2 - 1);
+
+                  Steps  : Products.Sequence;
+                  Kept   : Model_Runner.Bytes.Byte_Array_Access := Held;
+                  Ok     : Boolean;
+                  Added  : Boolean;
+                  Halted : Boolean;
+               begin
+                  for Index in Held'Range loop
+                     Held (Index) := 0;
+                  end loop;
+
+                  --  Binary32 written where the packing says it lies.
+                  for Which in 0 .. Rows * Cols * 2 - 1 loop
+                     declare
+                        Value : constant N.Real :=
+                          1.0 / N.Real (5 + Which mod 31) - 0.021;
+                        Bits : Interfaces.Unsigned_32;
+                        for Bits'Address use Value'Address;
+                        pragma Import (Ada, Bits);
+                     begin
+                        for Byte in 0 .. 3 loop
+                           Held (Held'First
+                                 + Model_Runner.Bytes.Byte_Count
+                                     (Which * 4 + Byte)) :=
+                             Model_Runner.Bytes.Byte
+                               (Interfaces.Shift_Right
+                                  (Bits, Byte * 8) and 16#FF#);
+                        end loop;
+                     end;
+                  end loop;
+
+                  for Index in Vector'Range loop
+                     Vector (Index) :=
+                       1.0 / N.Real (3 + Natural (Index) mod 11) - 0.043;
+                  end loop;
+
+                  Products.Multiply
+                    (Engine, Held.all, 0, Products.Values_F32, Rows, Cols,
+                     Vector, 1, Alone, Ok, Halted);
+                  Assert (Ok, "a device refused a plain product");
+
+                  Products.Multiply
+                    (Engine, Held.all, Values, Products.Values_F32,
+                     Rows, Cols, Vector, 1, Second, Ok, Halted);
+                  Assert (Ok, "a device refused the second matrix");
+
+                  Products.Open_Sequence (Steps);
+                  Assert (Products.Length (Steps) = 0,
+                          "a sequence just opened held something");
+
+                  Products.Add_Product
+                    (Steps, Held, 0, Products.Values_F32, Rows, Cols, Added);
+                  Assert (Added, "a sequence refused its first product");
+                  Products.Add_Product
+                    (Steps, Held, Values, Products.Values_F32, Rows, Cols,
+                     Added);
+                  Assert (Added, "a sequence refused its second product");
+                  Assert (Products.Length (Steps) = 2,
+                          "a sequence of two did not hold two");
+
+                  Products.Run
+                    (Engine, Steps, Vector, 1, Both, Ok, Halted);
+                  Assert (Ok, "a device refused a sequence of two");
+
+                  for Row in Alone'Range loop
+                     Assert (Both (Row) = Alone (Row),
+                             "a sequence disagreed with the single call"
+                             & " about the first matrix at row"
+                             & N.Element_Count'Image (Row));
+                     Assert
+                       (Both (Row + N.Element_Count (Rows)) = Second (Row),
+                        "a sequence disagreed with the single call about"
+                        & " the second matrix at row"
+                        & N.Element_Count'Image (Row));
+                  end loop;
+
+                  --  A target too small is refused rather than filled as
+                  --  far as it goes, which would hand back one product of
+                  --  two and say nothing.
+                  Products.Run
+                    (Engine, Steps, Vector, 1, Alone, Ok, Halted);
+                  Assert (not Ok,
+                          "a sequence filled a target too small for it");
+
+                  --  An empty sequence computes nothing and says so.
+                  Products.Open_Sequence (Steps);
+                  Products.Run (Engine, Steps, Vector, 1, Both, Ok, Halted);
+                  Assert (not Ok, "an empty sequence reported success");
+
+                  Model_Runner.Bytes.Free (Kept);
+                  Checked := Checked + 1;
+               end;
+
                --  A shape nobody has.
                declare
                   Given  : constant N.Real_Array (0 .. 0) := [others => 0.0];

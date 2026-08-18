@@ -3123,7 +3123,14 @@ package body Checks is
                      Full : constant String :=
                        Ada.Directories.Full_Name (Item);
                   begin
+                     --  A prover's shadow tree is not a build. gnatprove
+                     --  writes its own copy of a compilation's diagnostics
+                     --  under the object directory, so a dependency somebody
+                     --  has proved counts every warning twice and the
+                     --  recorded number goes stale for a reason that has
+                     --  nothing to do with the crate getting noisier.
                      if Simple /= "." and then Simple /= ".."
+                       and then Simple /= "gnatprove"
                        and then (Looking_For_Logs
                                  or else (Simple /= "obj"
                                           and then Simple /= "bin"

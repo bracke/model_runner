@@ -3,8 +3,16 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 29) of Text_Access :=
-     [new String'("Get_F16"),
+   --  The recording half of a device sequence. The engine still asks for
+   --  one product at a time, so nothing in the program names these yet; the
+   --  suite does, against the single call they have to reproduce. They are
+   --  listed here rather than left out because an operation no caller has
+   --  reached is exactly what this registry is for saying out loud.
+   Held : constant array (1 .. 31) of Text_Access :=
+     [new String'("Open_Sequence"),
+      new String'("Add_Product"),
+
+      new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
       new String'("Wipe"),
