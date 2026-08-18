@@ -7,12 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **Six of the ten architectures have now been read from published files.**
-  llama, gpt2, qwen2, qwen3, gemma3 and phi2, each loaded, generated from,
-  and checked for determinism and thread-stability by `tests external-model`.
-  It was two this morning. The other four -- gemma, gemma2, phi3, falcon --
-  remain attested by fixtures written here, and the figures file says which
-  is which, because that distinction is what the gpt2 output bias turned on.
+- **Every architecture the sweep crosses has now been read from a published
+  file.** llama, gpt2, qwen2, qwen3, gemma, gemma2, gemma3, phi2, phi3 and
+  falcon, each loaded, generated from, and checked for determinism and
+  thread-stability by `tests external-model`. It was two this morning. Only
+  gpt2 needed the engine changed to get there; the other eight loaded as
+  written. The eleventh architecture, qwen3moe, still has no published file
+  behind it, and the figures file says so rather than letting the count
+  round up.
 
 - **A figure for gpt2, on a published gpt2.** Twelve tokens in 0.253 s
   against TinyLlama-1.1B's 1.871 s, and `external-model` validates it:

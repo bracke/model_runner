@@ -152,7 +152,7 @@
 # published models does.
 
 # 2026-08-18, which architectures have been read from a file somebody else
-# wrote. Six of the ten this build claims, validated with `tests
+# wrote. Every one of the ten the sweep crosses, validated with `tests
 # external-model` -- it loads the file, generates, and checks that two runs
 # agree and that the worker count does not change the answer:
 #
@@ -160,16 +160,30 @@
 #   gpt2    gpt2 Q8_0 (mradermacher)        149 tensors, deterministic
 #   qwen2   Qwen2-0.5B-Instruct Q8_0        290 tensors, deterministic
 #   qwen3   Qwen3-0.6B Q8_0                 310 tensors, deterministic
+#   gemma   gemma-2b-it Q4_K_M (lmstudio)   164 tensors, deterministic
+#   gemma2  gemma-2-2b-it Q4_K_M            288 tensors, deterministic
 #   gemma3  gemma-3-1b-it Q4_K_M (unsloth)  340 tensors, deterministic
 #   phi2    phi-2 Q4_K_M (TheBloke)         325 tensors, deterministic
+#   phi3    Phi-3-mini-4k-instruct q4       195 tensors, deterministic
+#   falcon  falcon-7b-instruct Q4_K_M       196 tensors, deterministic
 #
-# The other four -- gemma, gemma2, phi3, falcon -- are still attested only by
-# fixtures written here. Two of the four were downloading when this was
-# recorded and falcon's smallest published file is behind a gate. That
-# distinction is worth keeping visible: a fixture and an engine can agree
+# The eleventh architecture, qwen3moe, has no published file behind it. It is
+# not crossed by the sweep either -- it is qwen3 with its metadata under
+# another prefix, compared against the reference on its own -- so what stands
+# behind it is a fixture written here and one comparison. The smallest
+# published qwen3moe is a thirty-billion-parameter mixture, which is why.
+# Saying so is the point of this list.
+# That distinction is worth keeping visible: a fixture and an engine can agree
 # about a model nobody ships, which is what gpt2's output bias was, and no
 # amount of agreement between two implementations reading the same fixture
 # will say so.
+#
+# One refusal along the way was not a defect. A gemma-2 file reported
+# MR-GGUF-0022, a tensor running past the end of the file, which is exactly
+# what a published gpt2 had legitimately found hours earlier. The download was
+# 225 of 1708 megabytes. Whole, the same file loads and generates. The reader
+# was right both times, and the second time it was right about the file rather
+# than about the engine.
 
 # covers:" line before a group says which published figures it stands
 # for, and the check prints it when that group fails. A group whose figures

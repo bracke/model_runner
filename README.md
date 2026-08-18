@@ -735,7 +735,7 @@ The run above crossed 10 architectures, in 15 formats and 5 shapes, of which
 words, and is checked against the run rather than kept by hand.
 
 Ten architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2` and
-`gpt2` -- in each of the five shapes a supported model comes in: dense, sliding-window, a mixture of
+`gpt2`, each of which has also been read from a file somebody else published -- in each of the five shapes a supported model comes in: dense, sliding-window, a mixture of
 experts, a stretched rotation, and heads wider than the embedding implies with
 keys and values different widths again. The processor and the binary64 backends, every evaluation path -- a token at a
 time, a whole prompt in one pass, and a prompt handed over in several --
