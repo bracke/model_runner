@@ -379,6 +379,18 @@ package Model_Runner.Platform.Device.Products is
 
 private
 
+   --  One descriptor set for every product a sequence may hold.
+   --
+   --  A descriptor update is not recorded into a command buffer: it takes
+   --  effect when the buffer is submitted. With one set, two dispatches
+   --  recorded together would both read whatever the last update named, so
+   --  a sequence could never be more than a run of separate submissions.
+   --  A set per step is what lets one command buffer hold them all, and
+   --  they are allocated once with the engine rather than per sequence
+   --  because allocating from a pool is the kind of work this exists to
+   --  keep out of a layer.
+   type Set_Array is array (1 .. Sequence_Limit) of System.Address;
+
    --  How many matrices one engine will keep, as a count. A dense model of a
    --  few dozen layers has some hundreds of them and a mixture of experts has
    --  three a layer for every expert, so this is high enough that the byte
@@ -455,6 +467,10 @@ private
       Pipeline   : System.Address := System.Null_Address;
       Pool       : System.Address := System.Null_Address;
       Descriptor : System.Address := System.Null_Address;
+
+      --  The sets a sequence binds, one per product. Null until a device is
+      --  open, and given back with the pool rather than one at a time.
+      Sets       : Set_Array := [others => System.Null_Address];
       Commands   : System.Address := System.Null_Address;
       Buffer     : System.Address := System.Null_Address;
       Fence      : System.Address := System.Null_Address;

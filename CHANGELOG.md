@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A descriptor set per step of a device sequence.** A descriptor update is
+  not recorded into a command buffer -- it takes effect at submit -- so with
+  one set two dispatches recorded together would both read whatever the last
+  update named. The pool now holds one set per product a sequence may carry,
+  which is what a single command buffer over several products needs. Nothing
+  dispatches differently yet.
+
 - **`tests fixture-likeness`, which compares a fixture against a real file.**
   Everything else here compares two implementations written together against
   a fixture written to suit them. This asks the other question: does the

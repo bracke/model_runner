@@ -974,7 +974,11 @@ package body Model_Runner.Platform.Device.Products is
          Create : constant Create_Call :=
            To_Create (Point ("vkCreateDescriptorPool"));
 
-         Sizes   : aliased Pool_Size;
+         --  Room for the single product's set and for one per step of the
+         --  longest sequence, in one pool: three storage descriptors each.
+         Sizes   : aliased Pool_Size :=
+           (Kind  => Descriptor_Storage,
+            Count => C.unsigned (3 * (1 + Sequence_Limit)));
          Request : aliased Descriptor_Pool_Info;
       begin
          if Create = null then
@@ -982,6 +986,7 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
+         Request.Max_Sets := C.unsigned (1 + Sequence_Limit);
          Request.Sizes := Sizes'Address;
 
          if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
@@ -1015,6 +1020,38 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Item.Descriptor := Made;
+      end;
+
+      --  And one set per product a sequence may hold, from the same pool
+      --  and against the same layout. Allocated in one call: a pool hands
+      --  out as many sets as it is asked for, and asking thirty-two times
+      --  would be thirty-two round trips for the same thing.
+      declare
+         Allocate : constant Allocate_Sets_Call :=
+           To_Allocate_Sets (Point ("vkAllocateDescriptorSets"));
+
+         Layouts : aliased array (1 .. Sequence_Limit) of Address :=
+           [others => Item.Set_Layout];
+         Given   : Set_Array := [others => Null_Handle];
+         First   : aliased Address := Null_Handle
+           with Address => Given (Given'First)'Address;
+         Request : aliased Descriptor_Set_Info;
+      begin
+         if Allocate = null then
+            Close (Item);
+            return;
+         end if;
+
+         Request.Pool := Item.Pool;
+         Request.Count := C.unsigned (Sequence_Limit);
+         Request.Layouts := Layouts (Layouts'First)'Address;
+
+         if Allocate (Item.Logical, Request'Address, First'Access) /= 0 then
+            Close (Item);
+            return;
+         end if;
+
+         Item.Sets := Given;
       end;
 
       --  A pool of commands and one buffer to record into.
