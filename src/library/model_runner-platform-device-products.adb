@@ -63,6 +63,16 @@ package body Model_Runner.Platform.Device.Products is
    Sharing_Exclusive    : constant := 0;
    Descriptor_Storage   : constant := 7;
    Stage_Compute        : constant := 16#20#;
+
+   --  A barrier between one dispatch and the next, for the case where the
+   --  second reads what the first wrote. Products of the same activation
+   --  need none of this -- they touch nothing in common -- but a chained one
+   --  does, and without it a device is free to start the reader before the
+   --  writer has finished.
+   Structure_Memory_Barrier : constant := 46;
+   Pipeline_Stage_Compute   : constant := 16#800#;
+   Access_Shader_Read       : constant := 16#20#;
+   Access_Shader_Write      : constant := 16#40#;
    Bind_Point_Compute   : constant := 1;
    Level_Primary        : constant := 0;
    Use_Once             : constant := 1;
@@ -408,6 +418,23 @@ package body Model_Runner.Platform.Device.Products is
                 Offset : C.unsigned; Size : C.unsigned; Values : Address)
      with Convention => C;
 
+   type Memory_Barrier is record
+      Kind   : C.unsigned := Structure_Memory_Barrier;
+      Next   : Address := Null_Handle;
+      Wrote  : C.unsigned := Access_Shader_Write;
+      Reads  : C.unsigned := Access_Shader_Read;
+   end record
+     with Convention => C;
+
+   type Barrier_Call is access
+     procedure (Buffer : Address;
+                From, Into : C.unsigned;
+                Flags : C.unsigned;
+                Memory_Count : C.unsigned; Memories : Address;
+                Buffer_Count : C.unsigned; Buffers : Address;
+                Image_Count : C.unsigned; Images : Address)
+     with Convention => C;
+
    type Dispatch_Call is access
      procedure (Buffer : Address; X, Y, Z : C.unsigned)
      with Convention => C;
@@ -458,6 +485,8 @@ package body Model_Runner.Platform.Device.Products is
    function To_Push is new Ada.Unchecked_Conversion (Address, Push_Call);
    function To_Dispatch is
      new Ada.Unchecked_Conversion (Address, Dispatch_Call);
+   function To_Barrier is
+     new Ada.Unchecked_Conversion (Address, Barrier_Call);
    function To_Submit is new Ada.Unchecked_Conversion (Address, Submit_Call);
    function To_Wait is new Ada.Unchecked_Conversion (Address, Wait_Call);
    function To_Reset_Fences is
@@ -2040,9 +2069,45 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Held := Steps.Held + 1;
       Steps.Items (Steps.Held) :=
         (Weights => Weights, At_Byte => At_Byte, Packing => Packing,
-         Rows => Rows, Columns => Columns, Key => Key);
+         Rows => Rows, Columns => Columns, Key => Key, Chained => False);
       Added := True;
    end Add_Product;
+
+   -------------------------
+   -- Add_Chained_Product --
+   -------------------------
+
+   procedure Add_Chained_Product
+     (Steps   : in out Sequence;
+      Weights : Model_Runner.Bytes.Byte_Array_Access;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Added   : out Boolean;
+      Key     : System.Address := System.Null_Address)
+   is
+      use type Model_Runner.Bytes.Byte_Array_Access;
+   begin
+      --  Nothing to chain to, no room, or a width that does not meet the
+      --  one before it. Each is a refusal rather than something patched
+      --  over: a product reading the wrong number of values would compute
+      --  and be wrong.
+      if Steps.Held = 0
+        or else Steps.Held = Sequence_Limit
+        or else Weights = null
+        or else Columns /= Steps.Items (Steps.Held).Rows
+      then
+         Added := False;
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Weights => Weights, At_Byte => At_Byte, Packing => Packing,
+         Rows => Rows, Columns => Columns, Key => Key, Chained => True);
+      Added := True;
+   end Add_Chained_Product;
 
    ---------
    -- Run --
@@ -2127,7 +2192,10 @@ package body Model_Runner.Platform.Device.Products is
               * Interfaces.Unsigned_64 (Count) * 4;
          begin
             if This.Rows = 0
-              or else This.Columns /= Steps.Items (1).Columns
+              or else (not This.Chained
+                       and then This.Columns /= Steps.Items (1).Columns)
+              or else (This.Chained
+                       and then This.Columns /= Steps.Items (Index - 1).Rows)
               or else Wide = 0
               or else This.Rows * This.Columns > Max_Elements
               or else This.Columns * Count > Max_Elements
@@ -2240,9 +2308,19 @@ package body Model_Runner.Platform.Device.Products is
             Told (1) :=
               (Buffer => Places (Index).Buffer, Offset => 0,
                Extent => Places (Index).Base + Places (Index).Weight);
-            Told (2) :=
-              (Buffer => Item.Vector_Buffer, Offset => 0,
-               Extent => Vector_Bytes);
+            --  What this product reads: the activation the caller sent,
+            --  or -- for a chained one -- the result the product before it
+            --  wrote, which never left the device.
+            if Steps.Items (Index).Chained then
+               Told (2) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index - 1).At_Byte,
+                  Extent => Places (Index - 1).Bytes);
+            else
+               Told (2) :=
+                 (Buffer => Item.Vector_Buffer, Offset => 0,
+                  Extent => Vector_Bytes);
+            end if;
             Told (3) :=
               (Buffer => Item.Result_Buffer,
                Offset => Places (Index).At_Byte,
@@ -2275,6 +2353,15 @@ package body Model_Runner.Platform.Device.Products is
          Push : constant Push_Call := To_Push (Point ("vkCmdPushConstants"));
          Dispatch : constant Dispatch_Call :=
            To_Dispatch (Point ("vkCmdDispatch"));
+         --  Looked up only when something chains. Resolving an entry point
+         --  is not free, and a sequence of products that share an activation
+         --  -- which is every sequence the engine names today -- would
+         --  otherwise pay for a barrier it never records.
+         Chains : Boolean := False;
+
+         Barrier : Barrier_Call := null;
+
+         Wall : aliased Memory_Barrier;
 
          Began : aliased Command_Begin_Info;
       begin
@@ -2284,6 +2371,18 @@ package body Model_Runner.Platform.Device.Products is
          then
             Release_All;
             return;
+         end if;
+
+         for Index in 1 .. Steps.Held loop
+            Chains := Chains or else Steps.Items (Index).Chained;
+         end loop;
+
+         if Chains then
+            Barrier := To_Barrier (Point ("vkCmdPipelineBarrier"));
+            if Barrier = null then
+               Release_All;
+               return;
+            end if;
          end if;
 
          if Reset_Buffer (Item.Buffer, 0) /= 0
@@ -2302,6 +2401,18 @@ package body Model_Runner.Platform.Device.Products is
                Bound : aliased Address := Item.Sets (Index);
                First : Natural := 0;
             begin
+               --  A chained product reads what the one before it wrote, so
+               --  the device is told to finish writing before it starts
+               --  reading. Products of the same activation share nothing and
+               --  get no barrier, which is why this is here and not around
+               --  the whole loop.
+               if This.Chained then
+                  Barrier
+                    (Item.Buffer, Pipeline_Stage_Compute,
+                     Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                     0, Null_Handle, 0, Null_Handle);
+               end if;
+
                Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                           Bound'Address, 0, Null_Handle);
 

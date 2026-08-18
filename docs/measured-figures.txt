@@ -1077,6 +1077,32 @@ reference 482EEE66C7F19A12 src/library/model_runner-backend-reference.adb src/li
 # arithmetic is untouched here, and the conformance sweep compares it against
 # the engine twenty-six thousand times a gate.
 
+# 2026-08-18, how the device figures above were taken, and why the next ones
+# are taken differently. The three lines under "the feed-forward joins in"
+# were measured one after another over a working session -- apart, then with
+# the queries, keys and values grouped, then with the gate too -- each at a
+# load under 1.50. That is not good enough, and the way it showed was a
+# regression that was not there: a change measured 0.46 s against a published
+# 0.385 s, and the commit before it measured 0.46 s as well. The machine had
+# moved, not the code.
+#
+# Taken again by building the two revisions alternately and running each three
+# times, twice around:
+#
+#   ungrouped (cf13815)  0.559  0.594  0.590   and  0.605  0.602  0.604
+#   grouped   (3c424a2)  0.472  0.471  0.459   and  0.463  0.449  0.459
+#
+# Median 0.598 s against 0.461 s: twenty-three per cent, where the sequential
+# measurement said eighteen. The effect is real and was understated. What was
+# also true, and unsaid, is that the same ungrouped build reads 0.468 s in the
+# morning and 0.60 s in the evening at the same load average -- a quarter,
+# which is larger than either effect this file has been reporting.
+#
+# So the absolute wall times in the two-row table are of their moment and the
+# ratios between backends are what survive. A comparison between two revisions
+# belongs in an interleaved run and nowhere else; a load average under 1.50 is
+# not evidence that two figures taken hours apart may be subtracted.
+
 # 2026-08-18, what device-side normalization would be worth: nothing this
 # machine can measure. Written down because the question looks obviously
 # worth a yes, and the answer is no for a reason that only a measurement
@@ -1411,7 +1437,7 @@ reference 482EEE66C7F19A12 src/library/model_runner-backend-reference.adb src/li
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device 824E741935011034 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 1EE5CA6186C01CFE src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived

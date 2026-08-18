@@ -293,12 +293,51 @@ package Model_Runner.Platform.Device.Products is
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address);
 
+   --  Name one product that reads what the product before it produced.
+   --
+   --  This is the point of a sequence rather than a convenience on top of it.
+   --  Products of the same activation save submissions because they may all
+   --  go at once; a chained product saves something different and larger --
+   --  what it reads never leaves the device. Without chaining, the only way
+   --  to feed one product's result to the next is to bring it back, hand it
+   --  to the caller, and send it again.
+   --
+   --  A barrier stands between a chained product and the one before it,
+   --  because the second reads what the first wrote. Products that are not
+   --  chained have no barrier between them and do not need one.
+   --
+   --  The activation this reads is the previous product's whole result, so
+   --  its column count must be that product's row count. A sequence whose
+   --  first product is chained has nothing to chain to and is refused.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Weights Storage the matrix lies in.
+   --  @param At_Byte Where in that storage the matrix begins.
+   --  @param Packing How each row is packed.
+   --  @param Rows Number of rows.
+   --  @param Columns Number of columns, which must be the previous
+   --    product's row count.
+   --  @param Added False when the sequence is full, when there is nothing to
+   --    chain to, or when the widths do not meet.
+   --  @param Key Identifies the matrix so the device may keep it.
+   procedure Add_Chained_Product
+     (Steps   : in out Sequence;
+      Weights : Model_Runner.Bytes.Byte_Array_Access;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Added   : out Boolean;
+      Key     : System.Address := System.Null_Address);
+
    --  Perform every product a sequence holds, in the order they were named.
    --
-   --  Each product reads the same activation and writes its own result, one
-   --  after another into Target: a sequence naming two matrices of R rows
-   --  fills the first R values from the first and the next R from the
-   --  second. A sequence of one fills Target exactly as the single call does.
+   --  An unchained product reads the activation given here; a chained one
+   --  reads what the product before it produced, without that ever leaving
+   --  the device. Each writes its own result, one after another into Target:
+   --  a sequence naming two matrices of R rows fills the first R values from
+   --  the first and the next R from the second. A sequence of one fills
+   --  Target exactly as the single call does.
    --
    --  @param Item Ready engine.
    --  @param Steps Sequence to perform.
@@ -539,6 +578,10 @@ private
       Rows    : Natural := 0;
       Columns : Natural := 0;
       Key     : System.Address := System.Null_Address;
+
+      --  Whether this reads what the product before it wrote, rather than
+      --  the activation the caller supplied.
+      Chained : Boolean := False;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

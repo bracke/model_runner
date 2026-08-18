@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A chained product in a device sequence**, whose activation is what the
+  product before it wrote -- it never leaves the device. A barrier stands
+  between the two, because the second reads what the first wrote; products
+  that share an activation have none and need none. Nothing in the engine
+  chains yet: every pair of products it names has host arithmetic between
+  them, and the kernels that would remove it are not written.
+
+### Fixed
+
+- **The device comparison figures were taken sequentially and are corrected.**
+  Building two revisions alternately and running each three times, twice
+  around, puts grouping at twenty-three per cent rather than eighteen. The
+  same build also drifts a quarter between morning and evening at the same
+  load average, which is larger than the effect being measured, so the
+  absolute wall times are of their moment.
+
 - **The gated feed-forward's two projections go to a device together too.**
   The gate and the up projection read the same normalized input and neither
   waits for the other. The device entry point generalized to a group of any

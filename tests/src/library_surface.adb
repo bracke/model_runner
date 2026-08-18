@@ -3,8 +3,14 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 29) of Text_Access :=
-     [new String'("Get_F16"),
+   --  Add_Chained_Product is here because nothing in the engine chains yet:
+   --  every pair of products it names has host arithmetic between them -- an
+   --  activation, a rotation, an attention -- and the kernels that would
+   --  remove it are not written. The suite names it, against the two calls it
+   --  has to reproduce.
+   Held : constant array (1 .. 30) of Text_Access :=
+     [new String'("Add_Chained_Product"),
+      new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
       new String'("Wipe"),
