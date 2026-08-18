@@ -37,7 +37,9 @@ with Model_Runner.Numerics;
 with Model_Runner.Output;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
+with Model_Runner.Backend.Device;
 with Model_Runner.GGUF;
+with Model_Runner.Tensors;
 with Model_Runner.Quantization;
 with Model_Runner.Templates;
 with Model_Runner.Text;
@@ -584,6 +586,110 @@ package body Tests.CLI_Cases is
 
                   Model_Runner.Bytes.Free (Kept);
                   Checked := Checked + 1;
+               end;
+
+               --  Three products of one activation, sent together, are
+               --  the three sent one at a time. Asserted against the single
+               --  dispatch rather than against arithmetic worked out here:
+               --  what is being checked is that going together changes
+               --  nothing, and the product itself is checked above.
+               declare
+                  use type Model_Runner.Bytes.Byte_Count;
+                  use type Interfaces.Unsigned_32;
+
+                  Rows : constant Natural := 12;
+                  Cols : constant Natural := 16;
+
+                  Span : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count (Rows * Cols * 4);
+
+                  Store : constant Model_Runner.Bytes.Byte_Array_Access :=
+                    new Model_Runner.Bytes.Byte_Array (1 .. Span * 3);
+                  Freed : Model_Runner.Bytes.Byte_Array_Access := Store;
+
+                  Vector : constant Model_Runner.Tensors.Real_Array_Access :=
+                    new N.Real_Array (0 .. N.Element_Count (Cols) - 1);
+
+                  Apart : constant array (1 .. 3) of
+                    Model_Runner.Tensors.Real_Array_Access :=
+                      [others => new N.Real_Array
+                                       (0 .. N.Element_Count (Rows) - 1)];
+                  Together : constant array (1 .. 3) of
+                    Model_Runner.Tensors.Real_Array_Access :=
+                      [others => new N.Real_Array
+                                       (0 .. N.Element_Count (Rows) - 1)];
+
+                  Views : array (1 .. 3) of Model_Runner.Tensors.View;
+                  Ready : Boolean;
+                  Why   : Model_Runner.Errors.Error_Info;
+               begin
+                  for Which in 0 .. Rows * Cols * 3 - 1 loop
+                     declare
+                        Value : constant N.Real :=
+                          1.0 / N.Real (7 + Which mod 23) - 0.019;
+                        Bits : Interfaces.Unsigned_32;
+                        for Bits'Address use Value'Address;
+                        pragma Import (Ada, Bits);
+                     begin
+                        for Byte in 0 .. 3 loop
+                           Store (Store'First
+                                  + Model_Runner.Bytes.Byte_Count
+                                      (Which * 4 + Byte)) :=
+                             Model_Runner.Bytes.Byte
+                               (Interfaces.Shift_Right
+                                  (Bits, Byte * 8) and 16#FF#);
+                        end loop;
+                     end;
+                  end loop;
+
+                  for Index in Vector'Range loop
+                     Vector (Index) :=
+                       1.0 / N.Real (5 + Natural (Index) mod 17) - 0.031;
+                  end loop;
+
+                  for Index in Views'Range loop
+                     Views (Index) :=
+                       (Format  => Model_Runner.GGUF.Type_F32,
+                        Rows    => N.Element_Count (Rows),
+                        Columns => N.Element_Count (Cols),
+                        Data    => Store,
+                        Offset  =>
+                          Model_Runner.Bytes.Byte_Count (Index - 1) * Span,
+                        others  => <>);
+                  end loop;
+
+                  Model_Runner.Backend.Device.Open (Ready);
+                  if Ready then
+                     for Index in Views'Range loop
+                        Model_Runner.Backend.Device.Dispatch
+                          (Views (Index), Vector, Apart (Index), Why);
+                        Assert (not Model_Runner.Errors.Is_Error (Why),
+                                "a device refused a single projection");
+                     end loop;
+
+                     Model_Runner.Backend.Device.Dispatch_Three
+                       (Views (1), Views (2), Views (3), Vector,
+                        Together (1), Together (2), Together (3), Why);
+                     Assert (not Model_Runner.Errors.Is_Error (Why),
+                             "a device refused three projections together");
+
+                     for Index in Views'Range loop
+                        for Row in Apart (Index).all'Range loop
+                           Assert
+                             (Together (Index).all (Row)
+                                = Apart (Index).all (Row),
+                              "three projections sent together disagree with"
+                              & " the three sent apart, at matrix"
+                              & Natural'Image (Index) & " row"
+                              & N.Element_Count'Image (Row));
+                        end loop;
+                     end loop;
+
+                     Model_Runner.Backend.Device.Close;
+                     Checked := Checked + 1;
+                  end if;
+
+                  Model_Runner.Bytes.Free (Freed);
                end;
 
                --  A shape nobody has.

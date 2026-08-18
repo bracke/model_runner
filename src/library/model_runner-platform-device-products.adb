@@ -1365,95 +1365,59 @@ package body Model_Runner.Platform.Device.Products is
       return Interfaces.Unsigned_64 (Columns / Per) * Block (Packing);
    end Row_Bytes;
 
-   -----------------
-   -- One_Product --
-   -----------------
+   ---------------------
+   -- Acquire_Weights --
+   ---------------------
 
-   --  One matrix against one or more activations: the whole of what a
-   --  product on a device is, unchanged. Both the single call and a
-   --  sequence's Run reach the device through here, so there is one copy of
-   --  the buffer handling, the descriptor update, the dispatch and the wait
-   --  rather than two that could drift apart.
-   procedure One_Product
-     (Item    : in out Engine;
-      Weights : Model_Runner.Bytes.Byte_Array;
-      At_Byte : Model_Runner.Bytes.Byte_Count;
-      Packing : Weight_Packing;
-      Rows    : Natural;
-      Columns : Natural;
-      Vectors : Model_Runner.Numerics.Real_Array;
-      Count   : Positive;
-      Target  : out Model_Runner.Numerics.Real_Array;
-      Ok      : out Boolean;
-      Cancelled : out Boolean;
-      Key     : System.Address := System.Null_Address;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
+   --  Put one matrix where the device can read it, and say how it got there.
+   --
+   --  Lifted out of the single product unchanged so that a sequence may do
+   --  it once per step before anything is recorded. A product used to
+   --  acquire its matrix and dispatch it in one breath, which is exactly
+   --  what a run of products recorded together cannot do: every matrix has
+   --  to be in place before the first dispatch is written down.
+   --
+   --  @param Item Ready engine.
+   --  @param Weights Storage the matrix lies in.
+   --  @param At_Byte Where in that storage the matrix begins.
+   --  @param Packing How each row is packed.
+   --  @param Rows Number of rows.
+   --  @param Columns Number of columns.
+   --  @param Weight_Bytes Bytes the matrix takes, as the caller computed it.
+   --  @param Buffer Receives the device buffer holding it.
+   --  @param Memory Receives the memory behind that buffer.
+   --  @param Base Where in the buffer the matrix begins, which is not zero
+   --    when the device took the host's own memory and had to align it.
+   --  @param Borrowed True when the buffer belongs to this call and has to
+   --    go back at the end of it rather than being kept.
+   --  @param Ok False when the matrix could not be put anywhere.
+   --  @param Key Identifies the matrix so it may be kept between calls.
+   procedure Acquire_Weights
+     (Item         : in out Engine;
+      Weights      : Model_Runner.Bytes.Byte_Array;
+      At_Byte      : Model_Runner.Bytes.Byte_Count;
+      Packing      : Weight_Packing;
+      Rows         : Natural;
+      Columns      : Natural;
+      Weight_Bytes : Interfaces.Unsigned_64;
+      Buffer       : out Address;
+      Memory       : out Address;
+      Base         : out Interfaces.Unsigned_64;
+      Borrowed     : out Boolean;
+      Ok           : out Boolean;
+      Key          : System.Address)
    is
-      Elements : constant Natural := Rows * Columns;
-
-      --  Whichever engine is being asked, because an entry point belongs to
-      --  the instance behind it.
-      Ignored : constant Boolean := Set_Asking (Item);
-
-      Wide : constant Interfaces.Unsigned_64 := Row_Bytes (Packing, Columns);
-
-      Weight_Bytes : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Rows) * Wide;
-      Vector_Bytes : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Count) * 4;
-      Result_Bytes : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Rows) * Interfaces.Unsigned_64 (Count) * 4;
-
-      --  The matrix, kept when it has a key and made afresh when it has not.
-      Weight_Buffer : Address := Null_Handle;
-      Weight_Memory : Address := Null_Handle;
-      Weight_Base   : Interfaces.Unsigned_64 := 0;
+      Weight_Buffer : Address renames Buffer;
+      Weight_Memory : Address renames Memory;
+      Weight_Base   : Interfaces.Unsigned_64 renames Base;
       Weight_Own    : Boolean := False;
-      Borrowed      : Boolean := False;
-
-      procedure Release_Borrowed is
-      begin
-         if Borrowed then
-            Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
-            Borrowed := False;
-         end if;
-      end Release_Borrowed;
-
-      Good : Boolean;
+      Good          : Boolean;
    begin
-      Target := [others => 0.0];
-      Ok := False;
-      Cancelled := False;
-
-      --  Asked before anything is uploaded or recorded, as well as between
-      --  slices of the wait further down. A request that is already standing
-      --  when the product is asked for costs the device nothing, and it is
-      --  the only form of this a test can arrange: a request that arrives
-      --  during a wait needs a wait long enough to arrive during.
-      if Model_Runner.Cancellation."/=" (Cancel, null)
-        and then Cancel.all.Is_Requested
-      then
-         Cancelled := True;
-         return;
-      end if;
-
-      if not Is_Ready (Item)
-        or else Rows = 0
-        or else Columns = 0
-        or else Wide = 0
-        or else Elements > Max_Elements
-        or else Columns * Count > Max_Elements
-        or else Interfaces.Unsigned_64 (Weights'Length)
-                  < Interfaces.Unsigned_64 (At_Byte) + Weight_Bytes
-        or else Vectors'Length
-                  < Model_Runner.Numerics.Element_Count (Columns)
-                    * Model_Runner.Numerics.Element_Count (Count)
-        or else Target'Length
-                  < Model_Runner.Numerics.Element_Count (Rows)
-                    * Model_Runner.Numerics.Element_Count (Count)
-      then
-         return;
-      end if;
+      Weight_Buffer := Null_Handle;
+      Weight_Memory := Null_Handle;
+      Weight_Base := 0;
+      Borrowed := False;
+      Ok := True;
 
       --  Is it already there? A matrix is what it is, what shape it is, and
       --  where it is. Every part of that is compared, because a caller that
@@ -1537,6 +1501,7 @@ package body Model_Runner.Platform.Device.Products is
             Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good);
             if not Good then
                Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
+               Ok := False;
                return;
             end if;
 
@@ -1548,6 +1513,7 @@ package body Model_Runner.Platform.Device.Products is
                Good);
             if not Good then
                Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
+               Ok := False;
                return;
             end if;
          end if;
@@ -1579,6 +1545,253 @@ package body Model_Runner.Platform.Device.Products is
          else
             Borrowed := True;
          end if;
+      end if;
+
+   end Acquire_Weights;
+
+   ---------------------
+   -- Submit_And_Wait --
+   ---------------------
+
+   --  Hand the recorded command buffer to the queue and wait for it.
+   --
+   --  Lifted out of the single product unchanged, so that a sequence which
+   --  records several dispatches into one buffer waits once for all of them
+   --  rather than once for each. Cleaning up whatever the caller borrowed is
+   --  the caller's, which is why this reports rather than releases.
+   --
+   --  @param Item Ready engine, with a command buffer already recorded.
+   --  @param Ok False when the device did not run it.
+   --  @param Cancelled True when a caller asked to stop while it ran.
+   --  @param Cancel Token a caller may set to ask for a stop.
+   procedure Submit_And_Wait
+     (Item      : in out Engine;
+      Ok        : out Boolean;
+      Cancelled : out Boolean;
+      Cancel    : Model_Runner.Cancellation.Token_Reference)
+   is
+   begin
+      Ok := True;
+      Cancelled := False;
+
+      --  Hand it over and wait.
+      declare
+         Submit : constant Submit_Call := To_Submit (Point ("vkQueueSubmit"));
+         Wait   : constant Wait_Call := To_Wait (Point ("vkWaitForFences"));
+         Reset  : constant Reset_Fences_Call :=
+           To_Reset_Fences (Point ("vkResetFences"));
+
+         Buffer_Handle : aliased Address := Item.Buffer;
+         Fence_Handle  : aliased Address := Item.Fence;
+         Request       : aliased Submit_Info;
+      begin
+         if Submit = null or else Wait = null or else Reset = null then
+            Ok := False;
+            return;
+         end if;
+
+         Request.Buffers := Buffer_Handle'Address;
+
+         if Reset (Item.Logical, 1, Fence_Handle'Address) /= 0
+           or else Submit (Item.Queue, 1, Request'Address, Item.Fence) /= 0
+         then
+            Ok := False;
+            return;
+         end if;
+
+         --  Waited for in slices rather than in one go, for two reasons.
+         --
+         --  A caller can ask to stop. Cancellation is checked between
+         --  layers everywhere else in this program, and a layer on a device
+         --  is one of these waits, so a wait that cannot be interrupted is
+         --  the longest a stop request goes unanswered. Slicing makes that
+         --  a slice rather than a whole product.
+         --
+         --  And the bound was wrong. A single second was a bound on the
+         --  wait, and a product larger than this machine's -- a wider model,
+         --  a longer batch -- can legitimately take longer, so the bound
+         --  refused work that was going perfectly well. Worse, it returned
+         --  with the command buffer still executing and the next call would
+         --  reset and record over it while the device was reading it. The
+         --  slices make the whole bound generous, because a device that has
+         --  stopped answering no longer holds the thread for the whole of
+         --  it; and when the bound does expire the engine is finished with
+         --  rather than reused, because there is no way to take work back
+         --  off a device that is not responding.
+         declare
+            --  Nanoseconds, which is what a Vulkan wait counts in.
+            Nanoseconds : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64'Max
+                (1, Interfaces.Unsigned_64 (Item.Slice * 1_000_000_000.0));
+
+            --  How many of those the whole bound holds. A caller who asks
+            --  for no patience at all gets none: zero slices is a wait that
+            --  does not happen, which is the only way to reach the giving-up
+            --  path without a device that has genuinely stopped answering.
+            --  Clamped, because a long patience divided by a short slice
+            --  is a count no Natural holds: a minute of nanosecond slices
+            --  is sixty thousand million of them. The clamp is what makes
+            --  a caller who asks for both an ordinary caller rather than a
+            --  Constraint_Error.
+            Wanted : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64
+                (Duration'Max (0.0, Item.Patience) * 1_000_000_000.0)
+              / Nanoseconds;
+
+            Slices : constant Natural :=
+              (if Wanted > Interfaces.Unsigned_64 (Natural'Last)
+               then Natural'Last
+               else Natural (Wanted));
+
+            Answered : Boolean := False;
+            Stopped  : Boolean := False;
+         begin
+            Item.Waited := 0;
+
+            for Attempt in 1 .. Slices loop
+               Item.Waited := Attempt;
+               declare
+                  Answer : constant Interfaces.C.int :=
+                    Wait (Item.Logical, 1, Fence_Handle'Address, 1,
+                          Nanoseconds);
+               begin
+                  if Answer = 0 then
+                     Answered := True;
+                     exit;
+                  elsif Answer /= Timeout_Result then
+                     --  A refusal rather than a timeout, and waiting again
+                     --  would only ask the same question.
+                     exit;
+                  end if;
+               end;
+
+               --  Asked between slices and acted on after the device has
+               --  finished, never instead of finishing: the buffers this
+               --  dispatch is reading belong to it until the fence says
+               --  otherwise, and giving them back sooner is how a cancelled
+               --  run corrupts the next one.
+               if not Stopped
+                 and then Model_Runner.Cancellation."/=" (Cancel, null)
+                 and then Cancel.all.Is_Requested
+               then
+                  Stopped := True;
+               end if;
+            end loop;
+
+            if not Answered then
+               --  The device did not finish inside the whole bound. Its
+               --  buffers are still its own, so this engine is done: the
+               --  caller is told, and nothing here touches them again.
+               Item.Stalled := True;
+               Ok := False;
+               return;
+            end if;
+
+            if Stopped then
+               Cancelled := True;
+               Ok := False;
+               return;
+            end if;
+         end;
+      end;
+
+   end Submit_And_Wait;
+
+   -----------------
+   -- One_Product --
+   -----------------
+
+   --  One matrix against one or more activations: the whole of what a
+   --  product on a device is, unchanged. Both the single call and a
+   --  sequence's Run reach the device through here, so there is one copy of
+   --  the buffer handling, the descriptor update, the dispatch and the wait
+   --  rather than two that could drift apart.
+   procedure One_Product
+     (Item    : in out Engine;
+      Weights : Model_Runner.Bytes.Byte_Array;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Vectors : Model_Runner.Numerics.Real_Array;
+      Count   : Positive;
+      Target  : out Model_Runner.Numerics.Real_Array;
+      Ok      : out Boolean;
+      Cancelled : out Boolean;
+      Key     : System.Address := System.Null_Address;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Elements : constant Natural := Rows * Columns;
+
+      --  Whichever engine is being asked, because an entry point belongs to
+      --  the instance behind it.
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      Wide : constant Interfaces.Unsigned_64 := Row_Bytes (Packing, Columns);
+
+      Weight_Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Rows) * Wide;
+      Vector_Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Count) * 4;
+      Result_Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Rows) * Interfaces.Unsigned_64 (Count) * 4;
+
+      --  The matrix, kept when it has a key and made afresh when it has not.
+      Weight_Buffer : Address := Null_Handle;
+      Weight_Memory : Address := Null_Handle;
+      Weight_Base   : Interfaces.Unsigned_64 := 0;
+      Borrowed      : Boolean := False;
+
+      procedure Release_Borrowed is
+      begin
+         if Borrowed then
+            Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
+            Borrowed := False;
+         end if;
+      end Release_Borrowed;
+
+      Good : Boolean;
+   begin
+      Target := [others => 0.0];
+      Ok := False;
+      Cancelled := False;
+
+      --  Asked before anything is uploaded or recorded, as well as between
+      --  slices of the wait further down. A request that is already standing
+      --  when the product is asked for costs the device nothing, and it is
+      --  the only form of this a test can arrange: a request that arrives
+      --  during a wait needs a wait long enough to arrive during.
+      if Model_Runner.Cancellation."/=" (Cancel, null)
+        and then Cancel.all.Is_Requested
+      then
+         Cancelled := True;
+         return;
+      end if;
+
+      if not Is_Ready (Item)
+        or else Rows = 0
+        or else Columns = 0
+        or else Wide = 0
+        or else Elements > Max_Elements
+        or else Columns * Count > Max_Elements
+        or else Interfaces.Unsigned_64 (Weights'Length)
+                  < Interfaces.Unsigned_64 (At_Byte) + Weight_Bytes
+        or else Vectors'Length
+                  < Model_Runner.Numerics.Element_Count (Columns)
+                    * Model_Runner.Numerics.Element_Count (Count)
+        or else Target'Length
+                  < Model_Runner.Numerics.Element_Count (Rows)
+                    * Model_Runner.Numerics.Element_Count (Count)
+      then
+         return;
+      end if;
+
+      --  The matrix, wherever it has to be put to be read.
+      Acquire_Weights
+        (Item, Weights, At_Byte, Packing, Rows, Columns, Weight_Bytes,
+         Weight_Buffer, Weight_Memory, Weight_Base, Borrowed, Good, Key);
+      if not Good then
+         return;
       end if;
 
       --  The two that change every call, grown when they have to.
@@ -1723,125 +1936,11 @@ package body Model_Runner.Platform.Device.Products is
       end;
 
       --  Hand it over and wait.
-      declare
-         Submit : constant Submit_Call := To_Submit (Point ("vkQueueSubmit"));
-         Wait   : constant Wait_Call := To_Wait (Point ("vkWaitForFences"));
-         Reset  : constant Reset_Fences_Call :=
-           To_Reset_Fences (Point ("vkResetFences"));
-
-         Buffer_Handle : aliased Address := Item.Buffer;
-         Fence_Handle  : aliased Address := Item.Fence;
-         Request       : aliased Submit_Info;
-      begin
-         if Submit = null or else Wait = null or else Reset = null then
-            Release_Borrowed;
-            return;
-         end if;
-
-         Request.Buffers := Buffer_Handle'Address;
-
-         if Reset (Item.Logical, 1, Fence_Handle'Address) /= 0
-           or else Submit (Item.Queue, 1, Request'Address, Item.Fence) /= 0
-         then
-            Release_Borrowed;
-            return;
-         end if;
-
-         --  Waited for in slices rather than in one go, for two reasons.
-         --
-         --  A caller can ask to stop. Cancellation is checked between
-         --  layers everywhere else in this program, and a layer on a device
-         --  is one of these waits, so a wait that cannot be interrupted is
-         --  the longest a stop request goes unanswered. Slicing makes that
-         --  a slice rather than a whole product.
-         --
-         --  And the bound was wrong. A single second was a bound on the
-         --  wait, and a product larger than this machine's -- a wider model,
-         --  a longer batch -- can legitimately take longer, so the bound
-         --  refused work that was going perfectly well. Worse, it returned
-         --  with the command buffer still executing and the next call would
-         --  reset and record over it while the device was reading it. The
-         --  slices make the whole bound generous, because a device that has
-         --  stopped answering no longer holds the thread for the whole of
-         --  it; and when the bound does expire the engine is finished with
-         --  rather than reused, because there is no way to take work back
-         --  off a device that is not responding.
-         declare
-            --  Nanoseconds, which is what a Vulkan wait counts in.
-            Nanoseconds : constant Interfaces.Unsigned_64 :=
-              Interfaces.Unsigned_64'Max
-                (1, Interfaces.Unsigned_64 (Item.Slice * 1_000_000_000.0));
-
-            --  How many of those the whole bound holds. A caller who asks
-            --  for no patience at all gets none: zero slices is a wait that
-            --  does not happen, which is the only way to reach the giving-up
-            --  path without a device that has genuinely stopped answering.
-            --  Clamped, because a long patience divided by a short slice
-            --  is a count no Natural holds: a minute of nanosecond slices
-            --  is sixty thousand million of them. The clamp is what makes
-            --  a caller who asks for both an ordinary caller rather than a
-            --  Constraint_Error.
-            Wanted : constant Interfaces.Unsigned_64 :=
-              Interfaces.Unsigned_64
-                (Duration'Max (0.0, Item.Patience) * 1_000_000_000.0)
-              / Nanoseconds;
-
-            Slices : constant Natural :=
-              (if Wanted > Interfaces.Unsigned_64 (Natural'Last)
-               then Natural'Last
-               else Natural (Wanted));
-
-            Answered : Boolean := False;
-            Stopped  : Boolean := False;
-         begin
-            Item.Waited := 0;
-
-            for Attempt in 1 .. Slices loop
-               Item.Waited := Attempt;
-               declare
-                  Answer : constant Interfaces.C.int :=
-                    Wait (Item.Logical, 1, Fence_Handle'Address, 1,
-                          Nanoseconds);
-               begin
-                  if Answer = 0 then
-                     Answered := True;
-                     exit;
-                  elsif Answer /= Timeout_Result then
-                     --  A refusal rather than a timeout, and waiting again
-                     --  would only ask the same question.
-                     exit;
-                  end if;
-               end;
-
-               --  Asked between slices and acted on after the device has
-               --  finished, never instead of finishing: the buffers this
-               --  dispatch is reading belong to it until the fence says
-               --  otherwise, and giving them back sooner is how a cancelled
-               --  run corrupts the next one.
-               if not Stopped
-                 and then Model_Runner.Cancellation."/=" (Cancel, null)
-                 and then Cancel.all.Is_Requested
-               then
-                  Stopped := True;
-               end if;
-            end loop;
-
-            if not Answered then
-               --  The device did not finish inside the whole bound. Its
-               --  buffers are still its own, so this engine is done: the
-               --  caller is told, and nothing here touches them again.
-               Item.Stalled := True;
-               Ok := False;
-               return;
-            end if;
-
-            if Stopped then
-               Release_Borrowed;
-               Cancelled := True;
-               return;
-            end if;
-         end;
-      end;
+      Submit_And_Wait (Item, Good, Cancelled, Cancel);
+      if not Good then
+         Release_Borrowed;
+         return;
+      end if;
 
       --  And what came out.
       declare
@@ -1959,41 +2058,330 @@ package body Model_Runner.Platform.Device.Products is
       Cancelled : out Boolean;
       Cancel    : Model_Runner.Cancellation.Token_Reference := null)
    is
-      Filled : Model_Runner.Numerics.Element_Count := Target'First;
+      use type Model_Runner.Bytes.Byte_Array_Access;
+      use type System.Storage_Elements.Integer_Address;
+
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      --  A storage buffer binding may not begin anywhere: a device states
+      --  the boundary it wants, and no device asks for more than this.
+      --  Rounding every step's share up to it is cheaper than reading the
+      --  limit and far cheaper than getting it wrong, which is a validation
+      --  failure on some drivers and wrong answers on others.
+      Alignment : constant Interfaces.Unsigned_64 := 256;
+
+      --  Where each product's matrix and result ended up.
+      type Place is record
+         Buffer   : Address := Null_Handle;
+         Memory   : Address := Null_Handle;
+         Base     : Interfaces.Unsigned_64 := 0;
+         Borrowed : Boolean := False;
+         Weight   : Interfaces.Unsigned_64 := 0;
+         At_Byte  : Interfaces.Unsigned_64 := 0;
+         Bytes    : Interfaces.Unsigned_64 := 0;
+      end record;
+
+      Places : array (1 .. Sequence_Limit) of Place;
+
+      Vector_Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Steps.Items (1).Columns)
+        * Interfaces.Unsigned_64 (Count) * 4;
+
+      Result_Bytes : Interfaces.Unsigned_64 := 0;
+      Wanted       : Model_Runner.Numerics.Element_Count := 0;
+      Good         : Boolean;
+
+      --  Give back whatever this call borrowed, on every way out.
+      procedure Release_All;
+
+      procedure Release_All is
+      begin
+         for Index in 1 .. Steps.Held loop
+            if Places (Index).Borrowed then
+               Give_Back_Buffer
+                 (Item, Places (Index).Buffer, Places (Index).Memory);
+               Places (Index).Borrowed := False;
+            end if;
+         end loop;
+      end Release_All;
    begin
-      Ok := Steps.Held > 0;
+      Ok := False;
       Cancelled := False;
 
+      if Steps.Held = 0 or else not Is_Ready (Item) then
+         return;
+      end if;
+
+      --  What the whole run needs, and whether it is askable at all. Every
+      --  product reads the same activation, so they must agree about how
+      --  wide it is; they may differ in every other way.
       for Index in 1 .. Steps.Held loop
          declare
             This : Step renames Steps.Items (Index);
 
-            Wanted : constant Model_Runner.Numerics.Element_Count :=
-              Model_Runner.Numerics.Element_Count (This.Rows)
-              * Model_Runner.Numerics.Element_Count (Count);
+            Wide : constant Interfaces.Unsigned_64 :=
+              Row_Bytes (This.Packing, This.Columns);
+
+            Mine : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (This.Rows)
+              * Interfaces.Unsigned_64 (Count) * 4;
          begin
-            --  Refused rather than truncated. A caller who sized the target
-            --  for one product and named two would otherwise get the first
-            --  and no word about the second.
-            if Filled + Wanted - 1 > Target'Last then
-               Ok := False;
+            if This.Rows = 0
+              or else This.Columns /= Steps.Items (1).Columns
+              or else Wide = 0
+              or else This.Rows * This.Columns > Max_Elements
+              or else This.Columns * Count > Max_Elements
+              or else This.Weights = null
+              or else Interfaces.Unsigned_64 (This.Weights.all'Length)
+                        < Interfaces.Unsigned_64 (This.At_Byte)
+                          + Interfaces.Unsigned_64 (This.Rows) * Wide
+            then
                return;
             end if;
 
-            One_Product
-              (Item, This.Weights.all, This.At_Byte, This.Packing,
-               This.Rows, This.Columns, Vectors, Count,
-               Target (Filled .. Filled + Wanted - 1),
-               Ok, Cancelled, This.Key, Cancel);
+            Places (Index).Weight :=
+              Interfaces.Unsigned_64 (This.Rows) * Wide;
+            Places (Index).At_Byte := Result_Bytes;
+            Places (Index).Bytes := Mine;
 
-            --  Each result still comes back to the host before the next
-            --  product is recorded. That is what makes this sequence of
-            --  several exactly as fast as the several calls it replaces,
-            --  and it is the thing the next change removes.
-            exit when not Ok or else Cancelled;
-            Filled := Filled + Wanted;
+            Result_Bytes :=
+              Result_Bytes + (Mine + Alignment - 1) / Alignment * Alignment;
+
+            Wanted := Wanted
+              + Model_Runner.Numerics.Element_Count (This.Rows)
+                * Model_Runner.Numerics.Element_Count (Count);
          end;
       end loop;
+
+      if Vectors'Length
+           < Model_Runner.Numerics.Element_Count (Steps.Items (1).Columns)
+             * Model_Runner.Numerics.Element_Count (Count)
+        or else Target'Length < Wanted
+      then
+         return;
+      end if;
+
+      Item.Clock := Item.Clock + 1;
+
+      --  Every matrix in place before the first dispatch is written down.
+      --  This is the whole point of the arrangement: acquiring a matrix can
+      --  upload it, evict another, or take the host's own memory, and none
+      --  of that may happen between two dispatches that are already
+      --  recorded.
+      for Index in 1 .. Steps.Held loop
+         declare
+            This : Step renames Steps.Items (Index);
+         begin
+            Acquire_Weights
+              (Item, This.Weights.all, This.At_Byte, This.Packing,
+               This.Rows, This.Columns, Places (Index).Weight,
+               Places (Index).Buffer, Places (Index).Memory,
+               Places (Index).Base, Places (Index).Borrowed, Good, This.Key);
+            if not Good then
+               Release_All;
+               return;
+            end if;
+         end;
+      end loop;
+
+      --  The two that change every call, grown when they have to.
+      if Item.Vector_Bytes < Vector_Bytes then
+         Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+         Take (Item, Vector_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
+               Good);
+         if not Good then
+            Release_All;
+            return;
+         end if;
+         Item.Vector_Bytes := Vector_Bytes;
+      end if;
+
+      if Item.Result_Bytes < Result_Bytes then
+         Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+         Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
+               Good);
+         if not Good then
+            Release_All;
+            return;
+         end if;
+         Item.Result_Bytes := Result_Bytes;
+      end if;
+
+      --  The activation goes over once, however many products read it.
+      Write_Into
+        (Item, Item.Vector_Memory, Vector_Bytes,
+         Vectors (Vectors'First
+                  .. Vectors'First
+                     + Model_Runner.Numerics.Element_Count
+                         (Steps.Items (1).Columns)
+                       * Model_Runner.Numerics.Element_Count (Count) - 1),
+         Good);
+      if not Good then
+         Release_All;
+         return;
+      end if;
+
+      --  One set per product, each pointed at its own matrix and its own
+      --  share of the result. A descriptor update is not recorded, so all
+      --  of them are made before anything is.
+      declare
+         Update : constant Update_Sets_Call :=
+           To_Update_Sets (Point ("vkUpdateDescriptorSets"));
+
+         Told  : aliased Buffer_Info_Array;
+         Notes : aliased Write_Array;
+      begin
+         if Update = null then
+            Release_All;
+            return;
+         end if;
+
+         for Index in 1 .. Steps.Held loop
+            Told (1) :=
+              (Buffer => Places (Index).Buffer, Offset => 0,
+               Extent => Places (Index).Base + Places (Index).Weight);
+            Told (2) :=
+              (Buffer => Item.Vector_Buffer, Offset => 0,
+               Extent => Vector_Bytes);
+            Told (3) :=
+              (Buffer => Item.Result_Buffer,
+               Offset => Places (Index).At_Byte,
+               Extent => Places (Index).Bytes);
+
+            for Binding in Told'Range loop
+               Notes (Binding).Target := Item.Sets (Index);
+               Notes (Binding).Binding := C.unsigned (Binding - 1);
+               Notes (Binding).Buffers := Told (Binding)'Address;
+            end loop;
+
+            Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+         end loop;
+      end;
+
+      --  Every product in one command buffer. They read the same activation
+      --  and write disjoint parts of the result, so nothing between them
+      --  waits for anything and no barrier is needed -- what is saved is a
+      --  submission and a fence for each product after the first.
+      declare
+         Reset_Buffer : constant Reset_Buffer_Call :=
+           To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+         Start : constant Begin_Call :=
+           To_Begin (Point ("vkBeginCommandBuffer"));
+         Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+         Bind_Pipeline : constant Bind_Pipeline_Call :=
+           To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
+         Bind_Sets : constant Bind_Sets_Call :=
+           To_Bind_Sets (Point ("vkCmdBindDescriptorSets"));
+         Push : constant Push_Call := To_Push (Point ("vkCmdPushConstants"));
+         Dispatch : constant Dispatch_Call :=
+           To_Dispatch (Point ("vkCmdDispatch"));
+
+         Began : aliased Command_Begin_Info;
+      begin
+         if Reset_Buffer = null or else Start = null or else Stop = null
+           or else Bind_Pipeline = null or else Bind_Sets = null
+           or else Push = null or else Dispatch = null
+         then
+            Release_All;
+            return;
+         end if;
+
+         if Reset_Buffer (Item.Buffer, 0) /= 0
+           or else Start (Item.Buffer, Began'Address) /= 0
+         then
+            Release_All;
+            return;
+         end if;
+
+         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+
+         for Index in 1 .. Steps.Held loop
+            declare
+               This : Step renames Steps.Items (Index);
+
+               Bound : aliased Address := Item.Sets (Index);
+               First : Natural := 0;
+            begin
+               Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
+                          Bound'Address, 0, Null_Handle);
+
+               while First < Count loop
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Columns),
+                        Count   => C.unsigned (Count),
+                        First   => C.unsigned (First),
+                        Packing =>
+                          C.unsigned (Weight_Packing'Pos (This.Packing)),
+                        Base    => C.unsigned (Places (Index).Base));
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Shape_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned ((This.Rows + Group_Size - 1)
+                                    / Group_Size), 1, 1);
+                  end;
+
+                  First := First + Batch_Group;
+               end loop;
+            end;
+         end loop;
+
+         if Stop (Item.Buffer) /= 0 then
+            Release_All;
+            return;
+         end if;
+      end;
+
+      --  Once, for all of them.
+      Submit_And_Wait (Item, Good, Cancelled, Cancel);
+      if not Good then
+         Release_All;
+         return;
+      end if;
+
+      --  And what came out, product by product, out of the one mapping.
+      declare
+         Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
+         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+
+         Where  : aliased Address := Null_Handle;
+         Filled : Model_Runner.Numerics.Element_Count := Target'First;
+      begin
+         if Map (Item.Logical, Item.Result_Memory, 0, Result_Bytes, 0,
+                 Where'Access) /= 0
+         then
+            Release_All;
+            return;
+         end if;
+
+         for Index in 1 .. Steps.Held loop
+            declare
+               Mine : constant Model_Runner.Numerics.Element_Count :=
+                 Model_Runner.Numerics.Element_Count (Steps.Items (Index).Rows)
+                 * Model_Runner.Numerics.Element_Count (Count);
+
+               Slice : Model_Runner.Numerics.Real_Array
+                 (Filled .. Filled + Mine - 1)
+                 with Import,
+                      Address =>
+                        System.Storage_Elements.To_Address
+                          (System.Storage_Elements.To_Integer (Where)
+                           + System.Storage_Elements.Integer_Address
+                               (Places (Index).At_Byte));
+            begin
+               Target (Slice'Range) := Slice;
+               Filled := Filled + Mine;
+            end;
+         end loop;
+
+         Unmap (Item.Logical, Item.Result_Memory);
+      end;
+
+      Release_All;
+      Ok := True;
    end Run;
 
    ---------------

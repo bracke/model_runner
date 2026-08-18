@@ -2208,6 +2208,59 @@ package body Model_Runner.Llama is
       end case;
    end Product;
 
+   --  A layer's queries, keys and values, as one thing where that is worth
+   --  something.
+   --
+   --  The three read the same normalized input and none of them waits for
+   --  another, which a device can be told: one upload of that input, one
+   --  command buffer, one submission, one wait. The processor and the
+   --  reference gain nothing from being told -- their work is the
+   --  arithmetic, not the errand -- so they do what they did, three products
+   --  one after another, and the difference stays inside here rather than
+   --  becoming a shape every backend has to answer for.
+   --
+   --  @param Item Session the layer belongs to.
+   --  @param Queries Matrix for the queries.
+   --  @param Keys Matrix for the keys.
+   --  @param Values Matrix for the values.
+   --  @param Vector The normalized input all three read.
+   --  @param Into_Queries Receives the queries.
+   --  @param Into_Keys Receives the keys.
+   --  @param Into_Values Receives the values.
+   --  @param Status Success, or the first refusal of the three.
+   procedure Product_Three
+     (Item         : Session;
+      Queries      : T.View;
+      Keys         : T.View;
+      Values       : T.View;
+      Vector       : T.Real_Array_Access;
+      Into_Queries : T.Real_Array_Access;
+      Into_Keys    : T.Real_Array_Access;
+      Into_Values  : T.Real_Array_Access;
+      Status       : out E.Error_Info)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+   begin
+      if Item.Owner.Able.Kind = Model_Runner.Backend.Backend_Device then
+         Model_Runner.Backend.Device.Dispatch_Three
+           (Queries, Keys, Values, Vector,
+            Into_Queries, Into_Keys, Into_Values, Status, Item.Stopping);
+         return;
+      end if;
+
+      Product (Item, Queries, Vector, Into_Queries, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Product (Item, Keys, Vector, Into_Keys, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Product (Item, Values, Vector, Into_Values, Status);
+   end Product_Three;
+
    procedure Product_Batch
      (Item    : Session;
       Weight  : T.View;
@@ -4483,14 +4536,9 @@ package body Model_Runner.Llama is
                Item.Post_Room.all := Item.Normalized.all;
             end if;
 
-            Product
-              (Item, Current.Query, Item.Normalized, Item.Query, Status);
-            exit when E.Is_Error (Status);
-            Product
-              (Item, Current.Key, Item.Normalized, Item.Key_Row, Status);
-            exit when E.Is_Error (Status);
-            Product
-              (Item, Current.Value, Item.Normalized, Item.Value_Row,
+            Product_Three
+              (Item, Current.Query, Current.Key, Current.Value,
+               Item.Normalized, Item.Query, Item.Key_Row, Item.Value_Row,
                Status);
             exit when E.Is_Error (Status);
 

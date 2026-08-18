@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A layer's queries, keys and values now reach a device in one submission.**
+  They read the same normalized input and none waits for another, so they are
+  recorded together: one upload, one command buffer, one fence, three
+  dispatches. Seven tokens on TinyLlama-1.1B-Chat Q8_0 went from 0.468 s
+  generating to 0.396 s, and the digest did not move -- which is what three
+  products sent together must produce if they are the same three products.
+  The processor and reference backends do what they did; the difference lives
+  in one subprogram rather than in every backend's interface.
+
+- **A device sequence now runs in one submission.** Every product records
+  into one command buffer against its own descriptor set and its own share of
+  the result buffer, and the engine waits once for all of them. Acquiring the
+  matrices and updating the descriptors moved ahead of recording, because
+  neither can happen between two dispatches already written down. The
+  products read the same activation and write disjoint results, so no barrier
+  stands between them. Nothing in the engine records a sequence yet, so no
+  published figure moves.
+
 - **A descriptor set per step of a device sequence.** A descriptor update is
   not recorded into a command buffer -- it takes effect at submit -- so with
   one set two dispatches recorded together would both read whatever the last

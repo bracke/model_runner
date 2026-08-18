@@ -50,6 +50,16 @@ package body Model_Runner.Backend.Device is
    -- Describe --
    --------------
 
+   --  Somewhere to put three results before they are handed out separately.
+   --
+   --  A sequence fills one array, product after product, because that is
+   --  what one result buffer read back once gives. The three targets a layer
+   --  has are three separate arrays, so the run lands here and is copied out.
+   --  The copy is a few thousand values against two submissions and two
+   --  fence waits saved, which is why it is a copy and not a reason to give
+   --  every product its own buffer.
+   Landing : T.Real_Array_Access := null;
+
    function Describe return Capabilities is
       Result : Capabilities;
    begin
@@ -183,6 +193,7 @@ package body Model_Runner.Backend.Device is
 
    procedure Close is
    begin
+      T.Free (Landing);
       Products.Close (Engine);
       Devices.Close (Opened);
       Devices.Close (Held);
@@ -434,6 +445,131 @@ package body Model_Runner.Backend.Device is
    begin
       Compute (Weight, Vector, 1, Target, Status, Cancel);
    end Dispatch;
+
+   ---------------------
+   -- Dispatch_Three --
+   ---------------------
+
+   procedure Dispatch_Three
+     (First       : T.View;
+      Second      : T.View;
+      Third       : T.View;
+      Vector      : T.Real_Array_Access;
+      Into_First  : T.Real_Array_Access;
+      Into_Second : T.Real_Array_Access;
+      Into_Third  : T.Real_Array_Access;
+      Status      : out E.Error_Info;
+      Cancel      : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Three : constant array (1 .. 3) of T.View := [First, Second, Third];
+      Into  : constant array (1 .. 3) of T.Real_Array_Access :=
+        [Into_First, Into_Second, Into_Third];
+
+      Steps  : Products.Sequence;
+      Wanted : Model_Runner.Numerics.Element_Count := 0;
+      Added  : Boolean;
+      Ok     : Boolean;
+      Cancelled : Boolean := False;
+   begin
+      Status := E.Success;
+
+      if not Ready_Now then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      Products.Open_Sequence (Steps);
+
+      for Index in Three'Range loop
+         declare
+            This : T.View renames Three (Index);
+
+            Packing : Products.Weight_Packing;
+            Known   : Boolean;
+         begin
+            Packing_Of (This, Packing, Known);
+            if not Known then
+               Status := E.Make (E.Backend_Capability_Missing);
+               E.Add_Text
+                 (Status, "capability",
+                  Model_Runner.GGUF.Type_Name (This.Format),
+                  E.Param_Identifier);
+               E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                           E.Param_Identifier);
+               return;
+            end if;
+
+            if This.Data = null
+              or else Vector = null
+              or else Into (Index) = null
+              or else Vector.all'Length < This.Columns
+              or else Into (Index).all'Length < This.Rows
+            then
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               return;
+            end if;
+
+            Products.Add_Product
+              (Steps, This.Data, This.Offset, Packing,
+               Natural (This.Rows), Natural (This.Columns), Added,
+               Key => This.Data.all
+                        (This.Data.all'First + This.Offset)'Address);
+            if not Added then
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               return;
+            end if;
+
+            Wanted := Wanted + This.Rows;
+         end;
+      end loop;
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps, Vector.all, 1,
+         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ok, Cancelled, Cancel);
+
+      --  Asked to stop comes before could not compute, for the reason the
+      --  single product gives: it is the truer answer.
+      if Cancelled then
+         Status := E.Make (E.Generation_Cancelled);
+         return;
+      elsif Products.Is_Stalled (Engine) then
+         Status := E.Make (E.Backend_Device_Stalled);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                     E.Param_Identifier);
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Opened_Patience));
+         return;
+      elsif not Ok then
+         Status := E.Make (E.Backend_Capability_Missing);
+         E.Add_Text (Status, "capability", "matrix_vector",
+                     E.Param_Identifier);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                     E.Param_Identifier);
+         return;
+      end if;
+
+      declare
+         At_Value : Model_Runner.Numerics.Element_Count :=
+           Landing.all'First;
+      begin
+         for Index in Three'Range loop
+            Into (Index).all
+              (Into (Index).all'First
+               .. Into (Index).all'First + Three (Index).Rows - 1) :=
+              Landing.all (At_Value .. At_Value + Three (Index).Rows - 1);
+            At_Value := At_Value + Three (Index).Rows;
+         end loop;
+      end;
+   end Dispatch_Three;
 
    --------------------
    -- Dispatch_Batch --
