@@ -5,6 +5,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The withdrawal of the device speedups is itself withdrawn.** The probes
+  behind it ran against a stale test binary: `tests/bin/tests` links the
+  library statically, and several probes rebuilt only the library. Rebuilt
+  properly they all reverse -- cutting `Evaluate` short fails the run, and a
+  wrong activation unit moves the digest. The path is live and the grouping
+  was running. Re-taken with both crates verified to have built and
+  interleaved, cf13815 reads 0.594 s and bef8293 reads 0.456 s: twenty-three
+  per cent, as first reported.
+
 ### Added
 
 - **A combining kernel for the middle of a gated feed-forward**, and the

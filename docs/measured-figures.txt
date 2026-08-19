@@ -1092,7 +1092,46 @@ reference 23D83AA8148AC827 src/library/model_runner-backend-reference.adb src/li
 # lines are for; the absolute times are not comparable with yesterday's and
 # are not offered as though they were.
 
-# 2026-08-19, a withdrawal. The device speedups this file reported yesterday
+# 2026-08-19, later: the withdrawal below was itself wrong, and the reason is
+# worth more than either claim.
+#
+# The probes that said Llama.Evaluate never runs were run against a stale
+# binary. `tests/bin/tests` links the library statically, so rebuilding the
+# library alone leaves the test tool carrying the old code. Several probes
+# rebuilt only the library. They showed no change because nothing had
+# changed -- not because the path was dead.
+#
+# Rebuilt properly, every probe reverses. Cutting Evaluate short fails the
+# run. A deliberately wrong activation unit moves the digest from
+# 5709b12b0517c8c5 to 8920270451e368f6. The path is live, the gated block does
+# reach the device, and the grouping was running all along.
+#
+# The split that "found the difference in neither half" was void for the same
+# family of reason: the half without the products layer could not have
+# compiled -- backend-device from that revision calls Products.Open_Sequence,
+# which the older products layer does not declare -- so the success it was
+# credited with was misread output, and what ran was again the previous
+# binary.
+#
+# The figure, re-taken with both crates verified to have built, interleaved:
+#
+#   cf13815 (before grouping)  0.594  0.576  0.598
+#   bef8293 (after)            0.451  0.461  0.456
+#
+# Median 0.594 against 0.456: twenty-three per cent, which is what the
+# interleaved run said yesterday before any of this. The speedups stand.
+#
+# What does not stand is the method. A probe that leaves behaviour unchanged
+# proves nothing until the binary under test is known to have been rebuilt,
+# and "seven tokens generated" is not a check that a run succeeded. Both
+# mistakes were made here in one day, and between them they produced a
+# confident retraction of a true result. The rule that follows: build every
+# crate that links what changed, verify the build said so, and prefer a probe
+# that fails loudly to one that merely differs.
+
+# 2026-08-19, a withdrawal -- WHICH IS ITSELF WITHDRAWN; see above. Kept
+# because a wrong conclusion and how it was reached is worth as much as the
+# right one. The device speedups this file reported yesterday
 # -- eighteen per cent for grouping the queries, keys and values, three more
 # for the gated arms, corrected to twenty-three by an interleaved run -- are
 # not supported, and the attribution was wrong. What follows is how that was
