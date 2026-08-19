@@ -19,17 +19,32 @@ with Interfaces;
 --  Task safety: one call at a time; it writes a file.
 package Shader_Generation is
 
-   --  Write the Ada constant for one compiled shader.
+   --  One shader to write out: where its source is and where its compiled
+   --  words are. The Ada name comes from the source's file name, so a shader
+   --  called row_product.comp becomes Row_Product.
+   type Text_Access is access constant String;
+
+   type Shader_Pair is record
+      Source   : Text_Access;
+      Compiled : Text_Access;
+   end record;
+
+   type Shader_Pairs is array (Positive range <>) of Shader_Pair;
+
+   --  Write the Ada constants for a set of compiled shaders.
+   --
+   --  The whole package is written at once rather than a constant at a time,
+   --  because a package half rewritten is a package that names one shader's
+   --  words beside another's digest. Every shader the engine uses has to be
+   --  passed on every call.
    --
    --  @param Root Repository root.
-   --  @param Source Path of the shader source, for its digest.
-   --  @param Compiled Path of the compiled words.
+   --  @param Shaders Sources and compiled words, in the order they appear.
    --  @param Written True when the package was written.
-   procedure Write_Shader
-     (Root     : String;
-      Source   : String;
-      Compiled : String;
-      Written  : out Boolean);
+   procedure Write_Shaders
+     (Root    : String;
+      Shaders : Shader_Pairs;
+      Written : out Boolean);
 
    --  A digest of a shader source, as the generated package records it.
    --

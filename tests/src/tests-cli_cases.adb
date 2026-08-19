@@ -678,6 +678,80 @@ package body Tests.CLI_Cases is
                      Model_Runner.Bytes.Free (Second_Free);
                   end;
 
+                  --  A combining step: a unit on one arm, multiplied by the
+                  --  other, with neither arm leaving the device. Compared
+                  --  against the same arithmetic done here, within a
+                  --  tolerance rather than exactly -- the device computes its
+                  --  exponential in binary32 and the host in binary64, so the
+                  --  two agree to about the width of a binary32 and not
+                  --  further. That is a real difference and the bound says
+                  --  which one it is.
+                  declare
+                     Arms   : N.Real_Array (0 .. N.Element_Count (Rows) - 1);
+                     Second : N.Real_Array (0 .. N.Element_Count (Rows) - 1);
+                     Whole  : N.Real_Array
+                       (0 .. N.Element_Count (Rows) * 3 - 1);
+
+                     Blend : Products.Sequence;
+                     Worst : N.Real := 0.0;
+                  begin
+                     Products.Multiply
+                       (Engine, Held.all, 0, Products.Values_F32, Rows, Cols,
+                        Vector, 1, Arms, Ok, Halted);
+                     Assert (Ok, "a device refused the first arm");
+
+                     Products.Multiply
+                       (Engine, Held.all, Values, Products.Values_F32,
+                        Rows, Cols, Vector, 1, Second, Ok, Halted);
+                     Assert (Ok, "a device refused the second arm");
+
+                     Products.Open_Sequence (Blend);
+                     Products.Add_Product
+                       (Blend, Held, 0, Products.Values_F32, Rows, Cols,
+                        Added);
+                     Products.Add_Product
+                       (Blend, Held, Values, Products.Values_F32, Rows, Cols,
+                        Added);
+                     Assert (Added, "a sequence refused a second arm");
+
+                     Products.Add_Combination (Blend, 0, Added);
+                     Assert (Added, "a sequence refused a combination");
+
+                     Products.Run
+                       (Engine, Blend, Vector, 1, Whole, Ok, Halted);
+                     Assert (Ok, "a device refused a combining sequence");
+
+                     for Row in Arms'Range loop
+                        declare
+                           Gate : constant N.Wide_Real :=
+                             N.Wide_Real (Arms (Row));
+
+                           Wanted : constant N.Real :=
+                             N.Real (Gate / (1.0 + N.Exp (-Gate)))
+                             * Second (Row);
+
+                           Got : constant N.Real :=
+                             Whole (Row + N.Element_Count (Rows) * 2);
+                        begin
+                           Worst := N.Real'Max (Worst, abs (Got - Wanted));
+                        end;
+                     end loop;
+
+                     Assert (Worst < 1.0E-5,
+                             "a device and the processor disagree about a"
+                             & " gated combination by" & N.Real'Image (Worst));
+
+                     --  Two steps are needed to combine, and their rows have
+                     --  to match.
+                     Products.Open_Sequence (Blend);
+                     Products.Add_Product
+                       (Blend, Held, 0, Products.Values_F32, Rows, Cols,
+                        Added);
+                     Products.Add_Combination (Blend, 0, Added);
+                     Assert (not Added,
+                             "a sequence combined with one step behind it");
+                  end;
+
                   --  A target too small is refused rather than filled as
                   --  far as it goes, which would hand back one product of
                   --  two and say nothing.
@@ -791,6 +865,106 @@ package body Tests.CLI_Cases is
                               & N.Element_Count'Image (Row));
                         end loop;
                      end loop;
+
+                     --  And the gated block whole: two arms, the unit and
+                     --  the multiply, and the projection that reads the
+                     --  result, none of the middle coming back. Against the
+                     --  same thing done a step at a time, within a tolerance
+                     --  -- the unit runs in binary32 on the device and in
+                     --  binary64 here.
+                     declare
+                        Square : constant Model_Runner.Bytes.Byte_Count :=
+                          Model_Runner.Bytes.Byte_Count (Rows * Rows * 4);
+
+                        Down_Held :
+                          constant Model_Runner.Bytes.Byte_Array_Access :=
+                            new Model_Runner.Bytes.Byte_Array (1 .. Square);
+                        Down_Free : Model_Runner.Bytes.Byte_Array_Access :=
+                          Down_Held;
+
+                        Down_View : Model_Runner.Tensors.View;
+
+                        Middle : constant
+                          Model_Runner.Tensors.Real_Array_Access :=
+                            new N.Real_Array
+                                  (0 .. N.Element_Count (Rows) - 1);
+                        By_Hand : constant
+                          Model_Runner.Tensors.Real_Array_Access :=
+                            new N.Real_Array
+                                  (0 .. N.Element_Count (Rows) - 1);
+                        Whole : constant
+                          Model_Runner.Tensors.Real_Array_Access :=
+                            new N.Real_Array
+                                  (0 .. N.Element_Count (Rows) - 1);
+
+                        Worst : N.Real := 0.0;
+                     begin
+                        for Which in 0 .. Rows * Rows - 1 loop
+                           declare
+                              Value : constant N.Real :=
+                                1.0 / N.Real (13 + Which mod 19) - 0.023;
+                              Bits : Interfaces.Unsigned_32;
+                              for Bits'Address use Value'Address;
+                              pragma Import (Ada, Bits);
+                           begin
+                              for Byte in 0 .. 3 loop
+                                 Down_Held
+                                   (Down_Held'First
+                                    + Model_Runner.Bytes.Byte_Count
+                                        (Which * 4 + Byte)) :=
+                                   Model_Runner.Bytes.Byte
+                                     (Interfaces.Shift_Right
+                                        (Bits, Byte * 8) and 16#FF#);
+                              end loop;
+                           end;
+                        end loop;
+
+                        Down_View :=
+                          (Format  => Model_Runner.GGUF.Type_F32,
+                           Rows    => N.Element_Count (Rows),
+                           Columns => N.Element_Count (Rows),
+                           Data    => Down_Held,
+                           Offset  => 0,
+                           others  => <>);
+
+                        --  A step at a time: the two arms are already in
+                        --  Apart, so this is the unit, the multiply, and the
+                        --  projection that reads what they make.
+                        for Row in Middle.all'Range loop
+                           declare
+                              Gate : constant N.Wide_Real :=
+                                N.Wide_Real (Apart (1).all (Row));
+                           begin
+                              Middle.all (Row) :=
+                                N.Real (Gate / (1.0 + N.Exp (-Gate)))
+                                * Apart (2).all (Row);
+                           end;
+                        end loop;
+
+                        Model_Runner.Backend.Device.Dispatch
+                          (Down_View, Middle, By_Hand, Why);
+                        Assert (not Model_Runner.Errors.Is_Error (Why),
+                                "a device refused a projection down");
+
+                        Model_Runner.Backend.Device.Dispatch_Gated
+                          (Views (1), Views (2), Down_View, Vector, 0,
+                           Whole, Why);
+                        Assert (not Model_Runner.Errors.Is_Error (Why),
+                                "a device refused a gated block");
+
+                        for Row in Whole.all'Range loop
+                           Worst := N.Real'Max
+                             (Worst,
+                              abs (Whole.all (Row) - By_Hand.all (Row)));
+                        end loop;
+
+                        Assert (Worst < 1.0E-4,
+                                "a gated block sent whole disagrees with the"
+                                & " same block sent a step at a time by"
+                                & N.Real'Image (Worst));
+
+                        Model_Runner.Bytes.Free (Down_Free);
+                     end;
 
                      Model_Runner.Backend.Device.Close;
                      Checked := Checked + 1;

@@ -192,6 +192,37 @@ package Model_Runner.Backend.Device is
       Status  : out Model_Runner.Errors.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null);
 
+   --  A gated feed-forward block, whole, in one submission.
+   --
+   --  The gate and up projections read the same normalized input; a unit is
+   --  put on the first and multiplied by the second; the down projection
+   --  reads that. Sent this way, neither arm nor the combined value ever
+   --  leaves the device -- only what the down projection produced comes back.
+   --  Sent as separate calls it is two submissions and four arrays crossing
+   --  the interface.
+   --
+   --  Only for the gated arrangement. An architecture with one arm and no
+   --  gate has nothing to combine and uses the ordinary dispatch.
+   --
+   --  @param Gate Matrix for the gate arm.
+   --  @param Up Matrix for the other arm.
+   --  @param Down Matrix the combined value is read by.
+   --  @param Vector The normalized input both arms read.
+   --  @param Unit Which unit the gate arm takes: zero for the
+   --    sigmoid-weighted one, one for the Gaussian one.
+   --  @param Into Receives what the down projection produced.
+   --  @param Status Success, or why not.
+   --  @param Cancel Token a caller may set to ask for a stop.
+   procedure Dispatch_Gated
+     (Gate   : Model_Runner.Tensors.View;
+      Up     : Model_Runner.Tensors.View;
+      Down   : Model_Runner.Tensors.View;
+      Vector : Model_Runner.Tensors.Real_Array_Access;
+      Unit   : Natural;
+      Into   : Model_Runner.Tensors.Real_Array_Access;
+      Status : out Model_Runner.Errors.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null);
+
    --  The same product for each vector of a batch.
    --
    --  A batch of one is what the evaluator hands a backend that says it does

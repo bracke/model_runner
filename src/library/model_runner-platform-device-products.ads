@@ -330,6 +330,30 @@ package Model_Runner.Platform.Device.Products is
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address);
 
+   --  Name a step that combines the two results before it.
+   --
+   --  The middle of a gated feed-forward: a unit on the first arm, multiplied
+   --  elementwise by the second. On its own this is nothing -- a few thousand
+   --  multiplications beside matrix products of millions -- and it is here for
+   --  what it lets stand around it. With the combining on the device, the
+   --  projection that reads the combined value can be chained to it, so a
+   --  gated block's three matrices reach the device in one submission rather
+   --  than two, and neither arm ever comes back.
+   --
+   --  The two steps before this must have the same row count, since they are
+   --  combined elementwise. A sequence with fewer than two steps behind it
+   --  has nothing to combine and is refused.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Unit Which unit to apply to the first arm: zero for the
+   --    sigmoid-weighted one, one for the Gaussian one in its tanh form.
+   --  @param Added False when the sequence is full, when there are not two
+   --    steps to combine, or when their rows do not match.
+   procedure Add_Combination
+     (Steps : in out Sequence;
+      Unit  : Natural;
+      Added : out Boolean);
+
    --  Perform every product a sequence holds, in the order they were named.
    --
    --  An unchained product reads the activation given here; a chained one
@@ -501,9 +525,16 @@ private
 
       --  Made once, in this order, and released in the reverse of it.
       Shader     : System.Address := System.Null_Address;
+
+      --  The second kernel: the middle of a gated feed-forward. It takes the
+      --  same descriptor layout and the same push constants as the first --
+      --  three storage buffers and a block of six words -- so it shares the
+      --  pipeline layout and needs only its own module and pipeline.
+      Blender    : System.Address := System.Null_Address;
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
+      Blend_Line : System.Address := System.Null_Address;
       Pool       : System.Address := System.Null_Address;
       Descriptor : System.Address := System.Null_Address;
 
@@ -582,6 +613,13 @@ private
       --  Whether this reads what the product before it wrote, rather than
       --  the activation the caller supplied.
       Chained : Boolean := False;
+
+      --  A combining step rather than a product: it takes the two results
+      --  before it, puts a unit on the first and multiplies by the second.
+      Blends  : Boolean := False;
+
+      --  Which unit a combining step applies. Meaningless otherwise.
+      Unit    : Natural := 0;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

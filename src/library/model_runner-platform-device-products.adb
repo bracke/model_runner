@@ -911,6 +911,31 @@ package body Model_Runner.Platform.Device.Products is
          Item.Shader := Made;
       end;
 
+      --  The second kernel's module.
+      declare
+         Create : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
+         Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+           Model_Runner.Shaders.Combine;
+         Request : aliased Shader_Create_Info;
+      begin
+         if Create = null then
+            Close (Item);
+            return;
+         end if;
+
+         Request.Size := Interfaces.C.size_t (Words'Length * 4);
+         Request.Code := Words'Address;
+
+         if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
+            /= 0
+         then
+            Close (Item);
+            return;
+         end if;
+
+         Item.Blender := Made;
+      end;
+
       --  Three storage buffers, and what a set of them looks like.
       declare
          Create : constant Create_Call :=
@@ -996,6 +1021,36 @@ package body Model_Runner.Platform.Device.Products is
 
          C.Strings.Free (Name);
          Item.Pipeline := Made;
+      end;
+
+      --  And the second kernel's pipeline, against the same layout.
+      declare
+         Create : constant Create_Pipelines_Call :=
+           To_Create_Pipelines (Point ("vkCreateComputePipelines"));
+
+         Name    : C.Strings.chars_ptr := C.Strings.New_String ("main");
+         Request : aliased Compute_Pipeline_Info;
+      begin
+         if Create = null then
+            C.Strings.Free (Name);
+            Close (Item);
+            return;
+         end if;
+
+         Request.Stage.Module := Item.Blender;
+         Request.Stage.Name := Name;
+         Request.Layout := Item.Layout;
+
+         if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                    Null_Handle, Made'Access) /= 0
+         then
+            C.Strings.Free (Name);
+            Close (Item);
+            return;
+         end if;
+
+         C.Strings.Free (Name);
+         Item.Blend_Line := Made;
       end;
 
       --  Somewhere to keep one set of descriptors, and the set itself.
@@ -1233,9 +1288,11 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Commands, "vkDestroyCommandPool");
       Item.Descriptor := Null_Handle;
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
+      Give_Back (Item.Blend_Line, "vkDestroyPipeline");
       Give_Back (Item.Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Layout, "vkDestroyPipelineLayout");
       Give_Back (Item.Set_Layout, "vkDestroyDescriptorSetLayout");
+      Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
 
       Item.Logical := Null_Handle;
@@ -2069,7 +2126,8 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Held := Steps.Held + 1;
       Steps.Items (Steps.Held) :=
         (Weights => Weights, At_Byte => At_Byte, Packing => Packing,
-         Rows => Rows, Columns => Columns, Key => Key, Chained => False);
+         Rows => Rows, Columns => Columns, Key => Key, Chained => False,
+         Blends => False, Unit => 0);
       Added := True;
    end Add_Product;
 
@@ -2105,9 +2163,38 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Held := Steps.Held + 1;
       Steps.Items (Steps.Held) :=
         (Weights => Weights, At_Byte => At_Byte, Packing => Packing,
-         Rows => Rows, Columns => Columns, Key => Key, Chained => True);
+         Rows => Rows, Columns => Columns, Key => Key, Chained => True,
+         Blends => False, Unit => 0);
       Added := True;
    end Add_Chained_Product;
+
+   ---------------------
+   -- Add_Combination --
+   ---------------------
+
+   procedure Add_Combination
+     (Steps : in out Sequence;
+      Unit  : Natural;
+      Added : out Boolean) is
+   begin
+      if Steps.Held < 2
+        or else Steps.Held = Sequence_Limit
+        or else Steps.Items (Steps.Held).Rows
+                  /= Steps.Items (Steps.Held - 1).Rows
+      then
+         Added := False;
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Weights => null, At_Byte => 0, Packing => Weight_Packing'First,
+         Rows => Steps.Items (Steps.Held - 1).Rows,
+         Columns => Steps.Items (Steps.Held - 1).Rows,
+         Key => System.Null_Address, Chained => True,
+         Blends => True, Unit => Unit);
+      Added := True;
+   end Add_Combination;
 
    ---------
    -- Run --
@@ -2191,7 +2278,20 @@ package body Model_Runner.Platform.Device.Products is
               Interfaces.Unsigned_64 (This.Rows)
               * Interfaces.Unsigned_64 (Count) * 4;
          begin
-            if This.Rows = 0
+            --  A combining step carries no matrix: it reads the two
+            --  results before it and writes its own. Everything the shape
+            --  checks below say about a matrix is beside the point for it.
+            if This.Blends then
+               if This.Rows = 0
+                 or else Index < 3
+                 or else Steps.Items (Index - 1).Rows /= This.Rows
+                 or else Steps.Items (Index - 2).Rows /= This.Rows
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight := 0;
+            elsif This.Rows = 0
               or else (not This.Chained
                        and then This.Columns /= Steps.Items (1).Columns)
               or else (This.Chained
@@ -2205,10 +2305,10 @@ package body Model_Runner.Platform.Device.Products is
                           + Interfaces.Unsigned_64 (This.Rows) * Wide
             then
                return;
+            else
+               Places (Index).Weight :=
+                 Interfaces.Unsigned_64 (This.Rows) * Wide;
             end if;
-
-            Places (Index).Weight :=
-              Interfaces.Unsigned_64 (This.Rows) * Wide;
             Places (Index).At_Byte := Result_Bytes;
             Places (Index).Bytes := Mine;
 
@@ -2240,6 +2340,10 @@ package body Model_Runner.Platform.Device.Products is
          declare
             This : Step renames Steps.Items (Index);
          begin
+            if This.Blends then
+               goto Next_Step;
+            end if;
+
             Acquire_Weights
               (Item, This.Weights.all, This.At_Byte, This.Packing,
                This.Rows, This.Columns, Places (Index).Weight,
@@ -2250,6 +2354,8 @@ package body Model_Runner.Platform.Device.Products is
                return;
             end if;
          end;
+
+         <<Next_Step>>
       end loop;
 
       --  The two that change every call, grown when they have to.
@@ -2305,6 +2411,32 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          for Index in 1 .. Steps.Held loop
+            if Steps.Items (Index).Blends then
+               --  Two arms in, its own room out. Both arms are results that
+               --  never left the device.
+               Told (1) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index - 2).At_Byte,
+                  Extent => Places (Index - 2).Bytes);
+               Told (2) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index - 1).At_Byte,
+                  Extent => Places (Index - 1).Bytes);
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
             Told (1) :=
               (Buffer => Places (Index).Buffer, Offset => 0,
                Extent => Places (Index).Base + Places (Index).Weight);
@@ -2333,6 +2465,8 @@ package body Model_Runner.Platform.Device.Products is
             end loop;
 
             Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+
+            <<Next_Set>>
          end loop;
       end;
 
@@ -2416,6 +2550,32 @@ package body Model_Runner.Platform.Device.Products is
                Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                           Bound'Address, 0, Null_Handle);
 
+               if This.Blends then
+                  --  The other kernel, and back again afterwards. Bound per
+                  --  step rather than once, because a sequence may go back
+                  --  and forth between the two.
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Blend_Line);
+
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Unit),
+                        others  => 0);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Shape_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned ((This.Rows + Group_Size - 1)
+                                    / Group_Size), 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+                  goto Next_Dispatch;
+               end if;
+
                while First < Count loop
                   declare
                      Shape : aliased Shape_Constants :=
@@ -2437,6 +2597,8 @@ package body Model_Runner.Platform.Device.Products is
 
                   First := First + Batch_Group;
                end loop;
+
+               <<Next_Dispatch>>
             end;
          end loop;
 

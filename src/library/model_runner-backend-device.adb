@@ -579,6 +579,143 @@ package body Model_Runner.Backend.Device is
    end Dispatch_Group;
 
    --------------------
+   -- Dispatch_Gated --
+   --------------------
+
+   procedure Dispatch_Gated
+     (Gate   : T.View;
+      Up     : T.View;
+      Down   : T.View;
+      Vector : T.Real_Array_Access;
+      Unit   : Natural;
+      Into   : T.Real_Array_Access;
+      Status : out E.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Arms : constant array (1 .. 3) of T.View := [Gate, Up, Down];
+
+      Steps  : Products.Sequence;
+      Wanted : Model_Runner.Numerics.Element_Count := 0;
+      Added  : Boolean;
+      Ok     : Boolean;
+      Cancelled : Boolean := False;
+   begin
+      Status := E.Success;
+
+      if not Ready_Now then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      if Vector = null or else Into = null
+        or else Vector.all'Length < Gate.Columns
+        or else Into.all'Length < Down.Rows
+      then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
+      Products.Open_Sequence (Steps);
+
+      for Index in Arms'Range loop
+         declare
+            This : T.View renames Arms (Index);
+
+            Packing : Products.Weight_Packing;
+            Known   : Boolean;
+         begin
+            Packing_Of (This, Packing, Known);
+            if not Known then
+               Status := E.Make (E.Backend_Capability_Missing);
+               E.Add_Text
+                 (Status, "capability",
+                  Model_Runner.GGUF.Type_Name (This.Format),
+                  E.Param_Identifier);
+               E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                           E.Param_Identifier);
+               return;
+            end if;
+
+            if This.Data = null then
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               return;
+            end if;
+
+            --  The two arms read the supplied activation; the down
+            --  projection reads what the combining step wrote, which is the
+            --  whole point of sending them together.
+            if Index = 3 then
+               Products.Add_Combination (Steps, Unit, Added);
+               if not Added then
+                  Status := E.Make (E.Tensor_Shape_Mismatch);
+                  return;
+               end if;
+
+               Wanted := Wanted + Gate.Rows;
+
+               Products.Add_Chained_Product
+                 (Steps, This.Data, This.Offset, Packing,
+                  Natural (This.Rows), Natural (This.Columns), Added,
+                  Key => This.Data.all
+                           (This.Data.all'First + This.Offset)'Address);
+            else
+               Products.Add_Product
+                 (Steps, This.Data, This.Offset, Packing,
+                  Natural (This.Rows), Natural (This.Columns), Added,
+                  Key => This.Data.all
+                           (This.Data.all'First + This.Offset)'Address);
+            end if;
+
+            if not Added then
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               return;
+            end if;
+
+            Wanted := Wanted + This.Rows;
+         end;
+      end loop;
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps, Vector.all, 1,
+         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ok, Cancelled, Cancel);
+
+      if Cancelled then
+         Status := E.Make (E.Generation_Cancelled);
+         return;
+      elsif Products.Is_Stalled (Engine) then
+         Status := E.Make (E.Backend_Device_Stalled);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                     E.Param_Identifier);
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Opened_Patience));
+         return;
+      elsif not Ok then
+         Status := E.Make (E.Backend_Capability_Missing);
+         E.Add_Text (Status, "capability", "matrix_vector",
+                     E.Param_Identifier);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                     E.Param_Identifier);
+         return;
+      end if;
+
+      --  Only the last of the four is wanted here. The arms and the combined
+      --  value are the device's business and stay there.
+      Into.all (Into.all'First .. Into.all'First + Down.Rows - 1) :=
+        Landing.all
+          (Landing.all'First + Wanted - Down.Rows
+           .. Landing.all'First + Wanted - 1);
+   end Dispatch_Gated;
+
+   --------------------
    -- Dispatch_Batch --
    --------------------
 

@@ -951,21 +951,45 @@ begin
       --  device. Compiling is not done here: it needs a shader compiler,
       --  which is not a build dependency of this project.
       declare
+         --  Pairs follow the command word, and a root may follow them. With
+         --  no root the count is odd, with one it is even, and the pair
+         --  count falls out of which.
+         Rooted : constant Boolean :=
+           Ada.Command_Line.Argument_Count mod 2 = 0;
+
          Root : constant String :=
-           (if Ada.Command_Line.Argument_Count >= 4
-            then Ada.Command_Line.Argument (4)
+           (if Rooted
+            then Ada.Command_Line.Argument (Ada.Command_Line.Argument_Count)
             else "..");
          Written : Boolean;
       begin
          if Ada.Command_Line.Argument_Count < 3 then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
-               "usage: tests shader SOURCE.comp COMPILED.spv [ROOT]");
+               "usage: tests shader SOURCE.comp COMPILED.spv"
+               & " [SOURCE.comp COMPILED.spv ...] [ROOT]");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          else
-            Shader_Generation.Write_Shader
-              (Root, Ada.Command_Line.Argument (2),
-               Ada.Command_Line.Argument (3), Written);
+            declare
+               --  Every shader on every call: the package is written whole,
+               --  and one written from half the shaders would name one's
+               --  words beside another's digest.
+               Pairs : Shader_Generation.Shader_Pairs
+                 (1 .. (if Rooted
+                        then (Ada.Command_Line.Argument_Count - 2) / 2
+                        else (Ada.Command_Line.Argument_Count - 1) / 2));
+            begin
+               for Index in Pairs'Range loop
+                  Pairs (Index) :=
+                    (Source =>
+                       new String'(Ada.Command_Line.Argument (Index * 2)),
+                     Compiled =>
+                       new String'
+                         (Ada.Command_Line.Argument (Index * 2 + 1)));
+               end loop;
+
+               Shader_Generation.Write_Shaders (Root, Pairs, Written);
+            end;
 
             if Written then
                Ada.Text_IO.Put_Line

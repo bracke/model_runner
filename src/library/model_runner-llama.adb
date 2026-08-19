@@ -1103,6 +1103,16 @@ package body Model_Runner.Llama is
    --  produces fluent wrong text rather than anything that looks broken,
    --  which is why this is decided from the architecture rather than left
    --  to a default.
+   --  Which unit a gated block puts on its gate arm, as a number a device
+   --  can be given. Beside Gate_Activation rather than anywhere else, so the
+   --  two cannot come to disagree about which architecture takes which.
+   --
+   --  @param Item Model whose architecture decides.
+   --  @return Zero for the sigmoid-weighted unit, one for the Gaussian one.
+   function Gate_Unit (Item : Model'Class) return Natural
+   is (if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2
+       then 1 else 0);
+
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
    is
    begin
@@ -4512,6 +4522,11 @@ package body Model_Runner.Llama is
             V_Base  : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * V_Width;
             V_Slot  : constant Element_Count := V_Base + Reserved * V_Width;
+
+            --  Set when a device took the whole gated feed-forward, its
+            --  projection down included, so that the common tail does not
+            --  project it a second time.
+            Whole_Block : Boolean := False;
          begin
             --  Attention block.
             Normalize
@@ -4704,21 +4719,36 @@ package body Model_Runner.Llama is
 
                   Gate_Activation (Source, Item.Gate.all);
                else
-                  --  The gate and the up projection read the same
-                  --  normalized input and neither waits for the other, so
-                  --  they go together where a backend can use that.
-                  Product_Group
-                    (Item, [Current.Gate, Current.Up], Item.Normalized,
-                     [Item.Gate, Item.Up], Status);
-                  exit when E.Is_Error (Status);
+                  --  A device takes the whole block: both arms, the unit
+                  --  and the multiply, and the projection that reads the
+                  --  result, without any of the middle coming back. Every
+                  --  other backend does what it did.
+                  if Model_Runner.Backend."=" (Item.Owner.Able.Kind,
+                                               Model_Runner.Backend
+                                                 .Backend_Device)
+                  then
+                     Model_Runner.Backend.Device.Dispatch_Gated
+                       (Current.Gate, Current.Up, Current.Down,
+                        Item.Normalized, Gate_Unit (Source),
+                        Item.Normalized, Status, Item.Stopping);
+                     exit when E.Is_Error (Status);
+                     Whole_Block := True;
+                  else
+                     Product_Group
+                       (Item, [Current.Gate, Current.Up], Item.Normalized,
+                        [Item.Gate, Item.Up], Status);
+                     exit when E.Is_Error (Status);
 
-                  Gate_Activation (Source, Item.Gate.all);
-                  K.Multiply (Item.Gate.all, Item.Up.all);
+                     Gate_Activation (Source, Item.Gate.all);
+                     K.Multiply (Item.Gate.all, Item.Up.all);
+                  end if;
                end if;
 
-               Product
-                 (Item, Current.Down, Item.Gate, Item.Normalized, Status);
-               exit when E.Is_Error (Status);
+               if not Whole_Block then
+                  Product
+                    (Item, Current.Down, Item.Gate, Item.Normalized, Status);
+                  exit when E.Is_Error (Status);
+               end if;
 
                if Current.Down_Bias /= null then
                   K.Add (Item.Normalized.all, Current.Down_Bias.all);

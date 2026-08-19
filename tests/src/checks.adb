@@ -5285,6 +5285,29 @@ package body Checks is
                   & "src/shaders/row_product.comp OUT.spv' again");
          end if;
       end;
+
+      --  And the second shader, asked the same way. Every shader the engine
+      --  carries needs its own question here: one asked and one not is a
+      --  shader that may go stale unwatched, which is the whole of what this
+      --  check exists to prevent.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/combine.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/combine.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Combine_Digest then
+            Fail ("src/shaders/combine.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
       declare
          Record_Path : constant String := "docs/measured-figures.txt";
          Listing     : constant String := Contents (Record_Path);

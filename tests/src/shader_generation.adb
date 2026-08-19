@@ -93,35 +93,151 @@ package body Shader_Generation is
    -- Write_Shader --
    -------------------
 
-   procedure Write_Shader
-     (Root     : String;
-      Source   : String;
-      Compiled : String;
-      Written  : out Boolean)
+   --  The Ada name a shader source carries: its file name without the
+   --  directory or the extension, in title case with underscores kept.
+   --  row_product.comp becomes Row_Product.
+   function Ada_Name (Path : String) return String is
+      First : Natural := Path'First;
+      Last  : Natural := Path'Last;
+   begin
+      for Index in reverse Path'Range loop
+         if Path (Index) = '/' then
+            First := Index + 1;
+            exit;
+         end if;
+      end loop;
+
+      for Index in reverse First .. Path'Last loop
+         if Path (Index) = '.' then
+            Last := Index - 1;
+            exit;
+         end if;
+      end loop;
+
+      declare
+         Kept  : String := Path (First .. Last);
+         Start : Boolean := True;
+      begin
+         for Index in Kept'Range loop
+            if Start and then Kept (Index) in 'a' .. 'z' then
+               Kept (Index) :=
+                 Character'Val (Character'Pos (Kept (Index)) - 32);
+            end if;
+            Start := Kept (Index) = '_';
+         end loop;
+         return Kept;
+      end;
+   end Ada_Name;
+
+   procedure Write_Shaders
+     (Root    : String;
+      Shaders : Shader_Pairs;
+      Written : out Boolean)
    is
       use Ada.Streams;
-
-      Room : Stream_Element_Array (1 .. 1_000_000);
-      Last : Stream_Element_Offset;
-      Read : Boolean;
-
-      Digest : Interfaces.Unsigned_64;
-      Marked : Boolean;
 
       Target : constant String :=
         Root & "/src/library/model_runner-shaders.ads";
 
       Handle : Ada.Text_IO.File_Type;
+
+      --  Write one shader's digest and words.
+      procedure Emit (Pair : Shader_Pair; Ok : out Boolean);
+
+      procedure Emit (Pair : Shader_Pair; Ok : out Boolean) is
+         Room : Stream_Element_Array (1 .. 1_000_000);
+         Last : Stream_Element_Offset;
+         Read : Boolean;
+
+         Digest : Interfaces.Unsigned_64;
+         Marked : Boolean;
+
+         Name : constant String := Ada_Name (Pair.Source.all);
+      begin
+         Ok := False;
+
+         Read_All (Pair.Compiled.all, Room, Last, Read);
+         if not Read or else Last = 0 or else Last mod 4 /= 0 then
+            return;
+         end if;
+
+         Digest := Source_Digest (Pair.Source.all, Marked);
+         if not Marked then
+            return;
+         end if;
+
+         Ada.Text_IO.Put_Line
+           (Handle, "   --  Digest of " & Pair.Source.all & " when these");
+         Ada.Text_IO.Put_Line (Handle, "   --  words were made from it.");
+         Ada.Text_IO.Put_Line
+           (Handle,
+            "   " & Name & "_Digest : constant Interfaces.Unsigned_64 :=");
+         Ada.Text_IO.Put_Line
+           (Handle, "     16#" & Hex (Digest) & "#;");
+         Ada.Text_IO.New_Line (Handle);
+         Ada.Text_IO.Put_Line
+           (Handle, "   --  The compiled words, as the device is given them.");
+         Ada.Text_IO.Put_Line
+           (Handle, "   " & Name & " : constant Word_Array :=");
+
+         declare
+            Words : constant Stream_Element_Offset := Last / 4;
+            Column : Natural := 0;
+         begin
+            Ada.Text_IO.Put (Handle, "     [");
+
+            for Index in 1 .. Words loop
+               declare
+                  At_Byte : constant Stream_Element_Offset :=
+                    (Index - 1) * 4 + 1;
+
+                  Value : constant Interfaces.Unsigned_32 :=
+                    Interfaces.Unsigned_32 (Room (At_Byte))
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Room (At_Byte + 1)), 8)
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Room (At_Byte + 2)), 16)
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Room (At_Byte + 3)), 24);
+
+                  Text : constant String := "16#" & Hex (Value) & "#";
+               begin
+                  if Column = 0 and then Index > 1 then
+                     Ada.Text_IO.Put_Line (Handle, "");
+                     Ada.Text_IO.Put (Handle, "      ");
+                  end if;
+
+                  Ada.Text_IO.Put (Handle, Text);
+
+                  --  The separator goes before the next word rather than
+                  --  after this one when the line ends here, because a comma
+                  --  and a space at the end of a line is a trailing space,
+                  --  and the gate refuses a build that leaves style warnings
+                  --  behind.
+                  Column := Column + 1;
+                  if Column = 5 then
+                     Column := 0;
+                  end if;
+
+                  if Index < Words and then Column /= 0 then
+                     Ada.Text_IO.Put (Handle, ", ");
+                  elsif Index < Words then
+                     Ada.Text_IO.Put (Handle, ",");
+                  end if;
+               end;
+            end loop;
+
+            Ada.Text_IO.Put_Line (Handle, "];");
+         end;
+
+         Ok := True;
+      end Emit;
+
+      Good : Boolean;
    begin
       Written := False;
 
-      Read_All (Compiled, Room, Last, Read);
-      if not Read or else Last = 0 or else Last mod 4 /= 0 then
-         return;
-      end if;
-
-      Digest := Source_Digest (Source, Marked);
-      if not Marked then
+      if Shaders'Length = 0 then
          return;
       end if;
 
@@ -129,108 +245,36 @@ package body Shader_Generation is
 
       Ada.Text_IO.Put_Line (Handle, "with Interfaces;");
       Ada.Text_IO.New_Line (Handle);
-      Ada.Text_IO.Put_Line
-        (Handle, "--  Compiled shaders, as the words a device is given.");
+      Ada.Text_IO.Put_Line (Handle, "--  Compiled shaders, as the words a device is given.");
       Ada.Text_IO.Put_Line (Handle, "--");
-      Ada.Text_IO.Put_Line
-        (Handle,
-         "--  Generated by `tests shader` from the sources under");
-      Ada.Text_IO.Put_Line
-        (Handle,
-         "--  src/shaders. Do not edit: edit the shader, compile it, and");
-      Ada.Text_IO.Put_Line
-        (Handle, "--  run the tool again.");
+      Ada.Text_IO.Put_Line (Handle, "--  Generated by `tests shader` from the sources under");
+      Ada.Text_IO.Put_Line (Handle, "--  src/shaders. Do not edit: edit the shader, compile it, and");
+      Ada.Text_IO.Put_Line (Handle, "--  run the tool again with every shader named.");
       Ada.Text_IO.Put_Line (Handle, "--");
-      Ada.Text_IO.Put_Line
-        (Handle,
-         "--  The digest below is of the shader source these words were");
-      Ada.Text_IO.Put_Line
-        (Handle,
-         "--  compiled from. The release checklist compares it against the");
-      Ada.Text_IO.Put_Line
-        (Handle,
-         "--  source in the tree, so a shader that has been edited and not");
-      Ada.Text_IO.Put_Line
-        (Handle, "--  recompiled is caught rather than quietly stale.");
+      Ada.Text_IO.Put_Line (Handle, "--  The digest below each name is of the shader source those");
+      Ada.Text_IO.Put_Line (Handle, "--  words were compiled from. The release checklist compares it");
+      Ada.Text_IO.Put_Line (Handle, "--  against the source in the tree, so a shader that has been");
+      Ada.Text_IO.Put_Line (Handle, "--  edited and not recompiled is caught rather than quietly");
+      Ada.Text_IO.Put_Line (Handle, "--  stale.");
       Ada.Text_IO.Put_Line (Handle, "--");
-      Ada.Text_IO.Put_Line
-        (Handle, "--  Task safety: constants, readable from any task.");
+      Ada.Text_IO.Put_Line (Handle, "--  Task safety: constants, readable from any task.");
       Ada.Text_IO.Put_Line (Handle, "package Model_Runner.Shaders is");
       Ada.Text_IO.New_Line (Handle);
-      Ada.Text_IO.Put_Line
-        (Handle, "   type Word_Array is array (Positive range <>) of");
+      Ada.Text_IO.Put_Line (Handle, "   type Word_Array is array (Positive range <>) of");
       Ada.Text_IO.Put_Line (Handle, "     Interfaces.Unsigned_32;");
       Ada.Text_IO.New_Line (Handle);
-      Ada.Text_IO.Put_Line
-        (Handle, "   --  Digest of src/shaders/row_product.comp when these");
-      Ada.Text_IO.Put_Line (Handle, "   --  words were made from it.");
-      Ada.Text_IO.Put_Line
-        (Handle,
-         "   Row_Product_Digest : constant Interfaces.Unsigned_64 :=");
-      Ada.Text_IO.Put_Line
-        (Handle, "     16#" & Hex (Digest) & "#;");
-      Ada.Text_IO.New_Line (Handle);
-      Ada.Text_IO.Put_Line
-        (Handle,
-         "   --  One row of a matrix against one vector, per invocation.");
-      Ada.Text_IO.Put_Line
-        (Handle, "   Row_Product : constant Word_Array :=");
 
-      declare
-         Words : constant Stream_Element_Offset := Last / 4;
-         Column : Natural := 0;
-      begin
-         Ada.Text_IO.Put (Handle, "     [");
+      for Index in Shaders'Range loop
+         Emit (Shaders (Index), Good);
+         if not Good then
+            Ada.Text_IO.Close (Handle);
+            return;
+         end if;
 
-         for Index in 1 .. Words loop
-            declare
-               At_Byte : constant Stream_Element_Offset := (Index - 1) * 4 + 1;
-
-               Value : constant Interfaces.Unsigned_32 :=
-                 Interfaces.Unsigned_32 (Room (At_Byte))
-                 or Interfaces.Shift_Left
-                      (Interfaces.Unsigned_32 (Room (At_Byte + 1)), 8)
-                 or Interfaces.Shift_Left
-                      (Interfaces.Unsigned_32 (Room (At_Byte + 2)), 16)
-                 or Interfaces.Shift_Left
-                      (Interfaces.Unsigned_32 (Room (At_Byte + 3)), 24);
-
-               Text : constant String := "16#" & Hex (Value) & "#";
-            begin
-               if Column = 0 then
-                  if Index > 1 then
-                     Ada.Text_IO.Put_Line (Handle, "");
-                     Ada.Text_IO.Put (Handle, "      ");
-                  end if;
-               end if;
-
-               Ada.Text_IO.Put (Handle, Text);
-
-               --  The separator goes before the next word rather than after
-               --  this one when the line ends here, because a comma and a
-               --  space at the end of a line is a trailing space, and the
-               --  gate refuses a build that leaves style warnings behind.
-               --
-               --  It wrote them for as long as it had existed -- five
-               --  hundred and seventeen of them in the file it produces --
-               --  and nothing said so, because a warning is only reported
-               --  when a unit is compiled and this one had not been since
-               --  the switch was turned on.
-               Column := Column + 1;
-               if Column = 5 then
-                  Column := 0;
-               end if;
-
-               if Index < Words and then Column /= 0 then
-                  Ada.Text_IO.Put (Handle, ", ");
-               elsif Index < Words then
-                  Ada.Text_IO.Put (Handle, ",");
-               end if;
-            end;
-         end loop;
-
-         Ada.Text_IO.Put_Line (Handle, "];");
-      end;
+         if Index < Shaders'Last then
+            Ada.Text_IO.New_Line (Handle);
+         end if;
+      end loop;
 
       Ada.Text_IO.New_Line (Handle);
       Ada.Text_IO.Put_Line (Handle, "end Model_Runner.Shaders;");
@@ -243,6 +287,6 @@ package body Shader_Generation is
             Ada.Text_IO.Close (Handle);
          end if;
          Written := False;
-   end Write_Shader;
+   end Write_Shaders;
 
 end Shader_Generation;

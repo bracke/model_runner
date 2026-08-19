@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A combining kernel for the middle of a gated feed-forward**, and the
+  sequence step that runs it: a unit on one arm, multiplied by the other,
+  with neither arm leaving the device. Tested against the same arithmetic on
+  the host, within the width of a binary32 -- the device computes its
+  exponential in binary32 and the host in binary64, so they agree that far
+  and no further. The shader tool now carries several shaders rather than one.
+
+### Fixed
+
+- **The device speedups reported yesterday are withdrawn.** The wiring went
+  into `Llama.Evaluate`, which generation does not call -- it reads through
+  `Evaluate_Batch` even for one token. Three probes agree that the path is
+  dead for the figure it was measured on: an early exit, an early return, and
+  a deliberately wrong activation unit, none of which moved the digest. The
+  measured difference between the two revisions reproduces, but splitting the
+  change in half finds it in neither half, so its cause is unknown and no
+  device speedup is claimed until one measurement isolates one change.
+
 - **A chained product in a device sequence**, whose activation is what the
   product before it wrote -- it never leaves the device. A barrier stands
   between the two, because the second reads what the first wrote; products

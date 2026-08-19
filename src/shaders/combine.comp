@@ -1,0 +1,71 @@
+#version 450
+
+//  The middle of a gated feed-forward: an activation on one arm, multiplied
+//  by the other.
+//
+//  A gated block computes two projections of the same normalized input and
+//  then combines them -- a unit applied to the gate, multiplied elementwise
+//  by the up projection -- before a third projection reads the result. On the
+//  host that middle step is nothing: a few thousand multiplications against a
+//  matrix product of millions. It is here for what it saves around it rather
+//  than for itself. With the combining on the device, the down projection can
+//  read what this wrote without it ever coming back, so a block's three
+//  feed-forward matrices reach the device in one submission instead of two.
+//
+//  Two arms in, one out. The out buffer may be one of the arms: every
+//  invocation reads only the element it writes, so overlapping them is safe
+//  and saves a buffer.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly  buffer Gate { float g[]; };
+layout(std430, binding = 1) readonly  buffer Up   { float u[]; };
+layout(std430, binding = 2) writeonly buffer Out  { float y[]; };
+
+layout(push_constant) uniform Shape {
+    //  How many elements each arm holds.
+    uint width;
+
+    //  Which unit to apply to the gate arm: 0 for the sigmoid-weighted one
+    //  that llama and its relatives use, 1 for the Gaussian one in the tanh
+    //  form that gemma and gpt2 state. Named by number rather than by
+    //  architecture because the shader has no business knowing which model
+    //  it is running.
+    uint unit;
+
+    //  The remaining words of the block the pipeline layout declares. Unused
+    //  here, and named so that the block matches the one the other shader
+    //  takes -- the two share a pipeline layout, and a layout that differed
+    //  between them would need a second one for no reason.
+    uint unused_count;
+    uint unused_first;
+    uint unused_packing;
+    uint unused_base;
+} shape;
+
+//  x / (1 + exp(-x)), guarded so a large negative x cannot overflow the
+//  exponential. The host computes the same thing the same way.
+float sigmoid_weighted(float x) {
+    return x / (1.0 + exp(-clamp(x, -60.0, 60.0)));
+}
+
+//  The Gaussian unit in the tanh form, which is what the files state rather
+//  than the error function the name suggests.
+float gaussian(float x) {
+    const float root = 0.7978845608028654;
+    const float bend = 0.044715;
+    float inner = root * (x + bend * x * x * x);
+    return 0.5 * x * (1.0 + tanh(clamp(inner, -60.0, 60.0)));
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= shape.width) {
+        return;
+    }
+
+    float gate = g[index];
+    float activated = shape.unit == 0 ? sigmoid_weighted(gate) : gaussian(gate);
+
+    y[index] = activated * u[index];
+}
