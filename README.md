@@ -470,9 +470,17 @@ has that the other does not. Pointed at a published `gpt2` the first time it
 ran, it named `blk.*.ffn_norm.bias` -- a tensor every gpt2 carries, that the
 fixture did not write and the engine did not read.
 
-The suite takes a second and a half. It took half a minute until compiling a
-template stopped allocating twenty-six megabytes: an instruction carried its
-operand and its condition inline, and the program is four thousand of them.
+The suite takes about twenty-four minutes on the host these figures name --
+1443 s measured, all 259 tests passing -- and most of that is the tests that
+open a real device. It read "a second and a half" here for a long time after
+it had stopped being true, which cost a day: the gate ran the suite first and
+timed every stage except that one, AUnit prints nothing until it has finished,
+and a timeout set from the published figure looks exactly like a hang. The
+gate now says `took: suite` beside the other four.
+
+Compiling a template took half a minute until it stopped allocating
+twenty-six megabytes: an instruction carried its operand and its condition
+inline, and the program is four thousand of them.
 
 Every test is deterministic, offline, and needs no downloaded model. The
 checklist holds the second of those: nothing in the repository may exceed a

@@ -378,6 +378,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The gate times its first stage.** It ran the suite and then reported the
+  time of every stage after it, so a suite that had grown to twenty-four
+  minutes was invisible in the gate's own accounting. `took: suite` now
+  appears beside the other four, with a bound of 2900 s.
+
+### Fixed
+
+- **The README said the suite takes a second and a half.** It takes 1443 s on
+  the host the figures name. The old number had been true once and nothing
+  re-measured it; combined with AUnit printing nothing until it finishes, it
+  made every timeout set from it look like a hang.
+
 - **An attention kernel for the device**, `attention.comp`: one position
   against everything a cache holds, with the softmax folded into the pass that
   computes the scores so nothing is stored per position. Keys and values share

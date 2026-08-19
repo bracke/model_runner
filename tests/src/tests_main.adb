@@ -395,6 +395,20 @@ begin
             Failed := True;
          end if;
 
+         --  What the suite cost, which nothing said until now. Four stages
+         --  reported their time and the first one did not, so a suite that
+         --  had grown to twenty-four minutes was invisible in the gate's own
+         --  accounting -- and a day was spent reading its silence as a hang,
+         --  because AUnit prints nothing until it is finished and a timeout
+         --  shorter than the stage looks exactly like one.
+         --
+         --  The bound is generous against the twenty-four minutes measured
+         --  here, on the same principle as the others: a machine under load
+         --  takes half again as long and that is not news.
+         if not Repository_Only then
+            Report_Stage ("suite", 2900.0);
+         end if;
+
          --  What each half of the gate costs, said as it goes. The gate
          --  grew from half an hour to the best part of an hour over three
          --  days and no line of its own output said where the time went;

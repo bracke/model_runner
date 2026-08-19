@@ -1103,6 +1103,33 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-19, what the suite costs, and why nobody knew. It reads 1443 s on
+# this host with all 259 tests passing, and the README said a second and a
+# half. That figure was true once and had not been re-measured; nothing
+# checked it, because the gate ran the suite as its first stage and timed the
+# four after it.
+#
+# The cost of not knowing was a day. AUnit prints nothing until it has
+# finished, so a suite that outruns its timeout is indistinguishable from one
+# that has hung -- and every timeout used against it was set from the
+# published figure. Four explanations were offered for that silence in one
+# afternoon: a barrier deadlock, a memory coherency fault, a wedged device,
+# and pipelines built too eagerly. All four were wrong, and the last was
+# tested by building the pipelines lazily, which made the suite slower and
+# broke two tests.
+#
+# Nor was any of it new. Three days earlier the same suite ran past 2400 s
+# without finishing, so it has cost tens of minutes since well before the
+# work that was being blamed for it:
+#
+#   18871a3, three days back   over 2400 s, unfinished
+#   a60e4e6, this morning      1443 s, 259 passing
+#
+# The gate now says `took: suite` beside the other four stages, with a bound
+# of 2900 s on the same principle as theirs -- roughly twice what was
+# measured, because a machine under load takes half again as long and that is
+# not news. One gate run would have said all of this in one line.
+
 # 2026-08-19, an attention kernel, checked and not yet wired.
 #
 # attention.comp does one position attending to everything a cache holds: the
