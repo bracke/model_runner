@@ -1103,6 +1103,33 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-19, the split explained, and a claim about it corrected.
+#
+# The experiment that seemed to find the speedup in neither half was recorded
+# above as void because one half supposedly could not compile. That was wrong
+# twice over: it compiles, and the split needs no explaining away at all.
+#
+#   cf13815 declares Open_Sequence and carries Run already -- a sequence
+#   existed there; what it did not do was record several products into one
+#   command buffer. Its Run calls One_Product a step, so a sequence of three
+#   was three submissions.
+#
+#   cf13815's llama has no Product_Group, so nothing ever asked for a
+#   sequence.
+#
+# So half A -- old llama, new products -- has the hoisted Run and no caller
+# that groups: every product goes as its own Multiply. Slow, and correctly so.
+# Half B -- new llama, old products -- asks for groups and reaches a Run that
+# submits per product. Also slow, also correctly so. The whole is fast because
+# the saving needs the caller and the callee together, which is what the
+# change is rather than a puzzle about it.
+#
+# The lesson here is narrower than the two above and still worth keeping: a
+# result that looks impossible was reached by asserting a compile failure
+# instead of checking for one. `git show REV:path | grep` answers that in a
+# second. Two of the three surprises of this day came from believing something
+# about a build without asking the build.
+
 # 2026-08-19, the gated block in the batched path too, and what it is worth:
 # very little, for a reason worth writing down.
 #
@@ -1149,12 +1176,10 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # 5709b12b0517c8c5 to 8920270451e368f6. The path is live, the gated block does
 # reach the device, and the grouping was running all along.
 #
-# The split that "found the difference in neither half" was void for the same
-# family of reason: the half without the products layer could not have
-# compiled -- backend-device from that revision calls Products.Open_Sequence,
-# which the older products layer does not declare -- so the success it was
-# credited with was misread output, and what ran was again the previous
-# binary.
+# The split that "found the difference in neither half" was explained later
+# and not this way; see the entry above dated the same day. It compiles, and
+# both halves are slow for good reasons. This paragraph was wrong and is kept
+# only so the correction has something to point at.
 #
 # The figure, re-taken with both crates verified to have built, interleaved:
 #

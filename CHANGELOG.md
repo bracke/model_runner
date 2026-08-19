@@ -16,7 +16,15 @@ Keep a Changelog and the project uses semantic versioning.
   interleaved, cf13815 reads 0.594 s and bef8293 reads 0.456 s: twenty-three
   per cent, as first reported.
 
-### Added
+### Fixed
+
+- **The split experiment is explained, and the earlier explanation of it was
+  wrong.** It was recorded as void because one half supposedly could not
+  compile; it compiles. Both halves are slow because the saving needs the
+  caller that groups and the `Run` that records several products into one
+  command buffer, and each half has only one of them. No puzzle, and no
+  compile failure -- which a `git show REV:path | grep` would have settled
+  before it was asserted.
 
 - **The batched path hands a device the whole gated block as well.** The
   combining step works over a batch now -- it is elementwise and both arms
