@@ -12,6 +12,7 @@ with Ada.Text_IO;
 
 with AUnit;
 with AUnit.Reporter.Text;
+with Case_Timing;
 with AUnit.Run;
 
 with Tests.Suite;
@@ -879,6 +880,16 @@ begin
 
          Ada.Text_IO.Put_Line (Room (1 .. Last));
       end;
+
+   elsif Command = "slow" then
+      --  The suite, reported by where its time went. It costs twenty-eight
+      --  minutes and nothing said which tests those were; the text reporter
+      --  is handed AUnit's own measurements and prints none of them.
+      if Ada.Command_Line.Argument_Count >= 2 then
+         Case_Timing.Report_Routines (Ada.Command_Line.Argument (2));
+      else
+         Case_Timing.Report;
+      end if;
 
    elsif Command = "fixture-likeness" then
       --  Compare a published file's tensor list against the fixture this

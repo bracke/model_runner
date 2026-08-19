@@ -16,6 +16,7 @@ package body Tool_Commands is
    Name_Pristine       : aliased constant String := "pristine";
    Name_Schema         : aliased constant String := "schema";
    Name_Likeness       : aliased constant String := "fixture-likeness";
+   Name_Slow           : aliased constant String := "slow";
 
    Nothing : aliased constant String := "";
 
@@ -54,7 +55,11 @@ package body Tool_Commands is
    Takes_Pristine  : aliased constant String := "[ROOT]";
    Takes_Schema    : aliased constant String := "SCHEMA";
    Takes_Likeness  : aliased constant String := "--model PATH [--names]";
+   Takes_Slow      : aliased constant String := "[NAME]";
 
+   Says_Slow : aliased constant String :=
+     "where the suite's time goes: each case on its own, or one test named"
+     & " by the prefix AUnit's filter understands";
    Says_Likeness : aliased constant String :=
      "compare a published model's tensor list against the fixture this"
      & " repository builds for its architecture";
@@ -91,7 +96,7 @@ package body Tool_Commands is
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
 
-   Held : constant array (1 .. 16) of Command :=
+   Held : constant array (1 .. 17) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -123,7 +128,9 @@ package body Tool_Commands is
       (Name_Schema'Access, Takes_Schema'Access, Says_Schema'Access,
        Opts_None'Access),
       (Name_Likeness'Access, Takes_Likeness'Access, Says_Likeness'Access,
-       Opts_Likeness'Access)];
+       Opts_Likeness'Access),
+      (Name_Slow'Access, Takes_Slow'Access, Says_Slow'Access,
+       Opts_None'Access)];
 
    -----------
    -- Count --

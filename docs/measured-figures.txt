@@ -1103,6 +1103,40 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-19, where the suite's twenty-eight minutes go: one test.
+#
+# `tests slow` runs each of the nine cases on its own and times it, and will
+# time one test named by the prefix AUnit's filter understands. What it says:
+#
+#   inference    1219.8 s        cli          3.2 s
+#   template     1.0 s           gguf         0.4 s
+#   backend, catalog, sampling, grammar, accounting, under a quarter-second
+#
+# Ninety-nine and a half per cent of the suite is one case, and of that case
+# 948 s -- sixteen minutes -- is one routine: "logits match an independent
+# reference implementation". Forty-eight of its forty-nine routines together
+# come to under a second.
+#
+# That routine compares the engine against Reference_Transformer, which is
+# what the conformance stage does for 650 s of its own. So the gate has been
+# running the engine against the reference twice, once in the suite and once
+# in the sweep, and nothing said so, because the suite stage was the one the
+# gate did not time.
+#
+# The other thing this says is what the device tests cost, which two of
+# yesterday's theories turned on: the cli case, holding all five of them and
+# every device open they make, is 3.2 s. Neither device opens nor pipelines
+# built eagerly were ever capable of the minutes they were blamed for, and
+# this measurement would have said so in twenty minutes at any point.
+#
+# Getting it took three attempts and the failures are worth recording. AUnit
+# times every routine and hands the numbers to the reporter, but this build
+# selects its no-calendar variant, where the times are all zero -- a reporter
+# that ranks them prints a column of noughts. perf writes an empty file here
+# and gdb returns no backtrace. And driving AUnit twice over one suite object
+# in a single process frees something twice, so the loop over routines has to
+# be outside the program, a process each.
+
 # 2026-08-19, what the suite costs, and why nobody knew. It reads 1443 s on
 # this host with all 259 tests passing, and the README said a second and a
 # half. That figure was true once and had not been re-measured; nothing

@@ -378,6 +378,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests slow`, which says where the suite's time goes.** Each of the nine
+  cases run on its own and timed, or one test named by a prefix. It reports
+  that 99.5 per cent of the suite is the inference case, and that 948 s of
+  that case is one routine -- the comparison against the independent
+  reference, which the conformance stage also performs for 650 s of its own.
+  The cli case, holding every device test, is 3.2 s.
+
 - **The gate times its first stage.** It ran the suite and then reported the
   time of every stage after it, so a suite that had grown to twenty-four
   minutes was invisible in the gate's own accounting. `took: suite` now
