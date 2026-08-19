@@ -403,11 +403,12 @@ begin
          --  because AUnit prints nothing until it is finished and a timeout
          --  shorter than the stage looks exactly like one.
          --
-         --  The bound is generous against the twenty-four minutes measured
-         --  here, on the same principle as the others: a machine under load
-         --  takes half again as long and that is not news.
+         --  Eight seconds, and sixty as the bound. It was twenty-eight
+         --  minutes until the conformance sweep stopped being run from
+         --  inside it as well as beside it; a bound of sixty says loudly if
+         --  anything of that size is put back.
          if not Repository_Only then
-            Report_Stage ("suite", 2900.0);
+            Report_Stage ("suite", 60.0);
          end if;
 
          --  What each half of the gate costs, said as it goes. The gate

@@ -1117,28 +1117,21 @@ package body Tests.Inference_Cases is
    end A_Refused_Evaluation_Is_Not_A_Clean_Sweep;
 
    --  The engine agrees with an independent implementation of the same
-   --  architecture, computed in a different arithmetic. This is the strongest
-   --  correctness evidence available without an external model: a shared
-   --  mistake would have to have been made twice, differently.
-   procedure Matches_Independent_Reference
-     (T : in out AUnit.Test_Cases.Test_Case'Class)
-   is
-      pragma Unreferenced (T);
-      Result : Conformance.Report;
-   begin
-      Conformance.Run (Result);
-
-      Assert (Result.Ran,
-              "the conformance comparison did not complete:"
-              & Natural'Image (Result.Sequences) & " sequences ran");
-      Assert (Result.Compared > 0, "no logits were compared");
-      Assert (Result.Failures = 0,
-              Natural'Image (Result.Failures) & " of"
-              & Natural'Image (Result.Compared)
-              & " logits fell outside tolerance; worst absolute difference"
-              & Long_Float'Image (Result.Worst_Abs)
-              & ", worst relative" & Long_Float'Image (Result.Worst_Rel));
-   end Matches_Independent_Reference;
+   --  architecture, computed in a different arithmetic -- the strongest
+   --  correctness evidence available without an external model, since a
+   --  shared mistake would have to have been made twice, differently.
+   --
+   --  It is not run from here. This called Conformance.Run, which is the
+   --  same sweep the gate runs as a stage of its own and `tests conformance`
+   --  runs alone, so the gate did it twice: 948 s inside the suite and 650 s
+   --  again beside it. Sixteen of the suite's twenty-eight minutes were this
+   --  one routine, and nothing said so while the suite was the one stage the
+   --  gate did not time.
+   --
+   --  What is lost is that `tests test` on its own no longer compares
+   --  against the reference. That is the right place to lose it: the suite
+   --  is what runs in a second and a half of somebody's attention, and a
+   --  sixteen-minute comparison belongs in the gate that already has one.
 
    ----------------------------------------
    -- Device_Reads_A_Model_In_Any_Format --
@@ -5099,9 +5092,6 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, A_Refused_Evaluation_Is_Not_A_Clean_Sweep'Access,
          "a conformance run that could not evaluate something is not clean");
-      Register_Routine
-        (T, Matches_Independent_Reference'Access,
-         "logits match an independent reference implementation");
       Register_Routine
         (T, Interrupt_Requests_Cancellation'Access,
          "an interrupt requests cancellation instead of killing the process");

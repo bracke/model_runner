@@ -471,13 +471,17 @@ has that the other does not. Pointed at a published `gpt2` the first time it
 ran, it named `blk.*.ffn_norm.bias` -- a tensor every gpt2 carries, that the
 fixture did not write and the engine did not read.
 
-The suite takes about twenty-four minutes on the host these figures name --
-1443 s measured, all 259 tests passing -- and most of that is the tests that
-open a real device. It read "a second and a half" here for a long time after
-it had stopped being true, which cost a day: the gate ran the suite first and
-timed every stage except that one, AUnit prints nothing until it has finished,
-and a timeout set from the published figure looks exactly like a hang. The
-gate now says `took: suite` beside the other four.
+The suite takes eight seconds, and took twenty-eight minutes until one test
+was moved out of it. That test ran the whole conformance sweep -- the same
+`Conformance.Run` the gate runs as a stage of its own -- so the gate did it
+twice, 948 s inside the suite and 650 s again beside it. Ninety-nine and a
+half per cent of the suite was one routine.
+
+It read "a second and a half" here for a long time after that had stopped
+being true, and the wrong figure cost a day: the gate timed every stage except
+the suite, AUnit prints nothing until it has finished, and a timeout set from
+a stale number looks exactly like a hang. The gate says `took: suite` now, and
+`tests slow` says where a suite's time goes.
 
 Compiling a template took half a minute until it stopped allocating
 twenty-six megabytes: an instruction carried its operand and its condition

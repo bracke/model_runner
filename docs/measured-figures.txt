@@ -1103,6 +1103,31 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-19, and the answer to it: the suite takes eight seconds.
+#
+# The routine that was sixteen of its twenty-eight minutes called
+# Conformance.Run -- the same sweep the gate runs as a stage of its own and
+# `tests conformance` runs alone. So the gate compared the engine against the
+# reference twice, 948 s inside the suite and 650 s again beside it, and the
+# suite was the stage the gate did not time.
+#
+# Taken out of the suite:
+#
+#   before   1677 s, 259 tests
+#   after        8 s, 258 tests
+#
+# Ninety-nine and a half per cent of a stage, and it was a duplicate. The
+# gate loses nothing: the sweep still runs, once, where it was already
+# running. What `tests test` alone loses is the comparison, and that is the
+# right place to lose it -- a suite is what runs inside somebody's attention,
+# and a sixteen-minute comparison belongs in the gate that already has one.
+#
+# The suite's bound comes down from 2900 s to 60, which says loudly if
+# anything of that size is put back. And the README, which said a second and
+# a half and was corrected yesterday to twenty-four minutes, now says eight
+# seconds -- the first figure had been right before that test was added, and
+# the correction was made to a number that was about to stop being true.
+
 # 2026-08-19, where the suite's twenty-eight minutes go: one test.
 #
 # `tests slow` runs each of the nine cases on its own and times it, and will

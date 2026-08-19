@@ -376,7 +376,15 @@ Keep a Changelog and the project uses semantic versioning.
   check with the reason, counted separately, and reported on every run so that
   it stays visible; anything else that stops answering fails the gate.
 
-### Added
+### Changed
+
+- **The suite no longer runs the conformance sweep, and takes eight seconds
+  instead of twenty-eight minutes.** One routine called `Conformance.Run`,
+  which the gate already runs as a stage of its own, so the engine was
+  compared against the reference twice a gate -- 948 s inside the suite and
+  650 s beside it. The sweep still runs, once. `tests test` on its own no
+  longer makes that comparison; the gate and `tests conformance` do. The
+  suite's bound in the gate comes down from 2900 s to 60.
 
 - **`tests slow`, which says where the suite's time goes.** Each of the nine
   cases run on its own and timed, or one test named by a prefix. It reports
