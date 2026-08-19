@@ -208,6 +208,9 @@ package Model_Runner.Backend.Device is
    --  @param Up Matrix for the other arm.
    --  @param Down Matrix the combined value is read by.
    --  @param Vector The normalized input both arms read.
+   --  @param Spread How many positions that input holds. The combining is
+   --    elementwise over whatever the arms produce, so a batch needs no
+   --    other handling than its length.
    --  @param Unit Which unit the gate arm takes: zero for the
    --    sigmoid-weighted one, one for the Gaussian one.
    --  @param Into Receives what the down projection produced.
@@ -218,6 +221,7 @@ package Model_Runner.Backend.Device is
       Up     : Model_Runner.Tensors.View;
       Down   : Model_Runner.Tensors.View;
       Vector : Model_Runner.Tensors.Real_Array_Access;
+      Spread : Model_Runner.Numerics.Element_Count;
       Unit   : Natural;
       Into   : Model_Runner.Tensors.Real_Array_Access;
       Status : out Model_Runner.Errors.Error_Info;

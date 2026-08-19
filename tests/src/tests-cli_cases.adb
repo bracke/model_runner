@@ -947,7 +947,7 @@ package body Tests.CLI_Cases is
                                 "a device refused a projection down");
 
                         Model_Runner.Backend.Device.Dispatch_Gated
-                          (Views (1), Views (2), Down_View, Vector, 0,
+                          (Views (1), Views (2), Down_View, Vector, 1, 0,
                            Whole, Why);
                         Assert (not Model_Runner.Errors.Is_Error (Why),
                                 "a device refused a gated block");

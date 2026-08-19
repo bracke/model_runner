@@ -18,6 +18,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The batched path hands a device the whole gated block as well.** The
+  combining step works over a batch now -- it is elementwise and both arms
+  share a layout, so the layout does not matter to it. Worth about three per
+  cent on a 522-token prompt, with overlapping spreads, against twenty-three
+  on the token-at-a-time path: a batch already amortizes a submission across
+  its whole width, so there is little left for this to remove. Kept for the
+  host arithmetic it takes off the processor rather than for the three per
+  cent.
+
 - **A combining kernel for the middle of a gated feed-forward**, and the
   sequence step that runs it: a unit on one arm, multiplied by the other,
   with neither arm leaving the device. Tested against the same arithmetic on

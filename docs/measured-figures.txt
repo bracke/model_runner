@@ -937,7 +937,7 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # processor time, at a load of 1.47 rising to 2.15. The figure holds.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-engine D91D90CB6A77EDC1 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine F8B000F8B0F20455 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -1016,7 +1016,7 @@ engine D91D90CB6A77EDC1 src/library/model_runner-llama.adb src/library/model_run
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-reference 23D83AA8148AC827 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -1091,6 +1091,49 @@ reference 23D83AA8148AC827 src/library/model_runner-backend-reference.adb src/li
 # change of the last two days. The ratio between the backends is what these
 # lines are for; the absolute times are not comparable with yesterday's and
 # are not offered as though they were.
+
+# The four groups, re-taken on the tree that carries all of this, each crate
+# verified to have built:
+#
+#   seven tokens, device      0.580 s wall, 0.467 s generating
+#   seven tokens, processor   1.012 s wall
+#   twelve tokens, processor  1.583 s wall, 1.409 s generating
+#   twelve tokens, drafted    5.820 s wall
+#
+# Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
+# wall time in this file now is.
+
+# 2026-08-19, the gated block in the batched path too, and what it is worth:
+# very little, for a reason worth writing down.
+#
+# Evaluate_Batch reads the prompt; Evaluate reads a token at a time while
+# generating. Both now hand a device the whole gated block. The combining step
+# was made to work over a batch -- it is elementwise, and both arms are laid
+# out the same way by the same kernel, so what that layout is does not matter
+# to it -- and the guard that restricted it to one position came out.
+#
+# On the prompt of the published figure, two tokens, the difference is inside
+# the noise: 0.106 s against 0.093 s by median, with the two spreads almost
+# entirely overlapping. On a 522-token prompt, where there is something to
+# measure:
+#
+#   before  22.252  22.723  21.523
+#   after   21.559  21.534  21.763
+#
+# Median 22.25 against 21.56, about three per cent, and the spreads overlap
+# there too. Both were built with each crate verified.
+#
+# Three per cent where the token-at-a-time path gave twenty-three, and the
+# reason is structural rather than disappointing: a batch of five hundred
+# positions already amortizes a submission across five hundred positions'
+# worth of arithmetic. Removing one submission a layer matters when a layer's
+# work is one position wide and hardly at all when it is five hundred. The
+# grouping was always going to pay where it paid, and this says where that is.
+#
+# It is kept because it is correct, tested, and takes real host arithmetic --
+# an activation and a multiply over half a million values a layer -- off the
+# processor. It is not kept for the three per cent, and the figures file
+# should not later be read as claiming it was.
 
 # 2026-08-19, later: the withdrawal below was itself wrong, and the reason is
 # worth more than either claim.
@@ -1527,7 +1570,7 @@ reference 23D83AA8148AC827 src/library/model_runner-backend-reference.adb src/li
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device 406238C8D7D440A8 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device A0BBA5E1124CB8A1 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -1634,7 +1677,7 @@ device 406238C8D7D440A8 src/shaders/row_product.comp src/library/model_runner-sh
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
-drafting A04E2B27FC2F0E24 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting 1A3E22067556CC3E src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14

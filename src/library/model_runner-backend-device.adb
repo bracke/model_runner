@@ -587,6 +587,7 @@ package body Model_Runner.Backend.Device is
       Up     : T.View;
       Down   : T.View;
       Vector : T.Real_Array_Access;
+      Spread : Model_Runner.Numerics.Element_Count;
       Unit   : Natural;
       Into   : T.Real_Array_Access;
       Status : out E.Error_Info;
@@ -608,8 +609,9 @@ package body Model_Runner.Backend.Device is
       end if;
 
       if Vector = null or else Into = null
-        or else Vector.all'Length < Gate.Columns
-        or else Into.all'Length < Down.Rows
+        or else Spread = 0
+        or else Vector.all'Length < Gate.Columns * Spread
+        or else Into.all'Length < Down.Rows * Spread
       then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
@@ -651,7 +653,7 @@ package body Model_Runner.Backend.Device is
                   return;
                end if;
 
-               Wanted := Wanted + Gate.Rows;
+               Wanted := Wanted + Gate.Rows * Spread;
 
                Products.Add_Chained_Product
                  (Steps, This.Data, This.Offset, Packing,
@@ -671,7 +673,7 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
 
-            Wanted := Wanted + This.Rows;
+            Wanted := Wanted + This.Rows * Spread;
          end;
       end loop;
 
@@ -685,7 +687,7 @@ package body Model_Runner.Backend.Device is
       end if;
 
       Products.Run
-        (Engine, Steps, Vector.all, 1,
+        (Engine, Steps, Vector.all, Positive (Spread),
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
          Ok, Cancelled, Cancel);
 
@@ -709,9 +711,9 @@ package body Model_Runner.Backend.Device is
 
       --  Only the last of the four is wanted here. The arms and the combined
       --  value are the device's business and stay there.
-      Into.all (Into.all'First .. Into.all'First + Down.Rows - 1) :=
+      Into.all (Into.all'First .. Into.all'First + Down.Rows * Spread - 1) :=
         Landing.all
-          (Landing.all'First + Wanted - Down.Rows
+          (Landing.all'First + Wanted - Down.Rows * Spread
            .. Landing.all'First + Wanted - 1);
    end Dispatch_Gated;
 

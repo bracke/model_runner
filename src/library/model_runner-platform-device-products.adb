@@ -2558,8 +2558,13 @@ package body Model_Runner.Platform.Device.Products is
                     (Item.Buffer, Bind_Point_Compute, Item.Blend_Line);
 
                   declare
+                     --  Every value both arms hold, not one position's
+                     --  worth: the combining is elementwise and the arms of
+                     --  a batch are as long as the batch is.
+                     Span : constant Natural := This.Rows * Count;
+
                      Shape : aliased Shape_Constants :=
-                       (Rows    => C.unsigned (This.Rows),
+                       (Rows    => C.unsigned (Span),
                         Columns => C.unsigned (This.Unit),
                         others  => 0);
                   begin
@@ -2567,7 +2572,7 @@ package body Model_Runner.Platform.Device.Products is
                            Shape_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
-                        C.unsigned ((This.Rows + Group_Size - 1)
+                        C.unsigned ((Span + Group_Size - 1)
                                     / Group_Size), 1, 1);
                   end;
 

@@ -4729,7 +4729,7 @@ package body Model_Runner.Llama is
                   then
                      Model_Runner.Backend.Device.Dispatch_Gated
                        (Current.Gate, Current.Up, Current.Down,
-                        Item.Normalized, Gate_Unit (Source),
+                        Item.Normalized, 1, Gate_Unit (Source),
                         Item.Normalized, Status, Item.Stopping);
                      exit when E.Is_Error (Status);
                      Whole_Block := True;
@@ -5009,6 +5009,11 @@ package body Model_Runner.Llama is
               Element_Count (Index) * Element_Count (Item.Context);
             V_Base  : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * V_Width;
+
+            --  Set when a device took the whole gated feed-forward, its
+            --  projection down included, so that the common tail does not
+            --  project it a second time.
+            Whole_Block : Boolean := False;
          begin
             for Which in 0 .. Count - 1 loop
                declare
@@ -5269,6 +5274,23 @@ package body Model_Runner.Llama is
                           (Source, Gate.all (Origin .. Origin + Feed - 1));
                      end;
                   end loop;
+               elsif Model_Runner.Backend."="
+                       (Item.Owner.Able.Kind,
+                        Model_Runner.Backend.Backend_Device)
+               then
+                  --  A device takes the whole gated block at once -- both
+                  --  arms, the unit, the multiply, and the projection that
+                  --  reads what they make -- with none of the middle coming
+                  --  back. However many positions: the combining step works
+                  --  elementwise over whatever the arms hold, and both arms
+                  --  are laid out the same way by the same kernel, so what
+                  --  that layout is does not matter to it.
+                  Model_Runner.Backend.Device.Dispatch_Gated
+                    (Current.Gate, Current.Up, Current.Down,
+                     Norm, Count, Gate_Unit (Source), Norm, Status,
+                     Item.Stopping);
+                  exit when E.Is_Error (Status);
+                  Whole_Block := True;
                else
                   Product_Batch
                     (Item, Current.Gate, Norm, Count, Gate, Status);
@@ -5290,9 +5312,11 @@ package body Model_Runner.Llama is
                   end loop;
                end if;
 
-               Product_Batch
-                 (Item, Current.Down, Gate, Count, Norm, Status);
-               exit when E.Is_Error (Status);
+               if not Whole_Block then
+                  Product_Batch
+                    (Item, Current.Down, Gate, Count, Norm, Status);
+                  exit when E.Is_Error (Status);
+               end if;
 
                if Current.Down_Bias /= null then
                   for Which in 0 .. Count - 1 loop
