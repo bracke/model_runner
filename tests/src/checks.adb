@@ -5308,6 +5308,26 @@ package body Checks is
                   & "every shader named");
          end if;
       end;
+
+      --  And the third, asked the same way.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/attention.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/attention.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Attention_Digest then
+            Fail ("src/shaders/attention.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
       declare
          Record_Path : constant String := "docs/measured-figures.txt";
          Listing     : constant String := Contents (Record_Path);

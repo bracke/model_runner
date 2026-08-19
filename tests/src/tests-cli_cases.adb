@@ -973,6 +973,109 @@ package body Tests.CLI_Cases is
                   Model_Runner.Bytes.Free (Freed);
                end;
 
+               --  One position attending to a cache, on the device,
+               --  against the same arithmetic done here in binary64. Not
+               --  exactly: the kernel folds the softmax into the pass that
+               --  computes the scores and works in binary32 throughout, so
+               --  the two agree to about the width of a binary32.
+               declare
+                  Heads  : constant Natural := 4;
+                  Wide   : constant Natural := 8;
+                  Steps  : constant Natural := 16;
+                  Span   : constant Natural := Heads * Wide;
+
+                  Cache : N.Real_Array
+                    (0 .. N.Element_Count (Steps * Span * 2) - 1);
+                  Asked : N.Real_Array (0 .. N.Element_Count (Span) - 1);
+                  Got   : N.Real_Array (0 .. N.Element_Count (Span) - 1);
+
+                  V_At  : constant Natural := Steps * Span;
+                  Scale : constant N.Real := 0.35;
+
+                  Worst : N.Real := 0.0;
+                  Ok    : Boolean;
+               begin
+                  for Index in Cache'Range loop
+                     Cache (Index) :=
+                       1.0 / N.Real (5 + Natural (Index) mod 37) - 0.021;
+                  end loop;
+
+                  for Index in Asked'Range loop
+                     Asked (Index) :=
+                       1.0 / N.Real (3 + Natural (Index) mod 11) - 0.037;
+                  end loop;
+
+                  Products.Attend
+                    (Engine, Cache, Asked,
+                     Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+                     Group_Size => 1, First => 0, Last => Steps - 1,
+                     K_Base => 0, V_Base => V_At,
+                     KV_Width => Span, V_Width => Span,
+                     Scale => Scale, Cap => 0.0,
+                     Target => Got, Ok => Ok);
+                  Assert (Ok, "a device refused an attention");
+
+                  for Head in 0 .. Heads - 1 loop
+                     declare
+                        Scores : array (0 .. Steps - 1) of N.Wide_Real;
+                        Top    : N.Wide_Real;
+                        Sum    : N.Wide_Real := 0.0;
+                     begin
+                        for Step in 0 .. Steps - 1 loop
+                           declare
+                              Dot : N.Wide_Real := 0.0;
+                           begin
+                              for C in 0 .. Wide - 1 loop
+                                 Dot := Dot
+                                   + N.Wide_Real
+                                       (Asked (N.Element_Count
+                                                 (Head * Wide + C)))
+                                     * N.Wide_Real
+                                         (Cache (N.Element_Count
+                                                   (Step * Span
+                                                    + Head * Wide + C)));
+                              end loop;
+                              Scores (Step) := Dot * N.Wide_Real (Scale);
+                           end;
+                        end loop;
+
+                        Top := Scores (0);
+                        for Step in 1 .. Steps - 1 loop
+                           Top := N.Wide_Real'Max (Top, Scores (Step));
+                        end loop;
+
+                        for Step in 0 .. Steps - 1 loop
+                           Scores (Step) := N.Exp (Scores (Step) - Top);
+                           Sum := Sum + Scores (Step);
+                        end loop;
+
+                        for C in 0 .. Wide - 1 loop
+                           declare
+                              Blend : N.Wide_Real := 0.0;
+                           begin
+                              for Step in 0 .. Steps - 1 loop
+                                 Blend := Blend + Scores (Step)
+                                   * N.Wide_Real
+                                       (Cache (N.Element_Count
+                                                 (V_At + Step * Span
+                                                  + Head * Wide + C)));
+                              end loop;
+
+                              Worst := N.Real'Max
+                                (Worst,
+                                 abs (Got (N.Element_Count (Head * Wide + C))
+                                      - N.Real (Blend / Sum)));
+                           end;
+                        end loop;
+                     end;
+                  end loop;
+
+                  Assert (Worst < 1.0E-5,
+                          "a device and the processor disagree about"
+                          & " attention by" & N.Real'Image (Worst));
+                  Checked := Checked + 1;
+               end;
+
                --  A shape nobody has.
                declare
                   Given  : constant N.Real_Array (0 .. 0) := [others => 0.0];

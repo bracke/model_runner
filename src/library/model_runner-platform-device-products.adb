@@ -229,7 +229,13 @@ package body Model_Runner.Platform.Device.Products is
    --  Bytes of push constants, which the layout declares and every dispatch
    --  writes. One number in two places is one number that can differ, so it
    --  is this one.
-   Shape_Bytes : constant := 24;
+   --  The push constants a pipeline layout carries. Twenty-four bytes are
+   --  what the two matrix kernels want; attention wants fourteen words, and
+   --  a range is declared once for every pipeline that shares the layout. A
+   --  shader may read fewer words than the range holds, so the larger number
+   --  costs the smaller kernels nothing.
+   Shape_Bytes     : constant := 56;
+   Product_Bytes   : constant := 24;
 
    type Push_Range is record
       Stages : C.unsigned := Stage_Compute;
@@ -326,6 +332,26 @@ package body Model_Runner.Platform.Device.Products is
      with Convention => C;
 
    --  What the shader is told about the shape, in the order it declares.
+   --  What the attention kernel is told. Fourteen words, against the six the
+   --  matrix kernels take, pushed into the same range.
+   type Attention_Constants is record
+      Heads      : C.unsigned := 0;
+      Head_Size  : C.unsigned := 0;
+      Value_Size : C.unsigned := 0;
+      Group_Size : C.unsigned := 1;
+      First      : C.unsigned := 0;
+      Last       : C.unsigned := 0;
+      K_Base     : C.unsigned := 0;
+      V_Base     : C.unsigned := 0;
+      KV_Width   : C.unsigned := 0;
+      V_Width    : C.unsigned := 0;
+      Scale      : C.C_float := 1.0;
+      Cap        : C.C_float := 0.0;
+   end record
+     with Convention => C;
+
+   Attention_Bytes : constant := 48;
+
    type Shape_Constants is record
       Rows    : C.unsigned := 0;
       Columns : C.unsigned := 0;
@@ -936,6 +962,31 @@ package body Model_Runner.Platform.Device.Products is
          Item.Blender := Made;
       end;
 
+      --  The third kernel's module.
+      declare
+         Create : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
+         Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+           Model_Runner.Shaders.Attention;
+         Request : aliased Shader_Create_Info;
+      begin
+         if Create = null then
+            Close (Item);
+            return;
+         end if;
+
+         Request.Size := Interfaces.C.size_t (Words'Length * 4);
+         Request.Code := Words'Address;
+
+         if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
+            /= 0
+         then
+            Close (Item);
+            return;
+         end if;
+
+         Item.Attender := Made;
+      end;
+
       --  Three storage buffers, and what a set of them looks like.
       declare
          Create : constant Create_Call :=
@@ -1051,6 +1102,36 @@ package body Model_Runner.Platform.Device.Products is
 
          C.Strings.Free (Name);
          Item.Blend_Line := Made;
+      end;
+
+      --  And the third kernel's pipeline, against the same layout.
+      declare
+         Create : constant Create_Pipelines_Call :=
+           To_Create_Pipelines (Point ("vkCreateComputePipelines"));
+
+         Name    : C.Strings.chars_ptr := C.Strings.New_String ("main");
+         Request : aliased Compute_Pipeline_Info;
+      begin
+         if Create = null then
+            C.Strings.Free (Name);
+            Close (Item);
+            return;
+         end if;
+
+         Request.Stage.Module := Item.Attender;
+         Request.Stage.Name := Name;
+         Request.Layout := Item.Layout;
+
+         if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                    Null_Handle, Made'Access) /= 0
+         then
+            C.Strings.Free (Name);
+            Close (Item);
+            return;
+         end if;
+
+         C.Strings.Free (Name);
+         Item.Attend_Line := Made;
       end;
 
       --  Somewhere to keep one set of descriptors, and the set itself.
@@ -1288,10 +1369,12 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Commands, "vkDestroyCommandPool");
       Item.Descriptor := Null_Handle;
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
+      Give_Back (Item.Attend_Line, "vkDestroyPipeline");
       Give_Back (Item.Blend_Line, "vkDestroyPipeline");
       Give_Back (Item.Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Layout, "vkDestroyPipelineLayout");
       Give_Back (Item.Set_Layout, "vkDestroyDescriptorSetLayout");
+      Give_Back (Item.Attender, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
 
@@ -2005,7 +2088,7 @@ package body Model_Runner.Platform.Device.Products is
                      Base    => C.unsigned (Weight_Base));
                begin
                   Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
-                        Shape_Bytes, Shape'Address);
+                        Product_Bytes, Shape'Address);
                   Dispatch
                     (Item.Buffer,
                      C.unsigned ((Rows + Group_Size - 1) / Group_Size), 1, 1);
@@ -2059,6 +2142,225 @@ package body Model_Runner.Platform.Device.Products is
       Release_Borrowed;
       Ok := True;
    end One_Product;
+
+   ------------
+   -- Attend --
+   ------------
+
+   procedure Attend
+     (Item       : in out Engine;
+      Cache      : Model_Runner.Numerics.Real_Array;
+      Query      : Model_Runner.Numerics.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out Model_Runner.Numerics.Real_Array;
+      Ok         : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      --  How many invocations a group of the attention kernel holds, which
+      --  is what its source declares. Named here rather than borrowed from
+      --  the matrix kernel's constant, because a parameter of this call
+      --  carries that name and the two are different things.
+      Per_Group : constant := 64;
+
+      Kept_Bytes  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Cache'Length) * 4;
+      Query_Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Query'Length) * 4;
+      Blend_Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Heads) *
+        Interfaces.Unsigned_64 (Value_Size) * 4;
+
+      Good      : Boolean;
+      Cancelled : Boolean;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Heads = 0
+        or else Head_Size = 0
+        or else Value_Size = 0
+        or else Value_Size > Attention_Room
+        or else Group_Size = 0
+        or else Last < First
+        or else Cache'Length = 0
+        or else Query'Length
+                  < Model_Runner.Numerics.Element_Count (Heads)
+                    * Model_Runner.Numerics.Element_Count (Head_Size)
+        or else Target'Length
+                  < Model_Runner.Numerics.Element_Count (Heads)
+                    * Model_Runner.Numerics.Element_Count (Value_Size)
+      then
+         return;
+      end if;
+
+      --  A buffer of its own for the cache: it is far larger than an
+      --  activation and it outlives one call.
+      if Item.Cache_Bytes < Kept_Bytes then
+         Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
+         Take (Item, Kept_Bytes, Item.Cache_Buffer, Item.Cache_Memory, Good);
+         if not Good then
+            return;
+         end if;
+         Item.Cache_Bytes := Kept_Bytes;
+      end if;
+
+      if Item.Vector_Bytes < Query_Bytes then
+         Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+         Take (Item, Query_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
+               Good);
+         if not Good then
+            return;
+         end if;
+         Item.Vector_Bytes := Query_Bytes;
+      end if;
+
+      if Item.Result_Bytes < Blend_Bytes then
+         Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+         Take (Item, Blend_Bytes, Item.Result_Buffer, Item.Result_Memory,
+               Good);
+         if not Good then
+            return;
+         end if;
+         Item.Result_Bytes := Blend_Bytes;
+      end if;
+
+      Write_Into (Item, Item.Cache_Memory, Kept_Bytes, Cache, Good);
+      if not Good then
+         return;
+      end if;
+
+      Write_Into (Item, Item.Vector_Memory, Query_Bytes, Query, Good);
+      if not Good then
+         return;
+      end if;
+
+      declare
+         Update : constant Update_Sets_Call :=
+           To_Update_Sets (Point ("vkUpdateDescriptorSets"));
+
+         Told  : aliased Buffer_Info_Array;
+         Notes : aliased Write_Array;
+      begin
+         if Update = null then
+            return;
+         end if;
+
+         Told (1) := (Item.Cache_Buffer, 0, Kept_Bytes);
+         Told (2) := (Item.Vector_Buffer, 0, Query_Bytes);
+         Told (3) := (Item.Result_Buffer, 0, Blend_Bytes);
+
+         for Binding in Told'Range loop
+            Notes (Binding).Target := Item.Descriptor;
+            Notes (Binding).Binding := C.unsigned (Binding - 1);
+            Notes (Binding).Buffers := Told (Binding)'Address;
+         end loop;
+
+         Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+      end;
+
+      declare
+         Reset_Buffer : constant Reset_Buffer_Call :=
+           To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+         Start : constant Begin_Call :=
+           To_Begin (Point ("vkBeginCommandBuffer"));
+         Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+         Bind_Pipeline : constant Bind_Pipeline_Call :=
+           To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
+         Bind_Sets : constant Bind_Sets_Call :=
+           To_Bind_Sets (Point ("vkCmdBindDescriptorSets"));
+         Push : constant Push_Call := To_Push (Point ("vkCmdPushConstants"));
+         Dispatch : constant Dispatch_Call :=
+           To_Dispatch (Point ("vkCmdDispatch"));
+
+         Sets  : aliased Address := Item.Descriptor;
+         Began : aliased Command_Begin_Info;
+
+         Shape : aliased Attention_Constants :=
+           (Heads      => C.unsigned (Heads),
+            Head_Size  => C.unsigned (Head_Size),
+            Value_Size => C.unsigned (Value_Size),
+            Group_Size => C.unsigned (Group_Size),
+            First      => C.unsigned (First),
+            Last       => C.unsigned (Last),
+            K_Base     => C.unsigned (K_Base),
+            V_Base     => C.unsigned (V_Base),
+            KV_Width   => C.unsigned (KV_Width),
+            V_Width    => C.unsigned (V_Width),
+            Scale      => C.C_float (Scale),
+            Cap        => C.C_float (Cap));
+      begin
+         if Reset_Buffer = null or else Start = null or else Stop = null
+           or else Bind_Pipeline = null or else Bind_Sets = null
+           or else Push = null or else Dispatch = null
+         then
+            return;
+         end if;
+
+         if Reset_Buffer (Item.Buffer, 0) /= 0
+           or else Start (Item.Buffer, Began'Address) /= 0
+         then
+            return;
+         end if;
+
+         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Attend_Line);
+         Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
+                    Sets'Address, 0, Null_Handle);
+         Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+               Attention_Bytes, Shape'Address);
+         Dispatch
+           (Item.Buffer,
+            C.unsigned ((Heads + Per_Group - 1) / Per_Group), 1, 1);
+
+         if Stop (Item.Buffer) /= 0 then
+            return;
+         end if;
+      end;
+
+      Submit_And_Wait (Item, Good, Cancelled, null);
+      if not Good then
+         return;
+      end if;
+
+      declare
+         Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
+         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+
+         Where : aliased Address := Null_Handle;
+      begin
+         if Map (Item.Logical, Item.Result_Memory, 0, Blend_Bytes, 0,
+                 Where'Access) /= 0
+         then
+            return;
+         end if;
+
+         declare
+            Slice : Model_Runner.Numerics.Real_Array
+              (Target'First
+               .. Target'First
+                  + Model_Runner.Numerics.Element_Count (Heads)
+                    * Model_Runner.Numerics.Element_Count (Value_Size) - 1)
+              with Import, Address => Where;
+         begin
+            Target (Slice'Range) := Slice;
+         end;
+
+         Unmap (Item.Logical, Item.Result_Memory);
+      end;
+
+      Ok := True;
+   end Attend;
 
    --------------
    -- Multiply --
@@ -2569,7 +2871,7 @@ package body Model_Runner.Platform.Device.Products is
                         others  => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
-                           Shape_Bytes, Shape'Address);
+                           Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
                         C.unsigned ((Span + Group_Size - 1)
@@ -2593,7 +2895,7 @@ package body Model_Runner.Platform.Device.Products is
                         Base    => C.unsigned (Places (Index).Base));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
-                           Shape_Bytes, Shape'Address);
+                           Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
                         C.unsigned ((This.Rows + Group_Size - 1)

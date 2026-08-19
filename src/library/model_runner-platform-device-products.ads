@@ -381,6 +381,65 @@ package Model_Runner.Platform.Device.Products is
       Cancelled : out Boolean;
       Cancel    : Model_Runner.Cancellation.Token_Reference := null);
 
+   --  One position attending to everything a cache holds.
+   --
+   --  The scores against every key in range, the bound where the architecture
+   --  states one, the softmax across them, and the values weighted by what
+   --  comes out. This is the piece of a layer that stands between two matrix
+   --  products; while it is on the processor the products on either side of
+   --  it cannot be sent together.
+   --
+   --  Keys and values are given as one array because the kernel reads them
+   --  from one buffer: attention wants four arrays and the layout carries
+   --  three. Where they lie inside it is said by K_Base and V_Base.
+   --
+   --  This uploads the cache on every call, so it is not yet faster than
+   --  doing it on the processor -- it exists to be checked against the
+   --  processor first. What makes it worth having is the cache staying on the
+   --  device between calls, which is a change to where the cache lives rather
+   --  than to this.
+   --
+   --  @param Item Ready engine.
+   --  @param Cache Keys and values, in one array.
+   --  @param Query This position's queries, one head after another.
+   --  @param Heads How many heads.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @param Group_Size How many heads share one group of keys and values.
+   --  @param First First cached position that may be looked at.
+   --  @param Last Last cached position that may be looked at.
+   --  @param K_Base Where the keys begin in Cache.
+   --  @param V_Base Where the values begin in Cache.
+   --  @param KV_Width How far apart one position's keys are from the next.
+   --  @param V_Width How far apart one position's values are from the next.
+   --  @param Scale What a score is multiplied by before the bound.
+   --  @param Cap The bound on a score, or zero for none.
+   --  @param Target Receives Heads * Value_Size values.
+   --  @param Ok True when the device computed it.
+   procedure Attend
+     (Item       : in out Engine;
+      Cache      : Model_Runner.Numerics.Real_Array;
+      Query      : Model_Runner.Numerics.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out Model_Runner.Numerics.Real_Array;
+      Ok         : out Boolean);
+
+   --  The widest value head this kernel will take. One wider is refused, and
+   --  the caller does it on the processor: a kernel that wrote past what it
+   --  kept would be worse than one that says no.
+   Attention_Room : constant := 256;
+
    --  Bytes one row of a matrix takes.
    --
    --  @param Packing How the row is packed.
@@ -531,10 +590,16 @@ private
       --  three storage buffers and a block of six words -- so it shares the
       --  pipeline layout and needs only its own module and pipeline.
       Blender    : System.Address := System.Null_Address;
+
+      --  The third kernel: one position attending to everything the cache
+      --  holds. It shares the layout too -- three storage buffers, with the
+      --  keys and values in one of them, and the same push-constant range.
+      Attender   : System.Address := System.Null_Address;
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
       Blend_Line : System.Address := System.Null_Address;
+      Attend_Line : System.Address := System.Null_Address;
       Pool       : System.Address := System.Null_Address;
       Descriptor : System.Address := System.Null_Address;
 
@@ -600,6 +665,12 @@ private
       Result_Buffer : System.Address := System.Null_Address;
       Result_Memory : System.Address := System.Null_Address;
       Result_Bytes  : Interfaces.Unsigned_64 := 0;
+
+      --  Where a cache goes when attention is done here. Grown when it has
+      --  to and kept between calls, like the two above.
+      Cache_Buffer : System.Address := System.Null_Address;
+      Cache_Memory : System.Address := System.Null_Address;
+      Cache_Bytes  : Interfaces.Unsigned_64 := 0;
    end record;
 
    type Step is record

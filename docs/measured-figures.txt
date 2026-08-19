@@ -1103,6 +1103,37 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-19, an attention kernel, checked and not yet wired.
+#
+# attention.comp does one position attending to everything a cache holds: the
+# scores, the bound where an architecture states one, the softmax across them,
+# and the values weighted by what comes out. It is the piece of a layer that
+# stands between two matrix products and keeps them from being sent together,
+# so it is what the rest of the resident chain waits on.
+#
+# Keys and values share a buffer, because attention wants four arrays and the
+# pipeline layout carries three. Widening the layout would have cost every
+# shader; laying the cache out as one region costs nothing, since this program
+# writes the cache in the first place.
+#
+# One invocation a head, folding the softmax into the pass that computes the
+# scores -- a running maximum, a running sum, a running weighted value -- so
+# nothing is stored per position. The host does not do it that way because it
+# has the scores in an array anyway; a device wants it because storing a score
+# a position is storing a context length of them.
+#
+# Checked against the same arithmetic in binary64: worst disagreement under
+# 1.0E-5 across four heads and sixteen positions. Checked by breaking it too
+# -- swapping where the keys and the values begin disagrees by 1.6E-2.
+#
+# Not wired, and it cannot pay yet: Attend uploads the whole cache on every
+# call, which is the round trip this exists to remove. What makes it worth
+# having is the cache staying on the device between tokens, and that is a
+# change to where the cache lives rather than to this kernel. The device
+# figure is unchanged within the day's spread -- 0.596 s wall, 0.488 s
+# generating, digest 5709b12b0517c8c5 -- because nothing in the engine calls
+# it.
+
 # 2026-08-19, the split explained, and a claim about it corrected.
 #
 # The experiment that seemed to find the speedup in neither half was recorded
@@ -1595,7 +1626,7 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device A0BBA5E1124CB8A1 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 4E5D9DEB73CDEA95 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived

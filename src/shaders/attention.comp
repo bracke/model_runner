@@ -1,0 +1,122 @@
+#version 450
+
+//  One position attending to everything the cache holds.
+//
+//  The scores against every cached key, the bound the architecture states on
+//  them, the softmax across them, and the values weighted by what comes out:
+//  the whole of attention for one position, which is the part of a layer that
+//  stands between two matrix products and keeps them from being sent
+//  together. Done here, a block's queries can go over, be attended with, and
+//  come back as one thing.
+//
+//  Keys and values share a buffer. Attention wants four arrays and the
+//  pipeline layout carries three, and rather than widen the layout for every
+//  shader the cache is laid out as one region with the values at an offset --
+//  which is the caller's choice to make and costs nothing, since the cache is
+//  written by this program in the first place.
+//
+//  One invocation a head. A head reads every cached position once and keeps a
+//  running maximum, a running sum and a running weighted value, so nothing
+//  needs storing per position: the softmax is folded into the pass that
+//  computes the scores rather than following it. That is the arrangement the
+//  host cannot use -- it has the scores in an array anyway -- and the one a
+//  device wants, because storing a score a position is storing a context
+//  length of them.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
+layout(std430, binding = 1) readonly  buffer Query { float q[]; };
+layout(std430, binding = 2) writeonly buffer Blend { float y[]; };
+
+layout(push_constant) uniform Shape {
+    uint heads;
+    uint head_size;
+    uint value_size;
+
+    //  How many heads share one group of keys and values. One for a model
+    //  that gives every head its own; more where several heads read the same.
+    uint group_size;
+
+    //  The first and last cached positions this may look at. A model with a
+    //  sliding window states a first that is not zero.
+    uint first;
+    uint last;
+
+    //  Where the keys begin in the shared buffer, where the values begin,
+    //  and how far apart one position's keys and values are.
+    uint k_base;
+    uint v_base;
+    uint kv_width;
+    uint v_width;
+
+    //  The scale on a score before the bound, and the bound itself, which is
+    //  zero where the architecture states none.
+    float scale;
+    float cap;
+} shape;
+
+//  The largest value width this kernel will take. A head wider than this is
+//  refused by the caller and done on the processor, which is better than a
+//  kernel that quietly writes past the end of what it kept.
+const uint room = 256;
+
+void main() {
+    uint head = gl_GlobalInvocationID.x;
+    if (head >= shape.heads) {
+        return;
+    }
+
+    uint group = head / shape.group_size;
+    uint q_at = head * shape.head_size;
+
+    //  Running maximum, running sum, and the running weighted value.
+    float top = -1.0 / 0.0;
+    float sum = 0.0;
+    float blended[room];
+
+    for (uint i = 0; i < shape.value_size; i++) {
+        blended[i] = 0.0;
+    }
+
+    for (uint step = shape.first; step <= shape.last; step++) {
+        uint k_at = shape.k_base + step * shape.kv_width
+                    + group * shape.head_size;
+
+        float score = 0.0;
+        for (uint c = 0; c < shape.head_size; c++) {
+            score += q[q_at + c] * kv[k_at + c];
+        }
+        score *= shape.scale;
+
+        //  The bound, where there is one. The same form the processor uses:
+        //  a hyperbolic tangent scaled by the bound, which flattens a large
+        //  score rather than clipping it.
+        if (shape.cap > 0.0) {
+            score = shape.cap * tanh(score / shape.cap);
+        }
+
+        //  Fold this score into what is held. When it is the largest so far
+        //  everything kept has to be rescaled to the new maximum, which is
+        //  what keeps the exponentials from overflowing.
+        float raised = max(top, score);
+        float carry = exp(top - raised);
+        float weight = exp(score - raised);
+
+        sum = sum * carry + weight;
+
+        uint v_at = shape.v_base + step * shape.v_width
+                    + group * shape.value_size;
+
+        for (uint i = 0; i < shape.value_size; i++) {
+            blended[i] = blended[i] * carry + weight * kv[v_at + i];
+        }
+
+        top = raised;
+    }
+
+    uint out_at = head * shape.value_size;
+    for (uint i = 0; i < shape.value_size; i++) {
+        y[out_at + i] = blended[i] / sum;
+    }
+}

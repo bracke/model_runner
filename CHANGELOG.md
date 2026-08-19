@@ -378,6 +378,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **An attention kernel for the device**, `attention.comp`: one position
+  against everything a cache holds, with the softmax folded into the pass that
+  computes the scores so nothing is stored per position. Keys and values share
+  a buffer rather than widening the pipeline layout for every shader. Checked
+  against the same arithmetic in binary64 to under 1.0E-5, and checked by
+  breaking it. Not wired to the engine and unable to pay until the cache stays
+  on the device between tokens, which is the next change.
+
 - **The halved cache is compared with products computed on a device.** Every
   comparison of it had been against a processor: the cache is the session's
   doing rather than the backend's, so nothing had crossed the two. It runs on
