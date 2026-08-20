@@ -1356,6 +1356,38 @@ package body Model_Runner.Platform.Device.Products is
       Item.Import_To := 0;
       Item.Share := False;
 
+      --  The cache goes back with them, and its mapping first.
+      --
+      --  It did not, and that was the whole of a corruption: Close released
+      --  the two buffers above and left the cache allocated, still mapped,
+      --  with Cache_At pointing into memory the device was about to take
+      --  with it. Nothing showed while nothing called Reserve. The moment
+      --  the engine wired attention up, a suite that opens and closes a
+      --  device once a test went from passing to "malloc(): unaligned
+      --  tcache chunk detected" -- and, in another run, to a glibc thread
+      --  assertion, which is the same stale pointer surfacing wherever the
+      --  allocator next looked.
+      --
+      --  The unmapping goes before the giving back, because unmapping
+      --  memory that has already gone back is the same fault the other way
+      --  round.
+      declare
+         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+      begin
+         if Item.Cache_At /= Null_Handle
+           and then Unmap /= null
+           and then Item.Logical /= Null_Handle
+           and then Item.Cache_Memory /= Null_Handle
+         then
+            Unmap (Item.Logical, Item.Cache_Memory);
+         end if;
+
+         Item.Cache_At := Null_Handle;
+      end;
+
+      Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
+      Item.Cache_Bytes := 0;
+
       Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
       Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
       Item.Vector_Bytes := 0;
@@ -2173,10 +2205,14 @@ package body Model_Runner.Platform.Device.Products is
       declare
          Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
       begin
-         if Item.Cache_At /= Null_Handle and then Unmap /= null then
+         if Item.Cache_At /= Null_Handle
+           and then Unmap /= null
+           and then Item.Cache_Memory /= Null_Handle
+         then
             Unmap (Item.Logical, Item.Cache_Memory);
-            Item.Cache_At := Null_Handle;
          end if;
+
+         Item.Cache_At := Null_Handle;
       end;
 
       Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);

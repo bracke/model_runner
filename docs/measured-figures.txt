@@ -1103,6 +1103,36 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-20, the corruption behind every end-to-end figure taken today.
+#
+# Close released the vector and result buffers and left the cache alone:
+# still allocated, still mapped, with Cache_At pointing into memory the
+# device was about to take with it. Cache_Buffer appeared in four places in
+# that file and none of them was Close.
+#
+# Nothing showed while nothing called Reserve, which is why it came through a
+# gate. The moment the engine wired attention up, a suite that opens and
+# closes a device once a test went from passing to "malloc(): unaligned
+# tcache chunk detected" -- and, in another run, to a glibc thread-priority
+# assertion, which is the same stale pointer surfacing wherever the allocator
+# next happened to look. Two symptoms, one fault.
+#
+# What it costs is not the crash. Every end-to-end measurement of device
+# attention taken today ran on a binary with it: the ones that said four
+# times slower, the ones that said eighteen times slower, and the one that
+# said eleven per cent faster. None of them mean anything. The isolated
+# figures from `tests device-bench` are untouched -- that tool opens one
+# engine and never closes it, which is exactly why it never saw this.
+#
+# The two-row device figure is not retaken: nothing the engine runs has
+# moved, since nothing in the engine reserves a cache. The sources the group
+# names have changed, which is the case this file's rules allow a written
+# reason for.
+#
+# The benchmark not reproducing it was not luck. A tool that measures one
+# call in one engine cannot see a fault in the second open, and the engine
+# does nothing else all day.
+
 # 2026-08-20, the call is not what is slow. Timed where it is made, inside a
 # layer, an attention reads 0.537 ms -- the same as the benchmark says for it
 # alone, and not the 2.55 ms that was inferred earlier by dividing an
@@ -1907,7 +1937,7 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device FD244F0FFA71490D src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device F2F7F314FA4837B5 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived

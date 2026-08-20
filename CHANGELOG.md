@@ -641,7 +641,16 @@ Keep a Changelog and the project uses semantic versioning.
   makes that true was added yesterday and nothing exercised it, which is the
   absence it was written to close.
 
-### Added
+### Fixed
+
+- **A closed device engine kept its key-and-value cache allocated and
+  mapped.** `Close` released the vector and result buffers and left the
+  cache, with the mapping pointer still set; the next `Reserve` then unmapped
+  and freed handles belonging to a device that had gone. Latent while nothing
+  called `Reserve`, and immediate once anything did: a suite that opens and
+  closes a device once a test aborted with `malloc(): unaligned tcache chunk
+  detected`, and in another run with a glibc thread assertion -- one stale
+  pointer, two symptoms.
 
 - **`tests device-bench` gained the rows that answer where a device attention's
   time goes.** The kernel at the engine's own shape; the same walking every
