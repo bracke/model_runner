@@ -2385,6 +2385,124 @@ package body Model_Runner.Llama is
       end loop;
    end Blend_Exact;
 
+   --  Put one position's keys and values where a device can read them.
+   --
+   --  Said by both evaluators, because a model must attend the same way
+   --  whichever reads it: one that computes attention one way while
+   --  generating and another while a draft's proposals are checked says two
+   --  different things, and the suite says so.
+   --
+   --  A device that has no room is not a failure. Resident comes back False
+   --  and everything is done on the processor as before, which is a slower
+   --  run rather than a refused one.
+   --
+   --  @param Item Session whose cache this is.
+   --  @param At_Key Where this position's keys go among the keys.
+   --  @param Key_Row The keys, rotated.
+   --  @param At_Value Where its values go among the values.
+   --  @param Value_Row The values.
+   --  @param Resident True when both reached the device.
+   procedure Put_Position
+     (Item      : Session;
+      At_Key    : Element_Count;
+      Key_Row   : Real_Array;
+      At_Value  : Element_Count;
+      Value_Row : Real_Array;
+      Resident  : out Boolean)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+   begin
+      Resident := False;
+
+      if Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
+        or else Item.Held /= Exact
+      then
+         return;
+      end if;
+
+      --  Said every position and done once: the room is the whole cache,
+      --  both halves, and asking again for what is there returns at once.
+      Model_Runner.Backend.Device.Reserve_Cache
+        (Item.Keys.all'Length + Item.Values.all'Length, Resident);
+
+      if Resident then
+         Model_Runner.Backend.Device.Put_Cache (At_Key, Key_Row, Resident);
+      end if;
+
+      if Resident then
+         --  The values follow the keys in the device's copy, which is one
+         --  buffer because attention wants four arrays and the pipeline
+         --  layout carries three.
+         Model_Runner.Backend.Device.Put_Cache
+           (Item.Keys.all'Length + At_Value, Value_Row, Resident);
+      end if;
+   end Put_Position;
+
+   --  One position attending, on the device, to the cache it already holds.
+   --
+   --  The arguments the processor's own attention takes, in the same order,
+   --  so that the two call sites read alike and a reader can see that they
+   --  are asking for the same thing.
+   --
+   --  @param Item Session the position belongs to.
+   --  @param Source Model, for the bound its architecture states.
+   --  @param Query This position's queries.
+   --  @param Heads How many heads.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @param First First cached position that may be looked at.
+   --  @param Last Last cached position that may be looked at.
+   --  @param K_Base Where this layer's keys begin.
+   --  @param V_Base Where this layer's values begin.
+   --  @param KV_Width How far apart one position's keys are from the next.
+   --  @param V_Width How far apart one position's values are from the next.
+   --  @param Scale What a score is multiplied by.
+   --  @param Target Receives the blend.
+   --  @param Usable False when the device declined it.
+   procedure Attend_There
+     (Item       : Session;
+      Source     : Model'Class;
+      Query      : Real_Array;
+      Heads      : Element_Count;
+      Head_Size  : Element_Count;
+      Value_Size : Element_Count;
+      First      : Element_Count;
+      Last       : Element_Count;
+      K_Base     : Element_Count;
+      V_Base     : Element_Count;
+      KV_Width   : Element_Count;
+      V_Width    : Element_Count;
+      Scale      : Real;
+      Target     : out Real_Array;
+      Usable     : out Boolean)
+   is
+      Took : Boolean;
+   begin
+      Model_Runner.Backend.Device.Attend
+        (Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
+         Source.Settings.Group_Size, Natural (First), Natural (Last),
+         Natural (K_Base), Natural (Item.Keys.all'Length + V_Base),
+         Natural (KV_Width), Natural (V_Width),
+         Scale, Source.Settings.Attention_Cap, Target, Took);
+
+      if Took then
+         Usable := True;
+         return;
+      end if;
+
+      --  A device that will not take it is not a wrong answer, only an
+      --  absent one, and the processor has the same cache to read: the
+      --  positions were written to both. Saying so here rather than at
+      --  either call site keeps the two evaluators alike, and keeps a
+      --  refusal from being reported as a tensor gone non-finite.
+      Blend_Exact
+        (Query, Item.Keys.all, Item.Values.all,
+         K_Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+         Value_Size, Element_Count (Source.Settings.Group_Size),
+         First, Last, Scale, Source.Settings.Attention_Cap,
+         Item.Scores.all, Target, Usable);
+   end Attend_There;
+
    --  The same, over a cache held in half precision. Every element is
    --  widened where the exact one reads it; nothing else differs, and
    --  nothing here computes in half precision.
@@ -4523,6 +4641,12 @@ package body Model_Runner.Llama is
               Element_Count (Index) * Element_Count (Item.Context) * V_Width;
             V_Slot  : constant Element_Count := V_Base + Reserved * V_Width;
 
+            --  Whether this position reached the device's own cache, which
+            --  is what says attention may be done there. False leaves
+            --  everything as it was, so a device that refused the room is a
+            --  slower run rather than a failed one.
+            Resident : Boolean := False;
+
             --  Set when a device took the whole gated feed-forward, its
             --  projection down included, so that the common tail does not
             --  project it a second time.
@@ -4602,6 +4726,13 @@ package body Model_Runner.Llama is
                   Item.Values.all (V_Slot + Offset) :=
                     Item.Value_Row.all (Offset);
                end loop;
+
+               --  And into the device's own copy, where attention reads it.
+               --  The host copy stays in step because everything else reads
+               --  it: the snapshot, the eviction, the other two precisions.
+               Put_Position
+                 (Item, Slot, Item.Key_Row.all (0 .. KV_Width - 1),
+                  V_Slot, Item.Value_Row.all (0 .. V_Width - 1), Resident);
             else
                for Offset in 0 .. KV_Width - 1 loop
                   Item.Half_Keys.all (Slot + Offset) :=
@@ -4636,6 +4767,11 @@ package body Model_Runner.Llama is
                      Element_Count (Settings.Group_Size),
                      First, Reserved, Scale, Settings.Attention_Cap,
                      Item.Scores.all, Item.Attention.all, Usable);
+               elsif Item.Held = Exact and then Resident then
+                  Attend_There
+                    (Item, Source, Item.Query.all, Heads, Head_Size,
+                     Value_Size, First, Reserved, Base, V_Base, KV_Width,
+                     V_Width, Scale, Item.Attention.all, Usable);
                elsif Item.Held = Exact then
                   Blend_Exact
                     (Item.Query.all, Item.Keys.all, Item.Values.all,
@@ -5010,6 +5146,11 @@ package body Model_Runner.Llama is
             V_Base  : constant Element_Count :=
               Element_Count (Index) * Element_Count (Item.Context) * V_Width;
 
+            --  Whether this batch's positions reached the device's cache.
+            --  Set as they are written and read where they are attended to,
+            --  which is a loop later.
+            Resident : Boolean := False;
+
             --  Set when a device took the whole gated feed-forward, its
             --  projection down included, so that the common tail does not
             --  project it a second time.
@@ -5118,6 +5259,17 @@ package body Model_Runner.Llama is
                         Item.Values.all (V_Place + Offset) :=
                           Values.all (V_At + Offset);
                      end loop;
+
+                     --  And the device's copy, as the single-token path
+                     --  does. Both evaluators must attend the same way: a
+                     --  model that computes attention one way when it
+                     --  generates and another when a draft's proposals are
+                     --  checked says two different things, and the suite
+                     --  says so.
+                     Put_Position
+                       (Item, Place, Keys.all (KV_At .. KV_At + KV_Width - 1),
+                        V_Place, Values.all (V_At .. V_At + V_Width - 1),
+                        Resident);
                   else
                      for Offset in 0 .. KV_Width - 1 loop
                         Item.Half_Keys.all (Place + Offset) :=
@@ -5153,6 +5305,12 @@ package body Model_Runner.Llama is
                         Element_Count (Settings.Group_Size),
                         First_Step, Last_Step, Scale,
                         Settings.Attention_Cap, Item.Scores.all,
+                        Attend.all (B_At .. B_At + Blend - 1), Usable);
+                  elsif Item.Held = Exact and then Resident then
+                     Attend_There
+                       (Item, Source, Query.all (Q_At .. Q_At + Wide - 1),
+                        Heads, Head_Size, Value_Size, First_Step, Last_Step,
+                        Base, V_Base, KV_Width, V_Width, Scale,
                         Attend.all (B_At .. B_At + Blend - 1), Usable);
                   elsif Item.Held = Exact then
                      Blend_Exact

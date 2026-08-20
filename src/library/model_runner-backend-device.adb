@@ -446,6 +446,71 @@ package body Model_Runner.Backend.Device is
       Compute (Weight, Vector, 1, Target, Status, Cancel);
    end Dispatch;
 
+   -------------------
+   -- Reserve_Cache --
+   -------------------
+
+   procedure Reserve_Cache
+     (Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Reserve (Engine, Elements, Ok);
+   end Reserve_Cache;
+
+   ---------------
+   -- Put_Cache --
+   ---------------
+
+   procedure Put_Cache
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : T.Real_Array;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Put_Cache (Engine, At_Value, Values, Ok);
+   end Put_Cache;
+
+   ------------
+   -- Attend --
+   ------------
+
+   procedure Attend
+     (Query      : T.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out T.Real_Array;
+      Ok         : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Attend_Resident
+        (Engine, Query, Heads, Head_Size, Value_Size, Group_Size,
+         First, Last, K_Base, V_Base, KV_Width, V_Width, Scale, Cap,
+         Target, Ok);
+   end Attend;
+
    --------------------
    -- Dispatch_Group --
    --------------------

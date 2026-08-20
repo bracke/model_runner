@@ -1352,21 +1352,49 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 1.777 s | **1.262 s** |
-| -- evaluating the prompt | 0.355 s | 0.174 s |
-| -- generating | 1.398 s | 1.062 s |
-| 110-token prompt, nothing generated | 6.295 s | **2.504 s** |
+| 6-token prompt, 12 generated | 1.777 s | **1.045 s** |
+| -- evaluating the prompt | 0.355 s | 0.196 s |
+| -- generating | 1.398 s | 0.847 s |
+| 110-token prompt, nothing generated | 6.295 s | **2.894 s** |
+
+The two columns were not taken together, which earlier versions of this
+table could say and this one cannot. The device column was measured on
+2026-08-20 at the loads its runs printed -- 1.47 rising to 1.67 for the short
+run and 1.45 rising to 1.54 for the long one. The processor column stands
+from the earlier sitting. Its runs were taken again beside these and read
+3.971 s and 12.572 s, at loads rising to 2.99 and 3.06 on a machine carrying
+somebody else's virtual machine at two thirds of a processor; those readings
+are recorded in `docs/measured-figures.txt` and are not published here,
+because a worse measurement is not a newer one. Read the comparison between
+the columns as the weaker claim it now is. What the device column is good
+for on its own is the row below.
 
 Both backends print the same digest of what they generated -- `5abff916` for
 the short run and `cbf29ce4` for the long one -- so this is the same text,
 not a faster answer to a different question.
 
-The long run moved from 3.824 s to 2.504 s when the shader was given a branch
-for every format, which was not the point of that change and is not claimed
-as its result: these were taken at a load of 1.6 and the earlier pair at a
-higher one, and the loads are the first thing to suspect. What the pair does
-say is that the shader did not get slower for carrying fifteen branches
-instead of three, which was the risk worth measuring.
+The two device figures moved in opposite directions when the engine was made
+to attend on the device from both of its evaluators, and both movements are
+worth stating. The short run went from 1.262 s to 1.045 s: it generates, and
+generating goes a token at a time, so each of its positions attends where its
+matrices already are instead of coming back for a blend.
+
+The long run went the other way, from 2.504 s to 2.894 s. It generates
+nothing and is a batch of 110 positions, and the batched evaluator now asks
+the device for a blend once per position per layer where it used to blend all
+110 at once here. Two readings taken an hour apart agree -- 2.862 s and
+2.894 s, the second at a load of 1.45 rising to 1.54, which is quieter than
+the 1.6 the 2.504 s was taken at -- so this is the change and not the
+machine. Fifteen per cent of a prompt evaluation is what the agreement
+between the two evaluators cost, and that agreement is not optional: a
+drafted run checks its proposals through the batched evaluator and generates
+through the other, so a device wired into one and not the other makes the two
+say different things, which is what the suite caught. What has not been
+measured is where inside that the time goes -- the natural suspicion is the
+count of separate submissions and their fences rather than the arithmetic,
+since the same 110 positions cost 1.90 s of processor time in total, but
+suspicion is not measurement and it is listed as work rather than written
+here as a finding.
 
 Read the left column with the caveat it deserves. This machine had other work
 on it, and the two columns are not equally hurt by that: the processor column
@@ -1375,8 +1403,8 @@ pairs taken across two days the processor's short run ranged from 1.42 to
 2.17 s and the device's from 1.21 to 1.80, with the device below the
 processor in seven of the eight. So its advantage on the short run is real
 and smaller than any single pair suggests; on the long run it has never been
-close. Each pair was taken together, which is what makes the two columns
-comparable at all.
+close. Each of those eight pairs was taken together; the table above is the
+first whose columns were not, for the reason given under it.
 
 The earlier pairs are not listed here any more, and the reason is that they
 were not comparable with these. Until this was written the tool differed from

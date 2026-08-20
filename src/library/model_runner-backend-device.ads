@@ -162,6 +162,67 @@ package Model_Runner.Backend.Device is
       Status : out Model_Runner.Errors.Error_Info;
       Cancel : Model_Runner.Cancellation.Token_Reference := null);
 
+   --  Make room on the device for a key-and-value cache and keep it.
+   --
+   --  A model's largest runtime allocation, put where attention can read it
+   --  without any of it crossing the interface for every position that
+   --  attends to it. Asking for no more than is already held does nothing,
+   --  so a caller may say it every layer.
+   --
+   --  @param Elements How many values, keys and values together.
+   --  @param Ok True when the room is there.
+   procedure Reserve_Cache
+     (Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
+   --  Write one position's keys or values into that cache.
+   --
+   --  @param At_Value Where in the cache the run begins.
+   --  @param Values What to write.
+   --  @param Ok True when it was written.
+   procedure Put_Cache
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : Model_Runner.Tensors.Real_Array;
+      Ok       : out Boolean);
+
+   --  One position attending to the cache the device holds.
+   --
+   --  Only the queries go over and only the blend comes back. The arguments
+   --  are the ones the processor's own attention takes, so the two read side
+   --  by side.
+   --
+   --  @param Query This position's queries, one head after another.
+   --  @param Heads How many heads.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @param Group_Size How many heads share one group of keys and values.
+   --  @param First First cached position that may be looked at.
+   --  @param Last Last cached position that may be looked at.
+   --  @param K_Base Where this layer's keys begin.
+   --  @param V_Base Where this layer's values begin.
+   --  @param KV_Width How far apart one position's keys are from the next.
+   --  @param V_Width How far apart one position's values are from the next.
+   --  @param Scale What a score is multiplied by.
+   --  @param Cap The bound on a score, or zero for none.
+   --  @param Target Receives the blend, one head after another.
+   --  @param Ok True when the device computed it.
+   procedure Attend
+     (Query      : Model_Runner.Tensors.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out Model_Runner.Tensors.Real_Array;
+      Ok         : out Boolean);
+
    --  Several products of the same activation, in one submission.
    --
    --  A layer's queries, keys and values are three matrices read against one

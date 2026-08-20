@@ -1,3 +1,4 @@
+with Ada.Numerics.Elementary_Functions;
 with Ada.Text_IO;
 
 with AUnit.Assertions;
@@ -1343,6 +1344,154 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Device_Reads_The_Host_Memory_When_Asked;
 
+   ------------------------------------------
+   -- Resident_Cache_Attends_As_A_Host_Does --
+   ------------------------------------------
+
+   --  The three the engine says as it generates -- reserve room, write a
+   --  position, attend to what was written -- against a blend worked out
+   --  here, in the open, on numbers small enough to check by hand.
+   --
+   --  This is the path both evaluators take. When it was said in one
+   --  evaluator and not the other, a drafted run stopped agreeing with an
+   --  undrafted one, and the difference was arithmetic rather than a
+   --  refusal: nothing failed, the answer was merely other.
+   procedure Resident_Cache_Attends_As_A_Host_Does
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      --  One head, four wide, three positions. Small enough that the
+      --  expected blend below is worked out rather than trusted.
+      Head_Size  : constant N.Element_Count := 4;
+      Positions  : constant N.Element_Count := 3;
+      Room       : constant N.Element_Count := Head_Size * Positions;
+
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      Query : constant N.Real_Array (0 .. Head_Size - 1) :=
+        [1.0, 0.0, 0.0, 0.0];
+
+      --  Keys chosen so the first position scores highest and the third
+      --  lowest, which makes a wrong ordering visible in the result.
+      Keys : constant N.Real_Array (0 .. Room - 1) :=
+        [2.0, 0.0, 0.0, 0.0,
+         1.0, 0.0, 0.0, 0.0,
+         0.0, 1.0, 0.0, 0.0];
+
+      --  Values that name their position, so a blend says which positions
+      --  it read and how much of each.
+      Values : constant N.Real_Array (0 .. Room - 1) :=
+        [1.0, 0.0, 0.0, 0.0,
+         0.0, 1.0, 0.0, 0.0,
+         0.0, 0.0, 1.0, 0.0];
+
+      Blend : N.Real_Array (0 .. Head_Size - 1) := [others => 0.0];
+
+      Scale : constant N.Real := 1.0;
+
+      --  What the three scores come to once softened, worked out from
+      --  exp (2), exp (1) and exp (0).
+      Total : constant N.Real :=
+        N.Real (Ada.Numerics.Elementary_Functions.Exp (2.0))
+        + N.Real (Ada.Numerics.Elementary_Functions.Exp (1.0))
+        + 1.0;
+      Wanted : constant N.Real_Array (0 .. Head_Size - 1) :=
+        [N.Real (Ada.Numerics.Elementary_Functions.Exp (2.0)) / Total,
+         N.Real (Ada.Numerics.Elementary_Functions.Exp (1.0)) / Total,
+         1.0 / Total,
+         0.0];
+
+      --  Loose enough for a device working in binary32 and for the online
+      --  softmax rescaling its running total as it goes.
+      Near : constant N.Real := 1.0e-4;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
+
+      if not Ready then
+         --  A machine with no device says nothing here, as the other
+         --  device cases do.
+         return;
+      end if;
+
+      Model_Runner.Backend.Device.Reserve_Cache (Room * 2, Ok);
+
+      if not Ok then
+         --  A device that will not hold a cache is a slower run, not a
+         --  wrong one; the engine falls back to the processor.
+         Model_Runner.Backend.Device.Close;
+         return;
+      end if;
+
+      Model_Runner.Backend.Device.Put_Cache (0, Keys, Ok);
+      Assert (Ok, "a device that reserved room would not take the keys");
+
+      --  The values follow the keys in the one buffer attention reads.
+      Model_Runner.Backend.Device.Put_Cache (Room, Values, Ok);
+      Assert (Ok, "a device that took the keys would not take the values");
+
+      Model_Runner.Backend.Device.Attend
+        (Query      => Query,
+         Heads      => 1,
+         Head_Size  => Natural (Head_Size),
+         Value_Size => Natural (Head_Size),
+         Group_Size => 1,
+         First      => 0,
+         Last       => Natural (Positions) - 1,
+         K_Base     => 0,
+         V_Base     => Natural (Room),
+         KV_Width   => Natural (Head_Size),
+         V_Width    => Natural (Head_Size),
+         Scale      => Scale,
+         Cap        => 0.0,
+         Target     => Blend,
+         Ok         => Ok);
+
+      Assert (Ok, "a device holding the cache would not attend to it");
+
+      for Index in Blend'Range loop
+         Assert (abs (Blend (Index) - Wanted (Index)) <= Near,
+                 "the device's blend differs from the one worked out here "
+                 & "at component" & N.Element_Count'Image (Index));
+      end loop;
+
+      --  Reserving again for the same room is the engine's every-position
+      --  case, and must neither refuse nor lose what is there.
+      Model_Runner.Backend.Device.Reserve_Cache (Room * 2, Ok);
+      Assert (Ok, "asking again for room a device already holds was "
+              & "refused");
+
+      Blend := [others => 0.0];
+      Model_Runner.Backend.Device.Attend
+        (Query      => Query,
+         Heads      => 1,
+         Head_Size  => Natural (Head_Size),
+         Value_Size => Natural (Head_Size),
+         Group_Size => 1,
+         First      => 0,
+         Last       => Natural (Positions) - 1,
+         K_Base     => 0,
+         V_Base     => Natural (Room),
+         KV_Width   => Natural (Head_Size),
+         V_Width    => Natural (Head_Size),
+         Scale      => Scale,
+         Cap        => 0.0,
+         Target     => Blend,
+         Ok         => Ok);
+
+      Assert (Ok, "a device would not attend a second time");
+
+      for Index in Blend'Range loop
+         Assert (abs (Blend (Index) - Wanted (Index)) <= Near,
+                 "a cache reserved a second time lost what was written to "
+                 & "it at component" & N.Element_Count'Image (Index));
+      end loop;
+
+      Model_Runner.Backend.Device.Close;
+   end Resident_Cache_Attends_As_A_Host_Does;
+
    ----------
    -- Name --
    ----------
@@ -1601,6 +1750,10 @@ package body Tests.Backend_Cases is
         (T, Default_Team_Leaves_A_Share'Access,
          "the default worker count leaves a share for the task that submits "
          & "the job, on every machine size");
+      Register_Routine
+        (T, Resident_Cache_Attends_As_A_Host_Does'Access,
+         "a cache a device holds is written and attended to, and says what "
+         & "a blend worked out by hand says");
    end Register_Tests;
 
 end Tests.Backend_Cases;

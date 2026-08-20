@@ -936,8 +936,36 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # median of three, 1.682 s wall against the published 1.88, 9.56 s of
 # processor time, at a load of 1.47 rising to 2.15. The figure holds.
 
+# 2026-08-20, attention on the device from both evaluators. The four groups
+# carry llama.adb, which gained two subprograms and three call sites: a
+# position's keys and values are written to a cache a device holds, and a
+# position attends to that cache there rather than here. This was already
+# said while generating; saying it while a batch is evaluated is what this
+# change adds, and the reason it had to be added is that a drafted run
+# checks its proposals through the batched evaluator while it generates
+# through the other, so a device wired into one and not the other made a
+# drafted run disagree with an undrafted one.
+#
+# The device group is re-measured; this group is not, and the reason is
+# that the code cannot run here. Put_Position returns on its first
+# statement unless the session's backend is the device one, and
+# Attend_There is reached only when Put_Position has come back saying the
+# device took the position, which off the device it never does. What these
+# figures pay for the change is one enumeration comparison per position per
+# layer, on a path that reads a matrix per position per layer.
+#
+# That is an arithmetic argument rather than a measurement, so it was worth
+# checking that the arithmetic is the whole story: this group's twelve-token
+# figure was taken again on the model above and read 4.016 s against the
+# published 1.869, at a load of 1.44 rising to 2.51 on a machine with a
+# virtual machine of somebody else's on it at two thirds of a processor.
+# That reading is not published and does not overturn anything -- it is a
+# busy machine, in the direction and roughly the size a busy machine moves
+# this figure -- but it is recorded here because a figure not taken is worth
+# less than a figure taken badly and said to be bad.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-engine F8B000F8B0F20455 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 5448B52B8BBAD68C src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -1015,8 +1043,27 @@ engine F8B000F8B0F20455 src/library/model_runner-llama.adb src/library/model_run
 # Not re-measured on that account. The twelve-token figure was taken on this
 # model two days ago at 1.871 s against the published 1.88.
 
+# 2026-08-20, attention on the device from both evaluators. The four groups
+# carry llama.adb, which gained two subprograms and three call sites: a
+# position's keys and values are written to a cache a device holds, and a
+# position attends to that cache there rather than here. This was already
+# said while generating; saying it while a batch is evaluated is what this
+# change adds, and the reason it had to be added is that a drafted run
+# checks its proposals through the batched evaluator while it generates
+# through the other, so a device wired into one and not the other made a
+# drafted run disagree with an undrafted one.
+#
+# The device group is re-measured; this group is not, and the reason is
+# that the code cannot run here. Put_Position returns on its first
+# statement unless the session's backend is the device one, and
+# Attend_There is reached only when Put_Position has come back saying the
+# device took the position, which off the device it never does. What these
+# figures pay for the change is one enumeration comparison per position per
+# layer, on a path that reads a matrix per position per layer.
+#
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 1D7CD21B4B5F978A src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -1936,8 +1983,45 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Not re-measured on that account. The twelve-token figure was taken on this
 # model two days ago at 1.871 s against the published 1.88.
 
+# 2026-08-20, attention on the device from both evaluators. Re-measured, in
+# one sitting, all four cells of the two-row table -- and the table now says
+# that its two columns were not taken together, because they were not.
+#
+# device, 6 prompt tokens and 12 generated: 1.045 s wall, 0.196 s evaluating
+# the prompt and 0.847 s generating, 0.36 s of processor time, digest
+# 5abff916f9d83ca6, load 1.47 to 1.67. Published, against 1.262 s.
+#
+# device, 110 prompt tokens and nothing generated: 2.862 s wall, 1.90 s of
+# processor time, digest cbf29ce484222325, load 1.50 to 1.80; and again an
+# hour later, 2.894 s wall, 1.92 s of processor time, same digest, load 1.45
+# to 1.54. The second is published, against 2.504 s, because it was taken at
+# the quieter load and is the slower of the two: where a figure got worse,
+# the reading that flatters the change least is the one to publish.
+#
+# That row got fifteen per cent slower and the reason is the change, not the
+# machine -- the quieter of the two readings is the slower one, and the load
+# it was taken at is below the 1.6 the published figure was taken at. The
+# batched evaluator now asks the device for a blend once per position per
+# layer where it blended all 110 positions here in one go. The cost is not
+# optional: a drafted run checks proposals through the batched evaluator and
+# generates through the other, and a device wired into one and not the other
+# made those two disagree, which is the failure that prompted the change.
+# Where the fifteen per cent actually goes has NOT been measured -- 110
+# positions cost 1.90 s of processor time in total, which points at the count
+# of submissions and their fences rather than at the arithmetic, but that is
+# a suspicion and it is recorded as one.
+#
+# The processor column was taken beside these and is not published: 3.971 s
+# for the short run at a load of 1.45 rising to 2.99, and 12.572 s for the
+# long one at 1.50 rising to 3.06, against published figures of 1.777 and
+# 6.295. The machine carried a virtual machine belonging to somebody else at
+# two thirds of a processor for the whole evening; an earlier attempt at the
+# short run waited 120 minutes and never saw the load fall below 1.5 at all.
+# Those readings are here rather than published for the reason the kernels
+# group gives above: a worse measurement is not a newer one.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device F2F7F314FA4837B5 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device A3EC88E35F0BDA22 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -2043,8 +2127,27 @@ device F2F7F314FA4837B5 src/shaders/row_product.comp src/library/model_runner-sh
 # Not re-measured on that account. The twelve-token figure was taken on this
 # model two days ago at 1.871 s against the published 1.88.
 
+# 2026-08-20, attention on the device from both evaluators. The four groups
+# carry llama.adb, which gained two subprograms and three call sites: a
+# position's keys and values are written to a cache a device holds, and a
+# position attends to that cache there rather than here. This was already
+# said while generating; saying it while a batch is evaluated is what this
+# change adds, and the reason it had to be added is that a drafted run
+# checks its proposals through the batched evaluator while it generates
+# through the other, so a device wired into one and not the other made a
+# drafted run disagree with an undrafted one.
+#
+# The device group is re-measured; this group is not, and the reason is
+# that the code cannot run here. Put_Position returns on its first
+# statement unless the session's backend is the device one, and
+# Attend_There is reached only when Put_Position has come back saying the
+# device took the position, which off the device it never does. What these
+# figures pay for the change is one enumeration comparison per position per
+# layer, on a path that reads a matrix per position per layer.
+#
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
-drafting 1A3E22067556CC3E src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting 6504AF4214CE0D95 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
