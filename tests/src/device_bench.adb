@@ -1,6 +1,7 @@
 with Ada.Calendar;
 with Ada.Text_IO;
 
+with Model_Runner.Bytes;
 with Model_Runner.Numerics;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Platform.Device;
@@ -27,12 +28,40 @@ package body Device_Bench is
       Rounds : constant := 20;
 
       --  Time one shape and say what it cost, per call and per position.
-      procedure Take (Heads : Natural; Wide : Natural; Steps : Natural);
+      procedure Take
+        (Heads   : Natural;
+         Wide    : Natural;
+         Steps   : Natural;
+         Sharing : Natural := 1;
+         Layers  : Natural := 1;
+         Room    : Natural := 0);
 
-      procedure Take (Heads : Natural; Wide : Natural; Steps : Natural) is
+      --  The engine's own shape, not a tidy one. A model with grouped
+      --  queries has fewer key heads than query heads, so a position's keys
+      --  are narrower than its queries, and the cache holds every layer of
+      --  the whole context rather than the few positions being attended to.
+      --  Both of those change what the kernel reads and neither was in the
+      --  first shapes measured here.
+      procedure Take
+        (Heads   : Natural;
+         Wide    : Natural;
+         Steps   : Natural;
+         Sharing : Natural := 1;
+         Layers  : Natural := 1;
+         Room    : Natural := 0)
+      is
          use type N.Element_Count;
 
+         --  How wide one position's keys are: a group a head unless heads
+         --  share, and then a group per group.
+         Groups : constant Natural := Heads / Sharing;
+         Narrow : constant Natural := Groups * Wide;
+
          Span  : constant Natural := Heads * Wide;
+
+         --  How many positions the cache has room for, against how many are
+         --  attended to. A layer of a real model holds the whole context.
+         Kept  : constant Natural := (if Room = 0 then Steps else Room);
 
          --  On the heap: a cache of two thousand positions across
          --  thirty-two heads is thirty-two megabytes, which is a stack
@@ -41,7 +70,8 @@ package body Device_Bench is
 
          Cache : constant Values :=
            new N.Real_Array
-             (0 .. N.Element_Count (Steps) * N.Element_Count (Span) * 2 - 1);
+             (0 .. N.Element_Count (Layers) * N.Element_Count (Kept)
+                   * N.Element_Count (Narrow) * 2 - 1);
          Asked : constant Values :=
            new N.Real_Array (0 .. N.Element_Count (Span) - 1);
          Got   : constant Values :=
@@ -80,9 +110,11 @@ package body Device_Bench is
             Products.Attend_Resident
               (Engine, Asked.all,
                Heads => Heads, Head_Size => Wide, Value_Size => Wide,
-               Group_Size => 1, First => 0, Last => Steps - 1,
-               K_Base => 0, V_Base => Steps * Span,
-               KV_Width => Span, V_Width => Span,
+               First => 0, Last => Steps - 1,
+               K_Base => 0,
+               V_Base => Layers * Kept * Narrow,
+               KV_Width => Narrow, V_Width => Narrow,
+               Group_Size => Sharing,
                Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
             exit when not Ok;
          end loop;
@@ -119,6 +151,132 @@ package body Device_Bench is
             & " Gflop/s, cache"
             & Natural'Image (Natural (Cache.all'Length) / 256) & " KiB");
       end Take;
+
+      --  As Take, but with a matrix product submitted before each attention,
+      --  which is what a layer does around it. A call timed on an idle
+      --  device is not a call in a layer.
+      procedure Busy
+        (Heads   : Natural;
+         Wide    : Natural;
+         Steps   : Natural;
+         Sharing : Natural := 1;
+         Layers  : Natural := 1;
+         Room    : Natural := 0)
+      is
+         use type N.Element_Count;
+         use type Model_Runner.Bytes.Byte_Count;
+
+         Groups : constant Natural := Heads / Sharing;
+         Narrow : constant Natural := Groups * Wide;
+         Span   : constant Natural := Heads * Wide;
+         Kept   : constant Natural := (if Room = 0 then Steps else Room);
+
+         type Values is access N.Real_Array;
+         type Bytes_Access is access Model_Runner.Bytes.Byte_Array;
+
+         Cache : constant Values :=
+           new N.Real_Array
+             (0 .. N.Element_Count (Layers) * N.Element_Count (Kept)
+                   * N.Element_Count (Narrow) * 2 - 1);
+         Asked : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Span) - 1);
+         Got   : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Span) - 1);
+
+         Rows : constant Natural := Span;
+         Cols : constant Natural := Span;
+
+         Weights : constant Bytes_Access :=
+           new Model_Runner.Bytes.Byte_Array
+             (1 .. Model_Runner.Bytes.Byte_Count (Rows * Cols * 4));
+         Product : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Rows) - 1);
+
+         Started : Ada.Calendar.Time;
+         Spent   : Duration;
+         Ok      : Boolean;
+         Halted  : Boolean;
+      begin
+         Cache.all := [others => 0.125];
+         Asked.all := [others => 0.25];
+         Weights.all := [others => 0];
+
+         Products.Reserve (Engine, Cache.all'Length, Ok);
+         if not Ok then
+            return;
+         end if;
+         Products.Put_Cache (Engine, 0, Cache.all, Ok);
+         if not Ok then
+            return;
+         end if;
+
+         --  The product on its own first, so that what the attention adds
+         --  beside it can be told from what the product costs. A pair timed
+         --  without this says only that a matrix of four million weights is
+         --  not free.
+         Started := Ada.Calendar.Clock;
+         for Round in 1 .. Rounds loop
+            Products.Multiply
+              (Engine, Weights.all, 0, Products.Values_F32, Rows, Cols,
+               Asked.all, 1, Product.all, Ok, Halted);
+         end loop;
+
+         Ada.Text_IO.Put_Line
+           ("    the product alone:"
+            & Duration'Image ((Ada.Calendar.Clock - Started) / Rounds)
+            & " s");
+
+         Started := Ada.Calendar.Clock;
+
+         for Round in 1 .. Rounds loop
+            Products.Multiply
+              (Engine, Weights.all, 0, Products.Values_F32, Rows, Cols,
+               Asked.all, 1, Product.all, Ok, Halted);
+
+            Products.Attend_Resident
+              (Engine, Asked.all,
+               Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+               Group_Size => Sharing, First => 0, Last => Steps - 1,
+               K_Base => 0, V_Base => Layers * Kept * Narrow,
+               KV_Width => Narrow, V_Width => Narrow,
+               Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
+            exit when not Ok;
+         end loop;
+
+         Spent := (Ada.Calendar.Clock - Started) / Rounds;
+
+         Ada.Text_IO.Put_Line
+           ("    a product and an attention together:"
+            & Duration'Image (Spent) & " s a pair");
+
+         --  And the same attention reading a different layer's region every
+         --  call, as a token does: twenty-two of them, ninety megabytes
+         --  apart end to end. Every call above read the first layer's keys,
+         --  which after the first is a region already warm.
+         Started := Ada.Calendar.Clock;
+
+         for Round in 1 .. Rounds loop
+            declare
+               Layer : constant Natural := (Round - 1) mod Layers;
+            begin
+               Products.Attend_Resident
+                 (Engine, Asked.all,
+                  Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+                  Group_Size => Sharing, First => 0, Last => Steps - 1,
+                  K_Base => Layer * Kept * Narrow,
+                  V_Base => Layers * Kept * Narrow
+                            + Layer * Kept * Narrow,
+                  KV_Width => Narrow, V_Width => Narrow,
+                  Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
+               exit when not Ok;
+            end;
+         end loop;
+
+         Ada.Text_IO.Put_Line
+           ("    attention walking every layer's region:"
+            & Duration'Image ((Ada.Calendar.Clock - Started) / Rounds)
+            & " s a call");
+      end Busy;
    begin
       Devices.Open (Held, Found);
       if not Found or else Devices.Count (Held) = 0 then
@@ -148,6 +306,19 @@ package body Device_Bench is
       Take (32, 64, 16);
       Take (32, 64, 512);
       Take (32, 64, 2048);
+
+      --  And what the engine actually asks for: thirty-two query heads
+      --  sharing four groups of keys, across twenty-two layers of a context
+      --  two thousand deep, attending to five hundred of them.
+      Ada.Text_IO.Put_Line ("  as the engine asks it:");
+      Take (32, 64, 512, Sharing => 8, Layers => 22, Room => 2048);
+
+      --  The same, with a matrix product submitted between each attention,
+      --  as a layer does. A call timed on an idle device is not a call in a
+      --  layer: the layer submits four products around it, and a submission
+      --  that queues behind them waits for them.
+      Ada.Text_IO.Put_Line ("  with a layer's other work between:");
+      Busy (32, 64, 512, Sharing => 8, Layers => 22, Room => 2048);
 
       Products.Close (Engine);
       Devices.Close (Opened);

@@ -643,6 +643,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests device-bench` measures the engine's own shape and its neighbours.**
+  The attention kernel at thirty-two heads sharing four groups of keys across
+  a ninety-megabyte cache; the same walking every layer's region rather than
+  one; a matrix product alone; and the two together. Enough to say that
+  attention costs 0.35 to 0.54 ms alone and about 2.55 ms inside a layer, and
+  to rule out machine load, the shape, and cache locality as the reason.
+  What remains -- the cost of submitting beside a layer's other work -- is
+  measured at between 0.7 and 1.8 ms beside a single product and is not
+  settled.
+
 - **The `gemma2` architecture:** `gemma` and four more differences, each
   silent when missed. A normalization after each sublayer as well as before
   it, required where the architecture states them; a bound on the attention

@@ -1103,6 +1103,37 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-20, hunting the difference between what an attention call costs on
+# its own and what it costs a layer. Wired into the engine it read 0.709 s of
+# generating against 0.261 s with the processor doing the attention -- taken
+# interleaved in one session, with the prompt evaluation reading 53.99 s and
+# 54.29 s either side of it, which is what says the machine was the same. It
+# is 0.448 s across 176 calls: 2.55 ms apiece, against 0.35 to 0.54 ms for the
+# same call measured on its own at the engine's own shape.
+#
+# Three explanations were offered for that and the benchmark refused two of
+# them outright:
+#
+#   the machine was busy      no: the unwired prompt path read the same
+#                             either side, and the pair was interleaved
+#   the shape was wrong       no: measured at thirty-two heads sharing four
+#                             groups, across ninety megabytes of cache,
+#                             0.35 ms
+#   the cache went cold       no: walking a different layer's region every
+#                             call reads 0.508 ms against 0.537 for the same
+#                             one twenty times over
+#
+# What is left is the fourth, and it is not settled. Beside one matrix product
+# an attention's marginal cost read 0.703 ms in one run and 1.810 ms in the
+# next -- above its cost alone, and varying by more than a factor of two. A
+# layer submits four products around each attention, and 2.55 ms is inside
+# what that suggests if the effect scales. It was called refuted here on the
+# first of those two numbers, which was one reading and the smaller one.
+#
+# So: the call is cheap and the calling is not, and how much of the calling
+# is the fence, the pipeline change, or the driver is not known. The rows are
+# in `tests device-bench` for whoever asks next.
+
 # 2026-08-20, the stage bounds held against the machine's time and not the
 # wall's. What a stage costs the processor barely moves when something else
 # is running; what it costs the clock moves by more than the growth a bound
