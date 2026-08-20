@@ -249,6 +249,59 @@ package body Device_Bench is
            ("    a product and an attention together:"
             & Duration'Image (Spent) & " s a pair");
 
+         --  A layer's shape: four products around one attention, and the
+         --  same four without it. The difference is what the attention adds
+         --  where it is actually called, which is the question a pair of
+         --  one product could only hint at -- and it read 0.703 ms one run
+         --  and 1.810 ms the next, so this says both figures every time
+         --  rather than one of them.
+         for Attempt in 1 .. 3 loop
+            declare
+               Bare : Duration;
+               Both : Duration;
+
+               --  What a layer submits: the queries, keys and values as one,
+               --  the attention output, the gate and up as one, and the
+               --  projection down. Four, whatever the grouping does to them.
+               Sends : constant := 4;
+            begin
+               Started := Ada.Calendar.Clock;
+               for Round in 1 .. Rounds loop
+                  for Each in 1 .. Sends loop
+                     Products.Multiply
+                       (Engine, Weights.all, 0, Products.Values_F32,
+                        Rows, Cols, Asked.all, 1, Product.all, Ok, Halted);
+                  end loop;
+               end loop;
+               Bare := (Ada.Calendar.Clock - Started) / Rounds;
+
+               Started := Ada.Calendar.Clock;
+               for Round in 1 .. Rounds loop
+                  for Each in 1 .. Sends loop
+                     Products.Multiply
+                       (Engine, Weights.all, 0, Products.Values_F32,
+                        Rows, Cols, Asked.all, 1, Product.all, Ok, Halted);
+                  end loop;
+
+                  Products.Attend_Resident
+                    (Engine, Asked.all,
+                     Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+                     Group_Size => Sharing, First => 0, Last => Steps - 1,
+                     K_Base => 0, V_Base => Layers * Kept * Narrow,
+                     KV_Width => Narrow, V_Width => Narrow,
+                     Scale => 0.125, Cap => 0.0, Target => Got.all,
+                     Ok => Ok);
+               end loop;
+               Both := (Ada.Calendar.Clock - Started) / Rounds;
+
+               Ada.Text_IO.Put_Line
+                 ("    four products" & Duration'Image (Bare)
+                  & " s, with an attention" & Duration'Image (Both)
+                  & " s, the attention" & Duration'Image (Both - Bare)
+                  & " s");
+            end;
+         end loop;
+
          --  And the same attention reading a different layer's region every
          --  call, as a token does: twenty-two of them, ninety megabytes
          --  apart end to end. Every call above read the first layer's keys,
@@ -277,6 +330,102 @@ package body Device_Bench is
             & Duration'Image ((Ada.Calendar.Clock - Started) / Rounds)
             & " s a call");
       end Busy;
+
+      --  Whether reserving a cache costs the weights their place.
+      --
+      --  The engine keeps a model's matrices on the device and gives the
+      --  least-wanted one back when the next will not fit a budget that is a
+      --  fixed share of the heap, decided when the device opened. A cache
+      --  reserved afterwards takes device memory that budget knows nothing
+      --  about. If that is what makes a wired run slow, then cycling
+      --  products through more matrices than the budget holds gets slower
+      --  once a cache is reserved, and the count given back rises.
+      procedure Squeeze (Wide : Natural; Many : Natural; Cache : Natural) is
+         use type N.Element_Count;
+         use type Model_Runner.Bytes.Byte_Count;
+
+         type Values is access N.Real_Array;
+         type Bytes_Access is access Model_Runner.Bytes.Byte_Array;
+
+         Weights : constant Bytes_Access :=
+           new Model_Runner.Bytes.Byte_Array
+             (1 .. Model_Runner.Bytes.Byte_Count (Many)
+                   * Model_Runner.Bytes.Byte_Count (Wide * Wide * 4));
+
+         Asked : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Wide) - 1);
+         Got   : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Wide) - 1);
+
+         Room : Values;
+
+         Started : Ada.Calendar.Time;
+         Ok      : Boolean;
+         Halted  : Boolean;
+
+         Before, After : Natural;
+      begin
+         Weights.all := [others => 0];
+         Asked.all := [others => 0.25];
+
+         if Cache > 0 then
+            Room := new N.Real_Array (0 .. N.Element_Count (Cache) - 1);
+            Room.all := [others => 0.0];
+            Products.Reserve (Engine, Room.all'Length, Ok);
+            if not Ok then
+               Ada.Text_IO.Put_Line ("    no room for the cache");
+               return;
+            end if;
+         end if;
+
+         --  Once through to settle what is kept, then the timed pass.
+         --  Each with a key of its own, which is what asks the device to
+         --  keep it. Without one nothing is kept and the question is not
+         --  being put at all -- the first pass at this measured that and
+         --  reported nothing kept, which was the test failing to ask rather
+         --  than the device declining.
+         for Round in 1 .. Many loop
+            declare
+               At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count ((Round - 1) * Wide * Wide * 4);
+            begin
+               Products.Multiply
+                 (Engine, Weights.all, At_Byte,
+                  Products.Values_F32, Wide, Wide, Asked.all, 1, Got.all,
+                  Ok, Halted,
+                  Key => Weights.all (Weights.all'First + At_Byte)'Address);
+            end;
+         end loop;
+
+         Before := Products.Given_Back (Engine);
+         Started := Ada.Calendar.Clock;
+
+         for Pass in 1 .. 3 loop
+            for Round in 1 .. Many loop
+               declare
+                  At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count
+                      ((Round - 1) * Wide * Wide * 4);
+               begin
+                  Products.Multiply
+                    (Engine, Weights.all, At_Byte,
+                     Products.Values_F32, Wide, Wide, Asked.all, 1, Got.all,
+                     Ok, Halted,
+                     Key =>
+                       Weights.all (Weights.all'First + At_Byte)'Address);
+               end;
+            end loop;
+         end loop;
+
+         After := Products.Given_Back (Engine);
+
+         Ada.Text_IO.Put_Line
+           ("    cache" & Natural'Image (Cache / 262_144) & " MiB:"
+            & Duration'Image ((Ada.Calendar.Clock - Started) / (3 * Many))
+            & " s a product," & Natural'Image (After - Before)
+            & " given back," & Natural'Image (Products.Resident (Engine))
+            & " kept");
+      end Squeeze;
    begin
       Devices.Open (Held, Found);
       if not Found or else Devices.Count (Held) = 0 then
@@ -319,6 +468,13 @@ package body Device_Bench is
       --  that queues behind them waits for them.
       Ada.Text_IO.Put_Line ("  with a layer's other work between:");
       Busy (32, 64, 512, Sharing => 8, Layers => 22, Room => 2048);
+
+      --  Twenty matrices of a thousand square, which is eighty megabytes of
+      --  weights, first with no cache and then with eighty-eight megabytes
+      --  of one.
+      Ada.Text_IO.Put_Line ("  weights against a reserved cache:");
+      Squeeze (1024, 20, 0);
+      Squeeze (1024, 20, 23_068_672);
 
       Products.Close (Engine);
       Devices.Close (Opened);

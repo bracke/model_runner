@@ -1103,6 +1103,43 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-20, the call is not what is slow. Timed where it is made, inside a
+# layer, an attention reads 0.537 ms -- the same as the benchmark says for it
+# alone, and not the 2.55 ms that was inferred earlier by dividing an
+# end-to-end difference by a call count. Reserving the cache costs 0.24 us a
+# call after the one allocation of 88 MiB, and writing a position costs
+# 1.18 us. Ninety-five milliseconds a run, all told, for the wiring.
+#
+# So the earlier inference was wrong, and it was wrong because an eight-token
+# window is shorter than this machine's own variation. Lengthened to
+# sixty-four it says something else entirely:
+#
+#   generating, unwired    0.282 s        4.4 ms a token
+#   generating, wired      5.224 s       81.6 ms a token
+#
+# Fourteen hundred attention calls account for 0.76 s of that 5.2. And the
+# cost per token grew from 4.4 to 81.6 while the calls per token did not:
+# whatever this is, it is not a per-call cost.
+#
+# Five explanations have now been offered and measured away:
+#
+#   the machine was busy    no: interleaved, and the unwired prompt path
+#                           read the same either side
+#   the shape was wrong     no: the engine's own shape reads 0.35 ms
+#   the cache went cold     no: walking every layer's region, 0.508 ms
+#   the queue was busy      not settled by differencing -- four products
+#                           cost thirty milliseconds and the attention one,
+#                           and three tries gave -4.02, +0.76 and +1.09 ms
+#   the cache took the      no: cycling twenty matrices with a cache
+#   weights' room           reserved gives back none of them, and kept forty
+#
+# The last was worth asking because the weight budget is a share of the heap
+# fixed when the device opens and knows nothing about a cache reserved after.
+# It gives back nothing all the same.
+#
+# What is left is unknown, and the honest thing is to leave it that way rather
+# than offer a sixth. The rows are in `tests device-bench`.
+
 # 2026-08-20, hunting the difference between what an attention call costs on
 # its own and what it costs a layer. Wired into the engine it read 0.709 s of
 # generating against 0.261 s with the processor doing the attention -- taken

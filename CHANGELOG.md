@@ -643,6 +643,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests device-bench` gained the rows that answer where a device attention's
+  time goes.** The kernel at the engine's own shape; the same walking every
+  layer's region; a matrix product alone; four products around one attention;
+  and weights cycled with and without a cache reserved. Timed inside a layer
+  the call reads 0.537 ms, matching the benchmark -- so the call is not what
+  is slow. What is slow is a wired run at sixty-four tokens, 81.6 ms a token
+  against 4.4, which is not a per-call cost at all. Five explanations have been
+  measured away; the cause is unknown and nothing is wired.
+
 - **`tests device-bench` measures the engine's own shape and its neighbours.**
   The attention kernel at thirty-two heads sharing four groups of keys across
   a ninety-megabyte cache; the same walking every layer's region rather than
