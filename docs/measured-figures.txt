@@ -1103,6 +1103,54 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-20, the attention kernel measured instead of guessed at. Two shapes
+# of it had been written and each lost to the processor -- one by twelve
+# times, the next by four -- and both were written before anything measured
+# where their time went. `tests device-bench` asks that instead: one call
+# timed at several shapes, with the arithmetic done put beside the seconds
+# taken.
+#
+# What it said about the kernel as committed, one invocation a head:
+#
+#   1 head,   512 positions   6.204 ms     32 heads, 16 positions   0.582 ms
+#   32 heads, 512 positions   9.980 ms     peak                     0.52 Gflop/s
+#
+# Rows two and three do identical arithmetic -- 131 thousand operations -- and
+# differ fifteenfold. Thirty-two times the heads cost one and a half times;
+# four times the positions cost three and a quarter. Positions were the serial
+# axis, which is what one invocation a head means and what no amount of
+# rewriting in the same shape would have fixed.
+#
+# Three changes, each from a number rather than a hunch:
+#
+#   a workgroup a head, positions dealt round its invocations
+#   the cache left on the device instead of re-sent for every call
+#   the cache mapped once instead of mapped and unmapped per write
+#
+#   attention, 32 heads 512 positions   9.98 ms  ->  0.395 ms
+#   peak                                0.52     ->  13.0 Gflop/s
+#   a cache write of 2048 values        1.6 ms   ->  0.26 us
+#
+# The processor does the same attention in 0.85 ms, so the kernel is now
+# twice its speed where it was four times slower. The standing mapping is
+# safe rather than lucky: the memory kind a device is chosen for must be
+# host-coherent, which is required where that choice is made, so a write
+# through it is seen without a flush. An earlier attempt at this was reverted
+# for fear of exactly that, and the fear was unfounded.
+#
+# The device group's own two-row figure is not retaken: nothing the engine
+# runs has moved, since nothing in the engine calls any of this. The sources
+# the group names have changed, which is the case this file's rules allow a
+# written reason for.
+#
+# It is not wired to the engine and does not pay yet. Generation at 522
+# cached positions reads 0.654 s against the processor's 0.150 s, and 176
+# attention calls account for seventy milliseconds of that. The rest is
+# unexplained, so nothing is claimed for it. What there is now is an
+# instrument that answers such a question in seconds rather than in
+# forty-five-minute gate runs, which is what made the first two shapes cost
+# what they did.
+
 # 2026-08-19, and the answer to it: the suite takes eight seconds.
 #
 # The routine that was sixteen of its twenty-eight minutes called
@@ -1712,7 +1760,7 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # model two days ago at 1.871 s against the published 1.88.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device 4E5D9DEB73CDEA95 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device FD244F0FFA71490D src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived

@@ -17,6 +17,7 @@ package body Tool_Commands is
    Name_Schema         : aliased constant String := "schema";
    Name_Likeness       : aliased constant String := "fixture-likeness";
    Name_Slow           : aliased constant String := "slow";
+   Name_Device_Bench   : aliased constant String := "device-bench";
 
    Nothing : aliased constant String := "";
 
@@ -56,7 +57,11 @@ package body Tool_Commands is
    Takes_Schema    : aliased constant String := "SCHEMA";
    Takes_Likeness  : aliased constant String := "--model PATH [--names]";
    Takes_Slow      : aliased constant String := "[NAME]";
+   Takes_Bench     : aliased constant String := "";
 
+   Says_Bench : aliased constant String :=
+     "what one attention call costs on a device, at several shapes, with the"
+     & " arithmetic done beside the seconds taken";
    Says_Slow : aliased constant String :=
      "where the suite's time goes: each case on its own, or one test named"
      & " by the prefix AUnit's filter understands";
@@ -96,7 +101,7 @@ package body Tool_Commands is
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
 
-   Held : constant array (1 .. 17) of Command :=
+   Held : constant array (1 .. 18) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -130,6 +135,8 @@ package body Tool_Commands is
       (Name_Likeness'Access, Takes_Likeness'Access, Says_Likeness'Access,
        Opts_Likeness'Access),
       (Name_Slow'Access, Takes_Slow'Access, Says_Slow'Access,
+       Opts_None'Access),
+      (Name_Device_Bench'Access, Takes_Bench'Access, Says_Bench'Access,
        Opts_None'Access)];
 
    -----------

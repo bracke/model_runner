@@ -15,13 +15,18 @@
 //  which is the caller's choice to make and costs nothing, since the cache is
 //  written by this program in the first place.
 //
-//  One invocation a head. A head reads every cached position once and keeps a
-//  running maximum, a running sum and a running weighted value, so nothing
-//  needs storing per position: the softmax is folded into the pass that
-//  computes the scores rather than following it. That is the arrangement the
-//  host cannot use -- it has the scores in an array anyway -- and the one a
-//  device wants, because storing a score a position is storing a context
-//  length of them.
+//  A workgroup a head, and the cached positions dealt round its invocations.
+//  Giving a head to a single invocation was measured first and is what this
+//  replaces: thirty-two threads walking five hundred positions in series read
+//  0.52 Gflop/s on a device good for thousands, and four times more positions
+//  cost three and a quarter times more while thirty-two times more heads cost
+//  one and a half. Positions were the serial axis, so positions are what is
+//  divided here.
+//
+//  The softmax is still folded into the pass that reads the keys, so no score
+//  outlives a tile. Storing one a position is storing a context length of
+//  them, which is what a device cannot afford and the processor does not
+//  mind.
 
 layout(local_size_x = 64) in;
 
@@ -61,8 +66,13 @@ layout(push_constant) uniform Shape {
 //  kernel that quietly writes past the end of what it kept.
 const uint room = 256;
 
+//  One tile of scores, one per invocation.
+shared float tile[64];
+
 void main() {
-    uint head = gl_GlobalInvocationID.x;
+    uint head = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
     if (head >= shape.heads) {
         return;
     }
@@ -70,53 +80,81 @@ void main() {
     uint group = head / shape.group_size;
     uint q_at = head * shape.head_size;
 
-    //  Running maximum, running sum, and the running weighted value.
-    float top = -1.0 / 0.0;
-    float sum = 0.0;
-    float blended[room];
-
-    for (uint i = 0; i < shape.value_size; i++) {
-        blended[i] = 0.0;
+    //  What this invocation carries out: every sixty-fourth component of
+    //  this head's value, so the private store is four floats and not a
+    //  head's width.
+    float held[room / 64];
+    for (uint k = 0; k < room / 64; k++) {
+        held[k] = 0.0;
     }
 
-    for (uint step = shape.first; step <= shape.last; step++) {
-        uint k_at = shape.k_base + step * shape.kv_width
-                    + group * shape.head_size;
+    float top = -1.0 / 0.0;
+    float sum = 0.0;
 
-        float score = 0.0;
-        for (uint c = 0; c < shape.head_size; c++) {
-            score += q[q_at + c] * kv[k_at + c];
+    for (uint base = shape.first; base <= shape.last; base += 64) {
+        uint step = base + lane;
+
+        float score = -1.0 / 0.0;
+        if (step <= shape.last) {
+            uint k_at = shape.k_base + step * shape.kv_width
+                        + group * shape.head_size;
+
+            float dot = 0.0;
+            for (uint c = 0; c < shape.head_size; c++) {
+                dot += q[q_at + c] * kv[k_at + c];
+            }
+            score = dot * shape.scale;
+
+            if (shape.cap > 0.0) {
+                score = shape.cap * tanh(score / shape.cap);
+            }
         }
-        score *= shape.scale;
 
-        //  The bound, where there is one. The same form the processor uses:
-        //  a hyperbolic tangent scaled by the bound, which flattens a large
-        //  score rather than clipping it.
-        if (shape.cap > 0.0) {
-            score = shape.cap * tanh(score / shape.cap);
+        tile[lane] = score;
+        barrier();
+
+        uint span = min(64u, shape.last - base + 1);
+
+        float highest = tile[0];
+        for (uint j = 1; j < span; j++) {
+            highest = max(highest, tile[j]);
         }
 
-        //  Fold this score into what is held. When it is the largest so far
-        //  everything kept has to be rescaled to the new maximum, which is
-        //  what keeps the exponentials from overflowing.
-        float raised = max(top, score);
+        float raised = max(top, highest);
         float carry = exp(top - raised);
-        float weight = exp(score - raised);
 
-        sum = sum * carry + weight;
+        float added = 0.0;
+        for (uint j = 0; j < span; j++) {
+            added += exp(tile[j] - raised);
+        }
+        sum = sum * carry + added;
 
-        uint v_at = shape.v_base + step * shape.v_width
-                    + group * shape.value_size;
+        for (uint k = 0; k < room / 64; k++) {
+            uint c = lane + k * 64;
+            if (c >= shape.value_size) {
+                break;
+            }
 
-        for (uint i = 0; i < shape.value_size; i++) {
-            blended[i] = blended[i] * carry + weight * kv[v_at + i];
+            float gathered = 0.0;
+            for (uint j = 0; j < span; j++) {
+                uint v_at = shape.v_base + (base + j) * shape.v_width
+                            + group * shape.value_size + c;
+                gathered += exp(tile[j] - raised) * kv[v_at];
+            }
+
+            held[k] = held[k] * carry + gathered;
         }
 
         top = raised;
+        barrier();
     }
 
     uint out_at = head * shape.value_size;
-    for (uint i = 0; i < shape.value_size; i++) {
-        y[out_at + i] = blended[i] / sum;
+    for (uint k = 0; k < room / 64; k++) {
+        uint c = lane + k * 64;
+        if (c >= shape.value_size) {
+            break;
+        }
+        y[out_at + c] = held[k] / sum;
     }
 }

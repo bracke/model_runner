@@ -435,6 +435,72 @@ package Model_Runner.Platform.Device.Products is
       Target     : out Model_Runner.Numerics.Real_Array;
       Ok         : out Boolean);
 
+   --  Make room on the device for a cache and keep it between calls.
+   --
+   --  Uploading the whole cache for every call is most of what an attention
+   --  call costs -- a per-call floor of 0.42 ms against a processor that does
+   --  the whole layer in 0.85 ms -- and a cache written a position at a time
+   --  and read where it lies removes it.
+   --
+   --  @param Item Ready engine.
+   --  @param Elements How many values, keys and values together.
+   --  @param Ok True when the room is there.
+   procedure Reserve
+     (Item     : in out Engine;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
+   --  Write a run of values into that cache.
+   --
+   --  @param Item Ready engine with a cache reserved.
+   --  @param At_Value Where in the cache the run begins.
+   --  @param Values What to write there.
+   --  @param Ok True when it was written.
+   procedure Put_Cache
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : Model_Runner.Numerics.Real_Array;
+      Ok       : out Boolean);
+
+   --  Attend against the cache the device already holds.
+   --
+   --  As Attend, without the cache crossing the interface: only the queries
+   --  go over and only the blend comes back.
+   --
+   --  @param Item Ready engine with a cache reserved and written.
+   --  @param Query This position's queries, one head after another.
+   --  @param Heads How many heads.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @param Group_Size How many heads share one group of keys and values.
+   --  @param First First cached position that may be looked at.
+   --  @param Last Last cached position that may be looked at.
+   --  @param K_Base Where the keys begin.
+   --  @param V_Base Where the values begin.
+   --  @param KV_Width How far apart one position's keys are from the next.
+   --  @param V_Width How far apart one position's values are from the next.
+   --  @param Scale What a score is multiplied by.
+   --  @param Cap The bound on a score, or zero for none.
+   --  @param Target Receives Heads * Value_Size values.
+   --  @param Ok True when the device computed it.
+   procedure Attend_Resident
+     (Item       : in out Engine;
+      Query      : Model_Runner.Numerics.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out Model_Runner.Numerics.Real_Array;
+      Ok         : out Boolean);
+
    --  The widest value head this kernel will take. One wider is refused, and
    --  the caller does it on the processor: a kernel that wrote past what it
    --  kept would be worse than one that says no.
@@ -671,6 +737,14 @@ private
       Cache_Buffer : System.Address := System.Null_Address;
       Cache_Memory : System.Address := System.Null_Address;
       Cache_Bytes  : Interfaces.Unsigned_64 := 0;
+
+      --  The cache mapped once and left mapped. A position is written every
+      --  layer of every token -- hundreds of writes a run, at a millisecond
+      --  and a half apiece when each maps and unmaps around itself -- and the
+      --  memory a device is chosen for is host-coherent, so what is written
+      --  through a standing mapping is seen without a flush. That is the
+      --  condition; it is required where the memory kind is picked.
+      Cache_At     : System.Address := System.Null_Address;
    end record;
 
    type Step is record

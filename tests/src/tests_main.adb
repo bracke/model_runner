@@ -13,6 +13,7 @@ with Ada.Text_IO;
 with AUnit;
 with AUnit.Reporter.Text;
 with Case_Timing;
+with Device_Bench;
 with AUnit.Run;
 
 with Tests.Suite;
@@ -891,6 +892,11 @@ begin
       else
          Case_Timing.Report;
       end if;
+
+   elsif Command = "device-bench" then
+      --  Where an attention call's time goes, before another kernel is
+      --  written on a guess about it.
+      Device_Bench.Report;
 
    elsif Command = "fixture-likeness" then
       --  Compare a published file's tensor list against the fixture this

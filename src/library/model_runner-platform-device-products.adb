@@ -2143,13 +2143,122 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end One_Product;
 
+   -------------
+   -- Reserve --
+   -------------
+
+   procedure Reserve
+     (Item     : in out Engine;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      Wanted : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Elements) * 4;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item) or else Elements = 0 then
+         return;
+      end if;
+
+      --  Already large enough is already done, so a caller may say this
+      --  every layer without paying for it after the first.
+      if Item.Cache_Bytes >= Wanted then
+         Ok := True;
+         return;
+      end if;
+
+      declare
+         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+      begin
+         if Item.Cache_At /= Null_Handle and then Unmap /= null then
+            Unmap (Item.Logical, Item.Cache_Memory);
+            Item.Cache_At := Null_Handle;
+         end if;
+      end;
+
+      Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
+      Take (Item, Wanted, Item.Cache_Buffer, Item.Cache_Memory, Ok);
+      if not Ok then
+         Item.Cache_Bytes := 0;
+         return;
+      end if;
+
+      --  Mapped here and left mapped. The kind this came from is
+      --  host-coherent by the rule that chose it, so a write through this
+      --  pointer is seen by the device without a flush.
+      declare
+         Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
+         Where : aliased Address := Null_Handle;
+      begin
+         if Map = null
+           or else Map (Item.Logical, Item.Cache_Memory, 0, Wanted, 0,
+                        Where'Access) /= 0
+         then
+            Ok := False;
+            Item.Cache_Bytes := 0;
+            return;
+         end if;
+
+         Item.Cache_At := Where;
+      end;
+
+      Item.Cache_Bytes := Wanted;
+   end Reserve;
+
+   ---------------
+   -- Put_Cache --
+   ---------------
+
+   procedure Put_Cache
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : Model_Runner.Numerics.Real_Array;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      use type System.Storage_Elements.Integer_Address;
+
+      At_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (At_Value) * 4;
+      Span    : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Values'Length) * 4;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.Cache_At = Null_Handle
+        or else Values'Length = 0
+        or else At_Byte + Span > Item.Cache_Bytes
+      then
+         return;
+      end if;
+
+      --  Straight into the standing mapping: a copy and no call to the
+      --  driver at all.
+      declare
+         Room : Model_Runner.Numerics.Real_Array (Values'Range)
+           with Import,
+                Address =>
+                  System.Storage_Elements.To_Address
+                    (System.Storage_Elements.To_Integer (Item.Cache_At)
+                     + System.Storage_Elements.Integer_Address (At_Byte));
+      begin
+         Room := Values;
+      end;
+
+      Ok := True;
+   end Put_Cache;
+
    ------------
    -- Attend --
    ------------
 
-   procedure Attend
+   procedure Attend_Resident
      (Item       : in out Engine;
-      Cache      : Model_Runner.Numerics.Real_Array;
       Query      : Model_Runner.Numerics.Real_Array;
       Heads      : Natural;
       Head_Size  : Natural;
@@ -2168,14 +2277,7 @@ package body Model_Runner.Platform.Device.Products is
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
-      --  How many invocations a group of the attention kernel holds, which
-      --  is what its source declares. Named here rather than borrowed from
-      --  the matrix kernel's constant, because a parameter of this call
-      --  carries that name and the two are different things.
-      Per_Group : constant := 64;
-
-      Kept_Bytes  : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Cache'Length) * 4;
+      Kept_Bytes  : constant Interfaces.Unsigned_64 := Item.Cache_Bytes;
       Query_Bytes : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Query'Length) * 4;
       Blend_Bytes : constant Interfaces.Unsigned_64 :=
@@ -2194,7 +2296,7 @@ package body Model_Runner.Platform.Device.Products is
         or else Value_Size > Attention_Room
         or else Group_Size = 0
         or else Last < First
-        or else Cache'Length = 0
+        or else Item.Cache_Buffer = Null_Handle
         or else Query'Length
                   < Model_Runner.Numerics.Element_Count (Heads)
                     * Model_Runner.Numerics.Element_Count (Head_Size)
@@ -2203,17 +2305,6 @@ package body Model_Runner.Platform.Device.Products is
                     * Model_Runner.Numerics.Element_Count (Value_Size)
       then
          return;
-      end if;
-
-      --  A buffer of its own for the cache: it is far larger than an
-      --  activation and it outlives one call.
-      if Item.Cache_Bytes < Kept_Bytes then
-         Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
-         Take (Item, Kept_Bytes, Item.Cache_Buffer, Item.Cache_Memory, Good);
-         if not Good then
-            return;
-         end if;
-         Item.Cache_Bytes := Kept_Bytes;
       end if;
 
       if Item.Vector_Bytes < Query_Bytes then
@@ -2234,11 +2325,6 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
          Item.Result_Bytes := Blend_Bytes;
-      end if;
-
-      Write_Into (Item, Item.Cache_Memory, Kept_Bytes, Cache, Good);
-      if not Good then
-         return;
       end if;
 
       Write_Into (Item, Item.Vector_Memory, Query_Bytes, Query, Good);
@@ -2319,9 +2405,9 @@ package body Model_Runner.Platform.Device.Products is
                     Sets'Address, 0, Null_Handle);
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                Attention_Bytes, Shape'Address);
-         Dispatch
-           (Item.Buffer,
-            C.unsigned ((Heads + Per_Group - 1) / Per_Group), 1, 1);
+         --  A workgroup a head, which is what the kernel's source declares:
+         --  its invocations divide the cached positions between them.
+         Dispatch (Item.Buffer, C.unsigned (Heads), 1, 1);
 
          if Stop (Item.Buffer) /= 0 then
             return;
@@ -2360,6 +2446,53 @@ package body Model_Runner.Platform.Device.Products is
       end;
 
       Ok := True;
+   end Attend_Resident;
+
+   ------------
+   -- Attend --
+   ------------
+
+   procedure Attend
+     (Item       : in out Engine;
+      Cache      : Model_Runner.Numerics.Real_Array;
+      Query      : Model_Runner.Numerics.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out Model_Runner.Numerics.Real_Array;
+      Ok         : out Boolean)
+   is
+      Good : Boolean;
+   begin
+      Ok := False;
+
+      --  The cache put where the kernel reads it, then the kernel. Kept as
+      --  one call for a caller with a cache in hand; a caller that writes a
+      --  position at a time uses the two beneath it and pays the upload once
+      --  rather than once a call.
+      Reserve (Item, Cache'Length, Good);
+      if not Good then
+         return;
+      end if;
+
+      Put_Cache (Item, 0, Cache, Good);
+      if not Good then
+         return;
+      end if;
+
+      Attend_Resident
+        (Item, Query, Heads, Head_Size, Value_Size, Group_Size,
+         First, Last, K_Base, V_Base, KV_Width, V_Width, Scale, Cap,
+         Target, Ok);
    end Attend;
 
    --------------

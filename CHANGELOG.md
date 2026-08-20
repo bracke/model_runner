@@ -559,6 +559,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests device-bench`, and an attention kernel that is worth twenty-five
+  times what it was.** A workgroup a head instead of one invocation, a cache
+  left on the device instead of re-sent per call, and a standing mapping
+  instead of one per write: 9.98 ms to 0.395 ms for thirty-two heads across
+  five hundred positions, 0.52 to 13.0 Gflop/s, and a cache write from 1.6 ms
+  to 0.26 us. The processor does the same attention in 0.85 ms.
+
+  Not wired to the engine. End to end it still loses -- 0.654 s against
+  0.150 s at 522 cached positions -- and the attention calls account for
+  seventy milliseconds of that, so the rest is unexplained and nothing is
+  claimed for it.
+
 - **The `phi3` architecture.** Nothing in its arithmetic differs; everything
   about where its weights are does. The queries, keys and values are one
   tensor and the gate and up projection another, and a part is taken out as a
