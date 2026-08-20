@@ -557,7 +557,18 @@ Keep a Changelog and the project uses semantic versioning.
   displacement follows a hash of the element's index now, which has no
   period to line up with a row length.
 
-### Added
+### Fixed
+
+- **A stage's timing bound no longer fails the gate on a busy machine.** Its
+  message admitted it could not tell "either the machine was busy or the stage
+  grew"; now it can, by the rule this repository already applies to every
+  figure it prints. Above `Host_Load.Publishable` an overrun is reported and
+  not counted; below it, it fails as before. Conformance read 648, 992, 1505
+  and 1794 s in one day against a bound of 1250, and the machine was the
+  difference every time. The bound itself goes to 3000 s: two quiet readings
+  of the same stage differed by 2.3 times, so a bound meant to catch a
+  doubling cannot be tighter than that. Processor time would be the better
+  instrument and is not adopted here.
 
 - **`tests device-bench`, and an attention kernel that is worth twenty-five
   times what it was.** A workgroup a head instead of one invocation, a cache

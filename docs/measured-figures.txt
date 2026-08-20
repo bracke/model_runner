@@ -1103,6 +1103,45 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-20, a bound that could not tell a busy machine from a stage that
+# grew. Its own message said so -- "either the machine was busy or the stage
+# grew" -- and it failed the gate either way. Conformance read 648, 992, 1505
+# and 1794 s in one day against a bound of 1250, and the difference was the
+# machine every time: this host was at a load of 3.6 for the last of them and
+# none of it was this program's.
+#
+# The bound was not wrong. Twice the 648 s taken on a quiet machine is 1250,
+# which is the rule written beside it. What was wrong is that a figure taken
+# at a load of 3.6 is not a figure about the stage, and this repository
+# already says so about every other number it prints: Host_Load.Publishable,
+# whose own comment says the rule is about figures and not about any one
+# measurement. A stage's time is a figure.
+#
+# So an overrun above that load is reported and not counted, and an overrun
+# below it fails as before. Checked both ways with the bound set to a
+# thousandth of a second: at a load of 3.06 it noted, and with the load
+# forced to 1.0 it failed.
+#
+# A bound that fails half the time is a bound people learn to ignore, and
+# that is how a suite of twenty-eight minutes went unnoticed for months.
+#
+# The rule alone was not enough, and the run that proved it is worth keeping.
+# With the mechanism in, the gate's total was noted at a load of 1.57 and
+# conformance failed at 1.40 -- correctly, by the rule, since 1.40 is quiet
+# enough to publish from. It took 1479 s there against a bound of 1250 that
+# came from 648 s the day before, also at a publishable load.
+#
+# So the quiet baseline itself moves by 2.3 times on this host, and a bound
+# meant to catch a stage that doubles cannot be set tighter than the noise it
+# is measuring against. 3000 s is twice the worst reading taken at a load the
+# rule calls quiet, which is the most a wall clock can say here.
+#
+# The better instrument is processor time rather than wall time: what a stage
+# costs the machine barely moves when something else is running, and what it
+# costs the clock moves by more than the thing being watched for. That is a
+# change to what Report_Stage measures rather than to any bound, and it is
+# not made here.
+
 # 2026-08-20, the attention kernel measured instead of guessed at. Two shapes
 # of it had been written and each lost to the processor -- one by twelve
 # times, the next by four -- and both were written before anything measured
