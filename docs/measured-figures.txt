@@ -1103,6 +1103,46 @@ reference 2842D0DB1A580901 src/library/model_runner-backend-reference.adb src/li
 # Both backends printed 5709b12b0517c8c5 again. As of their moment, as every
 # wall time in this file now is.
 
+# 2026-08-20, the stage bounds held against the machine's time and not the
+# wall's. What a stage costs the processor barely moves when something else
+# is running; what it costs the clock moves by more than the growth a bound
+# exists to catch. Conformance read 1741.85 s of wall in one run and 962 in
+# the one before it, for the same twenty-six thousand sequences -- and 1757.39
+# s of processor time, which is the figure that describes the stage.
+#
+# The five, measured on this host:
+#
+#   suite               3.94, 6.28 s              bound 20
+#   repository checks   9.00, 11.81, 13.03, 19.39  bound 60
+#   conformance         1757.39, 1945.01 s         bound 4000
+#   fixtures            199.92, 211.37 s           bound 450
+#   fuzzing             0.28, 0.30 s               bound 5
+#   the whole gate      about 2180 s               bound 4800
+#
+# Twice the worst for the long stages and three times it for the short two.
+# The short ones move: the repository checks read 9.00 and then 19.39, better
+# than two to one, because a stage that reads five thousand files gets what
+# the page cache and the scheduler give it that minute. The long ones are
+# arithmetic and hold still -- conformance moved by a ninth across two runs
+# whose wall times differed by a factor of two.
+#
+# This was set from a single reading each on the first pass and had to be
+# widened twice. A bound taken from one reading is a bound taken from the
+# best of them, and that is the third time this file has recorded the same
+# lesson in two days.
+#
+# Where a host keeps no such number the bound is not held at all. It is said
+# and not counted, rather than quietly reverting to the wall clock -- which is
+# the measurement this change exists to stop relying on. Processor_Seconds
+# reads /proc/self/stat, so that is every host but this family of them.
+#
+# Asking the system instead would answer everywhere: getrusage is POSIX and
+# gives the same figure. It was written that way and taken out again, because
+# a check in this repository refuses a host call bound by name in the tests
+# crate -- one directory for every host -- and the check was right. It belongs
+# in the platform layer with a body apiece, which is its own change and not
+# this one.
+
 # 2026-08-20, a bound that could not tell a busy machine from a stage that
 # grew. Its own message said so -- "either the machine was busy or the stage
 # grew" -- and it failed the gate either way. Conformance read 648, 992, 1505

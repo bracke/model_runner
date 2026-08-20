@@ -301,7 +301,11 @@ begin
          --  nobody notices growing, which is how a half-hour gate became an
          --  hour without any one part of it looking wrong.
          Whole  : constant Ada.Calendar.Time := Ada.Calendar.Clock;
-         Bound  : constant Duration := 1_500.0;
+
+         --  And what the machine spends on the whole of it, which is what
+         --  the bound is held against for the same reason the stages' are.
+         Whole_Burned : constant Long_Float := Host_Load.Processor_Seconds;
+         Bound  : constant Duration := 4_800.0;
 
          --  When the stage now running began, and how to say what it took.
          --
@@ -311,22 +315,95 @@ begin
          --  eight hundredths of a second.
          Started : Ada.Calendar.Time := Ada.Calendar.Clock;
 
-         --  What each stage took when it was last measured on the host the
-         --  figures name, and roughly twice that as the bound. Twice,
-         --  because a machine under load takes half again as long and that
-         --  is not news; a stage that doubles has had something added to it
-         --  rather than been unlucky, and the gate grew from half an hour to
-         --  an hour once with nothing saying so.
+         --  And what the machine spent on it, which is the figure the bounds
+         --  are held against. A wall clock measures what else the host was
+         --  doing as much as what the stage did: two quiet readings of
+         --  conformance differed by 2.3 times on this host, which is more
+         --  than the doubling a bound exists to catch. Processor seconds
+         --  barely move when something else runs, so a bound against them
+         --  says something about the stage and not about the afternoon.
+         Burned : Long_Float := Host_Load.Processor_Seconds;
+
+         --  What each stage cost the machine when it was last measured on
+         --  the host the figures name, and roughly twice that as the bound.
+         --  Twice, because a stage that doubles has had something added to
+         --  it rather than been unlucky, and the gate grew from half an hour
+         --  to an hour once with nothing saying so.
+         --
+         --  Against processor seconds and not the wall. These are what the
+         --  five read on 2026-08-20:
+         --
+         --    suite 3.94 and 6.28; repository checks 9.00, 11.81, 13.03
+         --    and 19.39; conformance 1757.39 and 1945.01; fixtures 199.92
+         --    and 211.37; fuzzing 0.28 and 0.30; about 2180 for the whole
+         --
+         --  The wall said 1741.85 for conformance in that run and 962 in
+         --  the one before it, for the same work; the machine's own figure
+         --  moved by a tenth of that. A bound wants holding against the
+         --  number that describes the stage.
+         --
+         --  Twice the worst reading, and three times it for the two short
+         --  stages. The first pass at these took one reading each and set
+         --  ten seconds for a suite that read 3.94; it read 6.28 next run.
+         --  The repository checks then read 9.00, 11.81, 13.03 and 19.39
+         --  across four -- better than two to one, on the figure that was
+         --  supposed to be the steady one.
+         --
+         --  A short stage is mostly the machine's other business: reading
+         --  five thousand files takes what the page cache and the scheduler
+         --  give it that minute. The long ones are arithmetic and hold
+         --  still. So the short two get three times their worst and the
+         --  long ones twice, and a bound set from a single reading is a
+         --  bound set from the best of them.
+         --
+         --  Where a host reports no processor time none of this is held at
+         --  all. Host_Load reads /proc/self/stat, so that is every host but
+         --  one family of them. Asking the system instead -- getrusage is
+         --  POSIX and answers the same question everywhere this is built --
+         --  belongs in the platform layer with a body per host, not in the
+         --  tests crate, which is one directory for every host and has a
+         --  check that says so. It caught this being done the wrong way.
          procedure Report_Stage (Named : String; Budget : Duration) is
             use type Ada.Calendar.Time;
             Ended : constant Ada.Calendar.Time := Ada.Calendar.Clock;
             Took  : constant Duration := Ended - Started;
+
+            --  Zero where the host does not say, and then there is nothing
+            --  to hold a bound against and the wall has to do.
+            Now_Burned : constant Long_Float := Host_Load.Processor_Seconds;
+            --  A start reading of zero is not a host that keeps no such
+            --  number; it is a process that has barely run yet, and for the
+            --  first stage the difference is the whole of it either way.
+            --  What says the host keeps none is a reading of zero after the
+            --  work, which no stage of this gate can honestly produce.
+            Told : constant Boolean := Now_Burned > 0.0;
+
+            Spent_On : constant Duration :=
+              (if Told then Duration (Now_Burned - Burned) else Took);
          begin
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
-               "  took: " & Named & Duration'Image (Took) & " s");
+               "  took: " & Named & Duration'Image (Took) & " s"
+               & (if Told
+                  then "," & Duration'Image (Spent_On) & " s of it the"
+                       & " machine's"
+                  else ""));
 
-            if Took > Budget then
+            if not Told then
+               --  No processor time from this host, so there is nothing to
+               --  hold a bound against. Saying the wall time exceeded it
+               --  would be saying something about the afternoon, which is
+               --  what this stopped doing; so it is said and not counted.
+               if Took > Budget then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "  note: " & Named & " took" & Duration'Image (Took)
+                     & " s against a bound of" & Duration'Image (Budget)
+                     & " s of the machine's time, which this host does not"
+                     & " report; the bound is not held here");
+               end if;
+
+            elsif Spent_On > Budget then
                --  "Either the machine was busy or the stage grew" is what
                --  this used to say, and it could not tell which. It can:
                --  Host_Load.Publishable is the rule this repository already
@@ -342,7 +419,7 @@ begin
                if not Host_Load.Publishable (Host_Load.Now) then
                   Ada.Text_IO.Put_Line
                     (Ada.Text_IO.Standard_Error,
-                     "  note: " & Named & " took" & Duration'Image (Took)
+                     "  note: " & Named & " cost" & Duration'Image (Spent_On)
                      & " s against a bound of" & Duration'Image (Budget)
                      & " s, at a load of" & Long_Float'Image (Host_Load.Now)
                      & "; too busy for that to say anything about the "
@@ -350,7 +427,7 @@ begin
                else
                   Ada.Text_IO.Put_Line
                     (Ada.Text_IO.Standard_Error,
-                     "  fail: " & Named & " took" & Duration'Image (Took)
+                     "  fail: " & Named & " cost" & Duration'Image (Spent_On)
                      & " s against a bound of" & Duration'Image (Budget)
                      & " s, at a load of" & Long_Float'Image (Host_Load.Now)
                      & "; the machine was quiet enough for that to mean the "
@@ -361,6 +438,7 @@ begin
             end if;
 
             Started := Ended;
+            Burned := Now_Burned;
          end Report_Stage;
          Fuzzed : Fuzzing.Report;
 
@@ -432,7 +510,7 @@ begin
          --  inside it as well as beside it; a bound of sixty says loudly if
          --  anything of that size is put back.
          if not Repository_Only then
-            Report_Stage ("suite", 60.0);
+            Report_Stage ("suite", 20.0);
          end if;
 
          --  What each half of the gate costs, said as it goes. The gate
@@ -443,7 +521,7 @@ begin
          Started := Ada.Calendar.Clock;
 
          Checks.Run (Root, Result, Record_Warnings => Recording);
-         Report_Stage ("repository checks", 30.0);
+         Report_Stage ("repository checks", 60.0);
          Failed := Failed or else not Checks.Is_Clean (Result);
 
          --  The gate runs the two things that were commands somebody had to
@@ -458,7 +536,7 @@ begin
          --  to leave either out.
          if not Repository_Only then
             Conformance.Run (Agreed);
-            Report_Stage ("conformance", 3000.0);
+            Report_Stage ("conformance", 4000.0);
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  of which: fixtures built" & Duration'Image (Agreed.Built)
@@ -503,7 +581,7 @@ begin
             --  asked until a fixture wrote one projection twice and the two
             --  readers took different halves of it.
             Fixture_Mutation.Run (Moved, Say => Complain'Access);
-            Report_Stage ("fixtures", 200.0);
+            Report_Stage ("fixtures", 450.0);
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  fixtures: tensors moved" & Natural'Image (Moved.Examined)
@@ -521,33 +599,55 @@ begin
                use type Ada.Calendar.Time;
                Spent : constant Duration := Ada.Calendar.Clock - Whole;
             begin
-               if Spent > Bound then
-                  --  Same rule, same reason: a whole-run time taken on a
-                  --  busy machine is not a fact about the gate.
-                  if not Host_Load.Publishable (Host_Load.Now) then
-                     Ada.Text_IO.Put_Line
-                       (Ada.Text_IO.Standard_Error,
-                        "  note: the gate took" & Duration'Image (Spent)
-                        & " s against a bound of" & Duration'Image (Bound)
-                        & " s, at a load of" & Long_Float'Image
-                                                 (Host_Load.Now)
-                        & "; too busy to count against it");
-                  else
-                     Ada.Text_IO.Put_Line
-                       (Ada.Text_IO.Standard_Error,
-                        "  fail: the gate took" & Duration'Image (Spent)
-                        & " s against a bound of" & Duration'Image (Bound)
-                        & " s, though every stage was inside its own");
-                     Failed := True;
+               declare
+                  Ended_Burned : constant Long_Float :=
+                    Host_Load.Processor_Seconds;
+
+                  Gate_Told : constant Boolean := Ended_Burned > 0.0;
+
+                  Gate_Spent : constant Duration :=
+                    (if Gate_Told
+                     then Duration (Ended_Burned - Whole_Burned)
+                     else Spent);
+               begin
+                  if not Gate_Told then
+                     if Spent > Bound then
+                        Ada.Text_IO.Put_Line
+                          (Ada.Text_IO.Standard_Error,
+                           "  note: the gate took" & Duration'Image (Spent)
+                           & " s against a bound of" & Duration'Image (Bound)
+                           & " s of the machine's time, which this host does"
+                           & " not report; the bound is not held here");
+                     end if;
+
+                  elsif Gate_Spent > Bound then
+                     --  Same rule, same reason: a whole-run time taken on a
+                     --  busy machine is not a fact about the gate.
+                     if not Host_Load.Publishable (Host_Load.Now) then
+                        Ada.Text_IO.Put_Line
+                          (Ada.Text_IO.Standard_Error,
+                           "  note: the gate cost" & Duration'Image (Gate_Spent)
+                           & " s against a bound of" & Duration'Image (Bound)
+                           & " s, at a load of" & Long_Float'Image
+                                                    (Host_Load.Now)
+                           & "; too busy to count against it");
+                     else
+                        Ada.Text_IO.Put_Line
+                          (Ada.Text_IO.Standard_Error,
+                           "  fail: the gate cost" & Duration'Image (Gate_Spent)
+                           & " s against a bound of" & Duration'Image (Bound)
+                           & " s, though every stage was inside its own");
+                        Failed := True;
+                     end if;
                   end if;
-               end if;
+               end;
             end;
 
             --  A short campaign, not the long one: the gate is asking whether
             --  the parser still refuses what it should, not searching for a new
             --  way to break it. 'tests fuzz' with a larger count is the search.
             Fuzzing.Run (1, 200, Fuzzed);
-            Report_Stage ("fuzzing", 10.0);
+            Report_Stage ("fuzzing", 5.0);
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "  fuzz: cases" & Natural'Image (Fuzzed.Cases)

@@ -607,7 +607,15 @@ Keep a Changelog and the project uses semantic versioning.
   calling the difference between two random models a tolerance. Every
   comparison agrees, and the exact set is back at 2.6e-5.
 
-### Added
+### Changed
+
+- **Stage bounds are held against processor time, not wall time.** What a
+  stage costs the machine barely moves when something else runs; what it costs
+  the clock moves by more than the doubling a bound watches for -- conformance
+  read 1741.85 s and 962 s of wall for the same work, and 1757.39 s of
+  processor time. All five bounds and the whole-gate bound are re-derived from
+  processor readings. Where a host reports no such number the bound is
+  reported and not held, rather than silently falling back to the wall.
 
 - **The `gemma3` architecture.** It keeps gemma2's two normalizations a
   block, drops its two bounds, normalizes query and key heads as qwen3 does,
