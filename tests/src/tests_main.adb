@@ -233,7 +233,8 @@ begin
             & ", slow" & Natural'Image (Result.Slow)
             & ", internal" & Natural'Image (Result.Internal)
             & ", prepared" & Natural'Image (Result.Prepared)
-            & ", ran" & Natural'Image (Result.Ran));
+            & ", ran" & Natural'Image (Result.Ran)
+            & ", on a device" & Natural'Image (Result.On_Device));
 
          --  The other untrusted input. Containers are what a model file is;
          --  a prompt is what everybody else is, and it reaches the tokenizer
@@ -653,6 +654,7 @@ begin
                "  fuzz: cases" & Natural'Image (Fuzzed.Cases)
                & ", prepared" & Natural'Image (Fuzzed.Prepared)
                & ", ran" & Natural'Image (Fuzzed.Ran)
+               & ", on a device" & Natural'Image (Fuzzed.On_Device)
                & ", escaped" & Natural'Image (Fuzzed.Escaped)
                & ", internal" & Natural'Image (Fuzzed.Internal));
 
@@ -664,6 +666,17 @@ begin
             --  trying to make it catch a parser regression when what it was
             --  failing to check was whether the campaign did anything at all.
             if not Fuzzing.Is_Clean (Fuzzed) then
+               Failed := True;
+            end if;
+
+            --  A device that was there and never asked is coverage that
+            --  went away quietly, which is what the clean totals above
+            --  would otherwise be read as.
+            if not Fuzzing.Reached_A_Device (Fuzzed) then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "  fuzz: a device was open and no case was prepared for "
+                  & "it, so nothing malformed reached a shader");
                Failed := True;
             end if;
 

@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A figure published in the README has to appear in the record of how it
+  was taken.** The fingerprints catch a source that moved without its
+  figures being re-measured; they cannot catch a number edited into one file
+  and not the other, in either direction, and both happened while the device
+  table was being rewritten. Every `N.NNN s` in that table is now looked for
+  in `docs/measured-figures.txt`, and the check was confirmed to fail when a
+  figure is altered.
+
+- **The fuzzing campaign reaches a device.** Every third case is prepared
+  for the device backend where there is one, so a malformed file gets past
+  the reader and into a shader -- a path no processor case can reach,
+  because the refusals guarding it belong to the device backend. The gate
+  fails if a device was open and no case was prepared for it, since clean
+  totals from a campaign that never asked would read as a pass. 200 cases
+  send 43 to a device; 400 send 78; nothing has escaped.
+
+- **The call that carries its own cache takes a batch too.** `Attend` passes
+  `Positions` and `Window` through to the resident call it delegates to, so
+  the two attention entry points agree on what a batch is. A test compares a
+  batch of two positions against the same two taken singly.
+
+- **An attention step can read its queries from the step before it.**
+  `Add_Attention` takes `Chained`, binding the previous step's result as the
+  queries so they never leave the device. The engine cannot use it yet --
+  it rotates the queries and writes the position's keys and values on the
+  processor, between the product that makes them and the attention that
+  reads them -- and it is here to measure what moving that work would be
+  worth before anyone moves it. Measured in a layer, alternated round by
+  round: 0.392, 0.199, 0.321 and 0.159 ms a layer, which is the same size as
+  a saving that has already failed to appear in a run.
+
 - **A sequence can hold an attention step.** `Add_Attention` records
   attention into the same command buffer as the products around it, with
   `Run`'s activation count supplying how many positions attend, so a batch
@@ -19,9 +50,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 - **A layer's attention and the matrix that reads its blend go over
   together.** One command buffer instead of two, and the blend never returns
-  to the host to be sent again. On the pair alone this saves about half a
-  millisecond; end to end it cannot be told from nothing, and the figures say
-  so rather than claiming it.
+  to the host to be sent again. It saves no time: with a layer's other
+  submissions around it the difference is nothing, and on an idle device the
+  joined pair is about a millisecond slower. The half-millisecond saving
+  first recorded for it was an artifact of timing the two arms as separate
+  blocks of rounds, which let machine drift land on whichever ran second;
+  alternating them round by round reverses the sign and four runs then
+  agree.
 
 - **A batch of positions attends in one call.** The attention kernel takes a
   workgroup a head of a position where it took a workgroup a head, and the

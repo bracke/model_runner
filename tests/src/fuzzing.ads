@@ -92,6 +92,14 @@ package Fuzzing is
       Prepared  : Natural := 0;
       Ran       : Natural := 0;
 
+      --  How many cases were prepared for a device rather than the
+      --  processor, and whether there was one to prepare for. Zero cases on
+      --  a machine with no device is not a failure; zero on a machine with
+      --  one is, because then no malformed file reached a shader and the
+      --  totals would say clean without having asked.
+      On_Device   : Natural := 0;
+      Device_Here : Boolean := False;
+
       First_Bad : Natural := 0;
    end record;
 
@@ -114,14 +122,26 @@ package Fuzzing is
    function Reached_The_Engine (Item : Report) return Boolean
    is (Item.Prepared > 0 and then Item.Ran > 0);
 
+   --  Report whether a campaign reached a device it had.
+   --
+   --  @param Item Report to classify.
+   --  @return True when there was no device, or there was one and mutated
+   --    files were prepared for it.
+   function Reached_A_Device (Item : Report) return Boolean
+   is (not Item.Device_Here or else Item.On_Device > 0);
+
    --  Run one mutated case.
    --
    --  @param Seed Run seed.
    --  @param Case_Number Case index within the run.
+   --  @param Device True to prepare this case for a device, so that a
+   --    mutated file reaches a shader rather than stopping at the
+   --    processor's own paths.
    --  @return What the parser did with the mutated bytes.
    function Run_Case
      (Seed        : Interfaces.Unsigned_64;
-      Case_Number : Positive) return Outcome;
+      Case_Number : Positive;
+      Device      : Boolean := False) return Outcome;
 
    --  What the last case reached, for the campaign to total up.
    --
@@ -130,6 +150,9 @@ package Fuzzing is
 
    --  @return True when that case ran a forward pass.
    function Last_Case_Ran return Boolean;
+
+   --  @return True when that case was prepared for a device.
+   function Last_Case_On_Device return Boolean;
 
    --  Run a whole campaign.
    --

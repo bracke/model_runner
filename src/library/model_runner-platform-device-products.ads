@@ -389,6 +389,13 @@ package Model_Runner.Platform.Device.Products is
    --  @param Window This layer's sliding window, or zero where it does not
    --    slide one, which a batch needs because First can only speak for one
    --    position and a window moves with each of them.
+   --  @param Chained True to read the queries from what the step before it
+   --    wrote rather than from the activation given to Run, so they never
+   --    leave the device. The engine cannot use this yet -- it rotates the
+   --    queries and writes the position's keys and values on the processor,
+   --    between the product that makes them and the attention that reads
+   --    them -- and it is here to measure what moving that work would be
+   --    worth before it is moved.
    procedure Add_Attention
      (Steps      : in out Sequence;
       Heads      : Natural;
@@ -404,7 +411,8 @@ package Model_Runner.Platform.Device.Products is
       Scale      : Model_Runner.Numerics.Real;
       Cap        : Model_Runner.Numerics.Real;
       Added      : out Boolean;
-      Window     : Natural := 0);
+      Window     : Natural := 0;
+      Chained    : Boolean := False);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -466,8 +474,14 @@ package Model_Runner.Platform.Device.Products is
    --  @param V_Width How far apart one position's values are from the next.
    --  @param Scale What a score is multiplied by before the bound.
    --  @param Cap The bound on a score, or zero for none.
-   --  @param Target Receives Heads * Value_Size values.
+   --  @param Target Receives Positions * Heads * Value_Size values.
    --  @param Ok True when the device computed it.
+   --  @param Positions How many positions attend in this call, whose
+   --    queries follow one another in Query and whose blends follow one
+   --    another in Target. Position p looks back to Last + p.
+   --  @param Window This layer's sliding window, or zero where it does not
+   --    slide one, which a batch needs because First can only speak for one
+   --    position and a window moves with each of them.
    procedure Attend
      (Item       : in out Engine;
       Cache      : Model_Runner.Numerics.Real_Array;
@@ -485,7 +499,9 @@ package Model_Runner.Platform.Device.Products is
       Scale      : Model_Runner.Numerics.Real;
       Cap        : Model_Runner.Numerics.Real;
       Target     : out Model_Runner.Numerics.Real_Array;
-      Ok         : out Boolean);
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0);
 
    --  Make room on the device for a cache and keep it between calls.
    --

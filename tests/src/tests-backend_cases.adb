@@ -1617,11 +1617,122 @@ package body Tests.Backend_Cases is
       Assert (Ok, "a sequence holding an attention step was refused");
       Assert (not Halted, "nothing asked it to stop");
 
+      --  And the same attention reading its queries from the step before it
+      --  instead of from the activation. A product whose result is exactly
+      --  the queries stands in for the rotation the engine does on the
+      --  processor: what matters here is that the queries never leave the
+      --  device and the answer does not change.
+      declare
+         Identity : Model_Runner.Bytes.Byte_Array_Access;
+         Through  : N.Real_Array (0 .. Span * 2 - 1) := [others => 0.0];
+      begin
+         Model_Runner.Bytes.Allocate
+           (Model_Runner.Bytes.Byte_Count (Span * Span) * 4, Identity);
+         Assert (Identity /= null, "no room for the matrix");
+
+         Identity.all := [others => 0];
+         for Row in 0 .. Span - 1 loop
+            declare
+               At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count (Row * Span + Row) * 4 + 1;
+            begin
+               Identity.all (At_Byte .. At_Byte + 3) :=
+                 Model_Runner.Bytes.Put_F32 (1.0);
+            end;
+         end loop;
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, Identity, 0, Products.Values_F32,
+            Natural (Span), Natural (Span), Added);
+         Assert (Added, "a sequence would not take the product");
+
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => 1, First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Natural (Room),
+            KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
+            Scale => 0.25, Cap => 0.0, Added => Added, Chained => True);
+         Assert (Added, "a sequence would not take a chained attention");
+
+         Products.Run (Engine, Steps, Query, 1, Through, Ok, Halted);
+         Assert (Ok, "a chained attention was refused");
+
+         for Index in 0 .. Span - 1 loop
+            Assert (abs (Alone (Index) - Through (Span + Index)) <= Near,
+                    "attention reading queries it was handed differs from "
+                    & "attention reading queries left where they were, at "
+                    & "component" & N.Element_Count'Image (Index));
+         end loop;
+
+         --  A chained attention with nothing before it has nothing to read.
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => 1, First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Natural (Room),
+            KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
+            Scale => 0.25, Cap => 0.0, Added => Added, Chained => True);
+         Assert (not Added,
+                 "a chained attention with nothing to chain to was taken");
+
+         Model_Runner.Bytes.Free (Identity);
+      end;
+
       for Index in Alone'Range loop
          Assert (abs (Alone (Index) - Recorded (Index)) <= Near,
                  "recorded attention differs from attention submitted alone "
                  & "at component" & N.Element_Count'Image (Index));
       end loop;
+
+      --  The call that carries its own cache takes a batch too, and must
+      --  say what the resident one says for every position of it. Two
+      --  positions, the second seeing one more than the first.
+      declare
+         Pair : N.Real_Array (0 .. Span * 2 - 1);
+         Both : N.Real_Array (0 .. Span * 2 - 1) := [others => 0.0];
+         Each : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+      begin
+         Pair (0 .. Span - 1) := Query;
+         Pair (Span .. Span * 2 - 1) := Query;
+
+         Products.Attend
+           (Engine, Cache, Pair,
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => 1, First => 0, Last => Positions - 2,
+            K_Base => 0, V_Base => Natural (Room),
+            KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
+            Scale => 0.25, Cap => 0.0, Target => Both, Ok => Ok,
+            Positions => 2);
+
+         Assert (Ok, "a batch through the call that carries its cache was "
+                 & "refused");
+
+         for Slot in 0 .. 1 loop
+            Products.Attend
+              (Engine, Cache, Query,
+               Heads => Heads, Head_Size => Head_Size,
+               Value_Size => Head_Size,
+               Group_Size => 1, First => 0,
+               Last => Positions - 2 + Slot,
+               K_Base => 0, V_Base => Natural (Room),
+               KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
+               Scale => 0.25, Cap => 0.0, Target => Each, Ok => Ok);
+
+            Assert (Ok, "one position of the pair was refused on its own");
+
+            for Index in Each'Range loop
+               Assert (abs (Each (Index)
+                            - Both (N.Element_Count (Slot) * Span + Index))
+                       <= Near,
+                       "a batch of two differs from the two taken singly at "
+                       & "position" & Integer'Image (Slot) & ", component"
+                       & N.Element_Count'Image (Index));
+            end loop;
+         end loop;
+      end;
 
       --  And a sequence recorded against a cache the engine does not hold
       --  is refused rather than run against whatever the binding last

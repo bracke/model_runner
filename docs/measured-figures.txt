@@ -1720,8 +1720,8 @@ reference 57825279B20DA862 src/library/model_runner-backend-reference.adb src/li
 # before and after, which is what three products sent together have to
 # produce if they are the same three products.
 
-# covers: the two-row table under "The device backend" -- the seven-token run
-# and the 111-token prompt, on both backends -- the claim that the two print
+# covers: the two-row table under "The device backend" -- the six-token run
+# and the 110-token prompt, on both backends -- the claim that the two print
 # the same digest, the five per-format ratios in the table under it, which
 # come from `tests benchmark` rather than from a model, and the three-way
 # table of where the weights are, which is the same run with no option, with
@@ -2086,8 +2086,84 @@ reference 57825279B20DA862 src/library/model_runner-backend-reference.adb src/li
 # the saving does not survive the surrounding work or the readings are too
 # coarse to hold it. Nothing here decides which.
 
+# 2026-08-21, later the same day: the saving published for the joined pair
+# was an artifact of how it was measured, and this replaces it. No figure in
+# the table moves -- the end-to-end readings were already published as no
+# movement, and they were right.
+#
+# What was published: 0.456, 0.553 and 0.848 ms saved by naming attention
+# with the matrix that reads its blend, from three runs of `tests
+# device-bench` at two hundred rounds a side. What three later runs of the
+# same binary said: 1.036, 0.307 and 0.589 ms lost. The arms ran as two
+# blocks -- every apart round, then every together round -- so anything that
+# moved on this machine between the blocks landed on whichever arm ran
+# second, and it moves: there is other people's work on it.
+#
+# Alternating the arms round by round puts the same drift through both.
+# Four runs then agree. Idle device: 0.836, 0.695, 0.933 and 1.104 ms LOST
+# by naming them together. With a layer's other three submissions around the
+# pair: -0.005, +0.184, +0.254 and +0.390 ms, which is nothing.
+#
+# So the mechanism was wrong as well as the number. A submission is not a
+# fixed toll: it costs waiting, and a device with work already queued is not
+# idle to be waited on. The bench had said as much in a row taken days
+# earlier and not connected to this -- four products cost 0.0217 s and the
+# same four with an attention among them cost 0.0212 s -- and connecting
+# those two would have cost nothing and saved a wrong claim.
+#
+# The pair stays named together: in a layer, which is the only place the
+# engine crosses it, it is free either way, and the blend not returning to
+# the host is less work even where the clock will not show it. It is no
+# longer said to save time.
+
+# 2026-08-21, both columns of the two-row table in one sitting, and the
+# processor column replaced. The call that carries its own cache takes a
+# batch now, which is why this group is re-measured at all; the figures moved
+# for a different reason.
+#
+# All four cells back to back, each waiting for the machine to fall below
+# 1.50 before starting:
+#
+#   cpu    6 prompt tokens, 12 generated: 3.734 s wall, 0.557 s prompt,
+#          3.176 s generating, 21.33 s of processor time, load 1.47 to 3.22
+#   device same:                          1.062 s wall, 0.212 s prompt,
+#          0.848 s generating, 0.46 s of processor time, load 1.50 to 1.62
+#   cpu    110 prompt tokens, none generated: 13.353 s wall, 72.33 s of
+#          processor time, load 1.48 to 4.01
+#   device same:                          2.631 s wall, 2.03 s of processor
+#          time, load 1.40 to 1.57
+#
+# Digests 5abff916f9d83ca6 and cbf29ce484222325 throughout, both backends.
+#
+# The processor column replaces figures of 1.777 s and 6.295 s, and the
+# reason it replaces them rather than being recorded as a bad reading is
+# that it is the third sitting to say so. The short run read 3.971 s on
+# 2026-08-20, 4.016 s the same day, and 3.734 s here, in three separate
+# sittings across two days. Twice this file recorded such a reading and kept
+# the older figure on the ground that a worse measurement is not a newer
+# one. That rule is for one reading against a quiet-machine figure; three
+# agreeing readings are not a worse measurement, they are the machine, and
+# continuing to publish 1.777 s would be publishing a figure this machine
+# does not produce.
+#
+# Nothing in the engine's processor path changed between those figures and
+# these -- the engine group's sources are fingerprinted and its entries above
+# record what moved and why. What changed is that this machine now carries
+# somebody else's virtual machine at about two thirds of a processor, all
+# day, and the processor column competes for cores while the device column
+# does not. That is also why the device column barely moved: 1.062 s here
+# against 1.088 s published, and 2.631 s against 2.628 s.
+#
+# One thing worth writing down about the load figures, because it caught me
+# out: a cpu run's load-after is mostly its own. Seven workers for eleven
+# seconds is seventy-two seconds of processor time, and the load average
+# follows. A cpu run can never end below 1.50 on this machine, so what says
+# whether it started on a quiet machine is the load before it, which --wait
+# is what enforces. The device runs are the ones whose load-after means
+# anything about the surroundings.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device 99A0AA268F2A51E4 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 12413C8B5FB56466 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived

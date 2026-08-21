@@ -1352,22 +1352,33 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 1.777 s | **1.088 s** |
-| -- evaluating the prompt | 0.355 s | 0.211 s |
-| -- generating | 1.398 s | 0.871 s |
-| 110-token prompt, nothing generated | 6.295 s | **2.628 s** |
+| 6-token prompt, 12 generated | 3.734 s | **1.062 s** |
+| -- evaluating the prompt | 0.557 s | 0.212 s |
+| -- generating | 3.176 s | 0.848 s |
+| 110-token prompt, nothing generated | 13.353 s | **2.631 s** |
 
-The two columns were not taken together, which earlier versions of this
-table could say and this one cannot. The device column was measured on
-2026-08-21 at the loads its runs printed -- 1.12 rising to 1.83 for the short
-run and 1.45 rising to 1.46 for the long one. The processor column stands
-from the earlier sitting. Its runs were taken again beside these and read
-3.971 s and 12.572 s, at loads rising to 2.99 and 3.06 on a machine carrying
-somebody else's virtual machine at two thirds of a processor; those readings
-are recorded in `docs/measured-figures.txt` and are not published here,
-because a worse measurement is not a newer one. Read the comparison between
-the columns as the weaker claim it now is. What the device column is good
-for on its own is the row below.
+All four cells were taken in one sitting on 2026-08-21, back to back, each
+waiting for the machine to fall below 1.50 before it started -- so the two
+columns are comparable again, which they were not in the version of this
+table before this one.
+
+The processor column is more than twice what this table published before
+-- 1.777 s and 6.295 s -- and that is not a bad reading. It was measured
+three times across two days, in three separate sittings, at 3.971 s, 4.016 s
+and 3.734 s for the short run: three agreeing measurements are not noise,
+and after the third the honest thing is to publish them and stop treating
+the older pair as the truth. What changed is the machine and not this
+program; nothing in the engine's processor path moved between those figures
+and these, and the fingerprints in `docs/measured-figures.txt` say so. This
+machine has carried somebody else's virtual machine at two thirds of a
+processor throughout, and the figures it gives now are the figures it gives
+now.
+
+The load each run printed is in `docs/measured-figures.txt`. Note that a
+`cpu` run's load-after is mostly its own doing: seven workers for eleven
+seconds is twenty-one seconds of processor time, so that column ends above
+the threshold whatever else the machine is doing, and it is the load before
+a run that says whether the machine was quiet when it started.
 
 Both backends print the same digest of what they generated -- `5abff916` for
 the short run and `cbf29ce4` for the long one -- so this is the same text,
@@ -1401,29 +1412,40 @@ makes the two say different things, which is what the suite caught.
 
 A layer's attention and the matrix that reads its blend are named together
 now, so they go over as one command buffer and the blend never comes back to
-be sent again. Measured on the pair alone, over two hundred rounds a side
-because at twenty the spread between repeats was five times the effect, that
-saves 0.456, 0.553 and 0.848 ms across three runs -- more than the 82.7
-microseconds of the submission itself, because the blend's journey each way
-goes with it.
+be sent again. It saves nothing, and the way that was established is worth
+more than the result.
 
-End to end it cannot be told from nothing. Three readings of the generating
-run before the change and three after: 1.019, 1.081 and 1.098 s against
-0.976, 1.067 and 1.088 s. The second set is lower throughout and the two
-ranges overlap almost entirely, which is not a result. The per-pair saving is
-real and what happens to it between there and the run as a whole is not
-something these figures answer; the slowest reading is published, as the ones
-before it were.
+Measured first as two blocks of two hundred rounds -- all the apart ones,
+then all the together ones -- it read 0.456, 0.553 and 0.848 ms saved across
+three runs. Measured again the same way later, on the same binary, it read
+1.036, 0.307 and 0.589 ms **lost**. Whatever moved on this machine between
+one block and the next landed entirely on whichever arm ran second, and the
+sign of the answer followed it.
 
-Read the left column with the caveat it deserves. This machine had other work
+Alternating the two arms round by round puts the same drift through both.
+Done that way, four runs agree: on an idle device the joined pair costs
+0.836, 0.695, 0.933 and 1.104 ms, and with a layer's other submissions
+around it the difference is -0.005, +0.184, +0.254 and +0.390 ms -- nothing,
+either way. A submission costs waiting, and a device that already has work
+queued is not idle to be waited on.
+
+That agrees with the end-to-end figures, which is the point of taking both.
+Three readings of the generating run before the change and three after:
+1.019, 1.081 and 1.098 s against 0.976, 1.067 and 1.088 s -- no movement
+where 264 crossings at half a millisecond would have been 130 ms. The
+half-millisecond was never there. The pair stays named together because the
+engine's case is the layer one, where it costs nothing either; it is not
+claimed to earn anything.
+
+Read the left column with the caveat it deserves. This machine has other work
 on it, and the two columns are not equally hurt by that: the processor column
-competes for the cores it is using and the device column does not. Over eight
-pairs taken across two days the processor's short run ranged from 1.42 to
-2.17 s and the device's from 1.21 to 1.80, with the device below the
-processor in seven of the eight. So its advantage on the short run is real
-and smaller than any single pair suggests; on the long run it has never been
-close. Each of those eight pairs was taken together; the table above is the
-first whose columns were not, for the reason given under it.
+competes for the cores it is using and the device column does not. That is
+the whole reason the left column moved and the right one did not. Over eight
+pairs taken on an earlier and quieter machine the processor's short run
+ranged from 1.42 to 2.17 s and the device's from 1.21 to 1.80, with the
+device below the processor in seven of the eight -- so the device's advantage
+on the short run was real and smaller then than this table now makes it look.
+On the long run it has never been close.
 
 The earlier pairs are not listed here any more, and the reason is that they
 were not comparable with these. Until this was written the tool differed from

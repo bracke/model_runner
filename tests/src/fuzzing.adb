@@ -7,6 +7,8 @@ with Model_Runner.Limits;
 with Model_Runner.Numerics;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
+with Model_Runner.Backend;
+with Model_Runner.Backend.Device;
 with Model_Runner.Llama;
 with Model_Runner.Templates;
 
@@ -18,6 +20,9 @@ package body Fuzzing is
    --  that the outcome of a case stays one value; the campaign reads these
    --  straight after each call.
    Prepared_Last : Boolean := False;
+
+   --  Whether the last case was prepared for a device.
+   On_Device_Last : Boolean := False;
    Ran_Last      : Boolean := False;
    Internal_Last : Boolean := False;
 
@@ -91,7 +96,8 @@ package body Fuzzing is
 
    function Run_Case
      (Seed        : Interfaces.Unsigned_64;
-      Case_Number : Positive) return Outcome
+      Case_Number : Positive;
+      Device      : Boolean := False) return Outcome
    is
       Stream : Stream_State :=
         (Value => Seed xor (Interfaces.Unsigned_64 (Case_Number) * 2_654_435_761));
@@ -99,6 +105,7 @@ package body Fuzzing is
       Result : Outcome := Rejected;
    begin
       Prepared_Last := False;
+      On_Device_Last := False;
       Ran_Last := False;
       Internal_Last := False;
       --  Half the campaign works on quantized weights. The suppressed index,
@@ -324,9 +331,21 @@ package body Fuzzing is
                   Outcome  : E.Error_Info;
                   Closing  : E.Error_Info;
                begin
+                  --  A device is asked for the same mutated file the
+                  --  processor is asked for. What is being looked for is a
+                  --  file that gets past the reader and then makes a shader
+                  --  read outside what it was given -- a path no processor
+                  --  case can reach, because the refusals that guard it are
+                  --  the device backend's own.
                   Model_Runner.Llama.Prepare
                     (Prepared, Item, Source, Bounds, null, null,
+                     Backend =>
+                       (if Device
+                        then Model_Runner.Backend.Backend_Device
+                        else Model_Runner.Backend.Backend_CPU),
                      Status => Outcome);
+
+                  On_Device_Last := Device;
                   Note_Internal (Outcome);
 
                   if E.Is_Ok (Outcome) then
@@ -423,21 +442,41 @@ package body Fuzzing is
 
    function Last_Case_Prepared return Boolean is (Prepared_Last);
 
+   function Last_Case_On_Device return Boolean is (On_Device_Last);
+
    function Last_Case_Ran return Boolean is (Ran_Last);
 
    procedure Run
      (Seed   : Interfaces.Unsigned_64;
       Cases  : Positive;
-      Result : out Report) is
+      Result : out Report)
+   is
+      Device_Here : Boolean := False;
    begin
       Result := (others => <>);
       Result.Cases := Cases;
+
+      --  Opened once for the whole campaign rather than per case: opening a
+      --  device is slower than most of the cases are, and a campaign that
+      --  spent its time opening one would be a campaign that tried fewer
+      --  files.
+      Model_Runner.Backend.Device.Open (Device_Here);
+      Result.Device_Here := Device_Here;
 
       for Index in 1 .. Cases loop
          declare
             use type Ada.Real_Time.Time;
             Started : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
-            What    : constant Outcome := Run_Case (Seed, Index);
+
+            --  Every third case, where there is a device to take it. Not
+            --  all of them: the processor's paths are what most of the
+            --  refusals live in, and they are still what most of a campaign
+            --  should be spent on.
+            Ask_Device : constant Boolean :=
+              Device_Here and then Index mod 3 = 0;
+
+            What    : constant Outcome :=
+              Run_Case (Seed, Index, Device => Ask_Device);
             Spent   : constant Duration :=
               Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
          begin
@@ -454,6 +493,10 @@ package body Fuzzing is
 
             if Last_Case_Ran then
                Result.Ran := Result.Ran + 1;
+            end if;
+
+            if Last_Case_On_Device then
+               Result.On_Device := Result.On_Device + 1;
             end if;
 
             case What is
@@ -486,6 +529,13 @@ package body Fuzzing is
             end case;
          end;
       end loop;
+
+      --  Left as it was found. A campaign is not the only thing that uses a
+      --  device in this program, and one that walked away leaving it open
+      --  would be one that changed what ran after it.
+      if Device_Here then
+         Model_Runner.Backend.Device.Close;
+      end if;
    end Run;
 
 end Fuzzing;

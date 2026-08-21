@@ -248,23 +248,55 @@ package body Device_Bench is
            ("    a product and an attention together:"
             & Duration'Image (Spent) & " s a pair");
 
-         --  The same pair named together instead of submitted apart: the
-         --  attention and the matrix that reads its blend, as one command
-         --  buffer with the blend never coming back.
+         --  The pair apart and the pair together, alternating within one
+         --  loop rather than as two blocks of rounds.
+         --
+         --  Two blocks was wrong and the wrongness was not subtle: three
+         --  runs of it said the joined pair saved 0.456, 0.553 and 0.848 ms
+         --  and three later runs of the same binary said it lost 1.036,
+         --  0.307 and 0.589 ms. Whatever moved between the blocks -- this
+         --  machine has other people's work on it -- landed entirely on
+         --  whichever arm ran second. Alternating puts the same drift
+         --  through both arms, so what is left is the difference between
+         --  them.
+         --
+         --  Each row below is also said with a layer's other submissions
+         --  around the pair, because a submission costs waiting and a
+         --  device that already has work queued is not idle to be waited
+         --  on. That is measurable here and nowhere else in this file.
          declare
             Order  : Products.Sequence;
             Added  : Boolean;
             Landed : constant Values :=
               new N.Real_Array
                 (0 .. N.Element_Count (Span) + N.Element_Count (Rows) - 1);
-            Apart, Together : Duration;
-         begin
-            --  Ten times the rounds the other measurements use. What is
-            --  being looked for here is one submission -- 83 microseconds
-            --  against a pair that costs some milliseconds -- and at twenty
-            --  rounds the spread between repeats was five times the effect.
-            Started := Ada.Calendar.Clock;
-            for Round in 1 .. Rounds * 10 loop
+
+            Apart, Together : Duration := 0.0;
+            Since : Ada.Calendar.Time;
+
+            --  What a layer submits besides these two.
+            Beside : constant := 3;
+
+            --  How many rounds each arm gets. Ten times the other rows
+            --  here: what is looked for is one submission against a pair
+            --  costing milliseconds.
+            Turns : constant Natural := Rounds * 10;
+
+            procedure Pair_Apart (Busy_Too : Boolean);
+            procedure Pair_Together (Busy_Too : Boolean);
+
+            --  Attention submitted, its blend brought back, and the
+            --  projection sent after it.
+            procedure Pair_Apart (Busy_Too : Boolean) is
+            begin
+               if Busy_Too then
+                  for Each in 1 .. Beside loop
+                     Products.Multiply
+                       (Engine, Weights.all, 0, Products.Values_F32,
+                        Rows, Cols, Asked.all, 1, Product.all, Ok, Halted);
+                  end loop;
+               end if;
+
                Products.Attend_Resident
                  (Engine, Asked.all,
                   Heads => Heads, Head_Size => Wide, Value_Size => Wide,
@@ -275,33 +307,144 @@ package body Device_Bench is
                Products.Multiply
                  (Engine, Weights.all, 0, Products.Values_F32,
                   Rows, Cols, Got.all, 1, Product.all, Ok, Halted);
-            end loop;
-            Apart := (Ada.Calendar.Clock - Started) / (Rounds * 10);
+            end Pair_Apart;
 
+            --  The two named together, as one command buffer.
+            procedure Pair_Together (Busy_Too : Boolean) is
+            begin
+               if Busy_Too then
+                  for Each in 1 .. Beside loop
+                     Products.Multiply
+                       (Engine, Weights.all, 0, Products.Values_F32,
+                        Rows, Cols, Asked.all, 1, Product.all, Ok, Halted);
+                  end loop;
+               end if;
+
+               Products.Run
+                 (Engine, Order, Asked.all, 1, Landed.all, Ok, Halted);
+            end Pair_Together;
+         begin
             Products.Open_Sequence (Order);
             Products.Add_Attention
               (Order, Heads, Wide, Wide, Sharing, 0, Steps_Count - 1,
                0, Layers * Kept * Narrow, Narrow, Narrow, 0.125, 0.0, Added);
             Products.Add_Chained_Product
-              (Order, Weights, 0, Products.Values_F32, Rows, Cols,
-               Added);
+              (Order, Weights, 0, Products.Values_F32, Rows, Cols, Added);
 
-            if Added then
-               Started := Ada.Calendar.Clock;
-               for Round in 1 .. Rounds * 10 loop
-                  Products.Run
-                    (Engine, Order, Asked.all, 1, Landed.all, Ok, Halted);
-               end loop;
-               Together := (Ada.Calendar.Clock - Started) / (Rounds * 10);
-
-               Ada.Text_IO.Put_Line
-                 ("    attention and its projection apart"
-                  & Duration'Image (Apart) & " s, together"
-                  & Duration'Image (Together) & " s, saved"
-                  & Duration'Image (Apart - Together) & " s");
-            else
+            if not Added then
                Ada.Text_IO.Put_Line
                  ("    the pair would not record as a sequence");
+            else
+               for Idle in reverse Boolean'Range loop
+                  Apart := 0.0;
+                  Together := 0.0;
+
+                  for Round in 1 .. Turns loop
+                     Since := Ada.Calendar.Clock;
+                     Pair_Apart (Busy_Too => not Idle);
+                     Apart := Apart + (Ada.Calendar.Clock - Since);
+
+                     Since := Ada.Calendar.Clock;
+                     Pair_Together (Busy_Too => not Idle);
+                     Together := Together + (Ada.Calendar.Clock - Since);
+                  end loop;
+
+                  Ada.Text_IO.Put_Line
+                    ("    " & (if Idle then "alone:     " else "in a layer:")
+                     & " apart" & Duration'Image (Apart / Turns)
+                     & " s, together" & Duration'Image (Together / Turns)
+                     & " s, saved"
+                     & Duration'Image ((Apart - Together) / Turns) & " s");
+               end loop;
+            end if;
+         end;
+
+         --  What a query's round trip is worth, which is the thing that
+         --  would have to pay for moving rotation and the cache write onto
+         --  a device.
+         --
+         --  A layer makes its queries with a product, rotates them on the
+         --  processor, writes the position's keys and values, and only then
+         --  attends -- so the queries come back and go over again. Moving
+         --  that work would let the attention chain to the product, and
+         --  this is what it would win: a product with an attention chained
+         --  to it, against the same product with the attention reading an
+         --  activation that was uploaded. Alternated round by round, and
+         --  said with a layer's other submissions around it, for the reason
+         --  the row above gives.
+         declare
+            Linked, Split : Products.Sequence;
+            Added  : Boolean;
+            Landed : constant Values :=
+              new N.Real_Array
+                (0 .. N.Element_Count (Span) * 2 - 1);
+
+            Over, Kept_There : Duration := 0.0;
+            Since : Ada.Calendar.Time;
+
+            Beside : constant := 3;
+            Turns  : constant Natural := Rounds * 10;
+         begin
+            --  The product that makes the queries, then attention reading
+            --  them where they lie.
+            Products.Open_Sequence (Linked);
+            Products.Add_Product
+              (Linked, Weights, 0, Products.Values_F32, Span, Cols, Added);
+            Products.Add_Attention
+              (Linked, Heads, Wide, Wide, Sharing, 0, Steps_Count - 1,
+               0, Layers * Kept * Narrow, Narrow, Narrow, 0.125, 0.0, Added,
+               Chained => True);
+
+            --  The same product, and an attention reading queries that were
+            --  uploaded -- which is what the engine does today, because the
+            --  rotation happens between the two.
+            Products.Open_Sequence (Split);
+            Products.Add_Product
+              (Split, Weights, 0, Products.Values_F32, Span, Cols, Added);
+
+            if not Added then
+               Ada.Text_IO.Put_Line ("    the pair would not record");
+            else
+               for Round in 1 .. Turns loop
+                  Since := Ada.Calendar.Clock;
+                  for Each in 1 .. Beside loop
+                     Products.Multiply
+                       (Engine, Weights.all, 0, Products.Values_F32,
+                        Rows, Cols, Asked.all, 1, Product.all, Ok, Halted);
+                  end loop;
+                  Products.Run
+                    (Engine, Split, Asked.all, 1,
+                     Landed.all (Landed.all'First
+                                 .. Landed.all'First
+                                    + N.Element_Count (Span) - 1),
+                     Ok, Halted);
+                  Products.Attend_Resident
+                    (Engine, Asked.all,
+                     Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+                     Group_Size => Sharing, First => 0,
+                     Last => Steps_Count - 1,
+                     K_Base => 0, V_Base => Layers * Kept * Narrow,
+                     KV_Width => Narrow, V_Width => Narrow,
+                     Scale => 0.125, Cap => 0.0, Target => Got.all,
+                     Ok => Ok);
+                  Over := Over + (Ada.Calendar.Clock - Since);
+
+                  Since := Ada.Calendar.Clock;
+                  for Each in 1 .. Beside loop
+                     Products.Multiply
+                       (Engine, Weights.all, 0, Products.Values_F32,
+                        Rows, Cols, Asked.all, 1, Product.all, Ok, Halted);
+                  end loop;
+                  Products.Run
+                    (Engine, Linked, Asked.all, 1, Landed.all, Ok, Halted);
+                  Kept_There := Kept_There + (Ada.Calendar.Clock - Since);
+               end loop;
+
+               Ada.Text_IO.Put_Line
+                 ("    queries over" & Duration'Image (Over / Turns)
+                  & " s, queries kept there"
+                  & Duration'Image (Kept_There / Turns) & " s, saved"
+                  & Duration'Image ((Over - Kept_There) / Turns) & " s");
             end if;
          end;
 

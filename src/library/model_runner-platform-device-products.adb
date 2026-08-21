@@ -2524,7 +2524,9 @@ package body Model_Runner.Platform.Device.Products is
       Scale      : Model_Runner.Numerics.Real;
       Cap        : Model_Runner.Numerics.Real;
       Target     : out Model_Runner.Numerics.Real_Array;
-      Ok         : out Boolean)
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0)
    is
       Good : Boolean;
    begin
@@ -2547,7 +2549,7 @@ package body Model_Runner.Platform.Device.Products is
       Attend_Resident
         (Item, Query, Heads, Head_Size, Value_Size, Group_Size,
          First, Last, K_Base, V_Base, KV_Width, V_Width, Scale, Cap,
-         Target, Ok);
+         Target, Ok, Positions, Window);
    end Attend;
 
    --------------
@@ -2708,12 +2710,17 @@ package body Model_Runner.Platform.Device.Products is
       Scale      : Model_Runner.Numerics.Real;
       Cap        : Model_Runner.Numerics.Real;
       Added      : out Boolean;
-      Window     : Natural := 0) is
+      Window     : Natural := 0;
+      Chained    : Boolean := False) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
       --  better refused where the caller can still do it another way.
       if Steps.Held = Sequence_Limit
+        or else (Chained
+                 and then (Steps.Held = 0
+                           or else Steps.Items (Steps.Held).Rows
+                                     /= Heads * Head_Size))
         or else Heads = 0
         or else Head_Size = 0
         or else Value_Size = 0
@@ -2734,7 +2741,7 @@ package body Model_Runner.Platform.Device.Products is
          --  product beside it are checked against it as against any step.
          Rows => Heads * Value_Size,
          Columns => Heads * Head_Size,
-         Key => System.Null_Address, Chained => False, Blends => False,
+         Key => System.Null_Address, Chained => Chained, Blends => False,
          Unit => 0, Attends => True,
          Heads => Heads, Head_Size => Head_Size, Value_Size => Value_Size,
          Group_Size => Group_Size, First => First, Last => Last,
@@ -2837,9 +2844,12 @@ package body Model_Runner.Platform.Device.Products is
                --  named, which is an answer and a wrong one.
                if This.Rows = 0
                  or else Item.Cache_Buffer = Null_Handle
-                 or else Model_Runner.Numerics.Element_Count (This.Columns)
-                           * Model_Runner.Numerics.Element_Count (Count)
-                         > Vectors'Length
+                 or else (not This.Chained
+                          and then Model_Runner.Numerics.Element_Count
+                                     (This.Columns)
+                                   * Model_Runner.Numerics.Element_Count
+                                       (Count)
+                                   > Vectors'Length)
                then
                   return;
                end if;
@@ -2987,9 +2997,19 @@ package body Model_Runner.Platform.Device.Products is
                  (Buffer => Item.Cache_Buffer,
                   Offset => 0,
                   Extent => Item.Cache_Bytes);
-               Told (2) :=
-                 (Buffer => Item.Vector_Buffer, Offset => 0,
-                  Extent => Vector_Bytes);
+               --  The queries: where the activation was written, or --
+               --  for a chained attention -- what the step before it wrote,
+               --  which never left the device.
+               if Steps.Items (Index).Chained then
+                  Told (2) :=
+                    (Buffer => Item.Result_Buffer,
+                     Offset => Places (Index - 1).At_Byte,
+                     Extent => Places (Index - 1).Bytes);
+               else
+                  Told (2) :=
+                    (Buffer => Item.Vector_Buffer, Offset => 0,
+                     Extent => Vector_Bytes);
+               end if;
                Told (3) :=
                  (Buffer => Item.Result_Buffer,
                   Offset => Places (Index).At_Byte,

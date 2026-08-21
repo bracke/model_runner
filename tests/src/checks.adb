@@ -5328,6 +5328,158 @@ package body Checks is
                   & "every shader named");
          end if;
       end;
+      --  Every figure the device table publishes has to appear in the
+      --  record that says how it was taken.
+      --
+      --  The fingerprints above catch a source that moved without its
+      --  figures being re-measured. They cannot catch the other direction:
+      --  a number edited into the README and not into the record, or
+      --  re-measured into the record and not into the README. Both happened
+      --  while this table was being rewritten, and neither would have been
+      --  noticed by anything here.
+      --
+      --  Only the device table, and only the seconds in it. A rule that
+      --  tried to cover every number in the README would either miss most
+      --  of them or object to the ones that are counts and ratios, and a
+      --  check that cries wolf is a check that gets a wolf.
+      declare
+         Table  : constant String := Contents ("README.md");
+         Record_Of : constant String := Contents ("docs/measured-figures.txt");
+
+         Heading : constant String := "### The device backend";
+
+         Looked : Natural := 0;
+         Missed : Natural := 0;
+
+         At_Heading : Natural := 0;
+      begin
+         if Table'Length > 0 and then Record_Of'Length > 0 then
+            for Index in Table'First
+                         .. Table'Last - Heading'Length + 1
+            loop
+               if Table (Index .. Index + Heading'Length - 1) = Heading then
+                  At_Heading := Index;
+                  exit;
+               end if;
+            end loop;
+
+            if At_Heading = 0 then
+               Fail ("README.md has no ""### The device backend"" heading, "
+                     & "so the figures under it cannot be checked against "
+                     & "the record of how they were taken");
+            else
+               declare
+                  --  The table is the run of lines beginning with a bar
+                  --  that follows the heading. Stopping at the first line
+                  --  after it that is not one keeps this to the table
+                  --  rather than to the prose under it, which quotes
+                  --  figures it is explaining and quotes withdrawn ones on
+                  --  purpose.
+                  At_Line : Natural := At_Heading;
+                  Started : Boolean := False;
+                  Done    : Boolean := False;
+               begin
+                  while not Done and then At_Line <= Table'Last loop
+                     declare
+                        Ends : Natural := At_Line;
+                     begin
+                        while Ends <= Table'Last
+                          and then Table (Ends) /= Character'Val (10)
+                        loop
+                           Ends := Ends + 1;
+                        end loop;
+
+                        declare
+                           Line : constant String :=
+                             Table (At_Line .. Natural'Min (Ends - 1,
+                                                            Table'Last));
+                        begin
+                           if Line'Length > 0
+                             and then Line (Line'First) = '|'
+                           then
+                              Started := True;
+
+                              --  Each run of digits with a point in it,
+                              --  followed by " s", is a figure.
+                              for At_Digit in Line'Range loop
+                                 if Line (At_Digit) in '0' .. '9'
+                                   and then (At_Digit = Line'First
+                                             or else Line (At_Digit - 1)
+                                                       not in '0' .. '9'
+                                                              | '.')
+                                 then
+                                    declare
+                                       Stop : Natural := At_Digit;
+                                    begin
+                                       while Stop < Line'Last
+                                         and then (Line (Stop + 1)
+                                                     in '0' .. '9' | '.')
+                                       loop
+                                          Stop := Stop + 1;
+                                       end loop;
+
+                                       if Stop + 2 <= Line'Last
+                                         and then Line (Stop + 1 .. Stop + 2)
+                                                    = " s"
+                                       then
+                                          declare
+                                             Figure : constant String :=
+                                               Line (At_Digit .. Stop);
+                                             Found : Boolean := False;
+                                          begin
+                                             Looked := Looked + 1;
+
+                                             for Where in Record_Of'First
+                                                          .. Record_Of'Last
+                                                             - Figure'Length
+                                                             + 1
+                                             loop
+                                                if Record_Of
+                                                     (Where .. Where
+                                                      + Figure'Length - 1)
+                                                   = Figure
+                                                then
+                                                   Found := True;
+                                                   exit;
+                                                end if;
+                                             end loop;
+
+                                             if not Found then
+                                                Missed := Missed + 1;
+                                                Fail
+                                                  ("README.md publishes "
+                                                   & Figure & " s in the "
+                                                   & "device table and "
+                                                   & "docs/measured-figures"
+                                                   & ".txt does not mention "
+                                                   & "it, so nothing says "
+                                                   & "how it was taken");
+                                             end if;
+                                          end;
+                                       end if;
+                                    end;
+                                 end if;
+                              end loop;
+                           elsif Started then
+                              Done := True;
+                           end if;
+                        end;
+
+                        At_Line := Ends + 1;
+                     end;
+                  end loop;
+               end;
+
+               if Looked = 0 then
+                  Fail ("no figures were found in README.md's device table, "
+                        & "so whether each is recorded was not asked");
+               end if;
+
+               Result.Performed := Result.Performed + Looked;
+            end if;
+         end if;
+      end;
+
       declare
          Record_Path : constant String := "docs/measured-figures.txt";
          Listing     : constant String := Contents (Record_Path);
