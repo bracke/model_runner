@@ -33,6 +33,16 @@ Model files are opened read-only and are never modified. Embedded metadata and
 templates never cause additional file access: only explicitly supplied paths
 are opened.
 
+The `device` backend is a trust surface the other two have not got: it opens
+the host's Vulkan loader by name at the moment it is first asked for, and from
+there a driver and a device run a shader compiled into this binary. That is
+host code this program does not control, reached only when `--backend device`
+or a device query asks for it; a host with no loader, no driver and no device
+reports none and nothing else about a run changes. What crosses to the device
+is weights, activations and a cache -- never a path, never a template, never
+anything the program would act on when it comes back -- and what comes back is
+read as numbers, in the same bounds every other backend's results are read in.
+
 ### Suppressed checks in the numeric kernels
 
 The innermost loops of `Model_Runner.Quantization` -- the ones that unpack a
@@ -62,7 +72,12 @@ What makes it safe:
 - `tests fuzz` drives malformed containers through the whole path: the parser,
   the tokenizer, the chat-template compiler, model preparation, and a forward
   pass over the mutated weights, so the loops described here are driven by
-  hostile bytes rather than only by valid ones. A
+  hostile bytes rather than only by valid ones. Where the host has a device,
+  every third case is prepared for it as well, so a malformed file reaches a
+  shader -- a path no processor case can take, because the refusals guarding
+  it belong to the device backend. A campaign that had a device open and
+  prepared no case for it fails, since clean totals from a question never
+  asked would otherwise read as a pass. A
   case that escapes an exception, is accepted into a usable state while
   invalid, or runs past a time bound fails the run. The release checklist runs
   a campaign on every invocation.

@@ -48,6 +48,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The documents caught up with the device.** Five claims had gone stale
+  while the device backend grew, and none of them was wrong when it was
+  written. `docs/support-matrix.md` described the device as running products
+  and named one shader, where it now attends as well, on both evaluation
+  paths and a batch at a time, with a layer's attention and the projection
+  that reads its blend in one command buffer; the same file's backend column
+  still said "both" of a table with three backends in it. The README's
+  opening paragraph said the model is evaluated on the CPU. The comment
+  heading `Model_Runner.Backend.Device` still said binary32 only and pointed
+  a quantized model at `--repack f32`, which the body of `Describe` a few
+  lines away had already stopped doing. The matrix's sampling table stopped at the
+  frequency and presence penalties, leaving tail-free, locally typical,
+  exclude-top-choices, the sequence repetition penalty, mirostat, per-token
+  bias and reported probabilities unnamed, and had no row at all for drafting
+  or for a rolling context, which now have a section of their own.
+  `SECURITY.md` did not mention that the fuzzing campaign reaches a shader,
+  nor that opening a host's Vulkan loader is a trust surface the other two
+  backends have not got, and now says both.
+
+- **Five cutting rules called five.** The README said six and
+  `docs/reference-runtime.md` said five, because one was counting the values
+  of `tokenizer.ggml.pre` this build accepts and the other the rules they
+  select: `starcoder` cuts as `gpt-2` does, `llama-bpe` as `llama3` does, and
+  an absent key as `gpt-2` does. Eight names, five rules, said that way in
+  both places.
+
 - **A layer's attention and the matrix that reads its blend go over
   together.** One command buffer instead of two, and the blend never returns
   to the host to be sent again. It saves no time: with a layer's other

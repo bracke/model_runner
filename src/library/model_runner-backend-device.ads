@@ -7,18 +7,20 @@ with Model_Runner.Tensors;
 
 --  The backend that runs on a device.
 --
---  It computes the one operation an evaluation is made of -- a matrix
---  against a vector -- on whatever compute device the host has, and it is
---  refused work it cannot take rather than approximating it.
+--  It computes what an evaluation spends its time on -- a matrix against a
+--  vector, and the attention that reads a cache -- on whatever compute
+--  device the host has, and it is refused work it cannot take rather than
+--  approximating it.
 --
---  Binary32 only. A weight on a device is a run of binary32 values, because
---  that is what the shader reads; every other format this program decodes is
---  packed bits with a scale, and decoding those on a device is a shader per
---  format and a piece of work of its own. So this backend declares one
---  format, the per-tensor check the loader already makes refuses a model
---  that carries anything else, and `--repack f32` is what makes a quantized
---  model usable here. That costs four bytes a weight, which is the bargain
---  that flag already publishes.
+--  Every format, decoded where the weights lie. The shader has a branch for
+--  each of the fifteen formats this program reads and decodes the file's own
+--  bytes, so nothing has to be repacked to reach a device. It was three --
+--  binary32, Q8_0 and Q4_0 -- and the other twelve arrived through
+--  `--repack f32`: a pass over the whole model at load and four bytes a
+--  weight afterwards, which for a k-quant model is four times the memory it
+--  was quantized to avoid. What this backend declares is read from
+--  GGUF.Is_Supported rather than listed again here, because the two lists
+--  that have to agree are the shader's branches and that one.
 --
 --  Availability. A machine with no device, or a device that will not take
 --  the shader, reports itself unready. A caller that asked for this backend
