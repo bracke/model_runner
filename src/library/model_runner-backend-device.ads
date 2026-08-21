@@ -233,6 +233,60 @@ package Model_Runner.Backend.Device is
       Positions  : Natural := 1;
       Window     : Natural := 0);
 
+   --  Attend, and project the blend, in one submission.
+   --
+   --  A layer's attention and the matrix that reads its result are two
+   --  submissions with a round trip between them: the blend comes back to
+   --  the host only to be sent again as the projection's activation. Named
+   --  together they are one command buffer, one fence, and a blend that
+   --  never leaves the device -- a call costs 82.7 microseconds before it
+   --  computes anything, and a run generating pays that once a layer a
+   --  token.
+   --
+   --  The arithmetic is the same either way, and a test says so rather than
+   --  this comment: attention recorded into a sequence is compared against
+   --  attention submitted on its own, on the same cache with the same
+   --  queries.
+   --
+   --  @param Query The queries, one position after another.
+   --  @param Heads How many heads.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @param Group_Size How many heads share one group of keys and values.
+   --  @param First First cached position the first position may look at.
+   --  @param Last Last cached position the first position may look at.
+   --  @param K_Base Where the keys begin.
+   --  @param V_Base Where the values begin.
+   --  @param KV_Width How far apart one position's keys are from the next.
+   --  @param V_Width How far apart one position's values are from the next.
+   --  @param Scale What a score is multiplied by.
+   --  @param Cap The bound on a score, or zero for none.
+   --  @param Weight The matrix the blend is projected through.
+   --  @param Into Receives the projection, Positions * Weight.Rows values.
+   --  @param Ok True when the device computed both.
+   --  @param Positions How many positions attend, which is also how many
+   --    activations the projection is given.
+   --  @param Window This layer's sliding window, or zero for none.
+   procedure Attend_And_Project
+     (Query      : Model_Runner.Tensors.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Weight     : Model_Runner.Tensors.View;
+      Into       : Model_Runner.Tensors.Real_Array_Access;
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0);
+
    --  Several products of the same activation, in one submission.
    --
    --  A layer's queries, keys and values are three matrices read against one

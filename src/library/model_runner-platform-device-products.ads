@@ -354,6 +354,58 @@ package Model_Runner.Platform.Device.Products is
       Unit  : Natural;
       Added : out Boolean);
 
+   --  Name an attention step for a sequence to perform.
+   --
+   --  This is what lets a layer's attention stop being a submission of its
+   --  own. A call to a device costs 82.7 microseconds before it computes
+   --  anything -- measured at a shape whose arithmetic runs at 0.05 Gflop/s
+   --  and is therefore nearly all call -- and attention submitted alone pays
+   --  that once a layer on top of what the products around it pay. Recorded
+   --  here, the blend it writes never leaves the device either: the
+   --  projection that reads it chains to it.
+   --
+   --  The queries are the activations given to Run, one position after
+   --  another, and Run's Count is how many positions attend -- so a batch
+   --  evaluates as one dispatch, as it does through Attend_Resident. The
+   --  cache is the one the device already holds, which Reserve made room for
+   --  and Put_Cache wrote; a sequence with an attention step and no cache is
+   --  refused rather than run against nothing.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Heads How many heads.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @param Group_Size How many heads share one group of keys and values.
+   --  @param First First cached position the first of them may look at.
+   --  @param Last Last cached position the first of them may look at.
+   --    Position p of a batch looks to Last + p.
+   --  @param K_Base Where the keys begin.
+   --  @param V_Base Where the values begin.
+   --  @param KV_Width How far apart one position's keys are from the next.
+   --  @param V_Width How far apart one position's values are from the next.
+   --  @param Scale What a score is multiplied by.
+   --  @param Cap The bound on a score, or zero for none.
+   --  @param Added False when the sequence is full or the shape is refused.
+   --  @param Window This layer's sliding window, or zero where it does not
+   --    slide one, which a batch needs because First can only speak for one
+   --    position and a window moves with each of them.
+   procedure Add_Attention
+     (Steps      : in out Sequence;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Added      : out Boolean;
+      Window     : Natural := 0);
+
    --  Perform every product a sequence holds, in the order they were named.
    --
    --  An unchained product reads the activation given here; a chained one
@@ -774,6 +826,25 @@ private
 
       --  Which unit a combining step applies. Meaningless otherwise.
       Unit    : Natural := 0;
+
+      --  An attention step rather than a product: it reads the queries the
+      --  caller supplied and the cache the device holds, and writes a blend
+      --  the step after it may chain to. Meaningless for anything else, and
+      --  the fields below with it.
+      Attends    : Boolean := False;
+      Heads      : Natural := 0;
+      Head_Size  : Natural := 0;
+      Value_Size : Natural := 0;
+      Group_Size : Natural := 1;
+      First      : Natural := 0;
+      Last       : Natural := 0;
+      K_Base     : Natural := 0;
+      V_Base     : Natural := 0;
+      KV_Width   : Natural := 0;
+      V_Width    : Natural := 0;
+      Window     : Natural := 0;
+      Scale      : Model_Runner.Numerics.Real := 1.0;
+      Cap        : Model_Runner.Numerics.Real := 0.0;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

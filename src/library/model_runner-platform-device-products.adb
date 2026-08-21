@@ -2617,7 +2617,8 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Weights => Weights, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => False,
-         Blends => False, Unit => 0);
+         Blends => False, Unit => 0, Attends => False,
+         others => <>);
       Added := True;
    end Add_Product;
 
@@ -2654,7 +2655,8 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Weights => Weights, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => True,
-         Blends => False, Unit => 0);
+         Blends => False, Unit => 0, Attends => False,
+         others => <>);
       Added := True;
    end Add_Chained_Product;
 
@@ -2682,9 +2684,64 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Steps.Items (Steps.Held - 1).Rows,
          Columns => Steps.Items (Steps.Held - 1).Rows,
          Key => System.Null_Address, Chained => True,
-         Blends => True, Unit => Unit);
+         Blends => True, Unit => Unit, Attends => False,
+         others => <>);
       Added := True;
    end Add_Combination;
+
+   -------------------
+   -- Add_Attention --
+   -------------------
+
+   procedure Add_Attention
+     (Steps      : in out Sequence;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Added      : out Boolean;
+      Window     : Natural := 0) is
+   begin
+      --  The same refusals the single call makes, made while recording
+      --  rather than while running: a step that could not be dispatched is
+      --  better refused where the caller can still do it another way.
+      if Steps.Held = Sequence_Limit
+        or else Heads = 0
+        or else Head_Size = 0
+        or else Value_Size = 0
+        or else Value_Size > Attention_Room
+        or else Group_Size = 0
+        or else Last < First
+      then
+         Added := False;
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Weights => null, At_Byte => 0, Packing => Weight_Packing'First,
+
+         --  What it writes for one position, and what it reads for one:
+         --  said as rows and columns so that a product chained to it and a
+         --  product beside it are checked against it as against any step.
+         Rows => Heads * Value_Size,
+         Columns => Heads * Head_Size,
+         Key => System.Null_Address, Chained => False, Blends => False,
+         Unit => 0, Attends => True,
+         Heads => Heads, Head_Size => Head_Size, Value_Size => Value_Size,
+         Group_Size => Group_Size, First => First, Last => Last,
+         K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
+         V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap);
+      Added := True;
+   end Add_Attention;
 
    ---------
    -- Run --
@@ -2771,7 +2828,24 @@ package body Model_Runner.Platform.Device.Products is
             --  A combining step carries no matrix: it reads the two
             --  results before it and writes its own. Everything the shape
             --  checks below say about a matrix is beside the point for it.
-            if This.Blends then
+            if This.Attends then
+               --  An attention step carries no matrix either, and reads a
+               --  cache rather than a weight. What it needs that the shape
+               --  checks below cannot say is that the cache is there: a
+               --  sequence recorded against a cache the engine does not
+               --  hold would dispatch against whatever the binding last
+               --  named, which is an answer and a wrong one.
+               if This.Rows = 0
+                 or else Item.Cache_Buffer = Null_Handle
+                 or else Model_Runner.Numerics.Element_Count (This.Columns)
+                           * Model_Runner.Numerics.Element_Count (Count)
+                         > Vectors'Length
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight := 0;
+            elsif This.Blends then
                if This.Rows = 0
                  or else Index < 3
                  or else Steps.Items (Index - 1).Rows /= This.Rows
@@ -2830,7 +2904,10 @@ package body Model_Runner.Platform.Device.Products is
          declare
             This : Step renames Steps.Items (Index);
          begin
-            if This.Blends then
+            --  Neither a combining step nor an attention step names a
+            --  matrix: one reads the two results before it, the other reads
+            --  the cache the device holds.
+            if This.Blends or else This.Attends then
                goto Next_Step;
             end if;
 
@@ -2901,6 +2978,33 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          for Index in 1 .. Steps.Held loop
+            if Steps.Items (Index).Attends then
+               --  The cache the engine holds, the queries where the
+               --  activation was written, and this step's own share of the
+               --  result: the same three the single call binds, in the same
+               --  order, because they are the same kernel.
+               Told (1) :=
+                 (Buffer => Item.Cache_Buffer,
+                  Offset => 0,
+                  Extent => Item.Cache_Bytes);
+               Told (2) :=
+                 (Buffer => Item.Vector_Buffer, Offset => 0,
+                  Extent => Vector_Bytes);
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
             if Steps.Items (Index).Blends then
                --  Two arms in, its own room out. Both arms are results that
                --  never left the device.
@@ -3039,6 +3143,45 @@ package body Model_Runner.Platform.Device.Products is
 
                Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                           Bound'Address, 0, Null_Handle);
+
+               if This.Attends then
+                  --  The attention kernel, and back again afterwards, as
+                  --  the combining step does.
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Attend_Line);
+
+                  declare
+                     Shape : aliased Attention_Constants :=
+                       (Heads      => C.unsigned (This.Heads),
+                        Head_Size  => C.unsigned (This.Head_Size),
+                        Value_Size => C.unsigned (This.Value_Size),
+                        Group_Size => C.unsigned (This.Group_Size),
+                        First      => C.unsigned (This.First),
+                        Last       => C.unsigned (This.Last),
+                        K_Base     => C.unsigned (This.K_Base),
+                        V_Base     => C.unsigned (This.V_Base),
+                        KV_Width   => C.unsigned (This.KV_Width),
+                        V_Width    => C.unsigned (This.V_Width),
+                        Scale      => C.C_float (This.Scale),
+                        Cap        => C.C_float (This.Cap),
+
+                        --  Run's Count is how many positions attend: a
+                        --  batch of activations is a batch of positions,
+                        --  and a workgroup goes to each head of each.
+                        Positions  => C.unsigned (Count),
+                        Window     => C.unsigned (This.Window));
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Attention_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer, C.unsigned (This.Heads),
+                        C.unsigned (Count), 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+                  goto Next_Dispatch;
+               end if;
 
                if This.Blends then
                   --  The other kernel, and back again afterwards. Bound per

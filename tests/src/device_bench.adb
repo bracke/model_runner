@@ -158,7 +158,7 @@ package body Device_Bench is
       procedure Busy
         (Heads   : Natural;
          Wide    : Natural;
-         Steps   : Natural;
+         Steps_Count : Natural;
          Sharing : Natural := 1;
          Layers  : Natural := 1;
          Room    : Natural := 0)
@@ -169,10 +169,9 @@ package body Device_Bench is
          Groups : constant Natural := Heads / Sharing;
          Narrow : constant Natural := Groups * Wide;
          Span   : constant Natural := Heads * Wide;
-         Kept   : constant Natural := (if Room = 0 then Steps else Room);
+         Kept   : constant Natural := (if Room = 0 then Steps_Count else Room);
 
          type Values is access N.Real_Array;
-         type Bytes_Access is access Model_Runner.Bytes.Byte_Array;
 
          Cache : constant Values :=
            new N.Real_Array
@@ -186,7 +185,7 @@ package body Device_Bench is
          Rows : constant Natural := Span;
          Cols : constant Natural := Span;
 
-         Weights : constant Bytes_Access :=
+         Weights : constant Model_Runner.Bytes.Byte_Array_Access :=
            new Model_Runner.Bytes.Byte_Array
              (1 .. Model_Runner.Bytes.Byte_Count (Rows * Cols * 4));
          Product : constant Values :=
@@ -236,7 +235,7 @@ package body Device_Bench is
             Products.Attend_Resident
               (Engine, Asked.all,
                Heads => Heads, Head_Size => Wide, Value_Size => Wide,
-               Group_Size => Sharing, First => 0, Last => Steps - 1,
+               Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
                K_Base => 0, V_Base => Layers * Kept * Narrow,
                KV_Width => Narrow, V_Width => Narrow,
                Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
@@ -248,6 +247,63 @@ package body Device_Bench is
          Ada.Text_IO.Put_Line
            ("    a product and an attention together:"
             & Duration'Image (Spent) & " s a pair");
+
+         --  The same pair named together instead of submitted apart: the
+         --  attention and the matrix that reads its blend, as one command
+         --  buffer with the blend never coming back.
+         declare
+            Order  : Products.Sequence;
+            Added  : Boolean;
+            Landed : constant Values :=
+              new N.Real_Array
+                (0 .. N.Element_Count (Span) + N.Element_Count (Rows) - 1);
+            Apart, Together : Duration;
+         begin
+            --  Ten times the rounds the other measurements use. What is
+            --  being looked for here is one submission -- 83 microseconds
+            --  against a pair that costs some milliseconds -- and at twenty
+            --  rounds the spread between repeats was five times the effect.
+            Started := Ada.Calendar.Clock;
+            for Round in 1 .. Rounds * 10 loop
+               Products.Attend_Resident
+                 (Engine, Asked.all,
+                  Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+                  Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
+                  K_Base => 0, V_Base => Layers * Kept * Narrow,
+                  KV_Width => Narrow, V_Width => Narrow,
+                  Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
+               Products.Multiply
+                 (Engine, Weights.all, 0, Products.Values_F32,
+                  Rows, Cols, Got.all, 1, Product.all, Ok, Halted);
+            end loop;
+            Apart := (Ada.Calendar.Clock - Started) / (Rounds * 10);
+
+            Products.Open_Sequence (Order);
+            Products.Add_Attention
+              (Order, Heads, Wide, Wide, Sharing, 0, Steps_Count - 1,
+               0, Layers * Kept * Narrow, Narrow, Narrow, 0.125, 0.0, Added);
+            Products.Add_Chained_Product
+              (Order, Weights, 0, Products.Values_F32, Rows, Cols,
+               Added);
+
+            if Added then
+               Started := Ada.Calendar.Clock;
+               for Round in 1 .. Rounds * 10 loop
+                  Products.Run
+                    (Engine, Order, Asked.all, 1, Landed.all, Ok, Halted);
+               end loop;
+               Together := (Ada.Calendar.Clock - Started) / (Rounds * 10);
+
+               Ada.Text_IO.Put_Line
+                 ("    attention and its projection apart"
+                  & Duration'Image (Apart) & " s, together"
+                  & Duration'Image (Together) & " s, saved"
+                  & Duration'Image (Apart - Together) & " s");
+            else
+               Ada.Text_IO.Put_Line
+                 ("    the pair would not record as a sequence");
+            end if;
+         end;
 
          --  A layer's shape: four products around one attention, and the
          --  same four without it. The difference is what the attention adds
@@ -286,7 +342,7 @@ package body Device_Bench is
                   Products.Attend_Resident
                     (Engine, Asked.all,
                      Heads => Heads, Head_Size => Wide, Value_Size => Wide,
-                     Group_Size => Sharing, First => 0, Last => Steps - 1,
+                     Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
                      K_Base => 0, V_Base => Layers * Kept * Narrow,
                      KV_Width => Narrow, V_Width => Narrow,
                      Scale => 0.125, Cap => 0.0, Target => Got.all,
@@ -315,7 +371,7 @@ package body Device_Bench is
                Products.Attend_Resident
                  (Engine, Asked.all,
                   Heads => Heads, Head_Size => Wide, Value_Size => Wide,
-                  Group_Size => Sharing, First => 0, Last => Steps - 1,
+                  Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
                   K_Base => Layer * Kept * Narrow,
                   V_Base => Layers * Kept * Narrow
                             + Layer * Kept * Narrow,

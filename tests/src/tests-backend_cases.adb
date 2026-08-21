@@ -15,6 +15,8 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.Numerics;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Device;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Tensors;
 
 with Fixtures;
@@ -35,6 +37,8 @@ package body Tests.Backend_Cases is
    package G renames Model_Runner.GGUF;
    package N renames Model_Runner.Numerics;
    package T renames Model_Runner.Tensors;
+   package Devices renames Model_Runner.Platform.Device;
+   package Products renames Model_Runner.Platform.Device.Products;
 
    Rows    : constant N.Element_Count := 37;
    Columns : constant N.Element_Count := 24;
@@ -1492,6 +1496,289 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Resident_Cache_Attends_As_A_Host_Does;
 
+   -----------------------------------------------
+   -- Recorded_Attention_Says_What_A_Call_Says --
+   -----------------------------------------------
+
+   --  Attention recorded into a sequence against attention submitted on its
+   --  own, on the same cache with the same queries.
+   --
+   --  A sequence exists so that a layer's steps go over in one submission
+   --  instead of several, and attention was the step that could not join
+   --  one: while it was submitted alone the products either side of it
+   --  could not be sent together. What has to be true before anything is
+   --  built on that is that the recorded form computes the same thing, and
+   --  a device is not a place to find that out by inspection.
+   procedure Recorded_Attention_Says_What_A_Call_Says
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads     : constant := 4;
+      Head_Size : constant := 8;
+      Positions : constant := 5;
+
+      Span : constant N.Element_Count := Heads * Head_Size;
+      Room : constant N.Element_Count :=
+        N.Element_Count (Positions) * Span;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found : Boolean;
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      Cache : N.Real_Array (0 .. Room * 2 - 1);
+      Query : N.Real_Array (0 .. Span - 1);
+
+      Alone    : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+      Recorded : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+
+      Steps : Products.Sequence;
+      Added : Boolean;
+
+      Halted : Boolean;
+
+      --  Both arms run the same kernel on the same device, so they should
+      --  agree to the last bit; this leaves room for the two paths reaching
+      --  it through different buffers rather than for different arithmetic.
+      Near : constant N.Real := 1.0e-6;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      --  Something with structure rather than a constant, so that a blend
+      --  reading the wrong region says so.
+      for Index in Cache'Range loop
+         Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+      end loop;
+      for Index in Query'Range loop
+         Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+      end loop;
+
+      Products.Reserve (Engine, Cache'Length, Ok);
+
+      if not Ok then
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Put_Cache (Engine, 0, Cache, Ok);
+      Assert (Ok, "the cache would not be written");
+
+      Products.Attend_Resident
+        (Engine, Query,
+         Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+         Group_Size => 1, First => 0, Last => Positions - 1,
+         K_Base => 0, V_Base => Natural (Room),
+         KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
+         Scale => 0.25, Cap => 0.0, Target => Alone, Ok => Ok);
+
+      Assert (Ok, "attention on its own was refused");
+
+      Products.Open_Sequence (Steps);
+      Products.Add_Attention
+        (Steps,
+         Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+         Group_Size => 1, First => 0, Last => Positions - 1,
+         K_Base => 0, V_Base => Natural (Room),
+         KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
+         Scale => 0.25, Cap => 0.0, Added => Added);
+
+      Assert (Added, "a sequence would not take an attention step");
+      Assert (Products.Length (Steps) = 1,
+              "an attention step was taken and not counted");
+
+      Products.Run (Engine, Steps, Query, 1, Recorded, Ok, Halted);
+
+      Assert (Ok, "a sequence holding an attention step was refused");
+      Assert (not Halted, "nothing asked it to stop");
+
+      for Index in Alone'Range loop
+         Assert (abs (Alone (Index) - Recorded (Index)) <= Near,
+                 "recorded attention differs from attention submitted alone "
+                 & "at component" & N.Element_Count'Image (Index));
+      end loop;
+
+      --  And a sequence recorded against a cache the engine does not hold
+      --  is refused rather than run against whatever the binding last
+      --  named, which would answer with the previous call's keys.
+      Products.Close (Engine);
+      Products.Open (Engine, Opened, Ready);
+
+      if Ready then
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => 1, First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Natural (Room),
+            KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
+            Scale => 0.25, Cap => 0.0, Added => Added);
+         Assert (Added, "recording does not need a cache; running does");
+
+         Products.Run (Engine, Steps, Query, 1, Recorded, Ok, Halted);
+         Assert (not Ok,
+                 "a sequence attending against a cache the engine does not "
+                 & "hold was run rather than refused");
+      end if;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end Recorded_Attention_Says_What_A_Call_Says;
+
+   ---------------------------------------------
+   -- Joined_Pair_Says_What_Two_Steps_Say --
+   ---------------------------------------------
+
+   --  Attention and its projection named together against the two done
+   --  apart, on the same cache with the same queries and the same matrix.
+   --
+   --  What the joining is for is a submission and a round trip, not a
+   --  different answer, so the answer has to be the same one. The saving is
+   --  measured by `tests device-bench` and is not what this asserts.
+   procedure Joined_Pair_Says_What_Two_Steps_Say
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads     : constant := 4;
+      Head_Size : constant := 8;
+      Positions : constant := 5;
+
+      Span : constant N.Element_Count := Heads * Head_Size;
+      Room : constant N.Element_Count :=
+        N.Element_Count (Positions) * Span;
+
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      Cache : N.Real_Array (0 .. Room * 2 - 1);
+      Query : N.Real_Array (0 .. Span - 1);
+
+      Blend : T.Real_Array_Access;
+      Apart : T.Real_Array_Access;
+      Joint : T.Real_Array_Access;
+
+      --  A square matrix of the width a blend has, so the projection reads
+      --  the blend whole and writes something of the same size.
+      Weights : Model_Runner.Bytes.Byte_Array_Access;
+      Matrix  : T.View;
+
+      Status : E.Error_Info;
+
+      Near : constant N.Real := 1.0e-4;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
+
+      if not Ready then
+         return;
+      end if;
+
+      for Index in Cache'Range loop
+         Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+      end loop;
+      for Index in Query'Range loop
+         Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+      end loop;
+
+      T.Allocate (Span, Blend);
+      T.Allocate (Span, Apart);
+      T.Allocate (Span, Joint);
+      Model_Runner.Bytes.Allocate
+        (Model_Runner.Bytes.Byte_Count (Span * Span) * 4, Weights);
+
+      Assert (Blend /= null and then Apart /= null and then Joint /= null
+              and then Weights /= null, "no room for the test");
+
+      --  Values with structure, written as bytes because that is how a
+      --  matrix reaches a backend.
+      for Row in 0 .. Span - 1 loop
+         for Column in 0 .. Span - 1 loop
+            declare
+               Value : constant N.Real :=
+                 N.Real ((Row + 2 * Column) mod 11) / 11.0 - 0.4;
+               At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count (Row * Span + Column) * 4 + 1;
+            begin
+               Weights.all (At_Byte .. At_Byte + 3) :=
+                 Model_Runner.Bytes.Put_F32 (Value);
+            end;
+         end loop;
+      end loop;
+
+      Matrix := (Format => Model_Runner.GGUF.Type_F32,
+                 Rows => Span, Columns => Span,
+                 Data => Weights, Offset => 0,
+                 Length => Weights.all'Length);
+
+      Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Ok);
+
+      if not Ok then
+         Model_Runner.Backend.Device.Close;
+         return;
+      end if;
+
+      Model_Runner.Backend.Device.Put_Cache (0, Cache, Ok);
+      Assert (Ok, "the cache would not be written");
+
+      --  Apart: attend, bring the blend back, send it again as the
+      --  projection's activation.
+      Model_Runner.Backend.Device.Attend
+        (Query, Heads, Head_Size, Head_Size, 1, 0, Positions - 1,
+         0, Natural (Room), Heads * Head_Size, Heads * Head_Size,
+         0.25, 0.0, Blend.all, Ok);
+      Assert (Ok, "attention on its own was refused");
+
+      Model_Runner.Backend.Device.Dispatch (Matrix, Blend, Apart, Status);
+      Assert (not E.Is_Error (Status),
+              "the projection on its own was refused");
+
+      --  Together: one submission, and the blend never comes back.
+      Model_Runner.Backend.Device.Attend_And_Project
+        (Query, Heads, Head_Size, Head_Size, 1, 0, Positions - 1,
+         0, Natural (Room), Heads * Head_Size, Heads * Head_Size,
+         0.25, 0.0, Matrix, Joint, Ok);
+      Assert (Ok, "the pair named together was refused");
+
+      for Index in 0 .. Span - 1 loop
+         Assert (abs (Apart.all (Index) - Joint.all (Index)) <= Near,
+                 "the pair named together differs from the two done apart "
+                 & "at component" & N.Element_Count'Image (Index));
+      end loop;
+
+      T.Free (Blend);
+      T.Free (Apart);
+      T.Free (Joint);
+      Model_Runner.Bytes.Free (Weights);
+      Model_Runner.Backend.Device.Close;
+   end Joined_Pair_Says_What_Two_Steps_Say;
+
    ----------
    -- Name --
    ----------
@@ -1754,6 +2041,15 @@ package body Tests.Backend_Cases is
         (T, Resident_Cache_Attends_As_A_Host_Does'Access,
          "a cache a device holds is written and attended to, and says what "
          & "a blend worked out by hand says");
+      Register_Routine
+        (T, Recorded_Attention_Says_What_A_Call_Says'Access,
+         "attention recorded into a sequence says what attention submitted "
+         & "on its own says, and a sequence attending against a cache that "
+         & "is not there is refused");
+      Register_Routine
+        (T, Joined_Pair_Says_What_Two_Steps_Say'Access,
+         "attention and its projection named together say what the two "
+         & "done apart say");
    end Register_Tests;
 
 end Tests.Backend_Cases;

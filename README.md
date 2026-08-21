@@ -1352,10 +1352,10 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 1.777 s | **1.098 s** |
-| -- evaluating the prompt | 0.355 s | 0.202 s |
-| -- generating | 1.398 s | 0.896 s |
-| 110-token prompt, nothing generated | 6.295 s | **2.621 s** |
+| 6-token prompt, 12 generated | 1.777 s | **1.088 s** |
+| -- evaluating the prompt | 0.355 s | 0.211 s |
+| -- generating | 1.398 s | 0.871 s |
+| 110-token prompt, nothing generated | 6.295 s | **2.628 s** |
 
 The two columns were not taken together, which earlier versions of this
 table could say and this one cannot. The device column was measured on
@@ -1398,6 +1398,22 @@ The agreement this was in aid of is not optional, whichever way the figure
 had gone: a drafted run checks its proposals through the batched evaluator
 and generates through the other, so a device wired into one and not the other
 makes the two say different things, which is what the suite caught.
+
+A layer's attention and the matrix that reads its blend are named together
+now, so they go over as one command buffer and the blend never comes back to
+be sent again. Measured on the pair alone, over two hundred rounds a side
+because at twenty the spread between repeats was five times the effect, that
+saves 0.456, 0.553 and 0.848 ms across three runs -- more than the 82.7
+microseconds of the submission itself, because the blend's journey each way
+goes with it.
+
+End to end it cannot be told from nothing. Three readings of the generating
+run before the change and three after: 1.019, 1.081 and 1.098 s against
+0.976, 1.067 and 1.088 s. The second set is lower throughout and the two
+ranges overlap almost entirely, which is not a result. The per-pair saving is
+real and what happens to it between there and the run as a whole is not
+something these figures answer; the slowest reading is published, as the ones
+before it were.
 
 Read the left column with the caveat it deserves. This machine had other work
 on it, and the two columns are not equally hurt by that: the processor column

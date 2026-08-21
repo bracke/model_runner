@@ -5,7 +5,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **A sequence can hold an attention step.** `Add_Attention` records
+  attention into the same command buffer as the products around it, with
+  `Run`'s activation count supplying how many positions attend, so a batch
+  stays one dispatch. It names no matrix and is refused at run time when the
+  engine holds no cache, rather than dispatching against whatever the
+  binding last named. A test compares the recorded form against attention
+  submitted on its own, on the same cache with the same queries.
+
 ### Changed
+
+- **A layer's attention and the matrix that reads its blend go over
+  together.** One command buffer instead of two, and the blend never returns
+  to the host to be sent again. On the pair alone this saves about half a
+  millisecond; end to end it cannot be told from nothing, and the figures say
+  so rather than claiming it.
 
 - **A batch of positions attends in one call.** The attention kernel takes a
   workgroup a head of a position where it took a workgroup a head, and the

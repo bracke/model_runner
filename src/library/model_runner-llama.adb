@@ -4688,6 +4688,11 @@ package body Model_Runner.Llama is
             --  slower run rather than a failed one.
             Resident : Boolean := False;
 
+            --  Whether attention and the matrix that reads its blend went
+            --  over as one submission. False means the projection still has
+            --  to be done, which is what it means everywhere else.
+            Projected : Boolean := False;
+
             --  Set when a device took the whole gated feed-forward, its
             --  projection down included, so that the common tail does not
             --  project it a second time.
@@ -4809,10 +4814,28 @@ package body Model_Runner.Llama is
                      First, Reserved, Scale, Settings.Attention_Cap,
                      Item.Scores.all, Item.Attention.all, Usable);
                elsif Item.Held = Exact and then Resident then
-                  Attend_There
-                    (Item, Source, Item.Query.all, Heads, Head_Size,
-                     Value_Size, First, Reserved, Base, V_Base, KV_Width,
-                     V_Width, Scale, Item.Attention.all, Usable);
+                  --  Attention and the matrix that reads its result, named
+                  --  together so they go over as one command buffer and the
+                  --  blend never comes back. Where the device will not take
+                  --  the pair, Attend_There does the attention alone and the
+                  --  projection follows as it always did.
+                  Model_Runner.Backend.Device.Attend_And_Project
+                    (Item.Query.all, Natural (Heads), Natural (Head_Size),
+                     Natural (Value_Size), Settings.Group_Size,
+                     Natural (First), Natural (Reserved), Natural (Base),
+                     Natural (Item.Keys.all'Length + V_Base),
+                     Natural (KV_Width), Natural (V_Width), Scale,
+                     Settings.Attention_Cap, Current.Attention_Out,
+                     Item.Normalized, Projected);
+
+                  if Projected then
+                     Usable := True;
+                  else
+                     Attend_There
+                       (Item, Source, Item.Query.all, Heads, Head_Size,
+                        Value_Size, First, Reserved, Base, V_Base, KV_Width,
+                        V_Width, Scale, Item.Attention.all, Usable);
+                  end if;
                elsif Item.Held = Exact then
                   Blend_Exact
                     (Item.Query.all, Item.Keys.all, Item.Values.all,
@@ -4837,10 +4860,13 @@ package body Model_Runner.Llama is
                end if;
             end;
 
-            Product
-              (Item, Current.Attention_Out, Item.Attention,
-               Item.Normalized, Status);
-            exit when E.Is_Error (Status);
+            --  Done already where the pair went over together.
+            if not Projected then
+               Product
+                 (Item, Current.Attention_Out, Item.Attention,
+                  Item.Normalized, Status);
+               exit when E.Is_Error (Status);
+            end if;
 
             if Current.Out_Bias /= null then
                K.Add (Item.Normalized.all, Current.Out_Bias.all);

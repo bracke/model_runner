@@ -513,6 +513,108 @@ package body Model_Runner.Backend.Device is
          Target, Ok, Positions, Window);
    end Attend;
 
+   ------------------------
+   -- Attend_And_Project --
+   ------------------------
+
+   procedure Attend_And_Project
+     (Query      : T.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Base     : Natural;
+      V_Base     : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Weight     : T.View;
+      Into       : T.Real_Array_Access;
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0)
+   is
+      Slots : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
+
+      --  What the sequence writes: the blend, then the projection of it.
+      --  Both come back in one array because Run fills one, and only the
+      --  second half is wanted.
+      Blend  : constant Model_Runner.Numerics.Element_Count :=
+        Slots * Model_Runner.Numerics.Element_Count (Heads)
+        * Model_Runner.Numerics.Element_Count (Value_Size);
+      Wanted : constant Model_Runner.Numerics.Element_Count :=
+        Blend + Slots * Weight.Rows;
+
+      Steps   : Products.Sequence;
+      Packing : Products.Weight_Packing;
+      Known   : Boolean;
+      Added   : Boolean;
+      Halted  : Boolean := False;
+   begin
+      Ok := False;
+
+      if not Ready_Now or else Into = null or else Weight.Data = null
+        or else Into.all'Length < Slots * Weight.Rows
+        or else Weight.Columns
+                  /= Model_Runner.Numerics.Element_Count (Heads)
+                     * Model_Runner.Numerics.Element_Count (Value_Size)
+      then
+         return;
+      end if;
+
+      Packing_Of (Weight, Packing, Known);
+      if not Known then
+         return;
+      end if;
+
+      Products.Open_Sequence (Steps);
+
+      Products.Add_Attention
+        (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
+         K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
+         Window => Window);
+      if not Added then
+         return;
+      end if;
+
+      --  Chained: the projection reads the blend where it lies, which is
+      --  the whole point of naming the two together.
+      Products.Add_Chained_Product
+        (Steps, Weight.Data, Weight.Offset, Packing,
+         Natural (Weight.Rows), Natural (Weight.Columns), Added,
+         Key => Weight.Data.all (Weight.Data.all'First + Weight.Offset)
+                  'Address);
+      if not Added then
+         return;
+      end if;
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps, Query, Natural'Max (Positions, 1),
+         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ok, Halted);
+
+      if Halted or else not Ok then
+         Ok := False;
+         return;
+      end if;
+
+      Into.all (Into.all'First .. Into.all'First + Slots * Weight.Rows - 1) :=
+        Landing.all (Landing.all'First + Blend
+                     .. Landing.all'First + Wanted - 1);
+   end Attend_And_Project;
+
    --------------------
    -- Dispatch_Group --
    --------------------
