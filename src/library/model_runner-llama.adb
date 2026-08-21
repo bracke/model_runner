@@ -2457,8 +2457,12 @@ package body Model_Runner.Llama is
    --  @param KV_Width How far apart one position's keys are from the next.
    --  @param V_Width How far apart one position's values are from the next.
    --  @param Scale What a score is multiplied by.
-   --  @param Target Receives the blend.
-   --  @param Usable False when the device declined it.
+   --  @param Target Receives the blend, one position after another.
+   --  @param Usable False when the arithmetic went non-finite.
+   --  @param Positions How many positions attend at once. One while
+   --    generating; the whole batch while a prompt is evaluated.
+   --  @param Window This layer's sliding window, or zero for none, which a
+   --    batch needs because every position of it has its own first.
    procedure Attend_There
      (Item       : Session;
       Source     : Model'Class;
@@ -2474,8 +2478,15 @@ package body Model_Runner.Llama is
       V_Width    : Element_Count;
       Scale      : Real;
       Target     : out Real_Array;
-      Usable     : out Boolean)
+      Usable     : out Boolean;
+      Positions  : Element_Count := 1;
+      Window     : Natural := 0)
    is
+      --  A head's worth of queries and of blend, which is how far apart one
+      --  position of a batch is from the next in either array.
+      Query_Span : constant Element_Count := Heads * Head_Size;
+      Blend_Span : constant Element_Count := Heads * Value_Size;
+
       Took : Boolean;
    begin
       Model_Runner.Backend.Device.Attend
@@ -2483,7 +2494,8 @@ package body Model_Runner.Llama is
          Source.Settings.Group_Size, Natural (First), Natural (Last),
          Natural (K_Base), Natural (Item.Keys.all'Length + V_Base),
          Natural (KV_Width), Natural (V_Width),
-         Scale, Source.Settings.Attention_Cap, Target, Took);
+         Scale, Source.Settings.Attention_Cap, Target, Took,
+         Positions => Natural (Positions), Window => Window);
 
       if Took then
          Usable := True;
@@ -2495,12 +2507,41 @@ package body Model_Runner.Llama is
       --  positions were written to both. Saying so here rather than at
       --  either call site keeps the two evaluators alike, and keeps a
       --  refusal from being reported as a tensor gone non-finite.
-      Blend_Exact
-        (Query, Item.Keys.all, Item.Values.all,
-         K_Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
-         Value_Size, Element_Count (Source.Settings.Group_Size),
-         First, Last, Scale, Source.Settings.Attention_Cap,
-         Item.Scores.all, Target, Usable);
+      Usable := True;
+
+      for Slot in 0 .. Positions - 1 loop
+         declare
+            --  Position Slot of the batch looks to Last + Slot, and back to
+            --  the window's start where there is one. The device works this
+            --  out from the same two numbers, which is what makes the two
+            --  paths comparable rather than merely similar.
+            Ends  : constant Element_Count := Last + Slot;
+            Since : constant Element_Count :=
+              (if Window = 0 then First
+               elsif Ends + 1 > Element_Count (Window)
+               then Ends + 1 - Element_Count (Window)
+               else 0);
+
+            Q_At : constant Element_Count := Slot * Query_Span;
+            B_At : constant Element_Count := Slot * Blend_Span;
+
+            Fine : Boolean;
+         begin
+            Blend_Exact
+              (Query (Query'First + Q_At .. Query'First + Q_At
+                      + Query_Span - 1),
+               Item.Keys.all, Item.Values.all,
+               K_Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+               Value_Size, Element_Count (Source.Settings.Group_Size),
+               Since, Ends, Scale, Source.Settings.Attention_Cap,
+               Item.Scores.all,
+               Target (Target'First + B_At .. Target'First + B_At
+                       + Blend_Span - 1), Fine);
+
+            Usable := Usable and then Fine;
+            exit when not Fine;
+         end;
+      end loop;
    end Attend_There;
 
    --  The same, over a cache held in half precision. Every element is
@@ -5283,7 +5324,48 @@ package body Model_Runner.Llama is
                end;
             end loop;
 
+            --  The whole batch in one call where a device holds the cache.
+            --  Every position of a batch reads the same cache and writes its
+            --  own blend, so nothing makes them wait for each other -- and a
+            --  call costs 83 microseconds before it computes anything, which
+            --  a position at a time pays 2420 times over a 110-token prompt.
+            if Item.Held = Exact and then Resident then
+               declare
+                  --  What Earliest would return for the batch's first
+                  --  position, and the width it would slide for the rest.
+                  --  Taken from Earliest rather than restated, so a layer
+                  --  that windows nothing says zero here as it does there.
+                  Window_Here : constant Natural :=
+                    (if Settings.Window > 0
+                       and then Earliest (Settings,
+                                          Element_Count (Settings.Window),
+                                          Natural (Index)) > 0
+                     then Settings.Window
+                     else 0);
+
+                  Usable : Boolean;
+               begin
+                  Attend_There
+                    (Item, Source, Query.all (0 .. Count * Wide - 1),
+                     Heads, Head_Size, Value_Size,
+                     Earliest (Settings, Reserved, Natural (Index)),
+                     Reserved, Base, V_Base, KV_Width, V_Width, Scale,
+                     Attend.all (0 .. Count * Blend - 1), Usable,
+                     Positions => Count, Window => Window_Here);
+
+                  if not Usable then
+                     Item.Current := Failed;
+                     Status := E.Make (E.Tensor_Non_Finite_Value);
+                     E.Add_Integer (Status, "layer",
+                                    Long_Long_Integer (Index));
+                     return;
+                  end if;
+               end;
+            end if;
+
             for Which in 0 .. Count - 1 loop
+               exit when Item.Held = Exact and then Resident;
+
                declare
                   --  Causal: this token sees the committed context and the
                   --  batch tokens up to and including itself, and with a
@@ -5305,12 +5387,6 @@ package body Model_Runner.Llama is
                         Element_Count (Settings.Group_Size),
                         First_Step, Last_Step, Scale,
                         Settings.Attention_Cap, Item.Scores.all,
-                        Attend.all (B_At .. B_At + Blend - 1), Usable);
-                  elsif Item.Held = Exact and then Resident then
-                     Attend_There
-                       (Item, Source, Query.all (Q_At .. Q_At + Wide - 1),
-                        Heads, Head_Size, Value_Size, First_Step, Last_Step,
-                        Base, V_Base, KV_Width, V_Width, Scale,
                         Attend.all (B_At .. B_At + Blend - 1), Usable);
                   elsif Item.Held = Exact then
                      Blend_Exact

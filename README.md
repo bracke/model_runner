@@ -1352,15 +1352,15 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 1.777 s | **1.045 s** |
-| -- evaluating the prompt | 0.355 s | 0.196 s |
-| -- generating | 1.398 s | 0.847 s |
-| 110-token prompt, nothing generated | 6.295 s | **2.894 s** |
+| 6-token prompt, 12 generated | 1.777 s | **1.098 s** |
+| -- evaluating the prompt | 0.355 s | 0.202 s |
+| -- generating | 1.398 s | 0.896 s |
+| 110-token prompt, nothing generated | 6.295 s | **2.621 s** |
 
 The two columns were not taken together, which earlier versions of this
 table could say and this one cannot. The device column was measured on
-2026-08-20 at the loads its runs printed -- 1.47 rising to 1.67 for the short
-run and 1.45 rising to 1.54 for the long one. The processor column stands
+2026-08-21 at the loads its runs printed -- 1.12 rising to 1.83 for the short
+run and 1.45 rising to 1.46 for the long one. The processor column stands
 from the earlier sitting. Its runs were taken again beside these and read
 3.971 s and 12.572 s, at loads rising to 2.99 and 3.06 on a machine carrying
 somebody else's virtual machine at two thirds of a processor; those readings
@@ -1373,28 +1373,31 @@ Both backends print the same digest of what they generated -- `5abff916` for
 the short run and `cbf29ce4` for the long one -- so this is the same text,
 not a faster answer to a different question.
 
-The two device figures moved in opposite directions when the engine was made
-to attend on the device from both of its evaluators, and both movements are
-worth stating. The short run went from 1.262 s to 1.045 s: it generates, and
-generating goes a token at a time, so each of its positions attends where its
-matrices already are instead of coming back for a blend.
+Both rows are the device attending for itself. The short run generates, and
+generating goes a position at a time, so its 1.262 s became 1.098 s when each
+position started attending where its matrices already are instead of coming
+back here for a blend.
 
-The long run went the other way, from 2.504 s to 2.894 s. It generates
-nothing and is a batch of 110 positions, and the batched evaluator now asks
-the device for a blend once per position per layer where it used to blend all
-110 at once here. Two readings taken an hour apart agree -- 2.862 s and
-2.894 s, the second at a load of 1.45 rising to 1.54, which is quieter than
-the 1.6 the 2.504 s was taken at -- so this is the change and not the
-machine. Fifteen per cent of a prompt evaluation is what the agreement
-between the two evaluators cost, and that agreement is not optional: a
-drafted run checks its proposals through the batched evaluator and generates
-through the other, so a device wired into one and not the other makes the two
-say different things, which is what the suite caught. What has not been
-measured is where inside that the time goes -- the natural suspicion is the
-count of separate submissions and their fences rather than the arithmetic,
-since the same 110 positions cost 1.90 s of processor time in total, but
-suspicion is not measurement and it is listed as work rather than written
-here as a finding.
+The long run generates nothing and is a batch of 110 positions, and it took
+two changes rather than one. Attending a position at a time made it worse,
+2.504 s to 2.894 s, because a call to a device costs something before it
+computes anything and a 110-token prompt over twenty-two layers is 2420 of
+them. `tests device-bench` says what that is: the whole triangle submitted a
+position at a time is 0.618 s in 2420 calls, 255 microseconds each, against a
+floor of 82.7 microseconds measured at a shape whose arithmetic runs at 0.05
+Gflop/s and is therefore almost entirely the call itself.
+
+The same triangle submitted a call a layer is 0.145 s in 22 calls, because
+the positions of a batch read the same cache and write their own blends and
+so never need each other. That is what the kernel now does -- a workgroup a
+head of a position, where it was a workgroup a head -- and the row went to
+2.621 s, past the 2.504 s it started at. Two readings, 2.371 s and 2.621 s,
+both at a load of about 1.45; the slower is published.
+
+The agreement this was in aid of is not optional, whichever way the figure
+had gone: a drafted run checks its proposals through the batched evaluator
+and generates through the other, so a device wired into one and not the other
+makes the two say different things, which is what the suite caught.
 
 Read the left column with the caveat it deserves. This machine had other work
 on it, and the two columns are not equally hurt by that: the processor column

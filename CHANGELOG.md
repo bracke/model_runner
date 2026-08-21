@@ -5,7 +5,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **A batch of positions attends in one call.** The attention kernel takes a
+  workgroup a head of a position where it took a workgroup a head, and the
+  batched evaluator submits its whole batch at once instead of a position at
+  a time. Positions of a batch read the same cache and write their own
+  blends, so nothing makes them wait for each other. A 110-token prompt's
+  attention over twenty-two layers falls from 0.618 s in 2420 calls to
+  0.145 s in 22, and the run it belongs to from 2.894 s to 2.621 s -- past
+  the 2.504 s it read before either change. Two push constants carry it: how
+  many positions, and the layer's sliding window, which is needed because
+  `First` can only speak for one position and a window moves with each.
+
+- **Both evaluators attend on the device, not just the generating one.** A
+  drafted run checks its proposals through `Evaluate_Batch` and generates
+  through `Evaluate`; a device wired into the second only made the two say
+  different things. They now share `Put_Position` and `Attend_There` rather
+  than each carrying its own copy, and `Attend_There` owns the fallback to
+  the processor as well -- both call sites previously reported a device that
+  declined as a tensor gone non-finite.
+
 ### Fixed
+
+- **A batched attention read back one position's worth of blend.** Whatever
+  the batch size, the copy out of the device's result buffer was
+  `Heads * Value_Size` floats, so every position after the first kept what
+  was already in the target. Caught by the drafted-run agreement test.
 
 - **The withdrawal of the device speedups is itself withdrawn.** The probes
   behind it ran against a stale test binary: `tests/bin/tests` links the

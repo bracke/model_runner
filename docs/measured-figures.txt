@@ -965,7 +965,7 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # less than a figure taken badly and said to be bad.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-engine 5448B52B8BBAD68C src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine CF11038F15ACEEFA src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -1063,7 +1063,7 @@ engine 5448B52B8BBAD68C src/library/model_runner-llama.adb src/library/model_run
 #
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-reference 1D7CD21B4B5F978A src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference A83DD71360A06A2A src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -2020,8 +2020,45 @@ reference 1D7CD21B4B5F978A src/library/model_runner-backend-reference.adb src/li
 # Those readings are here rather than published for the reason the kernels
 # group gives above: a worse measurement is not a newer one.
 
+# 2026-08-21, a batch of positions attending in one call. The kernel takes a
+# workgroup a head of a position where it took a workgroup a head, and the
+# batched evaluator submits its whole batch at once instead of a position at
+# a time. Both device figures re-measured; the processor column untouched and
+# still from its own earlier sitting, as the entry below says.
+#
+# First, what the previous entry left as a suspicion is now measured, and it
+# was right. `tests device-bench` reproduces a whole prompt's attention --
+# 110 positions over 22 layers against a 90 MB resident cache -- and reads
+# 0.618 s in 2420 calls, 255 microseconds each. The floor of a call, taken at
+# one head and sixteen positions where the arithmetic runs at 0.05 Gflop/s
+# and is therefore nearly all overhead, is 82.7 microseconds. So between a
+# third and a half of every call was submission and fence, which is what 2420
+# of them cost. The same triangle as one call a layer reads 0.145 s in 22
+# calls: 4.25 times less for arithmetic that did not change.
+#
+# device, 110 prompt tokens and nothing generated: two readings, 2.371 s at a
+# load of 1.49 falling to 1.45, and 2.621 s at 1.45 to 1.46. The slower is
+# published, against the 2.894 s of the previous entry and the 2.504 s before
+# any of this. Both digests cbf29ce484222325.
+#
+# device, 6 prompt tokens and 12 generated: three readings, 1.019 s at a load
+# of 1.04 to 1.12, 1.081 s at 1.44 to 1.56, and 1.098 s at 1.12 to 1.83. The
+# slowest is published, against the 1.045 s of the previous entry. That row
+# generates, so its batch is always one position and the kernel change should
+# cost it nothing; three readings straddling the figure it replaces is what
+# nothing looks like, and the slowest is published rather than the one that
+# would let this be read as an improvement. Digest 5abff916f9d83ca6 for all
+# three.
+#
+# One bug found by the suite on the way, worth recording because the figures
+# above would have been meaningless with it: the readback copied one
+# position's worth of blend whatever the batch size, so every position after
+# the first kept what was already in the target. It failed the drafted-run
+# agreement test and the device-memory test, and no figure was taken until it
+# was fixed.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device A3EC88E35F0BDA22 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device 539F8E01FDD78DE7 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -2147,7 +2184,7 @@ device A3EC88E35F0BDA22 src/shaders/row_product.comp src/library/model_runner-sh
 #
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
-drafting 6504AF4214CE0D95 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting B2C70EEB94ED5F05 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14

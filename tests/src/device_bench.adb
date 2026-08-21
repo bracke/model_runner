@@ -331,6 +331,136 @@ package body Device_Bench is
             & " s a call");
       end Busy;
 
+      --  A whole prompt evaluated the way the batched evaluator evaluates
+      --  one: every position of every layer, one call each, over a cache
+      --  the size the engine reserves.
+      --
+      --  This exists because a figure got worse and the reason was guessed
+      --  at rather than measured. Wiring the batched evaluator to attend on
+      --  the device moved the 110-token prompt from 2.504 s to 2.894 s, and
+      --  what was written down was a suspicion: that the cost is the count
+      --  of separate submissions and their fences rather than the
+      --  arithmetic. This says the number that suspicion predicts, so the
+      --  two can be compared instead of one of them being believed.
+      --
+      --  @param Heads Query heads.
+      --  @param Wide How wide a head is.
+      --  @param Steps How many positions the prompt has.
+      --  @param Sharing How many query heads share a group of keys.
+      --  @param Layers How many layers the model has.
+      --  @param Room How deep the reserved context is.
+      procedure Prompt
+        (Heads   : Natural;
+         Wide    : Natural;
+         Steps   : Natural;
+         Sharing : Natural := 1;
+         Layers  : Natural := 1;
+         Room    : Natural := 0)
+      is
+         use type N.Element_Count;
+
+         Groups : constant Natural := Heads / Sharing;
+         Narrow : constant Natural := Groups * Wide;
+         Span   : constant Natural := Heads * Wide;
+         Kept   : constant Natural := (if Room = 0 then Steps else Room);
+
+         type Values is access N.Real_Array;
+
+         Cache : constant Values :=
+           new N.Real_Array
+             (0 .. N.Element_Count (Layers) * N.Element_Count (Kept)
+                   * N.Element_Count (Narrow) * 2 - 1);
+         Asked : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Span) - 1);
+         Got   : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Span) - 1);
+
+         Started : Ada.Calendar.Time;
+         Calls   : Natural := 0;
+         Spent   : Duration;
+         Ok      : Boolean;
+      begin
+         Cache.all := [others => 0.125];
+         Asked.all := [others => 0.25];
+
+         Products.Reserve (Engine, Cache.all'Length, Ok);
+         if not Ok then
+            Ada.Text_IO.Put_Line ("    no room for the cache");
+            return;
+         end if;
+         Products.Put_Cache (Engine, 0, Cache.all, Ok);
+         if not Ok then
+            Ada.Text_IO.Put_Line ("    the cache would not be written");
+            return;
+         end if;
+
+         Started := Ada.Calendar.Clock;
+
+         for Layer in 0 .. Layers - 1 loop
+            for Step in 0 .. Steps - 1 loop
+               --  Each position attends to itself and everything before it,
+               --  which is what makes the arithmetic grow while the number
+               --  of submissions does not.
+               Products.Attend_Resident
+                 (Engine, Asked.all,
+                  Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+                  Group_Size => Sharing, First => 0, Last => Step,
+                  K_Base => Layer * Kept * Narrow,
+                  V_Base => Layers * Kept * Narrow + Layer * Kept * Narrow,
+                  KV_Width => Narrow, V_Width => Narrow,
+                  Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
+               Calls := Calls + 1;
+               exit when not Ok;
+            end loop;
+            exit when not Ok;
+         end loop;
+
+         Spent := Ada.Calendar.Clock - Started;
+
+         Ada.Text_IO.Put_Line
+           ("    a call a position:" & Duration'Image (Spent)
+            & " s," & Natural'Image (Calls) & " calls,"
+            & Duration'Image (Spent / Natural'Max (Calls, 1)) & " s a call");
+
+         --  And the same work as one call a layer. The arithmetic is the
+         --  same triangle either way; what differs is how many times it is
+         --  submitted and waited on.
+         declare
+            Batched : constant Values :=
+              new N.Real_Array
+                (0 .. N.Element_Count (Steps) * N.Element_Count (Span) - 1);
+            Blends  : constant Values :=
+              new N.Real_Array
+                (0 .. N.Element_Count (Steps) * N.Element_Count (Span) - 1);
+         begin
+            Batched.all := [others => 0.25];
+            Calls := 0;
+            Started := Ada.Calendar.Clock;
+
+            for Layer in 0 .. Layers - 1 loop
+               Products.Attend_Resident
+                 (Engine, Batched.all,
+                  Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+                  Group_Size => Sharing, First => 0, Last => 0,
+                  K_Base => Layer * Kept * Narrow,
+                  V_Base => Layers * Kept * Narrow + Layer * Kept * Narrow,
+                  KV_Width => Narrow, V_Width => Narrow,
+                  Scale => 0.125, Cap => 0.0, Target => Blends.all,
+                  Ok => Ok, Positions => Steps);
+               Calls := Calls + 1;
+               exit when not Ok;
+            end loop;
+
+            Spent := Ada.Calendar.Clock - Started;
+
+            Ada.Text_IO.Put_Line
+              ("    a call a layer:  " & Duration'Image (Spent)
+               & " s," & Natural'Image (Calls) & " calls,"
+               & Duration'Image (Spent / Natural'Max (Calls, 1))
+               & " s a call");
+         end;
+      end Prompt;
+
       --  Whether reserving a cache costs the weights their place.
       --
       --  The engine keeps a model's matrices on the device and gives the
@@ -468,6 +598,11 @@ package body Device_Bench is
       --  that queues behind them waits for them.
       Ada.Text_IO.Put_Line ("  with a layer's other work between:");
       Busy (32, 64, 512, Sharing => 8, Layers => 22, Room => 2048);
+
+      --  What a 110-token prompt costs in attention alone, one call a
+      --  position a layer, which is what the batched evaluator now submits.
+      Ada.Text_IO.Put_Line ("  a prompt, a call a position a layer:");
+      Prompt (32, 64, 110, Sharing => 8, Layers => 22, Room => 2048);
 
       --  Twenty matrices of a thousand square, which is eighty megabytes of
       --  weights, first with no cache and then with eighty-eight megabytes

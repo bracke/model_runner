@@ -333,7 +333,8 @@ package body Model_Runner.Platform.Device.Products is
 
    --  What the shader is told about the shape, in the order it declares.
    --  What the attention kernel is told. Fourteen words, against the six the
-   --  matrix kernels take, pushed into the same range.
+   --  matrix kernels take, pushed into the same range. Well inside the
+   --  hundred and twenty-eight bytes every device that runs Vulkan offers.
    type Attention_Constants is record
       Heads      : C.unsigned := 0;
       Head_Size  : C.unsigned := 0;
@@ -347,10 +348,12 @@ package body Model_Runner.Platform.Device.Products is
       V_Width    : C.unsigned := 0;
       Scale      : C.C_float := 1.0;
       Cap        : C.C_float := 0.0;
+      Positions  : C.unsigned := 1;
+      Window     : C.unsigned := 0;
    end record
      with Convention => C;
 
-   Attention_Bytes : constant := 48;
+   Attention_Bytes : constant := 56;
 
    type Shape_Constants is record
       Rows    : C.unsigned := 0;
@@ -2309,14 +2312,20 @@ package body Model_Runner.Platform.Device.Products is
       Scale      : Model_Runner.Numerics.Real;
       Cap        : Model_Runner.Numerics.Real;
       Target     : out Model_Runner.Numerics.Real_Array;
-      Ok         : out Boolean)
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0)
    is
       Ignored : constant Boolean := Set_Asking (Item);
+
+      --  A batch of none is not an error and not work either.
+      Slots : constant Natural := Natural'Max (Positions, 1);
 
       Kept_Bytes  : constant Interfaces.Unsigned_64 := Item.Cache_Bytes;
       Query_Bytes : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Query'Length) * 4;
       Blend_Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Slots) *
         Interfaces.Unsigned_64 (Heads) *
         Interfaces.Unsigned_64 (Value_Size) * 4;
 
@@ -2334,10 +2343,12 @@ package body Model_Runner.Platform.Device.Products is
         or else Last < First
         or else Item.Cache_Buffer = Null_Handle
         or else Query'Length
-                  < Model_Runner.Numerics.Element_Count (Heads)
+                  < Model_Runner.Numerics.Element_Count (Slots)
+                    * Model_Runner.Numerics.Element_Count (Heads)
                     * Model_Runner.Numerics.Element_Count (Head_Size)
         or else Target'Length
-                  < Model_Runner.Numerics.Element_Count (Heads)
+                  < Model_Runner.Numerics.Element_Count (Slots)
+                    * Model_Runner.Numerics.Element_Count (Heads)
                     * Model_Runner.Numerics.Element_Count (Value_Size)
       then
          return;
@@ -2421,7 +2432,9 @@ package body Model_Runner.Platform.Device.Products is
             KV_Width   => C.unsigned (KV_Width),
             V_Width    => C.unsigned (V_Width),
             Scale      => C.C_float (Scale),
-            Cap        => C.C_float (Cap));
+            Cap        => C.C_float (Cap),
+            Positions  => C.unsigned (Slots),
+            Window     => C.unsigned (Window));
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -2441,9 +2454,11 @@ package body Model_Runner.Platform.Device.Products is
                     Sets'Address, 0, Null_Handle);
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                Attention_Bytes, Shape'Address);
-         --  A workgroup a head, which is what the kernel's source declares:
-         --  its invocations divide the cached positions between them.
-         Dispatch (Item.Buffer, C.unsigned (Heads), 1, 1);
+         --  A workgroup a head of a position, which is what the kernel's
+         --  source declares: its invocations divide the cached positions
+         --  between them, and the positions of a batch do not need each
+         --  other, so they go in one submission rather than one each.
+         Dispatch (Item.Buffer, C.unsigned (Heads), C.unsigned (Slots), 1);
 
          if Stop (Item.Buffer) /= 0 then
             return;
@@ -2468,10 +2483,14 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          declare
+            --  Every position's blend, not the first one's: a batch that
+            --  read back one position's worth would leave the rest holding
+            --  whatever was there, which is an answer and a wrong one.
             Slice : Model_Runner.Numerics.Real_Array
               (Target'First
                .. Target'First
-                  + Model_Runner.Numerics.Element_Count (Heads)
+                  + Model_Runner.Numerics.Element_Count (Slots)
+                    * Model_Runner.Numerics.Element_Count (Heads)
                     * Model_Runner.Numerics.Element_Count (Value_Size) - 1)
               with Import, Address => Where;
          begin

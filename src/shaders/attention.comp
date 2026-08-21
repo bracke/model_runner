@@ -1,6 +1,6 @@
 #version 450
 
-//  One position attending to everything the cache holds.
+//  A batch of positions attending to everything the cache holds.
 //
 //  The scores against every cached key, the bound the architecture states on
 //  them, the softmax across them, and the values weighted by what comes out:
@@ -14,6 +14,19 @@
 //  shader the cache is laid out as one region with the values at an offset --
 //  which is the caller's choice to make and costs nothing, since the cache is
 //  written by this program in the first place.
+//
+//  A workgroup a head of a position, and the cached positions dealt round its
+//  invocations. A batch of one is what a run generating asks for; a batch of
+//  many is what evaluating a prompt asks for, and the reason it is one call
+//  rather than one a position is that a call costs 83 microseconds before it
+//  computes anything. A 110-token prompt over twenty-two layers submitted a
+//  position at a time spent 0.514 s in 2420 calls, around half of it in
+//  submission and fences.
+//
+//  Every position of a batch reads the same cache and writes its own blend,
+//  so they do not need each other and the only thing that differs between
+//  two workgroups of the same batch is where their query is, where their
+//  blend goes, and how far along the cache they may look.
 //
 //  A workgroup a head, and the cached positions dealt round its invocations.
 //  Giving a head to a single invocation was measured first and is what this
@@ -43,8 +56,9 @@ layout(push_constant) uniform Shape {
     //  that gives every head its own; more where several heads read the same.
     uint group_size;
 
-    //  The first and last cached positions this may look at. A model with a
-    //  sliding window states a first that is not zero.
+    //  The first and last cached positions the batch's first position may
+    //  look at. A model with a sliding window states a first that is not
+    //  zero. Position p of the batch looks to last + p.
     uint first;
     uint last;
 
@@ -59,6 +73,14 @@ layout(push_constant) uniform Shape {
     //  zero where the architecture states none.
     float scale;
     float cap;
+
+    //  How many positions this call attends for. One while generating.
+    uint positions;
+
+    //  How wide this layer's sliding window is, or zero where it does not
+    //  slide one. It cannot be read off first and last, because first is
+    //  the batch's first position's and every later position has its own.
+    uint window;
 } shape;
 
 //  The largest value width this kernel will take. A head wider than this is
@@ -71,14 +93,23 @@ shared float tile[64];
 
 void main() {
     uint head = gl_WorkGroupID.x;
+    uint slot = gl_WorkGroupID.y;
     uint lane = gl_LocalInvocationID.x;
 
-    if (head >= shape.heads) {
+    if (head >= shape.heads || slot >= shape.positions) {
         return;
     }
 
+    //  This position's last, and the first it may look back to. A window
+    //  slides with the position; without one, first is what was pushed.
+    uint last = shape.last + slot;
+    uint first = shape.first;
+    if (shape.window > 0u) {
+        first = last + 1u > shape.window ? last + 1u - shape.window : 0u;
+    }
+
     uint group = head / shape.group_size;
-    uint q_at = head * shape.head_size;
+    uint q_at = slot * shape.heads * shape.head_size + head * shape.head_size;
 
     //  What this invocation carries out: every sixty-fourth component of
     //  this head's value, so the private store is four floats and not a
@@ -91,11 +122,11 @@ void main() {
     float top = -1.0 / 0.0;
     float sum = 0.0;
 
-    for (uint base = shape.first; base <= shape.last; base += 64) {
+    for (uint base = first; base <= last; base += 64) {
         uint step = base + lane;
 
         float score = -1.0 / 0.0;
-        if (step <= shape.last) {
+        if (step <= last) {
             uint k_at = shape.k_base + step * shape.kv_width
                         + group * shape.head_size;
 
@@ -113,7 +144,7 @@ void main() {
         tile[lane] = score;
         barrier();
 
-        uint span = min(64u, shape.last - base + 1);
+        uint span = min(64u, last - base + 1);
 
         float highest = tile[0];
         for (uint j = 1; j < span; j++) {
@@ -149,7 +180,8 @@ void main() {
         barrier();
     }
 
-    uint out_at = head * shape.value_size;
+    uint out_at = slot * shape.heads * shape.value_size
+                  + head * shape.value_size;
     for (uint k = 0; k < room / 64; k++) {
         uint c = lane + k * 64;
         if (c >= shape.value_size) {

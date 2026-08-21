@@ -498,7 +498,9 @@ package body Model_Runner.Backend.Device is
       Scale      : Model_Runner.Numerics.Real;
       Cap        : Model_Runner.Numerics.Real;
       Target     : out T.Real_Array;
-      Ok         : out Boolean) is
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0) is
    begin
       if not Ready_Now then
          Ok := False;
@@ -508,7 +510,7 @@ package body Model_Runner.Backend.Device is
       Products.Attend_Resident
         (Engine, Query, Heads, Head_Size, Value_Size, Group_Size,
          First, Last, K_Base, V_Base, KV_Width, V_Width, Scale, Cap,
-         Target, Ok);
+         Target, Ok, Positions, Window);
    end Attend;
 
    --------------------

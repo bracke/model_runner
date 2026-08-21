@@ -204,8 +204,16 @@ package Model_Runner.Backend.Device is
    --  @param V_Width How far apart one position's values are from the next.
    --  @param Scale What a score is multiplied by.
    --  @param Cap The bound on a score, or zero for none.
-   --  @param Target Receives the blend, one head after another.
+   --  @param Target Receives Positions blends, each one head after
+   --    another.
    --  @param Ok True when the device computed it.
+   --  @param Positions How many positions attend in this call. One while
+   --    generating; the whole batch while a prompt is evaluated, whose
+   --    queries follow one another in Query and whose blends follow one
+   --    another in Target. Position p of the batch looks back to Last + p.
+   --  @param Window How wide this layer's sliding window is, or zero where
+   --    it does not slide one. A batch needs it because First can only
+   --    speak for one position and a window moves with each of them.
    procedure Attend
      (Query      : Model_Runner.Tensors.Real_Array;
       Heads      : Natural;
@@ -221,7 +229,9 @@ package Model_Runner.Backend.Device is
       Scale      : Model_Runner.Numerics.Real;
       Cap        : Model_Runner.Numerics.Real;
       Target     : out Model_Runner.Tensors.Real_Array;
-      Ok         : out Boolean);
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0);
 
    --  Several products of the same activation, in one submission.
    --

@@ -481,8 +481,15 @@ package Model_Runner.Platform.Device.Products is
    --  @param V_Width How far apart one position's values are from the next.
    --  @param Scale What a score is multiplied by.
    --  @param Cap The bound on a score, or zero for none.
-   --  @param Target Receives Heads * Value_Size values.
+   --  @param Target Receives Positions * Heads * Value_Size values.
    --  @param Ok True when the device computed it.
+   --  @param Positions How many positions attend in this call. One while
+   --    generating; a prompt's worth while evaluating a batch, whose
+   --    queries follow one another in Query and whose blends follow one
+   --    another in Target. Position p looks back to Last + p.
+   --  @param Window How wide this layer's sliding window is, or zero where
+   --    it does not slide one. A batch needs it because every position has
+   --    its own first, which First cannot say for more than one of them.
    procedure Attend_Resident
      (Item       : in out Engine;
       Query      : Model_Runner.Numerics.Real_Array;
@@ -499,7 +506,9 @@ package Model_Runner.Platform.Device.Products is
       Scale      : Model_Runner.Numerics.Real;
       Cap        : Model_Runner.Numerics.Real;
       Target     : out Model_Runner.Numerics.Real_Array;
-      Ok         : out Boolean);
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0);
 
    --  The widest value head this kernel will take. One wider is refused, and
    --  the caller does it on the processor: a kernel that wrote past what it
