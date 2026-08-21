@@ -63,18 +63,25 @@ and the type is read per tensor, which nothing had compared against another
 runtime. It agreed on the first attempt, so it found nothing -- which is worth
 having written down, because the alternative was not knowing.
 
-`logits compared 0` is not a failure. Neither recording carries a `logit`
-directive, because getting logits out of the reference means more than reading
-what it prints, and the tokenization and the greedy continuation were what
-these were for. The runner reports the count so that a recording with no logit
-comparison cannot be mistaken for one that made it.
+`logits compared 0` is not a failure. It says the recording carries no `logit`
+directive, and the count is reported so that a recording which never made the
+comparison cannot be mistaken for one that did. Getting logits out of the
+reference means more than reading what it prints, so the first recordings
+asked only about the tokenization and the greedy continuation. Of the three
+fixtures, `tinyllama-q4_k.expect` still carries none; `tinyllama-q8_0.expect`
+and `llama32-1b.expect` each carry three -- at a tolerance of 0.08 and of 0.2
+respectively, each figure arrived at by measurement and explained where it is
+written.
 
-These two blocks are copied by hand and nothing checks them, unlike the
+These three blocks are copied by hand and nothing checks them, unlike the
 conformance figures in the README, which the run itself now verifies. They
 cannot be: reproducing them needs a model that is not in this repository and
-should not be. Both had already drifted from what the runner prints -- they
-omitted the last field -- which is the argument for keeping the hand-copied
-ones few.
+should not be. They had already drifted from what the runner prints once --
+omitting the last field -- and the first of them has drifted again since,
+because the three logit directives were added to that fixture after its block
+was copied here. Both drifts are the argument for keeping the hand-copied ones
+few, and the numbers stand as recorded until somebody with the model runs them
+again.
 
 ## Where greedy decoding parts company
 
