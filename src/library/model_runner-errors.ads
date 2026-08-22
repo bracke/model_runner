@@ -190,6 +190,18 @@ package Model_Runner.Errors is
       Arch_Context_Too_Large,
       Arch_Layer_Numbering_Gap,
 
+      --  The model has no projection from a state to a distribution over
+      --  tokens: nothing to generate with. Bert is the architecture that
+      --  does this, and it is not a defect in the file -- an embedding
+      --  model was trained to produce states and stops there.
+      Arch_No_Output_Head,
+
+      --  A model that attends both ways was given part of a text. It reads
+      --  a whole one in a single call or it reads an answer to a different
+      --  question, and which of those happened is not visible in what comes
+      --  back.
+      Arch_Text_Not_Whole,
+
       --  Tensor layer.
       Tensor_Invalid_Shape,
       Tensor_Rank_Too_High,

@@ -42,7 +42,7 @@ package Reference_Tokenizer is
    type Token_Vector is array (Positive range <>) of Integer;
 
    --  Which tokenizer a vocabulary carries.
-   type Model_Kind is (SentencePiece, Byte_Pair, Unreadable);
+   type Model_Kind is (SentencePiece, Byte_Pair, Word_Piece, Unreadable);
 
    --  Which rule cuts text before any merging happens.
    type Cut_Rule is (GPT2, Falcon, SmolLM, Llama3, Qwen2);

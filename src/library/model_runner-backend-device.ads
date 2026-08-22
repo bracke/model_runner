@@ -216,6 +216,10 @@ package Model_Runner.Backend.Device is
    --  @param Window How wide this layer's sliding window is, or zero where
    --    it does not slide one. A batch needs it because First can only
    --    speak for one position and a window moves with each of them.
+   --  @param Causal True where a position may see only what precedes it,
+   --    which is every model that generates. False where it sees the whole
+   --    text, and every position then attends to Last rather than to Last
+   --    plus its own place in the batch.
    procedure Attend
      (Query      : Model_Runner.Tensors.Real_Array;
       Heads      : Natural;
@@ -233,7 +237,8 @@ package Model_Runner.Backend.Device is
       Target     : out Model_Runner.Tensors.Real_Array;
       Ok         : out Boolean;
       Positions  : Natural := 1;
-      Window     : Natural := 0);
+      Window     : Natural := 0;
+      Causal     : Boolean := True);
 
    --  Attend, and project the blend, in one submission.
    --
@@ -269,6 +274,10 @@ package Model_Runner.Backend.Device is
    --  @param Positions How many positions attend, which is also how many
    --    activations the projection is given.
    --  @param Window This layer's sliding window, or zero for none.
+   --  @param Causal True where a position may see only what precedes it,
+   --    which is every model that generates. False where it sees the whole
+   --    text, and every position then attends to Last rather than to Last
+   --    plus its own place in the batch.
    procedure Attend_And_Project
      (Query      : Model_Runner.Tensors.Real_Array;
       Heads      : Natural;
@@ -287,7 +296,8 @@ package Model_Runner.Backend.Device is
       Into       : Model_Runner.Tensors.Real_Array_Access;
       Ok         : out Boolean;
       Positions  : Natural := 1;
-      Window     : Natural := 0);
+      Window     : Natural := 0;
+      Causal     : Boolean := True);
 
    --  Several products of the same activation, in one submission.
    --

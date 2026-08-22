@@ -149,8 +149,23 @@ package body Model_Runner.Llama is
                  (case Kind is
                     when Llama => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3
-                       | Phi3 | Falcon | Phi2 | GPT2 =>
+                       | Phi3 | Falcon | Phi2 | GPT2 | Bert =>
                       K.Split);
+
+               --  What a position may see. Every architecture here
+               --  generates, and a generated token cannot depend on one
+               --  that does not exist yet -- except Bert, which does not
+               --  generate at all: it reads a text that is already whole
+               --  and every position of it may see every other.
+               Settings.Causal := Kind /= Bert;
+
+               --  And whether it can turn a state into a distribution at
+               --  all. Decided here rather than where the output projection
+               --  is resolved, because it is a fact about the architecture
+               --  and `inspect` reports what a file says without resolving
+               --  a tensor: read from the resolution, it said every model
+               --  had a head, including the one that has none.
+               Settings.Has_Head := Kind /= Bert;
                Found := True;
             end if;
          end loop;
@@ -232,15 +247,76 @@ package body Model_Runner.Llama is
       Settings.KV_Heads :=
         (if E.Is_Ok (Local) then Natural (Number) else Settings.Heads);
 
-      Containers.Get_Float
-        (Source, Model_Key (Settings.Kind, "attention.layer_norm_rms_epsilon"),
-         0.0, 1.0, Value, Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
+      --  The floor under a normalization's divisor. An architecture that
+      --  normalizes by root mean square states it under one key and Bert,
+      --  which centres, states it under another -- the same quantity in the
+      --  same units, named for the normalization it belongs to. Bert is
+      --  asked for its own key and falls back to the other, so a file that
+      --  states either is read and a file that states neither takes the
+      --  default both would.
+      if Settings.Kind = Bert then
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
+            0.0, 1.0, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+      end if;
+
+      if Settings.Kind /= Bert or else E.Is_Error (Local) then
+         Containers.Get_Float
+           (Source,
+            Model_Key (Settings.Kind, "attention.layer_norm_rms_epsilon"),
+            0.0, 1.0, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
       end if;
       Settings.Epsilon :=
         (if E.Is_Ok (Local) then N.Real (Value) else 1.0E-5);
+
+      --  What the file says its states should be pooled with. Read for the
+      --  architecture that states it and left unstated for the rest, which
+      --  is not the same as none: a model that says nothing about pooling
+      --  has not asked for one, and a model that says none has.
+      --
+      --  Ranked pooling is a fourth value some files carry. It is not a way
+      --  of reducing a text to a vector at all -- it names a scoring head
+      --  this program does not have -- so it is refused by name rather than
+      --  read as one of the three that are.
+      if Settings.Kind = Bert then
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "pooling_type"), 0, 4, Number,
+            Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+
+         if E.Is_Ok (Local) then
+            case Number is
+               when 0 => Settings.Pooling := Pool_None;
+               when 1 => Settings.Pooling := Pool_Mean;
+               when 2 => Settings.Pooling := Pool_Cls;
+               when 3 => Settings.Pooling := Pool_Last;
+               when others =>
+                  Reject_Feature ("rank pooling");
+                  return;
+            end case;
+         end if;
+
+         --  A row for each segment a token may belong to. The architecture
+         --  states two and the shape is checked against that where the
+         --  tensor is resolved; a text embedded here is all one segment, so
+         --  only the first row is ever read, and the second is required
+         --  because a file that has not got it is not the model this
+         --  computes.
+         if Containers.Find_Tensor (Source, "token_types.weight") /= 0 then
+            Settings.Segments := 2;
+         end if;
+      end if;
 
       Containers.Get_Float
         (Source, Model_Key (Settings.Kind, "rope.freq_base"), 1.0, 1.0E12, Value, Local);
@@ -482,6 +558,18 @@ package body Model_Runner.Llama is
          end;
       end if;
 
+      --  A window is a bound on how far back a position may look, and a
+      --  model that looks both ways has not got such a thing: there is no
+      --  "back" to bound. A file stating one under a bidirectional
+      --  architecture is describing something this cannot compute, and
+      --  reading the window as though it bounded the whole span would give
+      --  every position the same few positions to see -- an answer, and not
+      --  the model's.
+      if not Settings.Causal and then Settings.Window > 0 then
+         Reject_Feature ("a sliding window on a model that attends both ways");
+         return;
+      end if;
+
       --  The two bounds Gemma2 states, and the window it alternates. Read
       --  where the architecture says so rather than taken if present: a
       --  gemma2 file without them is a file this build cannot compute, and
@@ -644,7 +732,13 @@ package body Model_Runner.Llama is
          then 7
          else 4 + 1 + 3 * Item.Settings.Experts);
 
-      Room  : View_List (1 .. 2 + Per_Layer * Item.Settings.Layers);
+      --  Four beside the layers -- the embedding table, the output
+      --  projection, the positions and the segments -- though no
+      --  architecture carries all four: a model with segments has no output
+      --  projection. Sized for four anyway, because "three is enough" is
+      --  true by a coincidence between two architectures rather than by
+      --  anything holding it, and the cost of the fourth is a pointer.
+      Room  : View_List (1 .. 4 + Per_Layer * Item.Settings.Layers);
       Count : Natural := 0;
 
       procedure Add (Where : View_Access) is
@@ -664,6 +758,14 @@ package body Model_Runner.Llama is
       --  repacked buffer reads a row that is not there. Empty for every
       --  architecture that rotates, and Add ignores an empty view.
       Add (Item.Positions'Unchecked_Access);
+
+      --  And the segment table beside it, for the same reason and with the
+      --  same consequence. It was left out, and the sweep found it: with
+      --  the weights repacked, everything around this moved into the new
+      --  buffer and this went on reading the file's -- which is a row of
+      --  something, so what came back was an embedding rather than a
+      --  refusal. Empty for every architecture that has no segments.
+      Add (Item.Segments'Unchecked_Access);
 
       for Index in Item.Layers'Range loop
          Add (Item.Layers (Index).Query'Unchecked_Access);
@@ -1110,13 +1212,15 @@ package body Model_Runner.Llama is
    --  @param Item Model whose architecture decides.
    --  @return Zero for the sigmoid-weighted unit, one for the Gaussian one.
    function Gate_Unit (Item : Model'Class) return Natural
-   is (if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2
+   is (if Item.Settings.Kind
+          in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
        then 1 else 0);
 
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
    is
    begin
-      if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2
+      if Item.Settings.Kind
+         in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
       then
          K.GELU (Target);
       else
@@ -1201,10 +1305,11 @@ package body Model_Runner.Llama is
 
    --  Normalize the way the architecture does, into Target.
    --
-   --  Falcon and Phi2 centre and carry a bias; everything else divides by the
-   --  root mean square and does not. One procedure rather than a test at
-   --  each of the nine places a normalization happens, because nine tests
-   --  are nine chances to write one of them the other way round.
+   --  Falcon, Phi2, GPT2 and Bert centre and carry a bias; everything else
+   --  divides by the root mean square and does not. One procedure rather
+   --  than a test at each of the nine places a normalization happens,
+   --  because nine tests are nine chances to write one of them the other
+   --  way round.
    procedure Normalize
      (Item   : Model'Class;
       Source : Real_Array;
@@ -1212,7 +1317,7 @@ package body Model_Runner.Llama is
       Bias   : T.Real_Array_Access;
       Target : out Real_Array) is
    begin
-      if Item.Settings.Kind in Falcon | Phi2 | GPT2
+      if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert
         and then Bias /= null
       then
          K.Layer_Norm (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
@@ -1221,6 +1326,29 @@ package body Model_Runner.Llama is
                      Lifted => Lifted_Norms (Item));
       end if;
    end Normalize;
+
+   --  The state a position is left with: what the last layer produced,
+   --  through the model's final normalization where it has one.
+   --
+   --  Bert has not got one, and that is not an omission in the file. Its
+   --  layers normalize on the way out of each sublayer rather than on the
+   --  way in, so the last thing the last layer did was normalize what it
+   --  produced, and a second normalization here would be one the model was
+   --  never trained with. What "nothing" has to be is a copy, because every
+   --  caller of this writes somewhere other than where it read.
+   procedure Final_State
+     (Item   : Model'Class;
+      Source : Real_Array;
+      Target : out Real_Array) is
+   begin
+      if Item.Output_Norm = null then
+         Target := Source;
+      else
+         Normalize
+           (Item, Source, Item.Output_Norm.all, Item.Output_Norm_Bias,
+            Target);
+      end if;
+   end Final_State;
 
    --  Normalize what a sublayer produced, where the architecture says so.
    --
@@ -1250,6 +1378,40 @@ package body Model_Runner.Llama is
                   Lifted => Lifted_Norms (Item));
       Target := Room.all;
    end Post_Norm;
+
+   --  Add what a sublayer produced to the residual, normalizing on whichever
+   --  side of the add the architecture normalizes.
+   --
+   --  Two arrangements meet here. Gemma2 normalizes what the sublayer
+   --  produced and adds that to the residual; Bert adds it and then
+   --  normalizes the sum. The same two tensors, read in the same two places,
+   --  computing different models -- and the only thing that distinguishes
+   --  them is which side of the add falls under the normalization.
+   --
+   --  Written once for that reason. A sublayer joins a residual at four
+   --  places in this file, and a difference this quiet, repeated four times,
+   --  is a difference three of them would eventually stop having.
+   procedure Join_Residual
+     (Item     : Model'Class;
+      Produced : in out Real_Array;
+      Residual : in out Real_Array;
+      Gain     : T.Real_Array_Access;
+      Bias     : T.Real_Array_Access;
+      Room     : T.Real_Array_Access) is
+   begin
+      if Item.Settings.Kind /= Bert then
+         Post_Norm (Item, Gain, Produced, Room);
+         K.Add (Residual, Produced);
+         return;
+      end if;
+
+      K.Add (Residual, Produced);
+
+      if Gain /= null and then Room /= null then
+         Normalize (Item, Residual, Gain.all, Bias, Room.all);
+         Residual := Room.all;
+      end if;
+   end Join_Residual;
 
    --  What the embedding row is multiplied by before the first layer.
    --
@@ -1474,7 +1636,7 @@ package body Model_Runner.Llama is
          --  position, as wide as the embedding, and read exactly once a
          --  token -- there is no rotation anywhere in such a model, so this
          --  is the whole of its position handling.
-         if E.Is_Ok (Status) and then Item.Settings.Kind = GPT2 then
+         if E.Is_Ok (Status) and then Item.Settings.Kind in GPT2 | Bert then
             Resolve
               (Item, Source, "position_embd.weight",
                Element_Count (Item.Settings.Context_Length), Width,
@@ -1485,15 +1647,66 @@ package body Model_Runner.Llama is
             return;
          end if;
 
-         Resolve_Norm
-           (Item, Source, "output_norm.weight", Width, Item.Output_Norm, Status);
+         --  Bert learns a third row beside those two: which segment of the
+         --  input a token belongs to. Two rows, and this reads the first of
+         --  them for every position, because a text embedded here is one
+         --  segment -- the second is what a model trained on sentence pairs
+         --  uses to tell the halves apart, and there is no way to ask for a
+         --  pair through this program.
+         --
+         --  Required where the architecture states it. A file without it is
+         --  not a bert with one embedding missing; it is a file describing a
+         --  model this does not compute, and reading it as though the
+         --  segment row were zero would answer with an embedding that is
+         --  wrong by whatever that row holds.
+         if E.Is_Ok (Status) and then Item.Settings.Segments > 0 then
+            Resolve
+              (Item, Source, "token_types.weight",
+               Element_Count (Item.Settings.Segments), Width,
+               Item.Segments, Status, Repack);
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
+         end if;
 
-         if E.Is_Ok (Status)
-           and then Item.Settings.Kind in Falcon | Phi2 | GPT2
-         then
+         --  And the normalization over the sum of the three, before the
+         --  first layer sees it. Bert normalizes what it embedded; every
+         --  other architecture here hands layer zero the embedding row as it
+         --  stands, or scales it by a constant, and has no tensor for this.
+         if E.Is_Ok (Status) and then Item.Settings.Kind = Bert then
             Resolve_Norm
-              (Item, Source, "output_norm.bias", Width,
-               Item.Output_Norm_Bias, Status);
+              (Item, Source, "token_embd_norm.weight", Width,
+               Item.Embedding_Norm, Status);
+            if E.Is_Ok (Status) then
+               Resolve_Norm
+                 (Item, Source, "token_embd_norm.bias", Width,
+                  Item.Embedding_Norm_Bias, Status);
+            end if;
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
+         end if;
+
+         --  The normalization between the last layer and whatever reads it.
+         --  Every architecture here has one except Bert, whose layers
+         --  normalize on the way out rather than on the way in: the last
+         --  thing its last layer did was normalize what it produced, and a
+         --  file carrying a tensor for a second one would be describing a
+         --  model this does not compute.
+         if Item.Settings.Kind /= Bert then
+            Resolve_Norm
+              (Item, Source, "output_norm.weight", Width, Item.Output_Norm,
+               Status);
+
+            if E.Is_Ok (Status)
+              and then Item.Settings.Kind in Falcon | Phi2 | GPT2
+            then
+               Resolve_Norm
+                 (Item, Source, "output_norm.bias", Width,
+                  Item.Output_Norm_Bias, Status);
+            end if;
          end if;
          if E.Is_Error (Status) then
             Fail (Status);
@@ -1519,7 +1732,17 @@ package body Model_Runner.Llama is
 
          --  A model with no output projection ties the output to the embedding
          --  table. The alias is explicit and immutable; nothing is copied.
-         if Containers.Find_Tensor (Source, "output.weight") = 0 then
+         --
+         --  Except for a model that has no head to tie. Bert produces states
+         --  and stops, and its embedding table read backwards is not the
+         --  projection it never trained -- so the tie is not made, and what
+         --  asks for a distribution is refused by name instead of given the
+         --  numbers that arrangement would produce. Which architectures
+         --  those are is settled where the profile is read, so that
+         --  `inspect` can say it without resolving a tensor.
+         if not Item.Settings.Has_Head then
+            null;
+         elsif Containers.Find_Tensor (Source, "output.weight") = 0 then
             Item.Settings.Tied_Output := True;
             Item.Output := Item.Embeddings;
          else
@@ -1562,10 +1785,54 @@ package body Model_Runner.Llama is
             declare
                Current : Layer renames Item.Layers.all (Index);
             begin
-               Resolve_Norm
-                 (Item, Source, Layer_Key (Index, "attn_norm.weight"), Width,
-                  Current.Attention_Norm, Status);
-               exit when E.Is_Error (Status);
+               --  The normalization a block is given on the way in. Every
+               --  architecture here has one except Bert, which normalizes
+               --  on the way out of each sublayer instead and carries no
+               --  tensor for this at all.
+               if Item.Settings.Kind /= Bert then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_norm.weight"),
+                     Width, Current.Attention_Norm, Status);
+                  exit when E.Is_Error (Status);
+               end if;
+
+               --  Bert's two, which are the whole of its normalization: one
+               --  over the residual after attention has been added to it,
+               --  one over the residual after the feed-forward has. Both
+               --  centre and both carry a shift, so both take a bias where
+               --  Gemma2's post-normalizations take none.
+               --
+               --  They are read into the same two fields Gemma2 uses and
+               --  applied in a different place, which is the whole
+               --  difference between the two arrangements: Gemma2
+               --  normalizes what the sublayer produced and adds that,
+               --  and Bert adds what the sublayer produced and normalizes
+               --  the sum.
+               if Item.Settings.Kind = Bert then
+                  Resolve_Norm
+                    (Item, Source,
+                     Layer_Key (Index, "attn_output_norm.weight"), Width,
+                     Current.Post_Attention_Norm, Status);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Norm
+                    (Item, Source,
+                     Layer_Key (Index, "attn_output_norm.bias"), Width,
+                     Current.Post_Attention_Norm_Bias, Status);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Norm
+                    (Item, Source,
+                     Layer_Key (Index, "layer_output_norm.weight"), Width,
+                     Current.Post_Feed_Norm, Status);
+                  exit when E.Is_Error (Status);
+
+                  Resolve_Norm
+                    (Item, Source,
+                     Layer_Key (Index, "layer_output_norm.bias"), Width,
+                     Current.Post_Feed_Norm_Bias, Status);
+                  exit when E.Is_Error (Status);
+               end if;
 
                --  Gemma2 normalizes what each sublayer produced as well as
                --  what it was given. Required rather than optional: a
@@ -1664,7 +1931,9 @@ package body Model_Runner.Llama is
                   exit when E.Is_Error (Status);
                end if;
 
-               if Item.Settings.Kind = Qwen2 then
+               --  Bert biases the same three and writes them as Qwen2
+               --  does, one vector a projection rather than three in one.
+               if Item.Settings.Kind in Qwen2 | Bert then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_q.bias"),
                      Wide, Current.Query_Bias, Status);
@@ -1704,9 +1973,9 @@ package body Model_Runner.Llama is
                   Width, Blend, Current.Attention_Out, Status, Repack);
                exit when E.Is_Error (Status);
 
-               --  And the bias on the way out of attention, which only Phi2
-               --  has here.
-               if Item.Settings.Kind in Phi2 | GPT2 then
+               --  And the bias on the way out of attention, which Phi2,
+               --  GPT2 and Bert have and the rest have not.
+               if Item.Settings.Kind in Phi2 | GPT2 | Bert then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_output.bias"),
                      Width, Current.Out_Bias, Status);
@@ -1716,7 +1985,7 @@ package body Model_Runner.Llama is
                --  Falcon has one normalization a block, not two: attention
                --  and the feed-forward read the same normalized input. The
                --  feed norm stays null and the block below reads that.
-               if Item.Settings.Kind not in Falcon | Phi2 then
+               if Item.Settings.Kind not in Falcon | Phi2 | Bert then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "ffn_norm.weight"),
                      Width, Current.Feed_Norm, Status);
@@ -1745,7 +2014,7 @@ package body Model_Runner.Llama is
                   end if;
                end if;
 
-               if Item.Settings.Kind in Falcon | Phi2 | GPT2 then
+               if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert then
                   --  No gate: one projection up, a Gaussian unit, one down.
                   --  The gate stays null, and the block below reads that
                   --  rather than the architecture.
@@ -1762,7 +2031,7 @@ package body Model_Runner.Llama is
                   --  A bias on each side of the block, which Phi2 has and
                   --  Falcon does not, so the arrangement they share is not
                   --  what decides this.
-                  if Item.Settings.Kind in Phi2 | GPT2 then
+                  if Item.Settings.Kind in Phi2 | GPT2 | Bert then
                      Resolve_Norm
                        (Item, Source, Layer_Key (Index, "ffn_up.bias"),
                         Feed, Current.Up_Bias, Status);
@@ -2482,6 +2751,13 @@ package body Model_Runner.Llama is
       Positions  : Element_Count := 1;
       Window     : Natural := 0)
    is
+      --  What this model's attention is, asked of the model rather than
+      --  passed in: a window is a property of a layer and changes down the
+      --  stack, but whether a position may see what follows it is a
+      --  property of the model and cannot differ between two calls about
+      --  the same one.
+      Causal : constant Boolean := Source.Settings.Causal;
+
       --  A head's worth of queries and of blend, which is how far apart one
       --  position of a batch is from the next in either array.
       Query_Span : constant Element_Count := Heads * Head_Size;
@@ -2495,7 +2771,8 @@ package body Model_Runner.Llama is
          Natural (K_Base), Natural (Item.Keys.all'Length + V_Base),
          Natural (KV_Width), Natural (V_Width),
          Scale, Source.Settings.Attention_Cap, Target, Took,
-         Positions => Natural (Positions), Window => Window);
+         Positions => Natural (Positions), Window => Window,
+         Causal => Causal);
 
       if Took then
          Usable := True;
@@ -2515,7 +2792,12 @@ package body Model_Runner.Llama is
             --  the window's start where there is one. The device works this
             --  out from the same two numbers, which is what makes the two
             --  paths comparable rather than merely similar.
-            Ends  : constant Element_Count := Last + Slot;
+            --
+            --  Attending both ways, every position looks to Last itself:
+            --  the text ends where the text ends, whichever position is
+            --  asking.
+            Ends  : constant Element_Count :=
+              (if Causal then Last + Slot else Last);
             Since : constant Element_Count :=
               (if Window = 0 then First
                elsif Ends + 1 > Element_Count (Window)
@@ -4103,7 +4385,8 @@ package body Model_Runner.Llama is
          --  block normalized on the way in, because both of its sublayers
          --  read it. Different uses, one buffer, and both want it as wide as
          --  the embedding.
-         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon | Phi2 then
+         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon | Phi2 | Bert
+         then
             T.Allocate (Width, Item.Post_Room);
          end if;
 
@@ -4608,6 +4891,18 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  A single token is evaluated in order to find out what comes after
+      --  it, and a model with no head cannot say. Refused here rather than
+      --  at the projection, so that a caller who asked the wrong thing of
+      --  the wrong model is told before a forward pass is spent on it.
+      if not Settings.Has_Head then
+         Status := E.Make (E.Arch_No_Output_Head);
+         E.Add_Text
+           (Status, "architecture", Architecture_Name (Settings.Kind),
+            E.Param_Identifier);
+         return;
+      end if;
+
       if not Model_Runner.Tokenizer.Is_Valid (Source.Words, Token) then
          Status := E.Make (E.Tokenizer_Invalid_Token_Id);
          E.Add_Integer (Status, "token", Long_Long_Integer (Token));
@@ -4871,9 +5166,10 @@ package body Model_Runner.Llama is
             if Current.Out_Bias /= null then
                K.Add (Item.Normalized.all, Current.Out_Bias.all);
             end if;
-            Post_Norm (Source, Current.Post_Attention_Norm,
-                       Item.Normalized.all, Item.Post_Room);
-            K.Add (Item.Activation.all, Item.Normalized.all);
+            Join_Residual
+              (Source, Item.Normalized.all, Item.Activation.all,
+               Current.Post_Attention_Norm,
+               Current.Post_Attention_Norm_Bias, Item.Post_Room);
 
             --  Feed-forward block. It reads what the layer normalized on
             --  the way in where the architecture runs the two in parallel,
@@ -4892,9 +5188,10 @@ package body Model_Runner.Llama is
                Mixture
                  (Item, Current, Item.Normalized, Item.Mixture, Status);
                exit when E.Is_Error (Status);
-               Post_Norm (Source, Current.Post_Feed_Norm,
-                          Item.Mixture.all, Item.Post_Room);
-               K.Add (Item.Activation.all, Item.Mixture.all);
+               Join_Residual
+                 (Source, Item.Mixture.all, Item.Activation.all,
+                  Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
+                  Item.Post_Room);
             else
                --  Gated or not, the two arrangements differ only in how the
                --  buffer handed to the projection down is filled: one fills
@@ -4957,9 +5254,10 @@ package body Model_Runner.Llama is
                   K.Add (Item.Normalized.all, Current.Down_Bias.all);
                end if;
 
-               Post_Norm (Source, Current.Post_Feed_Norm,
-                          Item.Normalized.all, Item.Post_Room);
-               K.Add (Item.Activation.all, Item.Normalized.all);
+               Join_Residual
+                 (Source, Item.Normalized.all, Item.Activation.all,
+                  Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
+                  Item.Post_Room);
             end if;
          end;
       end loop;
@@ -4969,9 +5267,7 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Normalize
-        (Source, Item.Activation.all, Source.Output_Norm.all,
-         Source.Output_Norm_Bias, Item.Normalized.all);
+      Final_State (Source, Item.Activation.all, Item.Normalized.all);
 
       --  The output projection is the widest product of the token, so it is
       --  the one that most benefits from the pool. It writes into a
@@ -5102,10 +5398,41 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      if Count = 0 or else Count > Max_Batch then
-         Status := E.Make (E.Tensor_Shape_Mismatch);
-         E.Add_Integer (Status, "input", Long_Long_Integer (Count));
-         E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Batch));
+      --  How many positions may come in one call. A causal model takes the
+      --  batch this file bounds the working set at, because a longer prompt
+      --  is the same answer in more calls. A model that attends both ways
+      --  has no such freedom: position zero has to see the last position of
+      --  the text in the same pass, so the whole text is the batch and the
+      --  bound is the context.
+      declare
+         Limit : constant Element_Count :=
+           (if Settings.Causal
+            then Max_Batch
+            else Element_Count (Settings.Context_Length));
+      begin
+         if Count = 0 or else Count > Limit then
+            Status := E.Make (E.Tensor_Shape_Mismatch);
+            E.Add_Integer (Status, "input", Long_Long_Integer (Count));
+            E.Add_Integer (Status, "limit", Long_Long_Integer (Limit));
+            return;
+         end if;
+      end;
+
+      --  And it has to be the whole text. A second batch into a cache that
+      --  already holds positions would attend to what is there and be
+      --  invisible to it: the first half would have been computed without
+      --  the second, which is exactly the answer a bidirectional model is
+      --  not. Refused rather than split, because what comes back from a
+      --  split is an embedding, plausible in every respect, of a text the
+      --  model never read whole.
+      if not Settings.Causal and then Item.Committed > 0 then
+         Status := E.Make (E.Arch_Text_Not_Whole);
+         E.Add_Text
+           (Status, "architecture", Architecture_Name (Settings.Kind),
+            E.Param_Identifier);
+         E.Add_Integer
+           (Status, "count", Long_Long_Integer (Item.Committed),
+            E.Param_Tokens);
          return;
       end if;
 
@@ -5127,7 +5454,20 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      if Logits'Length /= Element_Count (Settings.Vocabulary) then
+      --  What a caller may ask a headless model for is states. A
+      --  distribution is refused by name, and an empty Logits is how a
+      --  caller says they are not asking for one -- the alternative is a row
+      --  of zeros that looks like a distribution and is not.
+      if not Settings.Has_Head then
+         if Logits'Length /= 0 or else Every /= null then
+            Status := E.Make (E.Arch_No_Output_Head);
+            E.Add_Text
+              (Status, "architecture", Architecture_Name (Settings.Kind),
+               E.Param_Identifier);
+            return;
+         end if;
+
+      elsif Logits'Length /= Element_Count (Settings.Vocabulary) then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          E.Add_Integer (Status, "output", Long_Long_Integer (Logits'Length));
          return;
@@ -5175,7 +5515,7 @@ package body Model_Runner.Llama is
             --  As in the single-token path: where the token is, added to
             --  what it is. Its position is the committed count plus its
             --  place in this batch.
-            if Source.Settings.Kind = GPT2 then
+            if Source.Settings.Kind in GPT2 | Bert then
                T.Dequantize_Row
                  (Source.Positions,
                   Element_Count (Item.Committed) + Which,
@@ -5185,6 +5525,35 @@ package body Model_Runner.Llama is
                   K.Add (Acts.all (Origin .. Origin + Width - 1),
                          Item.Normalized.all);
                end if;
+            end if;
+
+            --  And which segment it belongs to, which is the first of them
+            --  for every position of a text embedded here. The row is the
+            --  same for all of them and is read once a position rather than
+            --  once: a row is a decode of the file's own bytes, and hoisting
+            --  it would mean a second buffer to hold it in.
+            if E.Is_Ok (Status) and then Source.Settings.Segments > 0 then
+               T.Dequantize_Row
+                 (Source.Segments, 0, Item.Normalized.all, Status);
+
+               if E.Is_Ok (Status) then
+                  K.Add (Acts.all (Origin .. Origin + Width - 1),
+                         Item.Normalized.all);
+               end if;
+            end if;
+
+            --  Bert normalizes the sum of the three before layer zero sees
+            --  it. Written here rather than as the first thing a layer does,
+            --  because it happens once for the whole model and not once a
+            --  layer, and because the tensor it uses belongs to the
+            --  embedding rather than to any block.
+            if E.Is_Ok (Status) and then Source.Embedding_Norm /= null then
+               Normalize
+                 (Source, Acts.all (Origin .. Origin + Width - 1),
+                  Source.Embedding_Norm.all, Source.Embedding_Norm_Bias,
+                  Item.Normalized.all);
+               Acts.all (Origin .. Origin + Width - 1) :=
+                 Item.Normalized.all;
             end if;
 
             if E.Is_Error (Status) then
@@ -5223,24 +5592,40 @@ package body Model_Runner.Llama is
             --  project it a second time.
             Whole_Block : Boolean := False;
          begin
-            for Which in 0 .. Count - 1 loop
-               declare
-                  Origin : constant Element_Count := Slot (Which, Width);
-               begin
-                  Normalize
-                    (Source, Acts.all (Origin .. Origin + Width - 1),
-                     Current.Attention_Norm.all,
-                     Current.Attention_Norm_Bias,
-                     Norm.all (Origin .. Origin + Width - 1));
-               end;
-            end loop;
+            --  What the block is given. Every architecture here normalizes
+            --  on the way in except Bert, whose block reads the residual as
+            --  it stands -- the normalization it has was applied on the way
+            --  out of the block before this one.
+            if Current.Attention_Norm = null then
+               Norm.all (0 .. Count * Width - 1) :=
+                 Acts.all (0 .. Count * Width - 1);
+            else
+               for Which in 0 .. Count - 1 loop
+                  declare
+                     Origin : constant Element_Count := Slot (Which, Width);
+                  begin
+                     Normalize
+                       (Source, Acts.all (Origin .. Origin + Width - 1),
+                        Current.Attention_Norm.all,
+                        Current.Attention_Norm_Bias,
+                        Norm.all (Origin .. Origin + Width - 1));
+                  end;
+               end loop;
+            end if;
 
             --  Kept where the architecture runs its two sublayers from the
             --  same normalized input: attention is about to overwrite the
             --  buffer that holds it. A batch keeps all of it, which is why
             --  this is the batch's own buffer rather than the one position
             --  the single-token path keeps.
-            if Current.Feed_Norm = null then
+            --
+            --  Asked of the architecture and not of the feed normalization
+            --  being absent, because those are two different things and
+            --  Bert is where they came apart: it has no feed normalization
+            --  either, and it does not run its sublayers in parallel, so
+            --  reading the absence as the arrangement copied a batch into a
+            --  buffer that had never been allocated.
+            if Source.Settings.Kind in Falcon | Phi2 then
                Kept_Norm.all (0 .. Count * Width - 1) :=
                  Norm.all (0 .. Count * Width - 1);
             end if;
@@ -5371,11 +5756,18 @@ package body Model_Runner.Llama is
 
                   Usable : Boolean;
                begin
+                  --  The last position the batch may look at. Causally
+                  --  that is the batch's first, and each position after it
+                  --  moves its own end along; attending both ways it is the
+                  --  batch's last, and every position shares it.
                   Attend_There
                     (Item, Source, Query.all (0 .. Count * Wide - 1),
                      Heads, Head_Size, Value_Size,
                      Earliest (Settings, Reserved, Natural (Index)),
-                     Reserved, Base, V_Base, KV_Width, V_Width, Scale,
+                     (if Settings.Causal
+                      then Reserved
+                      else Reserved + Count - 1),
+                     Base, V_Base, KV_Width, V_Width, Scale,
                      Attend.all (0 .. Count * Blend - 1), Usable,
                      Positions => Count, Window => Window_Here);
 
@@ -5396,7 +5788,16 @@ package body Model_Runner.Llama is
                   --  Causal: this token sees the committed context and the
                   --  batch tokens up to and including itself, and with a
                   --  sliding window only the window's worth of those.
-                  Last_Step : constant Element_Count := Reserved + Which;
+                  --
+                  --  Bidirectional: it sees every position of the text,
+                  --  which is the whole batch -- the ones after it as well
+                  --  as the ones before. The cache holds them all by now,
+                  --  because every key and value of the batch was published
+                  --  before any attention read one.
+                  Last_Step : constant Element_Count :=
+                    (if Settings.Causal
+                     then Reserved + Which
+                     else Reserved + Count - 1);
                   First_Step : constant Element_Count :=
                     Earliest (Settings, Last_Step, Natural (Index));
                   Q_At      : constant Element_Count := Slot (Which, Wide);
@@ -5464,19 +5865,23 @@ package body Model_Runner.Llama is
                declare
                   Origin : constant Element_Count := Slot (Which, Width);
                begin
-                  Post_Norm
-                    (Source, Current.Post_Attention_Norm,
+                  Join_Residual
+                    (Source,
                      Norm.all (Origin .. Origin + Width - 1),
+                     Acts.all (Origin .. Origin + Width - 1),
+                     Current.Post_Attention_Norm,
+                     Current.Post_Attention_Norm_Bias,
                      Item.Post_Room);
-                  K.Add
-                    (Acts.all (Origin .. Origin + Width - 1),
-                     Norm.all (Origin .. Origin + Width - 1));
 
                   --  What the feed-forward reads: the block's own normalized
-                  --  input where the two sublayers run in parallel, and a
-                  --  fresh normalization of the residual where they run one
-                  --  after the other.
-                  if Current.Feed_Norm = null then
+                  --  input where the two sublayers run in parallel, the
+                  --  residual as it stands where the block normalized it on
+                  --  the way out, and a fresh normalization of the residual
+                  --  where they run one after the other.
+                  if Source.Settings.Kind = Bert then
+                     Norm.all (Origin .. Origin + Width - 1) :=
+                       Acts.all (Origin .. Origin + Width - 1);
+                  elsif Current.Feed_Norm = null then
                      Norm.all (Origin .. Origin + Width - 1) :=
                        Kept_Norm.all (Origin .. Origin + Width - 1);
                   else
@@ -5594,13 +5999,13 @@ package body Model_Runner.Llama is
                declare
                   Origin : constant Element_Count := Slot (Which, Width);
                begin
-                  Post_Norm
-                    (Source, Current.Post_Feed_Norm,
+                  Join_Residual
+                    (Source,
                      Norm.all (Origin .. Origin + Width - 1),
+                     Acts.all (Origin .. Origin + Width - 1),
+                     Current.Post_Feed_Norm,
+                     Current.Post_Feed_Norm_Bias,
                      Item.Post_Room);
-                  K.Add
-                    (Acts.all (Origin .. Origin + Width - 1),
-                     Norm.all (Origin .. Origin + Width - 1));
                end;
             end loop;
          end;
@@ -5625,9 +6030,8 @@ package body Model_Runner.Llama is
             declare
                Origin : constant Element_Count := Slot (Which, Width);
             begin
-               Normalize
+               Final_State
                  (Source, Acts.all (Origin .. Origin + Width - 1),
-                  Source.Output_Norm.all, Source.Output_Norm_Bias,
                   States.all (States.all'First + Origin
                               .. States.all'First + Origin + Width - 1));
             end;
@@ -5647,9 +6051,8 @@ package body Model_Runner.Llama is
                Into   : constant Element_Count :=
                  Which * Element_Count (Settings.Vocabulary);
             begin
-               Normalize
+               Final_State
                  (Source, Acts.all (Origin .. Origin + Width - 1),
-                  Source.Output_Norm.all, Source.Output_Norm_Bias,
                   Item.Normalized.all);
 
                Product
@@ -5670,30 +6073,35 @@ package body Model_Runner.Llama is
          end loop;
       end if;
 
-      declare
-         Origin : constant Element_Count := Slot (Count - 1, Width);
-      begin
-         --  Through the same normalization the single-token path uses, and
-         --  not the root-mean-square form directly: an architecture that
-         --  centres its normalization would otherwise be centred everywhere
-         --  but here, which is a difference only the batched path shows and
-         --  only in the logits it returns.
-         Normalize
-           (Source, Acts.all (Origin .. Origin + Width - 1),
-            Source.Output_Norm.all, Source.Output_Norm_Bias,
-            Item.Normalized.all);
-      end;
+      --  The last position's distribution, for the caller who is reading a
+      --  prompt in order to continue it. A headless model has none and was
+      --  refused the ask on the way in, so there is nothing to compute and
+      --  nothing to hand back.
+      if Settings.Has_Head then
+         declare
+            Origin : constant Element_Count := Slot (Count - 1, Width);
+         begin
+            --  Through the same normalization the single-token path uses,
+            --  and not the root-mean-square form directly: an architecture
+            --  that centres its normalization would otherwise be centred
+            --  everywhere but here, which is a difference only the batched
+            --  path shows and only in the logits it returns.
+            Final_State
+              (Source, Acts.all (Origin .. Origin + Width - 1),
+               Item.Normalized.all);
+         end;
 
-      Product
-        (Item, Source.Output, Item.Normalized, Item.Logit_Row, Status);
-      if E.Is_Error (Status) then
-         Release;
-         Item.Current := Failed;
-         return;
+         Product
+           (Item, Source.Output, Item.Normalized, Item.Logit_Row, Status);
+         if E.Is_Error (Status) then
+            Release;
+            Item.Current := Failed;
+            return;
+         end if;
+
+         Logits := Item.Logit_Row.all;
+         Finish_Logits (Source, Logits);
       end if;
-
-      Logits := Item.Logit_Row.all;
-      Finish_Logits (Source, Logits);
 
       --  Commit every position of the batch, or none of them.
       for Which in 0 .. Count - 1 loop

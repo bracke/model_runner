@@ -143,6 +143,17 @@ package Conformance is
       Shapes        : Natural := 0;
       On_Device     : Natural := 0;
 
+      --  Comparisons the sweep asked for that the architecture has no such
+      --  thing to compare. A model that attends both ways has no
+      --  single-token evaluation and no way to take a text in pieces: a
+      --  position cannot be computed before the text it reads exists.
+      --
+      --  Counted rather than passed over, for the reason the refusals are:
+      --  a sweep that quietly runs fewer comparisons for one architecture
+      --  than for the others reports the same clean totals either way, and
+      --  the count is what says which of those happened.
+      Not_Applicable : Natural := 0;
+
       Unlearned  : Natural := 0;
 
       --  Sequences the sweep's own arithmetic says it should have run. Kept

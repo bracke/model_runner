@@ -10,6 +10,7 @@ with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Llama;
+with Model_Runner.Tensors;
 with Model_Runner.Numerics;
 with Model_Runner.Tokenizer;
 
@@ -68,7 +69,22 @@ package body Fixture_Mutation is
 
       Words  : constant Natural := Tiny_Model.Vocabulary;
 
-      subtype Logit_Row is N.Real_Array (0 .. N.Element_Count (Words) - 1);
+      use type Model_Runner.Tensors.Real_Array_Access;
+      use type Tiny_Model.Fixture_Architecture;
+
+      --  What one evaluation answers with, which is not the same thing for
+      --  every architecture: a distribution over the vocabulary for a model
+      --  that has a projection, and every position's state for the one that
+      --  has none.
+      --
+      --  One row wide enough for either, filled as far as the answer goes
+      --  and zero after it. The comparison is of two answers to the same
+      --  question, so a tail that is zero in both says nothing either way,
+      --  and a row per architecture would be two shapes of the same test.
+      Room : constant Natural :=
+        Natural'Max (Words, Tokens'Length * Tiny_Model.Deep_Embedding);
+
+      subtype Logit_Row is N.Real_Array (0 .. N.Element_Count (Room) - 1);
 
       --  Build one architecture in one shape and one format.
       procedure Raise_Fixture
@@ -137,12 +153,55 @@ package body Fixture_Mutation is
          --  implementations of the same model, and this is where it would
          --  show: the batched path kept a final normalization of its own
          --  once, and only a conformance sweep noticed.
-         if Batched then
-            L.Evaluate_Batch (Session, Engine, Tokens, Logits,
-                              Status => Status);
+         --  A model with no projection is asked for what it does have.
+         --  Asking it for a distribution is refused by name, and a check
+         --  that took the refusal for an unreadable fixture would report
+         --  every tensor of that architecture as one nothing reads.
+         if not L.Config (Engine).Has_Head then
+            declare
+               None  : N.Real_Array (1 .. 0);
+               Width : constant N.Element_Count :=
+                 N.Element_Count (L.Config (Engine).Embedding);
+               States : Model_Runner.Tensors.Real_Array_Access := null;
+            begin
+               Model_Runner.Tensors.Allocate
+                 (Tokens'Length * Width, States);
+
+               if States = null then
+                  Why := E.Make (E.Memory_Allocation_Failed);
+                  L.Close (Session);
+                  L.Close (Engine, Status);
+                  Containers.Close (Parsed);
+                  return;
+               end if;
+
+               L.Evaluate_Batch
+                 (Session, Engine, Tokens, None, States => States,
+                  Status => Status);
+
+               if E.Is_Ok (Status) then
+                  Logits (0 .. Tokens'Length * Width - 1) :=
+                    States.all (0 .. Tokens'Length * Width - 1);
+               end if;
+
+               Model_Runner.Tensors.Free (States);
+            end;
+
+         --  A distribution is asked for in exactly the vocabulary's width,
+         --  which is not the width of this row: the row is wide enough for
+         --  either answer and a model with a head fills the first part of
+         --  it. Handing over the whole row was refused as a shape mismatch
+         --  by every model that has one.
+         elsif Batched then
+            L.Evaluate_Batch
+              (Session, Engine, Tokens,
+               Logits (0 .. N.Element_Count (Words) - 1), Status => Status);
          else
             for Token of Tokens loop
-               L.Evaluate (Session, Engine, Token, Logits, Status => Status);
+               L.Evaluate
+                 (Session, Engine, Token,
+                  Logits (0 .. N.Element_Count (Words) - 1),
+                  Status => Status);
                exit when E.Is_Error (Status);
             end loop;
          end if;
@@ -577,7 +636,17 @@ package body Fixture_Mutation is
             else
                for Format of Formats loop
                   for Read of Readings loop
-                     Examine (Kind, Shape, Format, Read.Backend, Read.Batched);
+                     --  A model that attends both ways has no reading a
+                     --  token at a time, so neither the processor's
+                     --  single-token path nor the backend that declines
+                     --  batching is a way to read one. Asking anyway
+                     --  produced a refusal a reader would take for a fault.
+                     if Kind = Tiny_Model.Bert and then not Read.Batched then
+                        Result.Unasked := Result.Unasked + 1;
+                     else
+                        Examine
+                          (Kind, Shape, Format, Read.Backend, Read.Batched);
+                     end if;
                   end loop;
                end loop;
             end if;
@@ -596,8 +665,13 @@ package body Fixture_Mutation is
          if Ready then
             for Kind in Tiny_Model.Fixture_Architecture loop
                for Format of Formats loop
+                  --  A token at a time, except for the model that has no
+                  --  such reading: asked that way it was batched anyway and
+                  --  the report said otherwise, which is a line that names
+                  --  a path nothing took.
                   Examine (Kind, Plain, Format,
-                           Model_Runner.Backend.Backend_Device, False);
+                           Model_Runner.Backend.Backend_Device,
+                           Batched => Kind = Tiny_Model.Bert);
                end loop;
             end loop;
          elsif Say /= null then

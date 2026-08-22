@@ -332,7 +332,7 @@ package body Model_Runner.Platform.Device.Products is
      with Convention => C;
 
    --  What the shader is told about the shape, in the order it declares.
-   --  What the attention kernel is told. Fourteen words, against the six the
+   --  What the attention kernel is told. Fifteen words, against the six the
    --  matrix kernels take, pushed into the same range. Well inside the
    --  hundred and twenty-eight bytes every device that runs Vulkan offers.
    type Attention_Constants is record
@@ -350,10 +350,17 @@ package body Model_Runner.Platform.Device.Products is
       Cap        : C.C_float := 0.0;
       Positions  : C.unsigned := 1;
       Window     : C.unsigned := 0;
+
+      --  One where a position sees only what precedes it, which is every
+      --  model that generates, and zero where it sees the whole text. The
+      --  shader derives each position's last from this, so a call that
+      --  pushed the wrong one would attend to the wrong half of a text and
+      --  return numbers of exactly the right shape.
+      Causal     : C.unsigned := 1;
    end record
      with Convention => C;
 
-   Attention_Bytes : constant := 56;
+   Attention_Bytes : constant := 60;
 
    type Shape_Constants is record
       Rows    : C.unsigned := 0;
@@ -2314,7 +2321,8 @@ package body Model_Runner.Platform.Device.Products is
       Target     : out Model_Runner.Numerics.Real_Array;
       Ok         : out Boolean;
       Positions  : Natural := 1;
-      Window     : Natural := 0)
+      Window     : Natural := 0;
+      Causal     : Boolean := True)
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
@@ -2434,7 +2442,8 @@ package body Model_Runner.Platform.Device.Products is
             Scale      => C.C_float (Scale),
             Cap        => C.C_float (Cap),
             Positions  => C.unsigned (Slots),
-            Window     => C.unsigned (Window));
+            Window     => C.unsigned (Window),
+            Causal     => (if Causal then 1 else 0));
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -2526,7 +2535,8 @@ package body Model_Runner.Platform.Device.Products is
       Target     : out Model_Runner.Numerics.Real_Array;
       Ok         : out Boolean;
       Positions  : Natural := 1;
-      Window     : Natural := 0)
+      Window     : Natural := 0;
+      Causal     : Boolean := True)
    is
       Good : Boolean;
    begin
@@ -2549,7 +2559,7 @@ package body Model_Runner.Platform.Device.Products is
       Attend_Resident
         (Item, Query, Heads, Head_Size, Value_Size, Group_Size,
          First, Last, K_Base, V_Base, KV_Width, V_Width, Scale, Cap,
-         Target, Ok, Positions, Window);
+         Target, Ok, Positions, Window, Causal);
    end Attend;
 
    --------------
@@ -2711,7 +2721,8 @@ package body Model_Runner.Platform.Device.Products is
       Cap        : Model_Runner.Numerics.Real;
       Added      : out Boolean;
       Window     : Natural := 0;
-      Chained    : Boolean := False) is
+      Chained    : Boolean := False;
+      Causal     : Boolean := True) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -2746,7 +2757,8 @@ package body Model_Runner.Platform.Device.Products is
          Heads => Heads, Head_Size => Head_Size, Value_Size => Value_Size,
          Group_Size => Group_Size, First => First, Last => Last,
          K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
-         V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap);
+         V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
+         Causal => Causal);
       Added := True;
    end Add_Attention;
 
@@ -3189,7 +3201,8 @@ package body Model_Runner.Platform.Device.Products is
                         --  batch of activations is a batch of positions,
                         --  and a workgroup goes to each head of each.
                         Positions  => C.unsigned (Count),
-                        Window     => C.unsigned (This.Window));
+                        Window     => C.unsigned (This.Window),
+                        Causal     => (if This.Causal then 1 else 0));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);

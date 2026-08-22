@@ -112,6 +112,18 @@ package Fixture_Mutation is
       --  declaration nobody exercises is a comment.
       Declared : Natural := 0;
 
+      --  Readings this architecture has not got. A model that attends both
+      --  ways can only be evaluated as a batch -- there is no computing a
+      --  position of it before the text it reads exists -- so a token at a
+      --  time is not a path it has, and the backend that declines batching
+      --  is not a backend it runs on. Neither is a fault, and counting them
+      --  as refusals said one had happened.
+      --
+      --  Counted rather than passed over, for the reason everything here is
+      --  counted: a check that quietly asks less of one architecture than of
+      --  the others reports the same clean totals either way.
+      Unasked  : Natural := 0;
+
       --  Between Unread and Unwanted the two appetites are both covered,
       --  and a third count asking what the engine asks for would say
       --  nothing either of these does not. A tensor the reference asks for

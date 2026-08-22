@@ -72,7 +72,11 @@ package Model_Runner.CLI.Options is
    --  position alone, which is what a model trained to summarize into its
    --  last token wants. Neither is right for every model, so neither is
    --  chosen on a model's behalf.
-   type Pooling_Kind is (Pool_Mean, Pool_Last);
+   --  Cls takes the first position alone, which is what a model trained
+   --  with a position that stands for the whole text wants -- bert puts a
+   --  marker there and is trained so that what it becomes is the text's
+   --  own vector.
+   type Pooling_Kind is (Pool_Mean, Pool_Last, Pool_Cls);
 
    --  The word a caller types for a pooling.
    --
@@ -81,7 +85,8 @@ package Model_Runner.CLI.Options is
    function Pooling_Word (Item : Pooling_Kind) return String
    is (case Item is
          when Pool_Mean => "mean",
-         when Pool_Last => "last");
+         when Pool_Last => "last",
+         when Pool_Cls  => "cls");
 
    --  The poolings a caller may name, in one line.
    --
@@ -399,6 +404,13 @@ package Model_Runner.CLI.Options is
       Grammar_Path : Model_Runner.Text.Bounded;
 
       Pooling    : Pooling_Kind := Pool_Mean;
+
+      --  Whether the caller named one. A model may state which pooling it
+      --  was trained for, and a caller who named none takes that; one who
+      --  named one takes their own, whatever the file says. Without this
+      --  the two cases are the same value and the file would override a
+      --  caller who typed the default.
+      Pooling_Named : Boolean := False;
       Normalize  : Boolean := True;
       Locale     : Model_Runner.Text.Bounded;
 

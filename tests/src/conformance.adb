@@ -1,4 +1,5 @@
 with Ada.Calendar;
+with Ada.Text_IO;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Platform;
 with Model_Runner.Bytes;
@@ -7,6 +8,7 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Llama;
 with Model_Runner.Numerics;
 with Model_Runner.Tokenizer;
+with Model_Runner.Tensors;
 
 with Reference_Transformer;
 with Model_Runner.Backend;
@@ -28,6 +30,7 @@ package body Conformance is
    use type L.Repack_Mode;
    use type Tiny_Model.Fixture_Architecture;
    use type Tiny_Model.Weight_Format;
+   use type Model_Runner.Tensors.Real_Array_Access;
    package N renames Model_Runner.Numerics;
    package R renames Reference_Transformer;
 
@@ -81,6 +84,30 @@ package body Conformance is
         R.Real_Vector (0 .. Words - 1);
 
       Expected : Expectation := [others => [others => 0.0]];
+
+      --  And what it makes of every position, for the architecture that has
+      --  no distribution to make. Sized for the longest sequence at the
+      --  widest embedding any fixture here is built at, because one array
+      --  serves every fixture and the widths differ by format.
+      Widest : constant Natural := Tiny_Model.Deep_Embedding;
+      Longest : constant Natural := 8;
+
+      type State_Expectation is array (Sequence_Index) of
+        R.Real_Vector (0 .. Longest * Widest - 1);
+
+      Expected_States : State_Expectation := [others => [others => 0.0]];
+
+      --  Which architecture the fixture in hand is. Learn and Compare are
+      --  written above the loop that chooses it, and what they do differs
+      --  for the one architecture that produces states rather than logits,
+      --  so the choice is left here for them to read rather than threaded
+      --  through every call.
+      Current_Kind : Tiny_Model.Fixture_Architecture := Tiny_Model.Llama;
+
+      --  How wide this fixture's states are, learned when the reference
+      --  loads it. Zero until then.
+      Current_Width : Natural := 0;
+
       Known    : array (Sequence_Index) of Boolean := [others => False];
 
       --  Forget them. Called wherever a new fixture is built, because the
@@ -138,11 +165,18 @@ package body Conformance is
       --  differences touch every part of a pass: the gain on every
       --  normalization, the scale on the embedding, and the gate in every
       --  feed-forward block, dense or mixed.
-      Crossed : constant array (1 .. 10) of Tiny_Model.Fixture_Architecture :=
+      --  Bert is crossed like the rest, and what is compared for it is
+      --  every position's state rather than the last position's logits --
+      --  the only answer it has, and a stronger one: a logit is the last
+      --  state through one more matrix, and these are every state before
+      --  that matrix. It answers fewer of the sweep's asks than the others,
+      --  because it has no single-token path and no way to take a text in
+      --  pieces, and the ones it declines are counted.
+      Crossed : constant array (1 .. 11) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
          Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3,
          Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2,
-         Tiny_Model.GPT2];
+         Tiny_Model.GPT2, Tiny_Model.Bert];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -165,6 +199,33 @@ package body Conformance is
       --  two hundred and fifty-six with a mixture behind each -- which is
       --  what gemma3's fixture became when it grew the block that sees
       --  everything.
+      --  What the reference makes of one sequence, into whichever of the two
+      --  stores this architecture has an answer for.
+      --
+      --  A model with no projection has no logits, and asking for them
+      --  would come back a vector of zeros with nothing wrong reported --
+      --  which would then be compared against the engine's zeros and pass.
+      --  So the ask is decided by the architecture rather than by what the
+      --  reference happens to leave in the buffer.
+      procedure Answer_From
+        (Second : in out R.Model;
+         Tokens : R.Token_Vector;
+         Which  : Sequence_Index;
+         Made   : out Boolean) is
+      begin
+         if Current_Kind = Tiny_Model.Bert then
+            declare
+               Span : constant Natural := Tokens'Length * Current_Width;
+            begin
+               R.Run_States
+                 (Second, Tokens, Expected_States (Which) (0 .. Span - 1),
+                  Made);
+            end;
+         else
+            R.Run (Second, Tokens, Expected (Which), Made);
+         end if;
+      end Answer_From;
+
       procedure Learn (Which : Sequence_Index) is
          Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
          Parsed : Containers.Container;
@@ -214,8 +275,10 @@ package body Conformance is
                Tokens_R (Index) := Tokens (Index);
             end loop;
 
+            Current_Width := R.Width (Second);
+
             Ran_At := Ada.Calendar.Clock;
-            R.Run (Second, Tokens_R, Expected (Which), Produced);
+            Answer_From (Second, Tokens_R, Which, Produced);
             Result.Computed := Result.Computed + (Ada.Calendar.Clock - Ran_At);
             Known (Which) := Produced;
 
@@ -237,7 +300,7 @@ package body Conformance is
                   end loop;
 
                   Ran_At := Ada.Calendar.Clock;
-                  R.Run (Second, Held, Expected (Other), Made);
+                  Answer_From (Second, Held, Other, Made);
                   Result.Computed := Result.Computed + (Ada.Calendar.Clock - Ran_At);
                   Known (Other) := Made;
 
@@ -282,7 +345,24 @@ package body Conformance is
          Status    : E.Error_Info;
 
          Tokens    : constant Sequence := Chosen (Which);
+
+         --  Whether this architecture attends both ways, which decides what
+         --  there is to compare and which of the sweep's asks it can answer.
+         Both_Ways : constant Boolean := Current_Kind = Tiny_Model.Bert;
       begin
+         --  A model that attends both ways has no single-token evaluation
+         --  and no way to take a text in pieces: a position cannot be
+         --  computed before the text it reads exists, and the engine
+         --  refuses both by name. The sweep asks every architecture for
+         --  every path, so the ask stops here for this one -- counted,
+         --  because a sweep that quietly runs fewer comparisons for one
+         --  architecture reports the same clean totals as one that ran them
+         --  all.
+         if Both_Ways and then (not Batched or else Chunk /= 0) then
+            Result.Not_Applicable := Result.Not_Applicable + 1;
+            return;
+         end if;
+
          Learn (Which);
          if not Known (Which) then
             return;
@@ -309,10 +389,36 @@ package body Conformance is
          end if;
 
          declare
-            Answer : R.Real_Vector renames Expected (Which);
-            Actual : N.Real_Array (0 .. N.Element_Count (Words) - 1) :=
+            --  What is compared, and how much of it. A model with a
+            --  distribution is compared on the last position's logits; a
+            --  model with none is compared on what it made of every
+            --  position, which is the only answer it has and a stronger
+            --  one: a logit is the last position's state through one more
+            --  matrix, and these are every position's before it.
+            Span : constant Natural :=
+              (if Both_Ways then Tokens'Length * Current_Width else Words);
+
+            Answer : R.Real_Vector (0 .. Span - 1) := [others => 0.0];
+            Actual : N.Real_Array (0 .. N.Element_Count (Span) - 1) :=
               [others => 0.0];
+
+            --  Where the engine writes every position's state, for the
+            --  comparison that asks for those.
+            Room : Model_Runner.Tensors.Real_Array_Access := null;
          begin
+            if Both_Ways then
+               Answer := Expected_States (Which) (0 .. Span - 1);
+               Model_Runner.Tensors.Allocate
+                 (N.Element_Count (Span), Room);
+               if Room = null then
+                  Result.Refused := Result.Refused + 1;
+                  L.Close (Engine, Status);
+                  Containers.Close (Parsed);
+                  return;
+               end if;
+            else
+               Answer := Expected (Which);
+            end if;
 
             --  Serial, or across the pool. The partitioned path is what a
             --  real run uses and it was compared only against the engine's
@@ -357,9 +463,23 @@ package body Conformance is
                         Upto : constant Positive :=
                           Positive'Min (From + Step - 1, Held'Last);
                      begin
-                        L.Evaluate_Batch
-                          (Session, Engine, Held (From .. Upto), Actual,
-                           Status => Status);
+                        if Both_Ways then
+                           --  The whole text in one call, and every
+                           --  position's state out of it. An empty Logits
+                           --  is how a caller says they are not asking for
+                           --  a distribution, which this model has not got.
+                           declare
+                              Nothing : N.Real_Array (1 .. 0);
+                           begin
+                              L.Evaluate_Batch
+                                (Session, Engine, Held (From .. Upto),
+                                 Nothing, States => Room, Status => Status);
+                           end;
+                        else
+                           L.Evaluate_Batch
+                             (Session, Engine, Held (From .. Upto), Actual,
+                              Status => Status);
+                        end if;
                         exit when E.Is_Error (Status);
                         From := Upto + 1;
                      end;
@@ -383,10 +503,15 @@ package body Conformance is
                Result.Refused := Result.Refused + 1;
             end if;
 
+            if E.Is_Ok (Status) and then Both_Ways then
+               Actual := Room.all (0 .. N.Element_Count (Span) - 1);
+            end if;
+            Model_Runner.Tensors.Free (Room);
+
             if E.Is_Ok (Status) then
                Result.Sequences := Result.Sequences + 1;
 
-               for Token in 0 .. Words - 1 loop
+               for Token in 0 .. Span - 1 loop
                   declare
                      Left  : constant Long_Float := Answer (Token);
                      Right : constant Long_Float :=
@@ -453,6 +578,38 @@ package body Conformance is
 
                         if Bad then
                            Result.Failures := Result.Failures + 1;
+
+                           --  The first one, named. The totals say how far
+                           --  apart the two implementations got and how
+                           --  often, which is what a gate needs and is not
+                           --  what somebody looking for the cause needs:
+                           --  eighteen thousand disagreements over eleven
+                           --  architectures, five formats, five shapes,
+                           --  three repack modes and three backends say
+                           --  nothing about which of those it is.
+                           --
+                           --  Finding that out cost a run per guess until
+                           --  this was written. With it the first line of
+                           --  the output names the combination, and the one
+                           --  it named was a repacked model whose segment
+                           --  table nothing had moved.
+                           if Result.Failures = 1 then
+                              Ada.Text_IO.Put_Line
+                                (Ada.Text_IO.Standard_Error,
+                                 "first disagreement: architecture "
+                                 & Tiny_Model.Fixture_Architecture'Image
+                                     (Current_Kind)
+                                 & ", backend "
+                                 & Model_Runner.Backend.Backend_Name (Backend)
+                                 & ", repack " & L.Repack_Mode'Image (Repack)
+                                 & ", cache "
+                                 & L.Cache_Precision'Image (Cache)
+                                 & ", batched " & Boolean'Image (Batched)
+                                 & ", chunk " & Natural'Image (Chunk)
+                                 & ", element " & Natural'Image (Token)
+                                 & " of" & Natural'Image (Span)
+                                 & ", apart by " & Long_Float'Image (Gap));
+                           end if;
                         end if;
                      end;
                   end;
@@ -558,6 +715,7 @@ package body Conformance is
                      --  which the fixture check builds through as well.
                      Tiny_Model.Build_Shaped
                        (Image, Format, Crossed (Which_Arch), Shape);
+                     Current_Kind := Crossed (Which_Arch);
 
                      --  A new fixture, so the expectations belonging to the
                      --  last one are gone.
@@ -783,6 +941,7 @@ package body Conformance is
                   Since := Ada.Calendar.Clock;
                   Tiny_Model.Build
                     (Image, Format, Kind => Crossed (Which_Arch));
+                  Current_Kind := Crossed (Which_Arch);
                   Result.Built := Result.Built
                     + (Ada.Calendar.Clock - Since);
                   Forget;
@@ -905,8 +1064,14 @@ package body Conformance is
             --  where the backend takes one.
             --  Twice over: the halved cache and the byte one run the same
             --  comparisons.
-            Cached : constant Natural :=
-              2 * Formats * Arches * 2 * (Backends * 2 + Batching);
+            --  Counted over the pairs the cached comparisons actually
+            --  reach rather than as architectures times two shapes. The two
+            --  are the same number until an architecture cannot hold one of
+            --  the two shapes -- and a bidirectional one cannot hold the
+            --  windowed shape, so the product would ask for a fixture the
+            --  loops never build.
+            Cached_Pairs : Natural := 0;
+            Cached : Natural := 0;
 
             --  The architectures with no gate, which run every shape but
             --  the mixture. Counted rather than named twice: what makes a
@@ -927,9 +1092,13 @@ package body Conformance is
                for Shape in Model_Shape loop
                   if Tiny_Model.Cannot_Hold (Kind, Shape) then
                      Skipped := Skipped + 1;
+                  elsif Shape in Plain | Windowed then
+                     Cached_Pairs := Cached_Pairs + 1;
                   end if;
                end loop;
             end loop;
+
+            Cached := 2 * Formats * Cached_Pairs * (Backends * 2 + Batching);
 
             --  The mixture shape runs every repack mode but the rounded one,
             --  which is skipped for every architecture; an ungated one runs
@@ -944,7 +1113,14 @@ package body Conformance is
             Result.Shapes := Shapes;
             Result.On_Device := On_Device;
             Result.Wanted := Expected;
-            Result.Ran := Result.Sequences = Expected;
+
+            --  Every comparison the loops ask for is either made or counted
+            --  as one this architecture has not got. A sweep that ran fewer
+            --  and said nothing is what this arithmetic exists to catch, so
+            --  the ones it declines have to be in the total rather than
+            --  quietly missing from it.
+            Result.Ran :=
+              Result.Sequences + Result.Not_Applicable = Expected;
          end;
       end;
 

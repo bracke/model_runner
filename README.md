@@ -343,9 +343,9 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Tensors | Read-only views with one documented dimension convention, block-boundary checks, row dot product, row dequantization, row-range matrix-vector |
 | Quantization | Reference decoders for F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS — decoded one block at a time, never a second full copy of the model. The two non-linear formats read a nibble as an index into a table of sixteen levels that belongs to the format rather than to any file. Q8_1 and Q8_K are refused: they are intermediates a reference implementation quantizes activations into, not formats weights are stored in |
 | Kernels | Scalar reference add, multiply, scale, dot, RMS normalization, softmax, SiLU, rotary encoding, with `Wide_Real` accumulation for length-dependent reductions |
-| Tokenizer | SentencePiece (`llama`) vocabulary: scores, token types, special tokens, byte fallback, greedy highest-score merge encoding. Byte-pair (`gpt2`) vocabulary: merge tables by rank, byte-level stand-in alphabet, and five cutting rules named by `tokenizer.ggml.pre` -- eight values of that key select between them, since an absent key cuts as `gpt-2` does, `starcoder` with it, and `llama-bpe` as `llama3` does -- a vocabulary naming any other being refused by name rather than cut by the wrong one. Both with UTF-8-boundary-safe incremental decoding. A special-token identifier that is absent leaves the token unset; one that names no token refuses the model rather than being ignored |
+| Tokenizer | SentencePiece (`llama`) vocabulary: scores, token types, special tokens, byte fallback, greedy highest-score merge encoding. Byte-pair (`gpt2`) vocabulary: merge tables by rank, byte-level stand-in alphabet, and five cutting rules named by `tokenizer.ggml.pre` -- eight values of that key select between them, since an absent key cuts as `gpt-2` does, `starcoder` with it, and `llama-bpe` as `llama3` does -- a vocabulary naming any other being refused by name rather than cut by the wrong one. WordPiece (`bert`) vocabulary: the text folded before anything is looked up -- lower-cased, accents off, punctuation and ideographs cut loose -- and each word then spelled from the front with the longest piece the vocabulary carries, every piece after the first written with two leading hashes, and a word no run of pieces spells given back as one unknown rather than as the pieces that did match. All three with UTF-8-boundary-safe incremental decoding. A special-token identifier that is absent leaves the token unset; one that names no token refuses the model rather than being ignored |
 | Chat templates | Bounded allowlisted engine: `for`, `if`/`elif`/`else`, `set`, comments, `+`-joined output, `==`/`!=`/`and`/`or`/`not` with parentheses, `is defined`/`is none`/`in`, `trim` and `length`, message indexing, front slicing such as `messages[1:]`, `loop.first`/`last`/`index`, whitespace control. Enough that the template a current Llama-3 file ships with renders. Compiled and validated at load time; `macro`, `include` and `import` are rejected there, while a value the engine cannot compute -- a function call, `tojson`, arithmetic -- is refused if the render reaches it, which the tool-calling branches of a plain conversation never do |
-| Architecture profile | `llama`, `qwen2`, `qwen3`, `qwen3moe`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2` and `gpt2`, each read under its own metadata keys and refused by name otherwise, with the refusal naming every one this build reads. All are the same shape with a difference: qwen2 a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour; qwen3 no biases and a root-mean-square normalization of every query and key head before the rotation, equally required; qwen3moe that again with the feed-forward block behind a router; gemma three differences of its own -- the normalization gain is one plus the stored weight rather than the weight, because its weights are trained around zero; the embedding row is multiplied by the square root of the embedding width before the first layer; and the feed-forward gate is a Gaussian error unit rather than a logistic one. Each of the three produces a plausible wrong answer rather than a refusal when it is missed, which is why each is crossed against the independent implementation rather than checked once; gemma2 those three and four more -- a normalization after each sublayer as well as before it, a bound on the attention scores and another on the logits, both applied as a scaled hyperbolic tangent, and a sliding window on every other layer rather than on all of them; gemma3 keeps the two normalizations, drops the two bounds, normalizes query and key heads as qwen3 does, windows five layers in six, and turns those five on a rotation base of their own; phi3 nothing at all in its arithmetic and everything in where its weights are -- the queries, keys and values in one tensor and the gate and up projection in another, taken out as views at a row offset rather than copied; falcon a different block rather than a different detail -- one normalization a block instead of two, with attention and the feed-forward both reading it and both adding to the same residual, a normalization that subtracts the mean and carries a bias rather than the root-mean-square form every other architecture here uses, and a feed-forward with no gate at all: one projection up, a Gaussian error unit, one projection down; and phi2 that arrangement with a bias on every projection instead of on none -- the three attention biases in one vector as their matrices are in one tensor, one on the way out of attention, one on each side of the feed-forward, and one on the output projection itself, which is added to every logit. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, uniformly across layers. A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
+| Architecture profile | `llama`, `qwen2`, `qwen3`, `qwen3moe`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`, `gpt2` and `bert`, each read under its own metadata keys and refused by name otherwise, with the refusal naming every one this build reads. All are the same shape with a difference: qwen2 a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour; qwen3 no biases and a root-mean-square normalization of every query and key head before the rotation, equally required; qwen3moe that again with the feed-forward block behind a router; gemma three differences of its own -- the normalization gain is one plus the stored weight rather than the weight, because its weights are trained around zero; the embedding row is multiplied by the square root of the embedding width before the first layer; and the feed-forward gate is a Gaussian error unit rather than a logistic one. Each of the three produces a plausible wrong answer rather than a refusal when it is missed, which is why each is crossed against the independent implementation rather than checked once; gemma2 those three and four more -- a normalization after each sublayer as well as before it, a bound on the attention scores and another on the logits, both applied as a scaled hyperbolic tangent, and a sliding window on every other layer rather than on all of them; gemma3 keeps the two normalizations, drops the two bounds, normalizes query and key heads as qwen3 does, windows five layers in six, and turns those five on a rotation base of their own; phi3 nothing at all in its arithmetic and everything in where its weights are -- the queries, keys and values in one tensor and the gate and up projection in another, taken out as views at a row offset rather than copied; falcon a different block rather than a different detail -- one normalization a block instead of two, with attention and the feed-forward both reading it and both adding to the same residual, a normalization that subtracts the mean and carries a bias rather than the root-mean-square form every other architecture here uses, and a feed-forward with no gate at all: one projection up, a Gaussian error unit, one projection down; and phi2 that arrangement with a bias on every projection instead of on none. Bert is the one that is not a decoder at all: it reads a whole text and produces a state for every position of it, attending both ways, normalizing after each residual add rather than before each sublayer, and learning a row for the token, a row for its position and a row for its segment where every other architecture here learns one. It carries no projection from a state to a token, so `run` is refused by name and `embed` is what it is for -- the three attention biases in one vector as their matrices are in one tensor, one on the way out of attention, one on each side of the feed-forward, and one on the output projection itself, which is added to every logit. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, uniformly across layers. A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
 | Execution | Embedding lookup, per-layer RMS norm, Q/K/V projection, rotary encoding, grouped-query causal attention without duplicating key or value heads, output projection, SiLU-gated feed-forward, residuals, raw logits |
 | KV cache and session | Explicit cache sized with checked arithmetic, transactional commit, state machine, reset preserving allocations, committed-prefix reuse. Any number of sessions may be open on one prepared model at once: a model carries no per-evaluation state -- the activations, the normalized copies and the query and key rows all belong to the session -- so a second sequence costs its own cache and nothing else. Held by a test that interleaves two sessions a token at a time and checks each gets what it would have got alone; interleaved rather than sequential, because sequential sessions pass even on a model that does hold such state. Anything that would write to the model is refused while a session is open. `--prompt` asks for several: the model is read once and answers each in turn, which is what the sessions buy |
 | Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, per-token biases, sequence penalty, repetition penalty, frequency and presence penalties, temperature, top-k, tail-free, locally typical, top-p, min-p, exclude-top-choices, renormalize, select. Everything that acts on a token acts on the greedy path too, which is where a caller can check by hand what a penalty did -- they did not, for as long as they have existed. Mirostat v2 replaces the truncation filters rather than joining them and is refused alongside any of them, because two answers to one question is not a configuration. Greedy is tie-broken to the lowest token and consumes no random state; xoshiro256++ seeded per session. `--logit-bias TOKEN=X` nudges a token; `--logprobs N` reports what the model made of each position, from a plain softmax over the raw logits with none of the sampling applied |
@@ -354,11 +354,11 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback |
 | CLI | `run`, `embed`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection. `--prompt` is repeatable: several prompts are several sequences from one loaded model, each with its own context and its own statistics, and standard error says which is which so that standard output stays nothing but generated text. It is refused together with a saved or restored context, which names one conversation |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]`, the last removing the system message when no text follows it, blank-line submission, no history written to disk. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 162 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 164 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
-| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires a logit to answer: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in all five shapes and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
+| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
 ## Building and testing
@@ -681,9 +681,9 @@ The scan is now bounded by the longest marker the vocabulary actually holds,
 which for the fixture is four bytes and for a real vocabulary about
 seventeen.
 
-`tests benchmark` times both cases now, at a load of 1.12: **0.0098 s** for
-sixty thousand ordinary characters and **0.0127 s** for sixty thousand
-brackets, so the hostile text costs about a third more rather than six
+`tests benchmark` times both cases now, at a load of 1.11: **0.0139 s** for
+sixty thousand ordinary characters and **0.0156 s** for sixty thousand
+brackets, so the hostile text costs about an eighth more rather than six
 hundred times more. Those are lower than the 0.039 and 0.045 this used to
 quote, and the reason is what they measure: the older pair came from timing
 a whole `model_runner run` in the shell -- parsing the model, loading the
@@ -741,29 +741,40 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 26910, logits compared 322560,
-             worst absolute 1.80089269772310E-05,
-             worst relative 5.39566401500295E-03,
-             rounded logits compared 32400,
-             rounded worst absolute 1.04444242613750E-01,
+conformance: sequences 27257, logits compared 520800,
+             worst absolute 1.75187297983825E-05,
+             worst relative 1.41178245094972E-02,
+             rounded logits compared 76296,
+             rounded worst absolute 1.34238864580048E-01,
              rounded worst relative 1.88480300374975E+00,
-             cached logits compared 22032,
+             cached logits compared 38560,
              cached worst absolute 9.22560479118539E-03,
              cached worst relative 7.98212777069768E-01,
-             byte logits compared 22032,
+             byte logits compared 38560,
              byte worst absolute 3.02788895569006E-01,
-             byte worst relative 1.84939983371143E+00,
+             byte worst relative 1.95383049343388E+00,
              outside tolerance 0, unlearned 0
 ```
 
-The run above crossed 10 architectures, in 15 formats and 5 shapes, of which
-960 ran on a device -- which is the same claim the paragraph below makes in
+The run above crossed 11 architectures, in 15 formats and 5 shapes, of which
+1056 ran on a device -- which is the same claim the paragraph below makes in
 words, and is checked against the run rather than kept by hand.
 
-Ten architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2` and
-`gpt2`, each of which has also been read from a file somebody else published -- in each of the five shapes a supported model comes in: dense, sliding-window, a mixture of
+Eleven architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2` and
+`gpt2`, each of which has also been read from a file somebody else published, and `bert`, which has not been -- in each of the five shapes a supported model comes in: dense, sliding-window, a mixture of
 experts, a stretched rotation, and heads wider than the embedding implies with
-keys and values different widths again. The processor and the binary64 backends, every evaluation path -- a token at a
+keys and values different widths again. Ten of the eleven are compared on the
+last position's logits and in every shape they can hold; `bert` is compared on
+what the model made of every position, which is the only answer it has and a
+stronger one -- a logit is the last state through one more matrix, and these
+are every state before that matrix. It holds two of the five shapes: a
+mixture wants a gate it has not got, a stretched rotation wants a rotation it
+has not got, and a window is a bound on how far back a position may look,
+which a model that looks both ways has not got. It answers fewer of the
+sweep's asks for the same reason -- there is no evaluating a position of it
+before the text it reads exists, so a token at a time and a text in pieces are
+both refused -- and the ones it declines are counted rather than quietly
+missing. The processor and the binary64 backends, every evaluation path -- a token at a
 time, a whole prompt in one pass, and a prompt handed over in several --
 serial and across a worker pool, every repacking mode, and every one of the
 fifteen weight formats the engine decodes: binary32, F16, BF16, Q4_0, Q4_1,
@@ -1135,15 +1146,16 @@ Named in the specification, absent here:
 All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself. From the six-token prompt in
-`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **1.88 s** --
-0.39 s evaluating the prompt and 1.49 s generating -- and 10.4 s of processor
-time, the median of three runs, taken at a load of 1.28 rising to 1.82. The figure this replaces was
-1.37 s, and the load it was taken under was not recorded, which is why it is
-replaced rather than compared with: a third of a second between two runs of
-the same code is exactly the range this machine moves through, and the older
-figure cannot say where in it it sat. The processor-time figure that stood
-beside it -- 9.3 s -- came from the operating system's timing tool; the
-10.4 s above comes from this one. Loading the model costs a further 0.6 s of
+`tests/fixtures/speed-prompt-short.txt`, twelve tokens take **3.743 s** --
+0.466 s evaluating the prompt and 3.215 s generating -- and 21.11 s of
+processor time, the median of three runs, taken at a load of 0.75 rising to
+1.45. The figures this replaces were 1.88 s and 10.4 s, and what moved them
+was the machine rather than the program: the same run on the code before
+this one, earlier the same day, gave 3.734 s, and both print the digest they
+always have. This host has carried somebody else's virtual machine at two
+thirds of a processor throughout, which the device table below says as well
+and in more detail. A figure is about a machine as much as about a program,
+and this one is about a machine that got slower. Loading the model costs a further 0.6 s of
 wall that this figure does not include, because the two are worth
 separating: one is the model, the other is the disk.
 
@@ -1176,20 +1188,32 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. The same run at
-fourteen threads takes **1.54 s** of wall against **1.88 s** at seven, and
-16.1 s of processor time against 10.4 s, both at a load of about 1.25.
+fourteen threads takes **4.146 s** of wall against **3.743 s** at seven, and
+27.26 s of processor time against 21.11 s -- the seven-thread run starting at
+a load of 0.75 and the fourteen-thread one at 1.31, which is the run's own
+doing as it fills the machine.
 
-That is eighteen per cent off the wall for fifty-five per cent more processor
-time, and it is worth saying plainly that it is not what this paragraph used
-to say. The figures here were 2.29 s against 2.43 s and 17.3 s against
+That is eleven per cent *added* to the wall for twenty-nine per cent more
+processor time, and it reverses what this paragraph said when the same
+measurement was taken on a quieter host: eighteen per cent off the wall for
+fifty-five per cent more. Oversubscribing paid then and does not now, and the
+reason is the same one that doubled the figure above -- a machine already
+sharing two thirds of a processor with somebody else has nothing to give a
+run that asks for fourteen threads on sixteen. The trade is a fact about a
+machine at a moment, which is why it is taken again rather than remembered.
+
+It is also worth saying plainly that neither figure is what this paragraph
+used to say. The figures here were 2.29 s against 2.43 s and 17.3 s against
 10.1 s -- six per cent of the wall for seventy per cent more energy -- taken
 with the shell's timer, on runs whose load nobody recorded, and including the
 model load that these exclude. Six per cent for seventy is a bad bargain that
-argues for itself. Eighteen for fifty-five is a real trade, and the default
-of one worker per core rests on the energy alone: the same tokens for two
-thirds of the processor time, on a fifteen-watt part where that is heat and
-battery rather than an abstraction. A caller who wants the wall and has the
-power can ask for `--threads 14` and will get it.
+argues for itself. Eighteen for fifty-five was a real trade when the host
+had the room for it; eleven per cent *worse* for twenty-nine per cent more is
+not a trade at all. Either way the default of one worker per core is the one
+to keep, and on this host it now wins twice over rather than on energy alone:
+fewer processor-seconds and less wall. A caller who wants to try the other
+way can still ask for `--threads 14`, and should measure it on their own
+machine rather than trust either figure here.
 
 A job is cut into one more piece than the pool has workers, because the task
 that submits it takes the last piece rather than waiting; the figures below
@@ -1316,11 +1340,11 @@ tests speed --model MODEL --backend cpu       --max-tokens 4
 tests speed --model MODEL --backend reference --max-tokens 4
 ```
 
-Four tokens from the short prompt, medians of three, taken at a load of 1.10
-to 1.74 and 1.25 to 1.57: `cpu` spends 0.415 s evaluating the prompt and
-0.512 s generating; `reference` spends 6.144 s and 4.288 s. That is
-**eleven times** the work in total, fifteen times on the prompt and eight
-times on the generation, and the two print the same digest.
+Four tokens from the short prompt, medians of three, taken at a load of 1.16
+to 1.31 and 1.07 to 1.25: `cpu` spends 0.345 s evaluating the prompt and
+1.104 s generating; `reference` spends 7.712 s and 5.110 s. That is
+**nine times** the work in total, twenty-two times on the prompt and under
+five times on the generation, and the two print the same digest.
 The prompt suffers more because that is where the batching goes: `cpu` shares
 one reading of the weights between the tokens of a batch and `reference`
 declines to, which is one of the things it exists to be without -- so the
@@ -1353,10 +1377,10 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 3.734 s | **1.062 s** |
-| -- evaluating the prompt | 0.557 s | 0.212 s |
-| -- generating | 3.176 s | 0.848 s |
-| 110-token prompt, nothing generated | 13.353 s | **2.631 s** |
+| 6-token prompt, 12 generated | 3.743 s | **0.885 s** |
+| -- evaluating the prompt | 0.466 s | 0.122 s |
+| -- generating | 3.215 s | 0.627 s |
+| 110-token prompt, nothing generated | 13.256 s | **2.174 s** |
 
 All four cells were taken in one sitting on 2026-08-21, back to back, each
 waiting for the machine to fall below 1.50 before it started -- so the two

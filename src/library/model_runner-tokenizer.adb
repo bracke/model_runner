@@ -35,6 +35,13 @@ package body Model_Runner.Tokenizer is
    --  a hostile prompt from costing unbounded time.
    Max_Symbols : constant := 65_536;
 
+   --  How many pieces one word may be spelled from on the WordPiece road.
+   --  A word longer than this is one unknown token rather than a spelling
+   --  that grows with the input: the bound refuses rather than allocates,
+   --  as every bound here does. The longest word in a published vocabulary
+   --  is spelled from a handful.
+   Max_Pieces  : constant := 128;
+
    Hex : constant String := "0123456789ABCDEF";
 
    procedure Deallocate is
@@ -243,6 +250,35 @@ package body Model_Runner.Tokenizer is
 
          if Name = "llama" then
             Item.Model := Kind_SentencePiece;
+         elsif Name = "bert" then
+            --  No cutting rule to name and no merge table to read. What a
+            --  WordPiece vocabulary states beyond its pieces is how the text
+            --  is to be changed before they are looked up, and this build
+            --  implements the one answer every published bert file gives:
+            --  lower-cased, with the accents taken off.
+            --
+            --  A file that says otherwise is refused rather than folded
+            --  anyway. A vocabulary cut without folding carries pieces with
+            --  capitals in them, and folding the text before looking those
+            --  up finds none of them -- every word would come back unknown,
+            --  which is an answer and not an error.
+            Item.Model := Kind_WordPiece;
+
+            declare
+               Folds : Boolean;
+               Local : E.Error_Info;
+            begin
+               Containers.Get_Boolean
+                 (Source, "tokenizer.ggml.do_lower_case", Folds, Local);
+               if E.Is_Ok (Local) and then not Folds then
+                  Item.Model := Kind_Unsupported;
+                  Status := E.Make (E.Tokenizer_Unsupported_Model);
+                  E.Add_Text
+                    (Status, "model", "bert without folding",
+                     E.Param_Identifier);
+                  return;
+               end if;
+            end;
          elsif Name = "gpt2" then
             Item.Model := Kind_BPE;
 
@@ -883,6 +919,124 @@ package body Model_Runner.Tokenizer is
 
    end BPE;
 
+   --  The WordPiece road, which is Bert's.
+   --
+   --  Three steps, and the first is the one that surprises: the text is
+   --  changed before anything is looked up. It is lower-cased, its accents
+   --  are taken off, and its punctuation and its ideographs are cut away
+   --  from the words around them -- so "Cafe", "cafe" and "cafe" with an
+   --  acute are one word by the time the vocabulary sees them, and a model
+   --  trained that way is a model that never saw the other two.
+   --
+   --  Then each word is spelled from the vocabulary, longest piece first,
+   --  with every piece after the first written with two leading hashes: a
+   --  vocabulary carries "play" and "##ing" and spells "playing" from the
+   --  pair. A word no run of pieces spells is one unknown token, not a word
+   --  partly spelled -- the pieces already matched are given back.
+   --
+   --  There is no merge table and no rank. Where byte-pair encoding builds a
+   --  word up from characters by the order the pairs were learned, this cuts
+   --  a word down from the front by what the vocabulary happens to carry,
+   --  and the two arrive at different pieces for the same word.
+   package Word_Piece is
+
+      --  The mark a piece that continues a word is written with.
+      Continues : constant String := "##";
+
+      --  Whether a code point ends the word before it and stands alone.
+      --
+      --  Punctuation does, and so does every ideograph: a run of Chinese is
+      --  not spaced, and a vocabulary trained on it carries one piece a
+      --  character rather than one a phrase. The rule reaches every script
+      --  the standard library knows a category for rather than a range of
+      --  code points written out here.
+      function Stands_Alone (Code_Point : Natural) return Boolean;
+
+      --  Whether a code point is thrown away rather than read: a control, a
+      --  combining mark left after the accents come off, or the replacement
+      --  character a decoder leaves where it could not read.
+      function Discarded (Code_Point : Natural) return Boolean;
+
+      --  Whether a code point separates words without being one.
+      function Breaks (Code_Point : Natural) return Boolean;
+
+      --  The code point with its accent taken off and lower-cased.
+      function Folded (Code_Point : Natural) return Natural;
+
+   end Word_Piece;
+
+   package body Word_Piece is
+
+      package Handling renames Ada.Wide_Wide_Characters.Handling;
+
+      function Wide (Code_Point : Natural) return Wide_Wide_Character
+      is (Wide_Wide_Character'Val (Code_Point));
+
+      --  An ideograph is a letter that is not written with an alphabet, and
+      --  what tells one is that it has no case: neither its lower nor its
+      --  upper form differs from itself, and it is outside the scripts that
+      --  space their words. Rather than test that indirectly, the blocks the
+      --  architecture's own preprocessing names are used, which is what a
+      --  vocabulary trained by that preprocessing was cut with.
+      function Ideograph (Code_Point : Natural) return Boolean
+      is (Code_Point in 16#4E00# .. 16#9FFF#
+          or else Code_Point in 16#3400# .. 16#4DBF#
+          or else Code_Point in 16#20000# .. 16#2A6DF#
+          or else Code_Point in 16#2A700# .. 16#2B73F#
+          or else Code_Point in 16#2B740# .. 16#2B81F#
+          or else Code_Point in 16#2B820# .. 16#2CEAF#
+          or else Code_Point in 16#F900# .. 16#FAFF#
+          or else Code_Point in 16#2F800# .. 16#2FA1F#);
+
+      --  Punctuation as this preprocessing counts it, which is wider than
+      --  the category of that name: every ASCII character that is neither
+      --  letter nor digit counts, so "$" and "+" and "`" cut a word even
+      --  though Unicode files them under symbol rather than punctuation.
+      function Punctuation (Code_Point : Natural) return Boolean
+      is (Code_Point in 33 .. 47
+          or else Code_Point in 58 .. 64
+          or else Code_Point in 91 .. 96
+          or else Code_Point in 123 .. 126
+          or else (Code_Point > 127
+                   and then Handling.Is_Punctuation_Connector (Wide (Code_Point)))
+          or else (Code_Point > 127
+                   and then not Handling.Is_Alphanumeric (Wide (Code_Point))
+                   and then Handling.Is_Graphic (Wide (Code_Point))
+                   and then not Handling.Is_Space (Wide (Code_Point))
+                   and then not Ideograph (Code_Point)));
+
+      function Stands_Alone (Code_Point : Natural) return Boolean
+      is (Ideograph (Code_Point) or else Punctuation (Code_Point));
+
+      function Discarded (Code_Point : Natural) return Boolean
+      is (Code_Point = 0
+          or else Code_Point = 16#FFFD#
+          or else Handling.Is_Mark (Wide (Code_Point))
+          or else (Handling.Is_Control (Wide (Code_Point))
+                   and then Code_Point not in 9 | 10 | 13));
+
+      function Breaks (Code_Point : Natural) return Boolean
+      is (Code_Point in 32 | 9 | 10 | 11 | 12 | 13
+          or else Handling.Is_Space (Wide (Code_Point))
+          or else Handling.Is_Line_Terminator (Wide (Code_Point)));
+
+      --  The accent first and the case after. To_Basic takes the diacritic
+      --  off a character that carries one; a text whose accents are already
+      --  written as separate combining marks loses them to Discarded
+      --  instead, so both spellings of an accented word arrive at the same
+      --  letters.
+      --
+      --  This is not a full canonical decomposition, and the difference is
+      --  worth stating: a syllable that decomposes into pieces which are not
+      --  marks -- Hangul is the case -- stays whole here where a decomposing
+      --  implementation would take it apart. Latin text, which is what these
+      --  vocabularies are overwhelmingly cut from, is the same either way.
+      function Folded (Code_Point : Natural) return Natural
+      is (Wide_Wide_Character'Pos
+            (Handling.To_Lower (Handling.To_Basic (Wide (Code_Point)))));
+
+   end Word_Piece;
+
    --  The longest piece starting at From that the vocabulary calls a control
    --  token or one of its author's own, with how many characters it spans.
    --
@@ -1085,6 +1239,205 @@ package body Model_Runner.Tokenizer is
          Status := E.Make (E.Tokenizer_Input_Too_Long);
          E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Symbols));
          return;
+      end if;
+
+      --  A WordPiece vocabulary takes a third road: the text is changed,
+      --  then cut into words, then each word spelled from the front.
+      if Item.Model = Kind_WordPiece then
+         declare
+            Produced : Natural := 0;
+            Refused  : Boolean := False;
+
+            --  The folded text, and where each word in it begins and ends.
+            --  Folding can only shorten a code point's encoding or leave it
+            --  as it was -- a letter with its accent off is never wider than
+            --  the letter with it -- so the input's own length is room
+            --  enough, and the count of words cannot exceed the count of
+            --  code points.
+            Room  : String (1 .. Text'Length * 4);
+            Held  : Natural := 0;
+
+            Starts : array (1 .. Max_Symbols) of Natural;
+            Ends   : array (1 .. Max_Symbols) of Natural;
+            Words  : Natural := 0;
+
+            --  Whether the word being built has anything in it yet, which is
+            --  what says a break has a word to close.
+            Open   : Boolean := False;
+
+            --  Add one token, or say why not. As on the byte-pair road: a
+            --  buffer with no room is a refusal and not a short answer.
+            procedure Put (Token : Token_Id) is
+            begin
+               if Refused then
+                  return;
+               end if;
+
+               if Produced >= Target'Length then
+                  Status := E.Make (E.Tokenizer_Buffer_Too_Small);
+                  E.Add_Integer
+                    (Status, "size", Long_Long_Integer (Target'Length));
+                  Refused := True;
+                  return;
+               end if;
+
+               Produced := Produced + 1;
+               Target (Target'First + Produced - 1) := Token;
+            end Put;
+
+            --  Close the word being built, if one is open.
+            procedure Close_Word is
+            begin
+               if Open then
+                  Ends (Words) := Held;
+                  Open := False;
+               end if;
+            end Close_Word;
+
+            --  Put one folded code point into the word being built,
+            --  starting a word where none is open.
+            procedure Extend (Code_Point : Natural) is
+               One : constant String := Model_Runner.UTF8.Encode (Code_Point);
+            begin
+               if not Open then
+                  if Words >= Max_Symbols then
+                     Refused := True;
+                     Status := E.Make (E.Tokenizer_Input_Too_Long);
+                     E.Add_Integer
+                       (Status, "limit", Long_Long_Integer (Max_Symbols));
+                     return;
+                  end if;
+
+                  Words := Words + 1;
+                  Starts (Words) := Held + 1;
+                  Open := True;
+               end if;
+
+               Room (Held + 1 .. Held + One'Length) := One;
+               Held := Held + One'Length;
+            end Extend;
+
+            --  Spell one word from the vocabulary, longest piece first.
+            --
+            --  Every piece after the first is looked up with the two hashes
+            --  in front of it. A word that runs out of pieces part way is
+            --  one unknown token and not the pieces it managed: half a word
+            --  spelled is a different word.
+            procedure Spell (Word : String) is
+               Held_Pieces : array (1 .. Max_Pieces) of Token_Id;
+               Count : Natural := 0;
+               From  : Positive := Word'First;
+            begin
+               while From <= Word'Last loop
+                  declare
+                     Stop  : Natural := Word'Last;
+                     Found : Token_Id := No_Token;
+                  begin
+                     --  Longest first, shrinking by a code point at a time
+                     --  so that a piece never ends inside a character.
+                     while Stop >= From loop
+                        declare
+                           Piece : constant String :=
+                             (if From = Word'First
+                              then Word (From .. Stop)
+                              else Word_Piece.Continues & Word (From .. Stop));
+                        begin
+                           Found := Find (Item, Piece);
+                           exit when Found /= No_Token;
+                        end;
+
+                        --  Back up to the previous character boundary.
+                        Stop := Stop - 1;
+                        while Stop >= From
+                          and then Stop < Word'Last
+                          and then Character'Pos (Word (Stop + 1)) in 128 .. 191
+                        loop
+                           Stop := Stop - 1;
+                        end loop;
+                     end loop;
+
+                     if Found = No_Token or else Count >= Max_Pieces then
+                        Count := 0;
+                        exit;
+                     end if;
+
+                     Count := Count + 1;
+                     Held_Pieces (Count) := Found;
+                     From := Stop + 1;
+                  end;
+               end loop;
+
+               if Count = 0 then
+                  --  Nothing the vocabulary can spell. A WordPiece file
+                  --  always carries an unknown token; one that does not is
+                  --  refused rather than quietly dropping the word, which is
+                  --  the defect the byte-pair road already had once.
+                  if Item.Unknown /= No_Token then
+                     Put (Item.Unknown);
+                  elsif not Refused then
+                     Status := E.Make (E.Tokenizer_Missing_Byte_Fallback);
+                     E.Add_Text (Status, "value", Word, E.Param_Identifier);
+                     Refused := True;
+                  end if;
+                  return;
+               end if;
+
+               for Index in 1 .. Count loop
+                  Put (Held_Pieces (Index));
+                  exit when Refused;
+               end loop;
+            end Spell;
+
+            Index : Natural := Text'First;
+         begin
+            --  Fold and cut in one pass over the text.
+            while Index <= Text'Last loop
+               declare
+                  Code, Width : Natural;
+               begin
+                  Model_Runner.UTF8.Decode_First
+                    (Text (Index .. Text'Last), Code, Width);
+                  exit when Width = 0;
+                  Index := Index + Width;
+
+                  if Word_Piece.Breaks (Code) then
+                     Close_Word;
+                  else
+                     declare
+                        Folded : constant Natural := Word_Piece.Folded (Code);
+                     begin
+                        if Word_Piece.Discarded (Folded) then
+                           null;
+                        elsif Word_Piece.Stands_Alone (Folded) then
+                           Close_Word;
+                           Extend (Folded);
+                           Close_Word;
+                        else
+                           Extend (Folded);
+                        end if;
+                     end;
+                  end if;
+               end;
+
+               exit when Refused;
+            end loop;
+
+            Close_Word;
+
+            for Which in 1 .. Words loop
+               exit when Refused;
+               if Ends (Which) >= Starts (Which) then
+                  Spell (Room (Starts (Which) .. Ends (Which)));
+               end if;
+            end loop;
+
+            Last := Produced;
+
+            if Refused then
+               Last := 0;
+            end if;
+            return;
+         end;
       end if;
 
       --  Byte-pair vocabularies take a different road entirely: the text is
@@ -1524,6 +1877,33 @@ package body Model_Runner.Tokenizer is
    begin
       if Raw = "" then
          return "";
+      end if;
+
+      --  WordPiece writes a piece that continues a word with two leading
+      --  hashes and a piece that starts one with nothing, so the spaces are
+      --  in neither: they are what the hashes are absent for. Decoding puts
+      --  them back -- a hashed piece joins what came before, an unhashed one
+      --  begins a word and takes a space in front of it unless it is the
+      --  first thing said.
+      --
+      --  What this cannot put back is the text as it was written. The road
+      --  folded the case and took the accents off before anything was looked
+      --  up, so what comes out of a round trip is the folded text and not
+      --  the caller's. That is a property of the vocabulary rather than of
+      --  this decoder, and it is why nothing here claims a round trip for
+      --  this road.
+      if Item.Model = Kind_WordPiece then
+         if Raw'Length >= Word_Piece.Continues'Length
+           and then Raw (Raw'First .. Raw'First
+                         + Word_Piece.Continues'Length - 1)
+                    = Word_Piece.Continues
+         then
+            return Raw (Raw'First + Word_Piece.Continues'Length .. Raw'Last);
+         elsif First then
+            return Raw;
+         else
+            return " " & Raw;
+         end if;
       end if;
 
       --  Byte-pair token text is written in stand-in characters, one for

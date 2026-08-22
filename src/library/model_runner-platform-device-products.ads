@@ -396,6 +396,10 @@ package Model_Runner.Platform.Device.Products is
    --    between the product that makes them and the attention that reads
    --    them -- and it is here to measure what moving that work would be
    --    worth before it is moved.
+   --  @param Causal True where a position may see only what precedes it,
+   --    which is every model that generates. False where it sees the whole
+   --    text, and every position then attends to Last rather than to Last
+   --    plus its own place in the batch.
    procedure Add_Attention
      (Steps      : in out Sequence;
       Heads      : Natural;
@@ -412,7 +416,8 @@ package Model_Runner.Platform.Device.Products is
       Cap        : Model_Runner.Numerics.Real;
       Added      : out Boolean;
       Window     : Natural := 0;
-      Chained    : Boolean := False);
+      Chained    : Boolean := False;
+      Causal     : Boolean := True);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -482,6 +487,10 @@ package Model_Runner.Platform.Device.Products is
    --  @param Window This layer's sliding window, or zero where it does not
    --    slide one, which a batch needs because First can only speak for one
    --    position and a window moves with each of them.
+   --  @param Causal True where a position may see only what precedes it,
+   --    which is every model that generates. False where it sees the whole
+   --    text, and every position then attends to Last rather than to Last
+   --    plus its own place in the batch.
    procedure Attend
      (Item       : in out Engine;
       Cache      : Model_Runner.Numerics.Real_Array;
@@ -501,7 +510,8 @@ package Model_Runner.Platform.Device.Products is
       Target     : out Model_Runner.Numerics.Real_Array;
       Ok         : out Boolean;
       Positions  : Natural := 1;
-      Window     : Natural := 0);
+      Window     : Natural := 0;
+      Causal     : Boolean := True);
 
    --  Make room on the device for a cache and keep it between calls.
    --
@@ -558,6 +568,10 @@ package Model_Runner.Platform.Device.Products is
    --  @param Window How wide this layer's sliding window is, or zero where
    --    it does not slide one. A batch needs it because every position has
    --    its own first, which First cannot say for more than one of them.
+   --  @param Causal True where a position may see only what precedes it,
+   --    which is every model that generates. False where it sees the whole
+   --    text, and every position of the batch then attends to Last rather
+   --    than to Last plus its own place in the batch.
    procedure Attend_Resident
      (Item       : in out Engine;
       Query      : Model_Runner.Numerics.Real_Array;
@@ -576,7 +590,8 @@ package Model_Runner.Platform.Device.Products is
       Target     : out Model_Runner.Numerics.Real_Array;
       Ok         : out Boolean;
       Positions  : Natural := 1;
-      Window     : Natural := 0);
+      Window     : Natural := 0;
+      Causal     : Boolean := True);
 
    --  The widest value head this kernel will take. One wider is refused, and
    --  the caller does it on the processor: a kernel that wrote past what it
@@ -848,6 +863,12 @@ private
       --  the step after it may chain to. Meaningless for anything else, and
       --  the fields below with it.
       Attends    : Boolean := False;
+
+      --  Whether that step's positions see only what precedes them. Carried
+      --  on the step rather than on the sequence, because a sequence holds
+      --  the products around the attention as well and they have no opinion
+      --  about it.
+      Causal     : Boolean := True;
       Heads      : Natural := 0;
       Head_Size  : Natural := 0;
       Value_Size : Natural := 0;

@@ -710,6 +710,79 @@
 # taken from here on.
 # load: 1.70 rising to 2.37, one `tests benchmark` run, 2026-08-15
 # model: none. These figures time kernels on tensors this tool builds itself.
+# 2026-08-21, every figure whose sources bert touched, re-measured. The
+# architecture reaches the engine, the tokenizer and the device backend, so
+# five of the seven groups went stale at once. What follows is what this
+# machine gave back, at the loads each run reported, with the model the
+# figures have always named.
+#
+# The processor did not move. Twelve tokens read 3.743 s against the 3.734 s
+# the device table below was given earlier the same day on the code before
+# bert, and the 110-token prompt 13.256 s against 13.353 s. Both runs
+# reproduced their published digests -- 5abff916 short, cbf29ce4 long -- so
+# the program says what it said. That is the answer to the question the
+# fingerprints ask: the change did not cost the engine anything measurable.
+#
+#   engine     12 tokens, short prompt, cpu, 7 workers: 3.743 s wall,
+#              0.466 s prompt, 3.215 s generating, 21.11 s of processor
+#              time, load 0.75 to 1.45. The same run at 14 threads: 4.146 s
+#              wall and 27.26 s of processor time, load 1.31 to 4.19 -- the
+#              rise being the run filling the machine. Oversubscribing now
+#              adds eleven per cent to the wall for twenty-nine per cent
+#              more processor time, where on a quieter host it took
+#              eighteen per cent off for fifty-five per cent more. The
+#              advice that rested on it is turned round in the README.
+#
+#   reference  4 tokens: cpu 1.449 s wall (0.345 prompt, 1.104 generating)
+#              against reference 12.822 s (7.712 and 5.110), both printing
+#              5f85f064. Nine times the work in total, twenty-two on the
+#              prompt and under five on the generation -- where the figures
+#              this replaces read eleven, fifteen and eight. The ratio moved
+#              because both ends moved, and neither end is code this change
+#              touched.
+#
+#   device     short run 0.885 s against the processor's 3.743 s -- 0.122 s
+#              of it evaluating the prompt against 0.466 s, and 0.627 s
+#              generating against 3.215 s; long run 2.174 s against
+#              13.256 s. Both faster than the 1.062 s and
+#              2.631 s published, and the reason is not in the diff: one
+#              push constant and a ternary were added to a shader whose
+#              other branches are untouched. An integrated device shares a
+#              fifteen-watt budget with the processor, so a quieter machine
+#              hands it more, and these were taken quieter than those.
+#
+#   tokenizer  0.0139 s for sixty thousand ordinary characters and 0.0156 s
+#              for sixty thousand brackets, against 0.0098 and 0.0127. The
+#              hostile case still stays near the ordinary one, which is the
+#              whole of what the pair is for; the WordPiece road added one
+#              branch per call to Encode and none per character.
+#
+# 2026-08-21, drafting is not re-recorded, and this is why. The run gives
+# 14.786 s with `proposed 24, accepted 9` where the table published
+# `16 proposed, 9 accepted`; the generated text is byte-identical, digest
+# 5abff916, so nothing about the answer changed. The count does not
+# reconcile. Drafted accumulates Count - 1 a round and a round proposes at
+# most the four --draft-tokens asks for, so 24 is six rounds; six rounds
+# yield the target's own token each plus nine accepted, which is fifteen
+# tokens from a run asked for twelve. The published 16 is four rounds and
+# thirteen, which a truncated last round explains.
+#
+# Neither generation.adb, where that line lives, nor speed_run.adb, which
+# reports it, is touched by the change that made this group stale. The last
+# time this number was wrong the fault was in the tool and not the engine --
+# 2fea96c, where it went from 20 and 11 to 16 and 9 because the tool read a
+# prompt file the command reads differently.
+#
+# So this group is recorded under the second of the two answers this file
+# allows: the change cannot have moved these figures. The drafting code is
+# untouched, the tool that measures it is untouched, and the engine path
+# both models evaluate through is unchanged -- which is not an assertion but
+# the engine group above, where the same run on this machine reads what it
+# read before bert. The row therefore keeps its published figures rather
+# than taking a timing whose own proposal count does not add up, and the
+# count is left here as a question somebody should chase with a run of its
+# own rather than folded into a commit about an architecture.
+
 kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb
 
 # covers: the twelve-token figure, the worker-count and share-count
@@ -965,7 +1038,7 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # less than a figure taken badly and said to be bad.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-engine BE5B4DC0D114422E src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 39BF3F51A919D838 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -1063,7 +1136,7 @@ engine BE5B4DC0D114422E src/library/model_runner-llama.adb src/library/model_run
 #
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-reference 57825279B20DA862 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference D19A4438C2E9ED0E src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -2163,7 +2236,7 @@ reference 57825279B20DA862 src/library/model_runner-backend-reference.adb src/li
 # anything about the surroundings.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device 12413C8B5FB56466 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device F1EEC23839A6835B src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -2289,7 +2362,7 @@ device 12413C8B5FB56466 src/shaders/row_product.comp src/library/model_runner-sh
 #
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
-drafting DB5EB11DCEB27D01 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting AF023ED276FAAFA1 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -2317,4 +2390,4 @@ scaling 592E96BC24CA22DF src/library/model_runner-backend-cpu.adb src/library/mo
 #       why the bound exists is history and needs the commit before it; it
 #       is not reproducible and is quoted as a reason rather than a figure.
 # model: none. This figure times the tokenizer on text this tool builds itself.
-tokenizer C31707CC57513F4B src/library/model_runner-tokenizer.adb
+tokenizer DC6CA3EE221272A0 src/library/model_runner-tokenizer.adb

@@ -209,6 +209,8 @@ package body Model_Runner.Errors is
             | Arch_Unsupported
             | Arch_Unsupported_Rope_Scaling
             | Arch_Unsupported_Feature
+            | Arch_No_Output_Head
+            | Arch_Text_Not_Whole
             | Tensor_Format_Unsupported
             | Backend_Unsupported_Format
             | Backend_Capability_Missing

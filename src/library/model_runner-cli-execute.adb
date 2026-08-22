@@ -69,6 +69,7 @@ package body Model_Runner.CLI.Execute is
    use type Opt.Command_Kind;
    use type Model_Runner.Bytes.Byte_Array_Access;
    use type L.Repack_Mode;
+   use type L.Pooling_Choice;
    use type Opt.Pooling_Kind;
    use type N.Element_Count;
    use type N.Real;
@@ -956,6 +957,40 @@ package body Model_Runner.CLI.Execute is
               (Screen, "cli.inspect.label.rope_base",
                T.Image (Long_Float (Settings.Rope_Base), 1), Pres.Answer);
 
+            --  What a reader of this report would otherwise have to work
+            --  out from the architecture's name: which way it attends, and
+            --  whether it can say what comes next at all. Both decide which
+            --  command the file is for, and a caller who runs the wrong one
+            --  learns it from a refusal rather than from here.
+            Pres.Put_Field
+              (Screen, "cli.inspect.label.attention",
+               Screen.Message_Value
+                 (if Settings.Causal
+                  then "cli.inspect.value.one_way"
+                  else "cli.inspect.value.both_ways"),
+               Pres.Answer);
+            Pres.Put_Field
+              (Screen, "cli.inspect.label.output_head",
+               Screen.Message_Value
+                 (if Settings.Has_Head
+                  then "cli.inspect.value.yes"
+                  else "cli.inspect.value.no"),
+               Pres.Answer);
+
+            --  And the pooling the file states, for the file that states
+            --  one. Absent and none are not the same answer, so a model
+            --  that says nothing prints nothing here.
+            if Settings.Pooling /= L.Pool_Unstated then
+               Pres.Put_Field
+                 (Screen, "cli.inspect.label.pooling",
+                  (case Settings.Pooling is
+                     when L.Pool_Mean => "mean",
+                     when L.Pool_Last => "last",
+                     when L.Pool_Cls  => "cls",
+                     when others      => "none"),
+                  Pres.Answer);
+            end if;
+
             --  Tokenizer.
             declare
                Words : Vocab.Vocabulary;
@@ -1329,6 +1364,25 @@ package body Model_Runner.CLI.Execute is
                end if;
             end;
          end loop;
+
+         --  A model that cannot say what comes next cannot be run. Refused
+         --  here rather than at the first evaluation, so that a caller who
+         --  asked the wrong command of the right model is told before a
+         --  session, a cache and a worker pool are built for a generation
+         --  that is not going to happen. `embed` is what such a model is
+         --  for, and saying so is more use than the code alone.
+         if not L.Config (Prepared).Has_Head then
+            declare
+               Refusal : E.Error_Info := E.Make (E.Arch_No_Output_Head);
+            begin
+               E.Add_Text
+                 (Refusal, "architecture",
+                  L.Architecture_Name (L.Config (Prepared).Kind),
+                  E.Param_Identifier);
+               Fail (Refusal);
+               return;
+            end;
+         end if;
 
          L.Open
            (Session, Prepared, Item.Context_Size,
@@ -2113,11 +2167,35 @@ package body Model_Runner.CLI.Execute is
               (1 .. Model_Runner.Limits.Default_Session_Limits.Max_Batch);
             Count  : Natural;
 
-            Logits : N.Real_Array (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+            --  Empty where the model has no projection to a distribution,
+            --  which is how a caller says they are not asking for one. A
+            --  model that has one still produces the last position's, as it
+            --  did: nothing here reads it, and refusing to compute it would
+            --  be a second path through the evaluator for no gain.
+            Logits : N.Real_Array
+              (0 .. (if Settings.Has_Head
+                     then N.Element_Count (Settings.Vocabulary) - 1
+                     else -1));
             Pooled : N.Real_Array (0 .. Width - 1) := [others => 0.0];
+
+            --  Which pooling this run uses. The caller's where they named
+            --  one; otherwise the model's own, for the architecture that
+            --  states it; otherwise the mean, as before.
+            Pooling : constant Opt.Pooling_Kind :=
+              (if Item.Pooling_Named then Item.Pooling
+               else (case Settings.Pooling is
+                       when L.Pool_Cls  => Opt.Pool_Cls,
+                       when L.Pool_Last => Opt.Pool_Last,
+                       when others      => Opt.Pool_Mean));
          begin
+            --  The end marker where the model is one that reads whole texts
+            --  and its file asks for one. Bert is trained with a marker at
+            --  each end and its states are what they are because of them;
+            --  a decoder's embedded text is not a finished utterance and
+            --  takes none, which is what this did for every model before.
             Vocab.Encode
-              (Words.all, Prompt.all, Vocab.Adds_Beginning (Words.all), False,
+              (Words.all, Prompt.all, Vocab.Adds_Beginning (Words.all),
+               not Settings.Causal and then Vocab.Adds_End (Words.all),
                Tokens, Count, Condition);
             if E.Is_Error (Condition) then
                Fail (Condition);
@@ -2139,11 +2217,19 @@ package body Model_Runner.CLI.Execute is
             --  only the batched path has them all in hand at once; asking
             --  for them is what the States buffer is.
             declare
+               --  How many positions go through the weights at once. A
+               --  causal model may take the text in any batches it likes
+               --  and get the same answer; one that attends both ways has
+               --  to see the whole of it at once, so the batch is the text
+               --  and --batch-size has nothing to say about it.
                Step : constant N.Element_Count :=
-                 N.Element_Count
-                   (Natural'Min
-                      (Natural'Max (1, Item.Batch_Size),
-                       Model_Runner.Limits.Default_Session_Limits.Max_Batch));
+                 (if not Settings.Causal
+                  then N.Element_Count (Count)
+                  else N.Element_Count
+                         (Natural'Min
+                            (Natural'Max (1, Item.Batch_Size),
+                             Model_Runner.Limits.Default_Session_Limits
+                               .Max_Batch)));
 
                Room : Model_Runner.Tensors.Real_Array_Access := null;
                From : Positive := 1;
@@ -2166,7 +2252,7 @@ package body Model_Runner.CLI.Execute is
                         return;
                      end if;
 
-                     case Item.Pooling is
+                     case Pooling is
                         when Opt.Pool_Mean =>
                            for Which in 0 .. Taken - 1 loop
                               for Element in Pooled'Range loop
@@ -2182,6 +2268,18 @@ package body Model_Runner.CLI.Execute is
                                    Room.all ((Taken - 1) * Width + Element);
                               end loop;
                            end if;
+
+                        --  The first position of the text, which is the
+                        --  first position of the first batch and of no
+                        --  other. A model pooled this way was trained with
+                        --  a marker there and with that marker's state
+                        --  standing for the whole.
+                        when Opt.Pool_Cls =>
+                           if From = 1 then
+                              for Element in Pooled'Range loop
+                                 Pooled (Element) := Room.all (Element);
+                              end loop;
+                           end if;
                      end case;
 
                      From := Upto + 1;
@@ -2191,7 +2289,7 @@ package body Model_Runner.CLI.Execute is
                Free_Reals (Room);
             end;
 
-            if Item.Pooling = Opt.Pool_Mean then
+            if Pooling = Opt.Pool_Mean then
                for Element in Pooled'Range loop
                   Pooled (Element) := Pooled (Element) / N.Real (Count);
                end loop;

@@ -55,6 +55,25 @@ package Tiny_Model is
    --  Write the fixture to disk.
    --
    --  @param Path Destination path; overwritten if it exists.
+   --  Which architecture the file declares. Each is the same shape with a
+   --  difference: Qwen2 a bias on each attention projection, Qwen3 a
+   --  normalization of every query and key head instead, Qwen3_MoE the same
+   --  under its own metadata prefix.
+   --  Gemma is written with normalization weights around zero rather than
+   --  around one, because that is what its gain convention means and a
+   --  fixture that wrote them around one would be a fixture where reading
+   --  the convention wrongly still gives the right answer.
+   --  Bert is the one that does not generate: bidirectional, normalizing
+   --  after each residual add rather than before each sublayer, with a
+   --  learned row for the position and another for the segment, and no
+   --  projection to a distribution at all.
+   type Fixture_Architecture is
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
+      Phi2, GPT2, Bert);
+
+   --  Write the tiny model to a file.
+   --
+   --  @param Path Destination path; overwritten if it exists.
    --  @param Adds_Beginning Whether the vocabulary declares that it wants a
    --    beginning-of-text marker. False is not a curiosity: real models
    --    declare it, and putting a marker in front of one that does not want
@@ -69,11 +88,17 @@ package Tiny_Model is
    --    narrow widths is seven kilobytes, which is under two pages, and a
    --    device reading weights where they lie can say almost nothing about
    --    a file that small.
+   --  @param Kind Architecture to write. The default is the one the suite's
+   --    own fixture is, and naming another is how a caller gets a file of
+   --    that shape to run the program against by hand -- which is the only
+   --    way to see a whole command work on an architecture the suite
+   --    exercises through the library alone.
    procedure Write
      (Path           : String;
       Adds_Beginning : Boolean := True;
       Room           : Positive := Context;
-      Format         : Weight_Format := F32);
+      Format         : Weight_Format := F32;
+      Kind           : Fixture_Architecture := Llama);
 
    --  A quantized row is a whole number of thirty-two element blocks, so a
    --  model whose widths are eight and twelve cannot be quantized at all.
@@ -97,18 +122,6 @@ package Tiny_Model is
    Deep_Embedding    : constant := 256;
    Deep_Feed_Forward : constant := 256;
    Deep_Head_Size    : constant := 128;
-
-   --  Which architecture the file declares. Each is the same shape with a
-   --  difference: Qwen2 a bias on each attention projection, Qwen3 a
-   --  normalization of every query and key head instead, Qwen3_MoE the same
-   --  under its own metadata prefix.
-   --  Gemma is written with normalization weights around zero rather than
-   --  around one, because that is what its gain convention means and a
-   --  fixture that wrote them around one would be a fixture where reading
-   --  the convention wrongly still gives the right answer.
-   type Fixture_Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2);
 
    --  How the fixture stretches the rotation. Plain is a model that says
    --  nothing, which rotates as it was trained.
@@ -181,9 +194,15 @@ package Tiny_Model is
    --  @return True when that architecture cannot be built in that shape.
    function Cannot_Hold
      (Kind : Fixture_Architecture; Shape : Fixture_Shape) return Boolean
+   --  Bert cannot hold three of the five. It has no gate, so a mixture
+   --  would route to experts it cannot run; it has no rotation, so a
+   --  stretched one hands it a table of divisors with no elements; and a
+   --  window is a bound on how far back a position may look, which means
+   --  nothing to a model where every position already sees every other.
    is (case Shape is
-         when Mixed => Kind in Falcon | Phi2 | GPT2,
-         when Stretched => Kind = GPT2,
+         when Mixed => Kind in Falcon | Phi2 | GPT2 | Bert,
+         when Stretched => Kind in GPT2 | Bert,
+         when Windowed => Kind = Bert,
          when others => False);
 
    --  Write a fixture in one of those shapes.

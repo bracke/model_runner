@@ -7,6 +7,42 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Bert, and `embed` on the models people actually embed with.** The first
+  architecture here that does not generate: it reads a whole text at once and
+  produces a state for every position of it. Three things follow, and none of
+  them is a parameter of what was already here. Its attention is
+  bidirectional, so a position sees what comes after it as well as what came
+  before -- read causally it still answers, with an embedding that is quietly
+  the wrong one. It normalizes after the residual add rather than before the
+  sublayer, which is a third arrangement beside the two already written and
+  not a flag on one of them. And it learns a row for the token, a row for
+  where the token is and a row for which segment it belongs to, summed and
+  normalized before the first layer.
+
+  A whole text or nothing: a second batch into a written cache is refused by
+  name, because the first half would then have been computed without the
+  second and nothing about what came back would look wrong. `--batch-size`
+  says nothing about such a model; the batch is the text.
+
+  It carries no projection from a state to a token and ties none to its
+  embedding table, so `run` is refused before a session is built and `embed`
+  is what it is for. `--pooling cls` joins mean and last, and where the
+  caller names no pooling the model's own `pooling_type` is used -- bge and
+  e5 were trained on the first position and MiniLM on the mean, and reading
+  the file is how the difference stops being the caller's problem.
+
+- **The WordPiece tokenizer road.** A third road beside SentencePiece and
+  byte-pair, for `tokenizer.ggml.model = "bert"`. It changes the text before
+  anything is looked up -- lower-cased, accents off, punctuation and
+  ideographs cut loose -- and then spells each word from the front with the
+  longest piece the vocabulary carries, every piece after the first written
+  with two leading hashes. A word no run of pieces spells is one unknown
+  token and not the pieces that did match, because half a word spelled is a
+  different word. A file that says it was cut without folding is refused
+  rather than folded anyway: every word would come back unknown, which is an
+  answer and not an error. Read by a second implementation written from the
+  description, as the other two roads are.
+
 - **A figure published in the README has to appear in the record of how it
   was taken.** The fingerprints catch a source that moved without its
   figures being re-measured; they cannot catch a number edited into one file
@@ -47,6 +83,63 @@ Keep a Changelog and the project uses semantic versioning.
   submitted on its own, on the same cache with the same queries.
 
 ### Changed
+
+- **The fixture check knows what a model has no reading of.** It asked every
+  architecture for a token at a time and on every backend, which a model that
+  attends both ways has neither of: there is no computing a position of it
+  before the text it reads exists, so the single-token path is not a path it
+  has and the backend that declines batching is not one it runs on. Those
+  asks came back as refusals, which read as ten faults. They are counted as
+  unasked now and reported beside the rest, because a check that quietly asks
+  less of one architecture than of the others reports the same clean totals
+  either way.
+
+- **A repacked model moves its segment table too.** `Matrices` is the
+  registry repacking walks, and it carried a comment warning that a view
+  left pointing at the file's bytes while everything around it moved into
+  the repacked buffer reads a row that is not there. Bert's segment table
+  is exactly such a view and was not in the list, so `--repack` produced an
+  embedding built on whatever those bytes now meant -- an answer rather than
+  a refusal, which is why nothing but a comparison could see it. Found by
+  the sweep at 3.59 worst absolute; 2.5e-06 with the table registered.
+
+- **Bert's feed-forward takes the Gaussian unit.** Both the engine and the
+  independent implementation left it off the list of architectures that do,
+  so the two agreed with each other while both computing the logistic one.
+  A second implementation cannot catch a mistake made in both, and this is
+  what that looks like: the sweep was clean about it. `Gate_Unit`, which
+  tells a device the same thing, was wrong the same way and is fixed beside
+  it -- its own comment says the two must not come to disagree.
+
+- **The conformance sweep names its first disagreement.** It counted them
+  and said how far apart the two implementations got, which is what a gate
+  needs; it said nothing about which of eleven architectures, five formats,
+  five shapes, three repack modes and three backends the disagreement was
+  in. Finding that out cost a run per guess. The first line of the output
+  now names the combination.
+
+- **The independent implementation evaluates block by block.** It ran a
+  position at a time through every layer, which works only while a position
+  depends on nothing after it. There is no order in which each position is
+  computed after what it reads once attention goes both ways, so the loops
+  are inverted: every position's keys and values for a block are written
+  before any attention in that block reads one. For a causal model that is
+  the same arithmetic in the same order -- every key a position reads was
+  written before it looks -- and the sweep says so.
+
+- **`Post_Norm` is reached through one place.** A sublayer joins a residual
+  at four places in the engine, and two architectures now differ in which
+  side of the addition the normalization falls on. Both are written in
+  `Join_Residual` and the four call sites go through it, rather than the
+  difference being repeated four times for three of them to eventually stop
+  having.
+
+- **The parallel arrangement is asked of the architecture.** Two evaluators
+  decided whether a block's two sublayers read the same normalized input by
+  testing whether the feed normalization was absent. Bert has no feed
+  normalization either and does not run its sublayers in parallel, so the
+  test read the absence as the arrangement and copied a batch into a buffer
+  that had never been allocated. Both now ask which architecture it is.
 
 - **The documents caught up with the device.** Five claims had gone stale
   while the device backend grew, and none of them was wrong when it was
@@ -4073,7 +4166,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 162 diagnostic
+- Localization through `messages`, with a catalog entry for all 164 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

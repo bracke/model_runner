@@ -21,6 +21,7 @@ with Interfaces;
 with Model_Runner.Backend;
 with Model_Runner.Backend.Device;
 with Model_Runner.Llama;
+with Model_Runner.Tensors;
 with Model_Runner.Localization;
 with Model_Runner.Memory;
 with Model_Runner.Numerics;
@@ -54,6 +55,7 @@ package body Tests.Inference_Cases is
    package N renames Model_Runner.Numerics;
    package Containers renames Model_Runner.GGUF.Containers;
    package Vocab renames Model_Runner.Tokenizer;
+   use type Model_Runner.Tensors.Real_Array_Access;
 
    subtype Logit_Vector is
      N.Real_Array (0 .. N.Element_Count (Tiny_Model.Vocabulary) - 1);
@@ -85,6 +87,206 @@ package body Tests.Inference_Cases is
               & E.Error_Code'Image (Status.Code));
       Assert (L.Is_Ready (Item.Ready), "model not marked ready");
    end Start;
+
+   --------------------------------------------
+   -- A_Position_Sees_What_Follows_It --
+   --------------------------------------------
+
+   --  The claim a bidirectional model rests on, and the one no comparison
+   --  of its own output against itself can make: what the model makes of
+   --  the first position depends on a token that comes after it.
+   --
+   --  A causal model cannot do this and must not: change the last token of
+   --  a prompt and the first position's state is what it was. So the test
+   --  is the same text twice with one later token different, and the
+   --  assertion is that the first position moved -- which fails against an
+   --  engine that attends causally while reporting itself bidirectional,
+   --  and fails in the other direction against one that lets a causal
+   --  model see ahead.
+   procedure A_Position_Sees_What_Follows_It
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  Every position's state for one text, first position first.
+      procedure States_Of
+        (Image  : access constant B.Byte_Array;
+         Tokens : Vocab.Token_Array;
+         Room   : Model_Runner.Tensors.Real_Array_Access)
+      is
+         Under  : Harness (Image);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         None   : N.Real_Array (1 .. 0);
+      begin
+         Start (Under);
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "bert session did not open");
+
+         L.Evaluate_Batch
+           (Live, Under.Ready, Tokens, None, States => Room,
+            Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "bert batch failed: " & E.Error_Code'Image (Status.Code));
+
+         L.Close (Live);
+      end States_Of;
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+
+         --  Two texts that agree everywhere but the last position.
+         One   : constant Vocab.Token_Array := [4, 5, 6];
+         Other : constant Vocab.Token_Array := [4, 5, 7];
+
+         --  The width, from the fixture's own declaration rather than
+         --  from a model that has to be prepared to be asked.
+         Width : constant N.Element_Count :=
+           N.Element_Count (Tiny_Model.Embedding);
+
+         First_Room  : Model_Runner.Tensors.Real_Array_Access := null;
+         Second_Room : Model_Runner.Tensors.Real_Array_Access := null;
+
+         Moved : N.Real := 0.0;
+      begin
+         Model_Runner.Tensors.Allocate (3 * Width, First_Room);
+         Model_Runner.Tensors.Allocate (3 * Width, Second_Room);
+         Assert (First_Room /= null and then Second_Room /= null,
+                 "no room for the states");
+
+         States_Of (Held'Access, One, First_Room);
+         States_Of (Held'Access, Other, Second_Room);
+
+         --  The first position, which is the one the changed token comes
+         --  after. Its state has to have moved.
+         for Index in 0 .. Width - 1 loop
+            Moved := N.Real'Max
+              (Moved, abs (First_Room.all (Index) - Second_Room.all (Index)));
+         end loop;
+
+         Assert (Moved > 1.0E-6,
+                 "the first position did not move when a later token "
+                 & "changed, so attention is not reading ahead");
+
+         --  And the second position moved too, for the same reason: it also
+         --  precedes the token that changed.
+         Moved := 0.0;
+         for Index in Width .. 2 * Width - 1 loop
+            Moved := N.Real'Max
+              (Moved, abs (First_Room.all (Index) - Second_Room.all (Index)));
+         end loop;
+         Assert (Moved > 1.0E-6,
+                 "the second position did not move when a later token "
+                 & "changed");
+
+         Model_Runner.Tensors.Free (First_Room);
+         Model_Runner.Tensors.Free (Second_Room);
+      end;
+
+      B.Free (Image);
+   end A_Position_Sees_What_Follows_It;
+
+   ------------------------------------------------
+   -- A_Headless_Model_Refuses_What_It_Cannot_Say --
+   ------------------------------------------------
+
+   --  Two refusals, both of which would otherwise be answers.
+   --
+   --  A model with no projection asked for a distribution could be given a
+   --  row of zeros, and a bidirectional model handed half a text could be
+   --  given the embedding of that half. Neither would report anything
+   --  wrong, and neither is the model's answer.
+   procedure A_Headless_Model_Refuses_What_It_Cannot_Say
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+
+         Settings : L.Configuration;
+      begin
+         Start (Under);
+         Settings := L.Config (Under.Ready);
+
+         Assert (not Settings.Has_Head,
+                 "the bert fixture was read as having an output projection");
+         Assert (not Settings.Causal,
+                 "the bert fixture was read as attending one way");
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "bert session did not open");
+
+         --  A distribution, from a model that has none to give.
+         declare
+            Logits : N.Real_Array
+              (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+         begin
+            L.Evaluate_Batch
+              (Live, Under.Ready, [4, 5], Logits, Status => Status);
+            Assert (E.Is_Error (Status)
+                    and then Status.Code = E.Arch_No_Output_Head,
+                    "a distribution was not refused by name: "
+                    & E.Error_Code'Image (Status.Code));
+         end;
+
+         --  And a single token, which exists to find out what comes next.
+         declare
+            Logits : N.Real_Array
+              (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+         begin
+            L.Evaluate (Live, Under.Ready, 4, Logits, Status => Status);
+            Assert (E.Is_Error (Status)
+                    and then Status.Code = E.Arch_No_Output_Head,
+                    "a single token was not refused by name: "
+                    & E.Error_Code'Image (Status.Code));
+         end;
+
+         --  Half a text, which the engine has to refuse rather than embed:
+         --  the first half would have been computed without the second.
+         declare
+            None : N.Real_Array (1 .. 0);
+            Room : Model_Runner.Tensors.Real_Array_Access := null;
+            Width : constant N.Element_Count :=
+              N.Element_Count (Settings.Embedding);
+         begin
+            Model_Runner.Tensors.Allocate (2 * Width, Room);
+            Assert (Room /= null, "no room for the states");
+
+            L.Evaluate_Batch
+              (Live, Under.Ready, [4, 5], None, States => Room,
+               Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the first half was refused: "
+                    & E.Error_Code'Image (Status.Code));
+
+            L.Evaluate_Batch
+              (Live, Under.Ready, [6, 7], None, States => Room,
+               Status => Status);
+            Assert (E.Is_Error (Status)
+                    and then Status.Code = E.Arch_Text_Not_Whole,
+                    "a second batch into a written cache was not refused: "
+                    & E.Error_Code'Image (Status.Code));
+
+            Model_Runner.Tensors.Free (Room);
+         end;
+
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end A_Headless_Model_Refuses_What_It_Cannot_Say;
 
    --  The tiny model prepares and reports the configuration it declared.
    procedure Model_Prepares (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -2640,6 +2842,111 @@ package body Tests.Inference_Cases is
    --  vocabulary out of the container and encodes by the rule the format
    --  describes, scanning where the engine hashes.
 
+   --  The WordPiece road, against a reader written from the description.
+   --
+   --  It shares nothing with the engine's: it folds and cuts a code point at
+   --  a time where the engine builds a folded copy as it goes, it spells by
+   --  scanning the whole vocabulary for the longest match where the engine
+   --  hashes, and it reads UTF-8 with its own decoder. What the two have in
+   --  common is the description they were both written from.
+   procedure Word_Piece_Matches_An_Independent_One
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Image  : B.Byte_Array_Access;
+      Parsed : Containers.Container;
+      Status : E.Error_Info;
+      Loaded : Boolean;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Words  : Vocab.Vocabulary;
+         Second : Reference_Tokenizer.Vocabulary;
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the bert fixture did not parse");
+
+         Vocab.Load (Words, Parsed, Status => Status);
+         Assert (E.Is_Ok (Status), "the engine did not read the vocabulary");
+
+         Reference_Tokenizer.Load (Second, Parsed, Loaded);
+         Assert (Loaded, "the independent reader did not read it");
+
+         --  Each case is one thing the road does, chosen against a reader
+         --  that leaves it out: a word carried whole, a word spelled from a
+         --  piece and a continuation, folding of case and of accents,
+         --  punctuation cut loose from the word before it, an ideograph
+         --  standing alone, and a word the vocabulary cannot spell.
+         declare
+            Acute : constant String :=
+              [1 => Character'Val (16#C3#), 2 => Character'Val (16#A1#)];
+
+            --  A CJK ideograph, which stands alone however it is spaced.
+            Middle : constant String :=
+              [1 => Character'Val (16#E4#), 2 => Character'Val (16#B8#),
+               3 => Character'Val (16#AD#)];
+
+            type Case_Text is access constant String;
+            Cases : constant array (1 .. 12) of Case_Text :=
+              [new String'(""),
+               new String'("a"),
+               new String'("ab"),
+               new String'("abc"),
+               new String'("abc ab"),
+               new String'("xb"),
+               new String'("xB, Ac"),
+               new String'(Acute & "B"),
+               new String'("a" & Middle & "b"),
+               new String'("1x"),
+               new String'("  ab  "),
+               new String'("ab.")];
+         begin
+            for Which of Cases loop
+               declare
+                  Mine   : Vocab.Token_Array (1 .. 64);
+                  Mine_N : Natural;
+                  Theirs : Reference_Tokenizer.Token_Vector (1 .. 64);
+                  Theirs_N : Natural;
+               begin
+                  Vocab.Encode
+                    (Words, Which.all, False, False, Mine, Mine_N, Status);
+                  Assert (E.Is_Ok (Status),
+                          "the engine refused """ & Which.all & """");
+
+                  Reference_Tokenizer.Encode
+                    (Second, Which.all, False, Theirs, Theirs_N);
+
+                  Assert (Mine_N = Theirs_N,
+                          "the two disagree on how many tokens """
+                          & Which.all & """ makes:"
+                          & Natural'Image (Mine_N) & " against"
+                          & Natural'Image (Theirs_N));
+
+                  for Index in 1 .. Natural'Min (Mine_N, Theirs_N) loop
+                     Assert (Integer (Mine (Index)) = Theirs (Index),
+                             "the two disagree on token"
+                             & Natural'Image (Index) & " of """
+                             & Which.all & """:"
+                             & Vocab.Token_Id'Image (Mine (Index))
+                             & " against" & Integer'Image (Theirs (Index)));
+                  end loop;
+               end;
+            end loop;
+         end;
+
+         Vocab.Close (Words);
+         Reference_Tokenizer.Close (Second);
+      end;
+
+      Containers.Close (Parsed);
+      B.Free (Image);
+   end Word_Piece_Matches_An_Independent_One;
+
    procedure Tokenizer_Matches_An_Independent_One
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -4989,6 +5296,9 @@ package body Tests.Inference_Cases is
         (T, Tokenizer_Matches_An_Independent_One'Access,
          "the tokenizer agrees with one written from the description");
       Register_Routine
+        (T, Word_Piece_Matches_An_Independent_One'Access,
+         "the WordPiece road agrees with one written from the description");
+      Register_Routine
         (T, Byte_Pair_Matches_An_Independent_One'Access,
          "the byte-pair tokenizer agrees with one written from the "
          & "description");
@@ -5050,6 +5360,13 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Model_Prepares'Access,
          "the tiny model prepares and reports its configuration");
+      Register_Routine
+        (T, A_Position_Sees_What_Follows_It'Access,
+         "a bidirectional model lets a position see what follows it");
+      Register_Routine
+        (T, A_Headless_Model_Refuses_What_It_Cannot_Say'Access,
+         "a model with no head refuses a distribution, and half a text is "
+         & "refused whole");
       Register_Routine
         (T, Evaluation_Advances'Access,
          "evaluation produces finite logits and commits one position each");

@@ -1214,6 +1214,7 @@ package body Model_Runner.CLI.Options is
                         for Kind in Pooling_Kind loop
                            if Pooling_Word (Kind) = T.To_String (Asked) then
                               Result.Pooling := Kind;
+                              Result.Pooling_Named := True;
                               Found := True;
                            end if;
                         end loop;

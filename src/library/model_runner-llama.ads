@@ -148,9 +148,29 @@ package Model_Runner.Llama is
    --  same normalized input rather than one after the other, and its
    --  feed-forward has no gate -- one projection up, a Gaussian unit, one
    --  projection down. Its projections are fused as phi3's are.
+   --  Bert is the first architecture here that does not generate. It reads a
+   --  whole text at once and produces a state for every position of it, and
+   --  three things follow from that which no decoder here has.
+   --
+   --  Its attention is bidirectional: a position sees every other position
+   --  of the text, the ones after it as well as the ones before. Every other
+   --  architecture here is causal, and the difference is not a parameter of
+   --  attention but a fact about what the model was trained to be -- a bert
+   --  read causally answers, and answers with an embedding that is quietly
+   --  the wrong one.
+   --
+   --  It normalizes after the residual add rather than before the sublayer:
+   --  LN(x + Attn(x)), where Gemma2 computes x + LN(Attn(x)). The parts are
+   --  the same and the order is not, so this is a third arrangement beside
+   --  the two already here rather than a flag on one of them.
+   --
+   --  And it learns three embeddings rather than one: a row for the token, a
+   --  row for where the token is, and a row for which segment it belongs to,
+   --  summed and normalized before the first layer. The position row is
+   --  GPT2's, which is why there is no rotation anywhere in the model.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2);
+      Phi2, GPT2, Bert);
 
    --  The identifier a file carries for an architecture.
    --
@@ -168,7 +188,17 @@ package Model_Runner.Llama is
          when Phi3      => "phi3",
          when Falcon    => "falcon",
          when Phi2      => "phi2",
-         when GPT2      => "gpt2");
+         when GPT2      => "gpt2",
+         when Bert      => "bert");
+
+   --  How a file says the states of a text should be reduced to one vector.
+   --
+   --  A bert file states this in `bert.pooling_type` and a decoder states
+   --  nothing, which is what Pool_Unstated is for: absent and none are not
+   --  the same answer, and a model that says none is a model whose states
+   --  the caller is expected to pool for themselves.
+   type Pooling_Choice is
+     (Pool_Unstated, Pool_None, Pool_Mean, Pool_Cls, Pool_Last);
 
    --  Validated architecture configuration.
    --
@@ -205,6 +235,41 @@ package Model_Runner.Llama is
       Scaling         : Model_Runner.Kernels.Rotary_Scaling :=
         Model_Runner.Kernels.No_Scaling;
       Tied_Output     : Boolean := False;
+
+      --  Whether the model can turn a state into a distribution over tokens
+      --  at all. False for Bert, which was trained to produce states and to
+      --  stop there: it carries no output projection and ties none to its
+      --  embedding table either.
+      --
+      --  A model without one is refused where a distribution is asked for,
+      --  by name, rather than given a row of zeros or the embedding matrix
+      --  read backwards. Both would be answers, and neither would be the
+      --  model's.
+      Has_Head        : Boolean := True;
+
+      --  Whether a position may see only the positions before it. True for
+      --  every architecture that generates, and false for Bert, which reads
+      --  a whole text and lets every position see every other.
+      --
+      --  A field rather than a case on the architecture, because it is asked
+      --  in the inner loop of both evaluators and in the shader, and because
+      --  what it selects is a property of the model rather than of the name
+      --  it goes by.
+      Causal          : Boolean := True;
+
+      --  How many segments the model learned a row for -- two, for the file
+      --  that states them, and zero for a model with no segment embedding at
+      --  all, which is every architecture here but Bert. Every position of a
+      --  text embedded here belongs to segment zero: the second is what a
+      --  sentence-pair task uses, and this program has no way to ask for one.
+      Segments        : Natural := 0;
+
+      --  What the file says its states should be pooled into a vector with,
+      --  which is a thing a bert file states and a decoder does not. Read
+      --  and reported rather than obeyed silently: a caller naming a pooling
+      --  gets that one, and a caller naming none gets what the model was
+      --  trained for instead of an average that may be nothing of the kind.
+      Pooling         : Pooling_Choice := Pool_Unstated;
 
       --  How far back attention may look, in positions, counting the
       --  current one. Zero is no window at all: every committed position is
@@ -930,6 +995,14 @@ private
       Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
       Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access;
 
+      --  The shift beside each of those gains, for the architecture whose
+      --  normalization centres as well as scaling. Null for Gemma2 and
+      --  Gemma3, whose post-normalizations are by root mean square and
+      --  carry no bias, and null for every architecture that has no post-
+      --  normalization at all.
+      Post_Attention_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
+      Post_Feed_Norm_Bias      : Model_Runner.Tensors.Real_Array_Access;
+
       --  The bias its normalization carries, for an architecture that
       --  centres rather than scaling. Null for every architecture that
       --  normalizes by root mean square, which is all of them but Falcon
@@ -1002,6 +1075,18 @@ private
       --  anywhere in the model. Absent -- and never read -- for every
       --  architecture that rotates.
       Positions   : aliased Model_Runner.Tensors.View;
+
+      --  One row a segment, added beside the token's row and the position's.
+      --  Bert learned two and this program uses the first for every position
+      --  of a text; a model with no segment embedding never reads this.
+      Segments    : aliased Model_Runner.Tensors.View;
+
+      --  The normalization over the sum of those three rows, before the
+      --  first layer sees it. Bert normalizes what it embedded; every other
+      --  architecture here hands the embedding row to layer zero as it is,
+      --  or scales it by a constant, and reads this nowhere.
+      Embedding_Norm      : Model_Runner.Tensors.Real_Array_Access;
+      Embedding_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
       Output      : aliased Model_Runner.Tensors.View;
       Output_Norm : Model_Runner.Tensors.Real_Array_Access;
 

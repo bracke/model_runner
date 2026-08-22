@@ -45,7 +45,14 @@ package Model_Runner.Tokenizer is
    --  character; byte-pair encoding merges by rank from a table the file
    --  carries, and represents every byte as a printable character first so
    --  that no merge ever straddles a partial character.
-   type Model_Kind is (Kind_SentencePiece, Kind_BPE, Kind_Unsupported);
+   --
+   --  WordPiece neither merges nor ranks: it changes the text first --
+   --  lower-cased, accents off, punctuation and ideographs cut loose -- and
+   --  then spells each word from the front with the longest piece the
+   --  vocabulary carries, writing every piece after the first with two
+   --  leading hashes.
+   type Model_Kind is
+     (Kind_SentencePiece, Kind_BPE, Kind_WordPiece, Kind_Unsupported);
 
    --  Per-token classification carried by the model.
    type Token_Class is

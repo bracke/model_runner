@@ -1,4 +1,5 @@
 with Ada.Unchecked_Deallocation;
+with Ada.Wide_Wide_Characters.Handling;
 
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
@@ -110,6 +111,8 @@ package body Reference_Tokenizer is
             Item.Model := SentencePiece;
          elsif Name = "gpt2" then
             Item.Model := Byte_Pair;
+         elsif Name = "bert" then
+            Item.Model := Word_Piece;
          else
             Item.Model := Unreadable;
          end if;
@@ -410,6 +413,241 @@ package body Reference_Tokenizer is
       end loop;
    end Encode_By_Score;
 
+   --  WordPiece: fold the text, cut it into words, spell each from the
+   --  front with the longest piece the vocabulary carries.
+   --
+   --  Written from the description rather than from the engine's code, and
+   --  it differs in how it does everything but the answer: it folds with the
+   --  same standard-library operations because there is only one way to ask
+   --  for those, it cuts by testing each code point in turn where the engine
+   --  builds a folded copy as it goes, and it spells by scanning the
+   --  vocabulary for the longest match where the engine hashes.
+   procedure Encode_By_Piece
+     (Item   : Vocabulary;
+      Text   : String;
+      Tokens : out Token_Vector;
+      Last   : out Natural)
+   is
+      package Handling renames Ada.Wide_Wide_Characters.Handling;
+
+      function Wide (Code : Natural) return Wide_Wide_Character
+      is (Wide_Wide_Character'Val (Code));
+
+      --  The blocks the architecture's own preprocessing names.
+      function Ideograph (Code : Natural) return Boolean
+      is (Code in 16#4E00# .. 16#9FFF#
+          or else Code in 16#3400# .. 16#4DBF#
+          or else Code in 16#20000# .. 16#2A6DF#
+          or else Code in 16#2A700# .. 16#2B73F#
+          or else Code in 16#2B740# .. 16#2B81F#
+          or else Code in 16#2B820# .. 16#2CEAF#
+          or else Code in 16#F900# .. 16#FAFF#
+          or else Code in 16#2F800# .. 16#2FA1F#);
+
+      function Punctuation (Code : Natural) return Boolean
+      is (Code in 33 .. 47 or else Code in 58 .. 64
+          or else Code in 91 .. 96 or else Code in 123 .. 126
+          or else (Code > 127
+                   and then Handling.Is_Punctuation_Connector (Wide (Code)))
+          or else (Code > 127
+                   and then not Handling.Is_Alphanumeric (Wide (Code))
+                   and then Handling.Is_Graphic (Wide (Code))
+                   and then not Handling.Is_Space (Wide (Code))
+                   and then not Ideograph (Code)));
+
+      --  One word at a time, built here and spelled before the next begins,
+      --  which is the other way round from the engine: it cuts the whole
+      --  text and then spells every word.
+      Word : String (1 .. 512);
+      Held : Natural := 0;
+
+      --  Spell what is in Word, or give back the unknown token.
+      procedure Spell is
+         From  : Positive := 1;
+         Marks : Token_Vector (1 .. 128);
+         Count : Natural := 0;
+      begin
+         if Held = 0 then
+            return;
+         end if;
+
+         while From <= Held loop
+            declare
+               Best      : Integer := -1;
+               Best_Stop : Natural := 0;
+            begin
+               --  The longest piece the vocabulary carries that starts
+               --  here, found by asking about every piece rather than by
+               --  shortening a candidate.
+               --  The pieces are held one-based and a piece's identifier
+               --  is one below where it sits, which is what Find returns
+               --  too.
+               for Index in 1 .. Item.Count loop
+                  declare
+                     Piece : constant String :=
+                       Item.Pieces (Index).Text
+                         (1 .. Item.Pieces (Index).Last);
+                     Body_Of : constant String :=
+                       (if From = 1 then Piece
+                        elsif Piece'Length > 2
+                          and then Piece (Piece'First .. Piece'First + 1)
+                                   = "##"
+                        then Piece (Piece'First + 2 .. Piece'Last)
+                        else "");
+                  begin
+                     if Body_Of'Length > 0
+                       and then From + Body_Of'Length - 1 <= Held
+                       and then Word (From .. From + Body_Of'Length - 1)
+                                = Body_Of
+                       and then From + Body_Of'Length - 1 > Best_Stop
+                     then
+                        Best := Index - 1;
+                        Best_Stop := From + Body_Of'Length - 1;
+                     end if;
+                  end;
+               end loop;
+
+               if Best < 0 or else Count >= Marks'Last then
+                  Count := 0;
+                  exit;
+               end if;
+
+               Count := Count + 1;
+               Marks (Count) := Best;
+               From := Best_Stop + 1;
+            end;
+         end loop;
+
+         if Count = 0 then
+            Last := Last + 1;
+            Tokens (Tokens'First + Last - 1) := Item.Unknown;
+         else
+            for Index in 1 .. Count loop
+               Last := Last + 1;
+               Tokens (Tokens'First + Last - 1) := Marks (Index);
+            end loop;
+         end if;
+
+         Held := 0;
+      end Spell;
+
+      --  UTF-8 read and written here rather than through the engine's
+      --  reader. That is the whole point of a second implementation: a
+      --  mistake in one is unlikely to be the same mistake in the other,
+      --  and sharing the decoder would make the two agree about every text
+      --  the decoder reads wrongly.
+      function Written (Code : Natural) return String
+      is (if Code < 16#80#
+          then [1 => Character'Val (Code)]
+          elsif Code < 16#800#
+          then [Character'Val (16#C0# + Code / 16#40#),
+                Character'Val (16#80# + Code mod 16#40#)]
+          elsif Code < 16#1_0000#
+          then [Character'Val (16#E0# + Code / 16#1000#),
+                Character'Val (16#80# + (Code / 16#40#) mod 16#40#),
+                Character'Val (16#80# + Code mod 16#40#)]
+          else [Character'Val (16#F0# + Code / 16#4_0000#),
+                Character'Val (16#80# + (Code / 16#1000#) mod 16#40#),
+                Character'Val (16#80# + (Code / 16#40#) mod 16#40#),
+                Character'Val (16#80# + Code mod 16#40#)]);
+
+      --  The code point at a byte position, and how many bytes it took.
+      procedure Read_One
+        (At_Byte : Positive; Code : out Natural; Width : out Natural)
+      is
+         Lead : constant Natural := Character'Pos (Text (At_Byte));
+
+         --  How many continuation bytes the lead announces.
+         Extra : constant Natural :=
+           (if Lead < 16#80# then 0
+            elsif Lead >= 16#F0# then 3
+            elsif Lead >= 16#E0# then 2
+            elsif Lead >= 16#C0# then 1
+            else 0);
+      begin
+         if Lead in 16#80# .. 16#BF#
+           or else At_Byte + Extra > Text'Last
+         then
+            --  A stray continuation byte, or a sequence the text does not
+            --  hold the whole of. Neither is text this can fold, and
+            --  stopping is what the engine does with it too.
+            Code := 0;
+            Width := 0;
+            return;
+         end if;
+
+         Code := (if Extra = 0 then Lead
+                  elsif Extra = 1 then Lead - 16#C0#
+                  elsif Extra = 2 then Lead - 16#E0#
+                  else Lead - 16#F0#);
+
+         for Step in 1 .. Extra loop
+            Code := Code * 16#40#
+              + (Character'Pos (Text (At_Byte + Step)) - 16#80#);
+         end loop;
+
+         Width := Extra + 1;
+      end Read_One;
+
+      --  Put one folded code point into the word being built.
+      procedure Extend (Code : Natural) is
+         One : constant String := Written (Code);
+      begin
+         if Held + One'Length <= Word'Last then
+            Word (Held + 1 .. Held + One'Length) := One;
+            Held := Held + One'Length;
+         end if;
+      end Extend;
+
+      Index : Natural := Text'First;
+   begin
+      Last := 0;
+
+      while Index <= Text'Last loop
+         declare
+            Code, Width : Natural;
+         begin
+            Read_One (Index, Code, Width);
+            exit when Width = 0;
+            Index := Index + Width;
+
+            --  Whitespace separates words, which includes the separators
+            --  that are not spaces: a line terminator ends a word as surely
+            --  as a space does, and leaving it out would join the last word
+            --  of one line to the first of the next.
+            if Handling.Is_Space (Wide (Code))
+              or else Handling.Is_Line_Terminator (Wide (Code))
+              or else Code in 32 | 9 | 10 | 11 | 12 | 13
+            then
+               Spell;
+            else
+               declare
+                  Folded : constant Natural :=
+                    Wide_Wide_Character'Pos
+                      (Handling.To_Lower (Handling.To_Basic (Wide (Code))));
+               begin
+                  if Handling.Is_Mark (Wide (Folded))
+                    or else Folded = 0
+                    or else Folded = 16#FFFD#
+                    or else (Handling.Is_Control (Wide (Folded))
+                             and then Folded not in 9 | 10 | 13)
+                  then
+                     null;
+                  elsif Punctuation (Folded) or else Ideograph (Folded) then
+                     Spell;
+                     Extend (Folded);
+                     Spell;
+                  else
+                     Extend (Folded);
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+
+      Spell;
+   end Encode_By_Piece;
+
    --  Byte-pair: cut, rewrite each byte, then merge by rank.
    --
    --  The cutting is the ASCII part of the rule and no more: every byte above
@@ -702,6 +940,8 @@ package body Reference_Tokenizer is
                Encode_By_Score (Item, Piece, Leading, Made, Count);
             when Byte_Pair =>
                Encode_By_Rank (Item, Piece, Made, Count);
+            when Word_Piece =>
+               Encode_By_Piece (Item, Piece, Made, Count);
             when Unreadable =>
                Count := 0;
          end case;

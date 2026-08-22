@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 29) of Text_Access :=
+   Held : constant array (1 .. 28) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -21,7 +21,6 @@ package body Library_Surface is
       --  a token at a time has no other way to read what the model made of
       --  what it read, so the operation stays.
       new String'("Hidden_State"),
-      new String'("Adds_End"),
       new String'("Has_Template"),
       new String'("Is_Closed"),
       new String'("Is_Loaded"),

@@ -58,7 +58,8 @@ layout(push_constant) uniform Shape {
 
     //  The first and last cached positions the batch's first position may
     //  look at. A model with a sliding window states a first that is not
-    //  zero. Position p of the batch looks to last + p.
+    //  zero. Position p of the batch looks to last + p where the model
+    //  attends one way, and to last itself where it attends both.
     uint first;
     uint last;
 
@@ -81,6 +82,13 @@ layout(push_constant) uniform Shape {
     //  slide one. It cannot be read off first and last, because first is
     //  the batch's first position's and every later position has its own.
     uint window;
+
+    //  Whether a position may see only what precedes it. Non-zero for every
+    //  model that generates. Zero for one that reads a whole text at once,
+    //  where every position of the batch sees every position of it -- the
+    //  ones after it as well as the ones before -- so none of them derives
+    //  its last from where it sits.
+    uint causal;
 } shape;
 
 //  The largest value width this kernel will take. A head wider than this is
@@ -102,7 +110,9 @@ void main() {
 
     //  This position's last, and the first it may look back to. A window
     //  slides with the position; without one, first is what was pushed.
-    uint last = shape.last + slot;
+    //  Attending both ways, every position shares the one that was pushed:
+    //  the end of the text is the end of the text for all of them.
+    uint last = shape.last + (shape.causal != 0u ? slot : 0u);
     uint first = shape.first;
     if (shape.window > 0u) {
         first = last + 1u > shape.window ? last + 1u - shape.window : 0u;

@@ -69,6 +69,13 @@ package Reference_Transformer is
    --  @return Token count.
    function Vocabulary (Item : Model) return Natural;
 
+   --  How wide a state is, which is what a caller sizing a states buffer
+   --  needs and cannot work out from the vocabulary.
+   --
+   --  @param Item Loaded model.
+   --  @return Embedding width, or zero before a model is loaded.
+   function Width (Item : Model) return Natural;
+
    type Token_Vector is array (Positive range <>) of Natural;
 
    --  Evaluate a token sequence from an empty context.
@@ -84,6 +91,23 @@ package Reference_Transformer is
      (Item   : in out Model;
       Tokens : Token_Vector;
       Logits : out Real_Vector;
+      Ok     : out Boolean);
+
+   --  What the model made of every position, for the model that produces
+   --  states and no distribution.
+   --
+   --  Bert is that model, and there is nothing else to ask it for: it
+   --  carries no projection from a state to a token, so a comparison
+   --  against the engine is of these or of nothing.
+   --
+   --  @param Item Loaded model.
+   --  @param Tokens Token identifiers, in order.
+   --  @param States Steps times the embedding width, position by position.
+   --  @param Ok True when the sequence was evaluated.
+   procedure Run_States
+     (Item   : in out Model;
+      Tokens : Token_Vector;
+      States : out Real_Vector;
       Ok     : out Boolean);
 
 private
@@ -104,7 +128,7 @@ private
    --  implementation.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2);
+      Phi2, GPT2, Bert);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -118,6 +142,12 @@ private
       --  was given. Null for everything else.
       Post_Attention_Norm : Vector_Access := null;
       Post_Feed_Norm      : Vector_Access := null;
+
+      --  The shift beside each of those gains, for the architecture whose
+      --  post-normalization centres as well as scaling. Bert's; null for
+      --  Gemma2 and Gemma3, whose two are by root mean square.
+      Post_Attention_Norm_Bias : Vector_Access := null;
+      Post_Feed_Norm_Bias      : Vector_Access := null;
 
       --  The bias the centred normalization carries, which Falcon and Phi2
       --  have. Null for every architecture that normalizes by root mean
@@ -234,6 +264,13 @@ private
       --  One row a position, added to the token's row before the first
       --  layer. GPT2 learns where a token is instead of rotating for it.
       Positions        : Matrix_Access := null;
+
+      --  One row a segment, of which a text uses the first, and the
+      --  normalization over the sum of the token's row, the position's and
+      --  the segment's. Bert's, and null everywhere else.
+      Segments             : Matrix_Access := null;
+      Embedding_Norm       : Vector_Access := null;
+      Embedding_Norm_Bias  : Vector_Access := null;
 
       --  One divisor per rotated pair, when the file carries the table.
       Rope_Factors : Vector_Access := null;

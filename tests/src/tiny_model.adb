@@ -354,7 +354,8 @@ package body Tiny_Model is
            when Phi3      => "phi3",
            when Falcon    => "falcon",
            when Phi2      => "phi2",
-           when GPT2      => "gpt2");
+           when GPT2      => "gpt2",
+           when Bert      => "bert");
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
@@ -379,11 +380,31 @@ package body Tiny_Model is
         (Builder, Prefix & ".feed_forward_length", Interfaces.Unsigned_32 (Feed_Forward));
       Fixtures.Add_U32 (Builder, Prefix & ".attention.head_count", Heads);
       Fixtures.Add_U32 (Builder, Prefix & ".attention.head_count_kv", KV_Heads);
-      Fixtures.Add_F32
-        (Builder, Prefix & ".attention.layer_norm_rms_epsilon", 1.0E-5);
+      --  Bert states the same quantity under the key that names the
+      --  normalization it belongs to, which is not the root-mean-square
+      --  one. A fixture that wrote the other key would be a file the
+      --  engine reads by falling back rather than by reading what bert
+      --  files actually say.
+      if Kind = Bert then
+         Fixtures.Add_F32
+           (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0E-5);
+      else
+         Fixtures.Add_F32
+           (Builder, Prefix & ".attention.layer_norm_rms_epsilon", 1.0E-5);
+      end if;
+
       Fixtures.Add_U32
         (Builder, Prefix & ".rope.dimension_count",
-         (if Kind = GPT2 then 0 else Interfaces.Unsigned_32 (Head_Size)));
+         (if Kind in GPT2 | Bert
+          then 0
+          else Interfaces.Unsigned_32 (Head_Size)));
+
+      --  Which pooling the model was trained for, which is a thing a bert
+      --  file states and a decoder does not. Written as the first position,
+      --  because that is what these vocabularies put a marker at.
+      if Kind = Bert then
+         Fixtures.Add_U32 (Builder, Prefix & ".pooling_type", 2);
+      end if;
 
       --  The head widths, when the file states them apart.
       if Apart_Widths then
@@ -459,9 +480,16 @@ package body Tiny_Model is
          Fixtures.Add_F32 (Builder, Prefix & ".rope.local_freq_base", 500.0);
       end if;
 
+      --  A bert file carries a WordPiece vocabulary, and the architecture
+      --  decides it rather than the caller: a bert written with a
+      --  SentencePiece vocabulary is not a file anyone ships, and building
+      --  the sweep out of one would check the engine against a model that
+      --  does not exist.
       Fixtures.Add_String
         (Builder, "tokenizer.ggml.model",
-         (if Byte_Pair then "gpt2" else "llama"));
+         (if Kind = Bert then "bert"
+          elsif Byte_Pair then "gpt2"
+          else "llama"));
 
       --  A minimal template inside the supported subset, so that the
       --  conversation path can be exercised end to end without a real model.
@@ -477,7 +505,65 @@ package body Tiny_Model is
       --  identifiers, so a test varying the end token means the same thing
       --  on both roads. The pieces are written in the stand-in alphabet
       --  those vocabularies use, where a space is U+0120.
-      if Byte_Pair then
+      --  The WordPiece vocabulary. Sixteen pieces again, at the same three
+      --  control identifiers, so a test that varies the end token means the
+      --  same thing on all three roads. What is its own is the shape of the
+      --  pieces: a word is spelled from one that starts it and any number
+      --  written with two leading hashes that continue it, so "abc" is
+      --  reachable both as one piece and as "ab" and "##c" -- and which of
+      --  those a reader takes is the whole of what this road decides.
+      if Kind = Bert then
+         declare
+            type Text_Access is access constant String;
+            Pieces : constant array (1 .. Vocabulary) of Text_Access :=
+              [new String'("[UNK]"),
+               new String'("[CLS]"),
+               new String'("[SEP]"),
+               new String'("[PAD]"),
+               new String'("a"),
+               new String'("b"),
+               new String'("c"),
+               new String'("ab"),
+               new String'("##b"),
+               new String'("##c"),
+               new String'("##bc"),
+               new String'("abc"),
+               new String'("x"),
+               new String'("##a"),
+               new String'("1"),
+               new String'("2")];
+         begin
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.tokens", G.Value_String, Vocabulary);
+            for Index in Pieces'Range loop
+               Fixtures.String_Element (Builder, Pieces (Index).all);
+            end loop;
+            Fixtures.End_Array (Builder);
+
+            --  Scores mean nothing on this road -- there is no merge to
+            --  order -- and the array is written because the reader asks
+            --  every vocabulary for one.
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.scores", G.Value_Float32, Vocabulary);
+            for Index in 0 .. Vocabulary - 1 loop
+               Fixtures.Float_Element (Builder, 0.0);
+            end loop;
+            Fixtures.End_Array (Builder);
+
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.token_type", G.Value_Int32,
+               Vocabulary);
+            Fixtures.Int32_Element (Builder, 2);   --  [UNK]
+            Fixtures.Int32_Element (Builder, 3);   --  [CLS]
+            Fixtures.Int32_Element (Builder, 3);   --  [SEP]
+            Fixtures.Int32_Element (Builder, 3);   --  [PAD]
+            for Index in 5 .. Vocabulary loop
+               Fixtures.Int32_Element (Builder, 1);
+            end loop;
+            Fixtures.End_Array (Builder);
+         end;
+
+      elsif Byte_Pair then
          declare
             Space : constant String :=
               [Character'Val (16#C4#), Character'Val (16#A0#)];
@@ -626,8 +712,24 @@ package body Tiny_Model is
 
       Weight ("token_embd.weight", [G.U64 (Embedding), Vocabulary]);
 
+      --  Bert's other two embeddings and the normalization over their sum.
+      --  Two segment rows, of which a text uses the first: the second is
+      --  written because the architecture states it, and a fixture that
+      --  wrote one row would let a reader that ignores the segment
+      --  entirely agree with one that reads it.
+      if Kind = Bert then
+         Weight ("token_types.weight", [G.U64 (Embedding), G.U64 (2)]);
+         Norm ("token_embd_norm.weight");
+         Norm_Of ("token_embd_norm.bias", Embedding);
+      end if;
+
       for Index in 0 .. Blocks - 1 loop
-         Norm (Layer_Name (Index, "attn_norm.weight"));
+         --  Every architecture but Bert normalizes on the way into the
+         --  block. Bert's two normalizations are on the way out of its two
+         --  sublayers and are written below.
+         if Kind /= Bert then
+            Norm (Layer_Name (Index, "attn_norm.weight"));
+         end if;
 
          --  Gemma2's two extra normalizations, one after each sublayer.
          if Kind in Gemma2 | Gemma3 then
@@ -699,7 +801,8 @@ package body Tiny_Model is
                     [G.U64 (Embedding), G.U64 (KV_Heads * Value_Size)]);
          end if;
          --  Qwen2 carries a bias beside each projection; Llama has none.
-         if Kind = Qwen2 and then not Omit_Biases then
+         --  Bert carries the same three, written the same way.
+         if Kind in Qwen2 | Bert and then not Omit_Biases then
             Norm_Of (Layer_Name (Index, "attn_q.bias"), Heads * Key_Size);
             Norm_Of (Layer_Name (Index, "attn_k.bias"), KV_Heads * Key_Size);
             Norm_Of (Layer_Name (Index, "attn_v.bias"), KV_Heads * Value_Size);
@@ -760,11 +863,19 @@ package body Tiny_Model is
                  [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
          --  One normalization a block where the two sublayers run in
          --  parallel; two where they run one after the other.
-         if Kind in Phi2 | GPT2 then
+         if Kind in Phi2 | GPT2 | Bert then
             Norm_Of (Layer_Name (Index, "attn_output.bias"), Embedding);
          end if;
 
-         if Kind not in Falcon | Phi2 then
+         --  Bert's normalization over the residual once attention has been
+         --  added to it, and the one over the residual once the
+         --  feed-forward has. Both centre and both carry a shift.
+         if Kind = Bert then
+            Norm (Layer_Name (Index, "attn_output_norm.weight"));
+            Norm_Of (Layer_Name (Index, "attn_output_norm.bias"), Embedding);
+         end if;
+
+         if Kind not in Falcon | Phi2 | Bert then
             Norm (Layer_Name (Index, "ffn_norm.weight"));
 
             --  The shift beside it, which a centring architecture carries
@@ -790,7 +901,7 @@ package body Tiny_Model is
                     [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Experts)]);
             Weight (Layer_Name (Index, "ffn_down_exps.weight"),
                     [G.U64 (Expert_Feed), G.U64 (Embedding), G.U64 (Experts)]);
-         elsif Kind in Falcon | Phi2 | GPT2 then
+         elsif Kind in Falcon | Phi2 | GPT2 | Bert then
             --  No gate: one projection up and one down.
             Weight (Layer_Name (Index, "ffn_up.weight"),
                     [G.U64 (Embedding), G.U64 (Feed_Forward)]);
@@ -799,9 +910,17 @@ package body Tiny_Model is
 
             --  And a bias on each side of it, which Phi2 has and Falcon
             --  does not: the arrangement they share does not decide this.
-            if Kind in Phi2 | GPT2 then
+            if Kind in Phi2 | GPT2 | Bert then
                Norm_Of (Layer_Name (Index, "ffn_up.bias"), Feed_Forward);
                Norm_Of (Layer_Name (Index, "ffn_down.bias"), Embedding);
+            end if;
+
+            --  And the second of Bert's two normalizations, over the
+            --  residual the feed-forward has just been added to.
+            if Kind = Bert then
+               Norm (Layer_Name (Index, "layer_output_norm.weight"));
+               Norm_Of
+                 (Layer_Name (Index, "layer_output_norm.bias"), Embedding);
             end if;
          elsif Kind = Phi3 then
             --  The gate and the up projection in one tensor, gate first,
@@ -831,17 +950,29 @@ package body Tiny_Model is
          end if;
       end loop;
 
-      Norm ("output_norm.weight");
-      if Kind in Falcon | Phi2 | GPT2 then
-         Norm ("output_norm.bias");
+      --  Bert has no normalization between its last layer and whatever
+      --  reads it: its last layer already normalized what it produced.
+      if Kind /= Bert then
+         Norm ("output_norm.weight");
+         if Kind in Falcon | Phi2 | GPT2 then
+            Norm ("output_norm.bias");
+         end if;
       end if;
-      --  One row a position, which is what GPT2 has instead of a rotation.
-      if Kind = GPT2 then
+
+      --  One row a position, which is what GPT2 and Bert have instead of a
+      --  rotation.
+      if Kind in GPT2 | Bert then
          Weight ("position_embd.weight",
                  [G.U64 (Embedding), G.U64 (Room)]);
       end if;
 
-      Weight ("output.weight", [G.U64 (Embedding), Vocabulary]);
+      --  And no projection to a distribution. A bert file carries none and
+      --  ties none: writing one here would let a reader that invents a head
+      --  for such a model pass, which is exactly the reading the engine
+      --  refuses.
+      if Kind /= Bert then
+         Weight ("output.weight", [G.U64 (Embedding), Vocabulary]);
+      end if;
 
       --  Phi2's output projection carries a bias, so the last thing this
       --  writes is the last thing the model adds. GPT2's does not, which a
@@ -966,13 +1097,14 @@ package body Tiny_Model is
      (Path : String;
       Adds_Beginning : Boolean := True;
       Room : Positive := Context;
-      Format : Weight_Format := F32) is
+      Format : Weight_Format := F32;
+      Kind : Fixture_Architecture := Llama) is
       use Ada.Streams;
       Image  : Model_Runner.Bytes.Byte_Array_Access;
       Handle : Stream_IO.File_Type;
    begin
       Build (Image, Format => Format,
-             Adds_Beginning => Adds_Beginning, Room => Room);
+             Adds_Beginning => Adds_Beginning, Room => Room, Kind => Kind);
 
       Stream_IO.Create (Handle, Stream_IO.Out_File, Path);
 

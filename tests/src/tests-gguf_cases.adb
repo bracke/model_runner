@@ -19,6 +19,7 @@ with Model_Runner.Tokenizer;
 with Model_Runner.Llama;
 
 with BPE_Vocabulary;
+with Tiny_Model;
 with Fixtures;
 with Fuzzing;
 
@@ -2420,6 +2421,177 @@ package body Tests.GGUF_Cases is
    --  built so that the five rules give five different answers on two short
    --  strings. Anything less would pass on a reader that carried one rule and
    --  answered to five names.
+   ---------------------------------------------
+   -- Word_Piece_Folds_A_Text_Before_It_Spells --
+   ---------------------------------------------
+
+   --  The WordPiece road changes the text before it looks anything up, and
+   --  what it changes is not recoverable afterwards: a vocabulary cut from
+   --  folded text carries no piece with a capital in it, so a reader that
+   --  skipped the folding would find nothing and answer in unknowns.
+   --
+   --  Each case here is one thing the folding or the spelling does, chosen
+   --  against a reader that leaves it out rather than by inspection.
+   procedure Word_Piece_Folds_A_Text_Before_It_Spells
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+      use type Vocab.Model_Kind;
+
+      Image  : B.Byte_Array_Access;
+      Item   : Containers.Container;
+      Words  : Vocab.Vocabulary;
+      Parse  : E.Error_Info;
+      Status : E.Error_Info;
+
+      --  Encode one string and report the identifiers, space separated.
+      function Encoded (Text : String) return String is
+         Tokens : Vocab.Token_Array (1 .. 64);
+         Last   : Natural;
+         Result : String (1 .. 256);
+         Used   : Natural := 0;
+         Local  : E.Error_Info;
+
+         procedure Add (Value : String) is
+         begin
+            Result (Used + 1 .. Used + Value'Length) := Value;
+            Used := Used + Value'Length;
+         end Add;
+      begin
+         Vocab.Encode (Words, Text, False, False, Tokens, Last, Local);
+         Assert (E.Is_Ok (Local),
+                 "encoding """ & Text & """ failed: "
+                 & E.Error_Code'Image (Local.Code));
+
+         for Index in 1 .. Last loop
+            Add ((if Index = 1 then "" else " "));
+            Add (Model_Runner.Text.Trim
+                   (Vocab.Token_Id'Image (Tokens (Index))));
+         end loop;
+
+         return Result (1 .. Used);
+      end Encoded;
+
+      --  A lower-case e with an acute accent, written as one code point.
+      Acute : constant String :=
+        [1 => Character'Val (16#C3#), 2 => Character'Val (16#A1#)];
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert);
+      Parse_Image (Image.all, Item, Parse);
+      Assert (E.Is_Ok (Parse), "the bert fixture did not parse");
+
+      Vocab.Load (Words, Item, Status => Status);
+      Assert (E.Is_Ok (Status),
+              "the WordPiece vocabulary did not load: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Vocab.Kind (Words) = Vocab.Kind_WordPiece,
+              "the vocabulary did not load as WordPiece");
+
+      --  A word the vocabulary carries whole, and one it carries whole
+      --  beside it. Nothing about folding or continuation yet: this is the
+      --  case every wrong reader also gets right, and it is here so that a
+      --  failure in the others is about what it says it is about.
+      Assert (Encoded ("abc ab") = "11 7",
+              "whole words were not spelled from whole pieces: "
+              & Encoded ("abc ab"));
+
+      --  Case folded, punctuation cut loose from the word before it, and a
+      --  word spelled from a piece that starts it and one that continues
+      --  it. Against a reader that does not fold, "xB" finds no piece and
+      --  the answer would be one unknown; against one that does not cut
+      --  punctuation, the comma joins "ac" and the answer would be two.
+      Assert (Encoded ("xB, Ac") = "12 8 0 4 9",
+              "the text was not folded and cut as the road describes: "
+              & Encoded ("xB, Ac"));
+
+      --  The accent comes off, so this is the same word as "ab" and is
+      --  spelled from the same single piece. A reader that folds the case
+      --  and not the accent answers with an unknown here and passes every
+      --  case above.
+      Assert (Encoded (Acute & "B") = "7",
+              "an accented letter did not fold onto its plain one: "
+              & Encoded (Acute & "B"));
+
+      --  A word no run of pieces spells is one unknown token and not the
+      --  pieces that did match. "1x" starts with a piece the vocabulary
+      --  carries and continues with one it does not write as a
+      --  continuation, so a reader that gives back what it managed would
+      --  answer with two tokens here.
+      Assert (Encoded ("1x") = "0",
+              "a word the vocabulary cannot spell was not one unknown: "
+              & Encoded ("1x"));
+
+      Vocab.Close (Words);
+      Containers.Close (Item);
+      B.Free (Image);
+   end Word_Piece_Folds_A_Text_Before_It_Spells;
+
+   ------------------------------------------
+   -- Word_Piece_Decoding_Puts_Spaces_Back --
+   ------------------------------------------
+
+   --  A piece that continues a word is written with two leading hashes and
+   --  a piece that starts one with nothing, so the spaces are in neither.
+   --  Decoding is where they come back, and a decoder that passed the
+   --  pieces through would write the hashes into the caller's text and run
+   --  every word together.
+   procedure Word_Piece_Decoding_Puts_Spaces_Back
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+
+      Image  : B.Byte_Array_Access;
+      Item   : Containers.Container;
+      Words  : Vocab.Vocabulary;
+      Parse  : E.Error_Info;
+      Status : E.Error_Info;
+
+      --  What a run of identifiers decodes to, the first of them told that
+      --  it is first.
+      function Decoded (Ids : Vocab.Token_Array) return String is
+         Result : String (1 .. 128);
+         Used   : Natural := 0;
+      begin
+         for Index in Ids'Range loop
+            declare
+               Piece : constant String :=
+                 Vocab.Decode_Token
+                   (Words, Ids (Index), First => Index = Ids'First);
+            begin
+               Result (Used + 1 .. Used + Piece'Length) := Piece;
+               Used := Used + Piece'Length;
+            end;
+         end loop;
+
+         return Result (1 .. Used);
+      end Decoded;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert);
+      Parse_Image (Image.all, Item, Parse);
+      Assert (E.Is_Ok (Parse), "the bert fixture did not parse");
+
+      Vocab.Load (Words, Item, Status => Status);
+      Assert (E.Is_Ok (Status), "the WordPiece vocabulary did not load");
+
+      --  "x" then "##b" then "a" then "##c": two words, the hashes gone and
+      --  a space where the second word starts.
+      Assert (Decoded ([12, 8, 4, 9]) = "xb ac",
+              "the pieces did not decode to the words they spell: "
+              & Decoded ([12, 8, 4, 9]));
+
+      --  And the first piece takes no space in front of it, which is what
+      --  First is for: a decoder that leads every word with one would put a
+      --  space at the front of the caller's text.
+      Assert (Decoded ([4]) = "a",
+              "the first piece was given a leading space: " & Decoded ([4]));
+
+      Vocab.Close (Words);
+      Containers.Close (Item);
+      B.Free (Image);
+   end Word_Piece_Decoding_Puts_Spaces_Back;
+
    procedure Byte_Pair_Cutting_Follows_The_Named_Rule
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -5338,6 +5510,12 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Byte_Pair_Cutting_Follows_The_Named_Rule'Access,
          "the byte-pair tokenizer cuts by the rule the vocabulary names");
+      Register_Routine
+        (T, Word_Piece_Folds_A_Text_Before_It_Spells'Access,
+         "the WordPiece tokenizer folds a text before it spells it");
+      Register_Routine
+        (T, Word_Piece_Decoding_Puts_Spaces_Back'Access,
+         "a WordPiece piece decodes to the word it helps spell");
       Register_Routine
         (T, Fixture_Q4_K_Round_Trips'Access,
          "every fixture encoder is the inverse of the engine's reader");

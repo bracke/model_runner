@@ -591,6 +591,7 @@ begin
                & ", unwanted" & Natural'Image (Moved.Unwanted)
                & ", declared" & Natural'Image (Moved.Declared)
                & ", faint" & Natural'Image (Moved.Faint)
+               & ", unasked" & Natural'Image (Moved.Unasked)
                & ", refused" & Natural'Image (Moved.Refused));
             if not Fixture_Mutation.Is_Clean (Moved) then
                Failed := True;
@@ -1469,11 +1470,41 @@ begin
            (if Ada.Command_Line.Argument_Count >= 2
             then Ada.Command_Line.Argument (2)
             else "fixtures");
+         --  Which architecture to write, for a caller who wants to run the
+         --  program by hand against a shape the suite only reaches through
+         --  the library. Absent, it is the one the suite's own fixture is.
+         Named : constant String :=
+           (if Ada.Command_Line.Argument_Count >= 3
+            then Ada.Command_Line.Argument (3)
+            else "");
+
+         Kind  : Tiny_Model.Fixture_Architecture := Tiny_Model.Llama;
+         Known : Boolean := Named = "";
+
+         Stem  : constant String :=
+           (if Named = "" then "tiny-model" else "tiny-" & Named);
       begin
-         Tiny_Model.Write (Directory & "/tiny-model.gguf");
+         for Choice in Tiny_Model.Fixture_Architecture loop
+            if Model_Runner.Text.To_Lower
+                 (Tiny_Model.Fixture_Architecture'Image (Choice)) = Named
+            then
+               Kind := Choice;
+               Known := True;
+            end if;
+         end loop;
+
+         if not Known then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "unknown architecture: " & Named);
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         Tiny_Model.Write (Directory & "/" & Stem & ".gguf", Kind => Kind);
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error,
-            "wrote " & Directory & "/tiny-model.gguf");
+            "wrote " & Directory & "/" & Stem & ".gguf");
       end;
 
    else

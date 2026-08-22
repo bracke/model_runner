@@ -839,7 +839,8 @@ package body Reference_Transformer is
          when Phi3      => "phi3.",
          when Falcon    => "falcon.",
          when Phi2      => "phi2.",
-         when GPT2      => "gpt2.");
+         when GPT2      => "gpt2.",
+         when Bert      => "bert.");
 
    procedure Load
      (Item   : in out Model;
@@ -1216,6 +1217,8 @@ package body Reference_Transformer is
             Item.Kind := Phi2;
          elsif Named = "gpt2" then
             Item.Kind := GPT2;
+         elsif Named = "bert" then
+            Item.Kind := Bert;
          else
             return;
          end if;
@@ -1307,8 +1310,18 @@ package body Reference_Transformer is
          Value  : Model_Runner.Numerics.Wide_Real;
          Status : Model_Runner.Errors.Error_Info;
       begin
+         --  Bert names the key after the normalization it belongs to,
+         --  which is not the root-mean-square one. Read from the file's own
+         --  key rather than from the other with a fallback, because this
+         --  implementation is here to disagree with the engine when the
+         --  engine is wrong, and inheriting its fallback would be one
+         --  fewer thing that can.
          Containers.Get_Float
-           (Source, Prefix (Item) & "attention.layer_norm_rms_epsilon",
+           (Source,
+            Prefix (Item)
+            & (if Item.Kind = Bert
+               then "attention.layer_norm_epsilon"
+               else "attention.layer_norm_rms_epsilon"),
             0.0, 1.0, Value, Status);
          if Model_Runner.Errors.Is_Ok (Status) then
             Item.Epsilon := Long_Float (Value);
@@ -1385,20 +1398,44 @@ package body Reference_Transformer is
 
       --  The table of positions, for the architecture that learns where a
       --  token is rather than rotating for it.
-      if Item.Kind = GPT2 then
+      if Item.Kind in GPT2 | Bert then
          Item.Positions := Read_Matrix ("position_embd.weight", Present);
          if not Present then
             return;
          end if;
       end if;
 
-      Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
-      if Present and then Item.Kind in Falcon | Phi2 | GPT2 then
-         Item.Output_Norm_Bias :=
-           Read_Vector ("output_norm.bias", Present);
+      --  Bert's segment table and the normalization over the sum of the
+      --  three embeddings.
+      if Item.Kind = Bert then
+         Item.Segments := Read_Matrix ("token_types.weight", Present);
+         if not Present then
+            return;
+         end if;
+
+         Item.Embedding_Norm := Read_Vector ("token_embd_norm.weight", Present);
+         if not Present then
+            return;
+         end if;
+
+         Item.Embedding_Norm_Bias :=
+           Read_Vector ("token_embd_norm.bias", Present);
+         if not Present then
+            return;
+         end if;
       end if;
-      if not Present then
-         return;
+
+      --  Every architecture but Bert normalizes between the last layer and
+      --  whatever reads it. Bert's last layer normalized what it produced.
+      if Item.Kind /= Bert then
+         Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
+         if Present and then Item.Kind in Falcon | Phi2 | GPT2 then
+            Item.Output_Norm_Bias :=
+              Read_Vector ("output_norm.bias", Present);
+         end if;
+         if not Present then
+            return;
+         end if;
       end if;
 
       --  The per-dimension divisors, when the file carries them. Absent is
@@ -1410,7 +1447,12 @@ package body Reference_Transformer is
       end;
 
       Item.Output := Read_Matrix ("output.weight", Present);
-      if not Present then
+      if not Present and then Item.Kind = Bert then
+         --  No projection and nothing to tie one to. What this model
+         --  produces is states, and the comparison against the engine is of
+         --  those rather than of logits.
+         Item.Output := null;
+      elsif not Present then
          --  A tied model reuses the embedding table as the output projection.
          Item.Output := Item.Embeddings;
       elsif Item.Kind = Phi2 then
@@ -1426,10 +1468,45 @@ package body Reference_Transformer is
          declare
             Current : Layer renames Item.Blocks (Index);
          begin
-            Current.Attention_Norm :=
-              Read_Vector (Layer_Name (Index, "attn_norm.weight"), Present);
-            if not Present then
-               return;
+            --  Every architecture but Bert normalizes on the way into the
+            --  block; Bert's two normalizations are on the way out of its
+            --  two sublayers and are read below.
+            if Item.Kind /= Bert then
+               Current.Attention_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_norm.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+            end if;
+
+            if Item.Kind = Bert then
+               Current.Post_Attention_Norm :=
+                 Read_Vector
+                   (Layer_Name (Index, "attn_output_norm.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Post_Attention_Norm_Bias :=
+                 Read_Vector
+                   (Layer_Name (Index, "attn_output_norm.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Post_Feed_Norm :=
+                 Read_Vector
+                   (Layer_Name (Index, "layer_output_norm.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Post_Feed_Norm_Bias :=
+                 Read_Vector
+                   (Layer_Name (Index, "layer_output_norm.bias"), Present);
+               if not Present then
+                  return;
+               end if;
             end if;
 
             --  Gemma2's two extra normalizations, required where the
@@ -1531,7 +1608,9 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            if Item.Kind = Qwen2 then
+            --  Bert biases the same three and writes them apart, as
+            --  Qwen2 does.
+            if Item.Kind in Qwen2 | Bert then
                Current.Query_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_q.bias"), Present);
                if not Present then
@@ -1578,7 +1657,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi2 | GPT2 then
+            if Item.Kind in Phi2 | GPT2 | Bert then
                Current.Out_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_output.bias"), Present);
                if not Present then
@@ -1588,7 +1667,9 @@ package body Reference_Transformer is
 
             --  Falcon and Phi2 have one normalization a block: their
             --  feed-forward reads what attention read.
-            if Item.Kind not in Falcon | Phi2 then
+            --  Bert has none either, for the other reason: it normalizes
+            --  on the way out of each sublayer rather than into it.
+            if Item.Kind not in Falcon | Phi2 | Bert then
                Current.Feed_Norm :=
                  Read_Vector (Layer_Name (Index, "ffn_norm.weight"), Present);
                if not Present then
@@ -1634,7 +1715,7 @@ package body Reference_Transformer is
                   return;
                end if;
             else
-               if Item.Kind in Falcon | Phi2 | GPT2 then
+               if Item.Kind in Falcon | Phi2 | GPT2 | Bert then
                   --  No gate at all: one projection up, a Gaussian unit,
                   --  one projection down.
                   Current.Gate := null;
@@ -1672,7 +1753,7 @@ package body Reference_Transformer is
 
                --  A bias on each side of the block, which Phi2 has and
                --  Falcon does not.
-               if Item.Kind in Phi2 | GPT2 then
+               if Item.Kind in Phi2 | GPT2 | Bert then
                   Current.Up_Bias :=
                     Read_Vector (Layer_Name (Index, "ffn_up.bias"), Present);
                   if not Present then
@@ -1706,6 +1787,8 @@ package body Reference_Transformer is
             Free_Vector (Item.Blocks (Index).Post_Attention_Norm);
             Free_Vector (Item.Blocks (Index).Attention_Norm_Bias);
             Free_Vector (Item.Blocks (Index).Post_Feed_Norm);
+            Free_Vector (Item.Blocks (Index).Post_Attention_Norm_Bias);
+            Free_Vector (Item.Blocks (Index).Post_Feed_Norm_Bias);
             Free_Matrix (Item.Blocks (Index).Query);
             Free_Matrix (Item.Blocks (Index).Key);
             Free_Matrix (Item.Blocks (Index).Value);
@@ -1731,7 +1814,12 @@ package body Reference_Transformer is
       Item.Output := null;
 
       Free_Matrix (Item.Embeddings);
+      Free_Matrix (Item.Positions);
+      Free_Matrix (Item.Segments);
+      Free_Vector (Item.Embedding_Norm);
+      Free_Vector (Item.Embedding_Norm_Bias);
       Free_Vector (Item.Output_Norm);
+      Free_Vector (Item.Output_Norm_Bias);
       Free_Vector (Item.Rope_Factors);
       Item.Loaded := False;
       Item.Words := 0;
@@ -1743,15 +1831,29 @@ package body Reference_Transformer is
 
    function Vocabulary (Item : Model) return Natural is (Item.Words);
 
-   ---------
-   -- Run --
-   ---------
+   -----------
+   -- Width --
+   -----------
 
-   procedure Run
-     (Item   : in out Model;
-      Tokens : Token_Vector;
-      Logits : out Real_Vector;
-      Ok     : out Boolean)
+   function Width (Item : Model) return Natural is (Item.Embedding);
+
+   --------------
+   -- Evaluate --
+   --------------
+
+   --  One pass, for both of the things a caller may want out of it: the
+   --  distribution after the last position, and what the model made of
+   --  every position. Written once because they are one computation, and a
+   --  model that has only one of them to give -- Bert has no projection at
+   --  all -- would otherwise be a second forward pass to keep in step with
+   --  this one.
+   procedure Evaluate
+     (Item        : in out Model;
+      Tokens      : Token_Vector;
+      Logits      : out Real_Vector;
+      States      : out Real_Vector;
+      Want_States : Boolean;
+      Ok          : out Boolean)
    is
       Width    : constant Natural := Item.Embedding;
       KV_Width : constant Natural := Item.KV_Heads * Item.Head_Size;
@@ -1769,6 +1871,13 @@ package body Reference_Transformer is
 
       Keys   : History_Access := null;
       Values : History_Access := null;
+
+      --  What a block-major pass has to hold that a token-major one did
+      --  not: every position's state between blocks, and between a block's
+      --  two passes its queries and the input its feed-forward reads.
+      Whole   : History_Access := null;
+      Queries : History_Access := null;
+      Kept    : History_Access := null;
 
       State  : Real_Vector (0 .. Width - 1) := [others => 0.0];
       Normed : Real_Vector (0 .. Width - 1) := [others => 0.0];
@@ -1811,7 +1920,9 @@ package body Reference_Transformer is
          Root : constant Long_Float := 0.797_884_560_802_865_4;
          Bend : constant Long_Float := 0.044_715;
       begin
-         if Item.Kind in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 then
+         if Item.Kind
+            in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
+         then
             declare
                Inner : constant Long_Float :=
                  Root * (Value + Bend * Value * Value * Value);
@@ -2118,10 +2229,20 @@ package body Reference_Transformer is
    begin
       Ok := False;
       Logits := [others => 0.0];
+      States := [others => 0.0];
 
-      if not Item.Loaded or else Steps = 0
-        or else Logits'Length /= Item.Words
-      then
+      if not Item.Loaded or else Steps = 0 then
+         return;
+      end if;
+
+      --  What the caller asked for has to be the size of what there is. A
+      --  model with no projection has no vocabulary-sized answer, so the
+      --  logits are not checked against one.
+      if Want_States then
+         if States'Length /= Steps * Width then
+            return;
+         end if;
+      elsif Logits'Length /= Item.Words then
          return;
       end if;
 
@@ -2134,6 +2255,19 @@ package body Reference_Transformer is
       Keys := new History (0 .. Item.Layers * Steps - 1, 0 .. KV_Width - 1);
       Values := new History (0 .. Item.Layers * Steps - 1, 0 .. V_Width - 1);
 
+      --  Every position's state, its queries and the normalized input its
+      --  feed-forward reads, all held across the two passes a block takes.
+      Whole   := new History (0 .. Steps - 1, 0 .. Width - 1);
+      Queries := new History (0 .. Steps - 1, 0 .. Q_Width - 1);
+      Kept    := new History (0 .. Steps - 1, 0 .. Width - 1);
+
+      --  Every position embedded before any block runs, because a
+      --  model that attends both ways cannot be evaluated a position
+      --  at a time: position zero reads the last position of the text
+      --  and there is no order in which each is computed after what it
+      --  reads. Block-major is the order that works for both, and for
+      --  a causal model it is the same arithmetic in the same order --
+      --  every key a position reads was written before it looks.
       for Step in 0 .. Steps - 1 loop
          --  Embedding lookup, scaled by what the architecture says.
          --
@@ -2162,390 +2296,543 @@ package body Reference_Transformer is
                     State (Index) + Item.Positions (Step, Index);
                end loop;
             end if;
+
+            --  And which segment the token belongs to, which is the first
+            --  of them for every position of a text embedded here.
+            if Item.Segments /= null then
+               for Index in 0 .. Width - 1 loop
+                  State (Index) := State (Index) + Item.Segments (0, Index);
+               end loop;
+            end if;
+
+            --  Bert normalizes the sum of the three before layer zero sees
+            --  it, and the normalization centres and carries a shift.
+            if Item.Embedding_Norm /= null then
+               declare
+                  Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
+               begin
+                  Normalize_Centred
+                    (State, Item.Embedding_Norm.all,
+                     Item.Embedding_Norm_Bias, Room);
+                  State (0 .. Width - 1) := Room;
+               end;
+            end if;
          end;
 
-         for Block in 0 .. Item.Layers - 1 loop
-            declare
-               Current : Layer renames Item.Blocks (Block);
-               Query   : Real_Vector (0 .. Q_Width - 1) := [others => 0.0];
-               Key_Row : Real_Vector (0 .. KV_Width - 1) := [others => 0.0];
-               Val_Row : Real_Vector (0 .. V_Width - 1) := [others => 0.0];
-               Blended : Real_Vector (0 .. B_Width - 1) := [others => 0.0];
-               Slot    : constant Natural := Block * Steps + Step;
-            begin
-               if Item.Kind in Falcon | Phi2 | GPT2 then
-                  Normalize_Centred
-                    (State, Current.Attention_Norm.all,
-                     Current.Attention_Norm_Bias, Normed);
-               else
-                  Normalize (State, Current.Attention_Norm.all, Normed);
-               end if;
-
-               --  Kept, because Falcon's feed-forward reads this and not
-               --  what attention produced.
-               if Current.Feed_Norm = null then
-                  Held_Norm (0 .. Width - 1) := Normed (0 .. Width - 1);
-               end if;
-               Project (Current.Query.all, Normed, Query);
-               Project (Current.Key.all, Normed, Key_Row);
-               Project (Current.Value.all, Normed, Val_Row);
-
-               --  The bias belongs to the projection, so it is added to
-               --  what the projection produced and before the rotation acts
-               --  on it. That ordering is the one thing the engine's own
-               --  tests cannot check, because a fixture has nothing to be
-               --  right against; this is the something.
-               if Current.Query_Bias /= null then
-                  for Index in Query'Range loop
-                     Query (Index) :=
-                       Query (Index) + Current.Query_Bias.all (Index);
-                  end loop;
-                  for Index in Key_Row'Range loop
-                     Key_Row (Index) :=
-                       Key_Row (Index) + Current.Key_Bias.all (Index);
-                  end loop;
-                  for Index in Val_Row'Range loop
-                     Val_Row (Index) :=
-                       Val_Row (Index) + Current.Value_Bias.all (Index);
-                  end loop;
-               end if;
-
-               --  Qwen3 normalizes each head against itself before the
-               --  rotation, with a gain shared across the heads. Written out
-               --  here rather than shared with the engine, as the rotation
-               --  is.
-               if Current.Query_Norm /= null then
-                  Normalize_Heads
-                    (Query, Item.Heads, Item.Head_Size,
-                     Current.Query_Norm.all);
-                  Normalize_Heads
-                    (Key_Row, Item.KV_Heads, Item.Head_Size,
-                     Current.Key_Norm.all);
-               end if;
-
-               Rotate (Query, Item.Heads, Step, Block);
-               Rotate (Key_Row, Item.KV_Heads, Step, Block);
-
-               for Index in 0 .. KV_Width - 1 loop
-                  Keys (Slot, Index) := Key_Row (Index);
-               end loop;
-               for Index in 0 .. V_Width - 1 loop
-                  Values (Slot, Index) := Val_Row (Index);
-               end loop;
-
-               --  Attention. The key and value heads are expanded to one per
-               --  query head rather than mapped, so a grouping mistake in the
-               --  engine cannot be reproduced here.
-               declare
-                  Group : constant Natural := Item.Heads / Item.KV_Heads;
-                  Scale : constant Long_Float :=
-                    1.0 / Functions.Sqrt (Long_Float (Item.Head_Size));
-               begin
-                  for Head in 0 .. Item.Heads - 1 loop
-                     declare
-                        Source_Head : constant Natural := Head / Group;
-                        --  The earliest position this one may look at. With
-                        --  a window of four, a query at position ten reads
-                        --  seven through ten.
-                        --  Gemma2 windows every other layer, starting with
-                        --  the first; everything else here windows all of
-                        --  them or none.
-                        --  Which layers slide a window: all of them where
-                        --  the architecture states no pattern, and where it
-                        --  does, all but the last of each period -- every
-                        --  second layer for Gemma2 and every sixth for
-                        --  Gemma3.
-                        Windowed : constant Boolean :=
-                          Item.Window /= 0
-                          and then (Item.Window_Every = 0
-                                    or else Block mod Item.Window_Every
-                                            /= Item.Window_Every - 1);
-
-                        First : constant Natural :=
-                          (if not Windowed or else Step < Item.Window
-                           then 0 else Step - Item.Window + 1);
-
-                        Scores : Real_Vector (First .. Step) :=
-                          [others => 0.0];
-                        Largest : Long_Float;
-                        Total   : Long_Float := 0.0;
-                     begin
-                        for Past in First .. Step loop
-                           declare
-                              Where : constant Natural := Block * Steps + Past;
-                              Total_Score : Long_Float := 0.0;
-                           begin
-                              for Component in 0 .. Item.Head_Size - 1 loop
-                                 Total_Score := Total_Score
-                                   + Query (Head * Item.Head_Size + Component)
-                                     * Keys (Where,
-                                             Source_Head * Item.Head_Size
-                                             + Component);
-                              end loop;
-                              --  Held under the bound the architecture
-                              --  states, before the softmax reads it: a
-                              --  bound applied afterwards would be a bound
-                              --  on a probability and mean something else.
-                              Scores (Past) :=
-                                (if Item.Attention_Cap > 0.0
-                                 then Item.Attention_Cap
-                                      * Hyperbolic
-                                          (Total_Score * Scale
-                                           / Item.Attention_Cap)
-                                 else Total_Score * Scale);
-                           end;
-                        end loop;
-
-                        Largest := Scores (First);
-                        for Past in Scores'Range loop
-                           if Scores (Past) > Largest then
-                              Largest := Scores (Past);
-                           end if;
-                        end loop;
-
-                        for Past in Scores'Range loop
-                           Scores (Past) := Functions.Exp (Scores (Past) - Largest);
-                           Total := Total + Scores (Past);
-                        end loop;
-
-                        for Component in 0 .. Item.Value_Size - 1 loop
-                           declare
-                              Sum : Long_Float := 0.0;
-                           begin
-                              for Past in First .. Step loop
-                                 Sum := Sum + Scores (Past)
-                                   * Values (Block * Steps + Past,
-                                             Source_Head * Item.Value_Size
-                                             + Component);
-                              end loop;
-                              Blended (Head * Item.Value_Size + Component) :=
-                                Sum / Total;
-                           end;
-                        end loop;
-                     end;
-                  end loop;
-               end;
-
-               Project (Current.Attention_Out.all, Blended, Normed);
-
-               if Current.Out_Bias /= null then
-                  for Index in 0 .. Width - 1 loop
-                     Normed (Index) :=
-                       Normed (Index) + Current.Out_Bias.all (Index);
-                  end loop;
-               end if;
-
-               --  Gemma2 normalizes what the sublayer produced before it
-               --  goes back into the residual. Written where the addition
-               --  is, because that is where the architecture puts it.
-               if Current.Post_Attention_Norm /= null then
-                  declare
-                     Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
-                  begin
-                     Normalize (Normed, Current.Post_Attention_Norm.all, Room);
-                     Normed (0 .. Width - 1) := Room;
-                  end;
-               end if;
-
-               for Index in 0 .. Width - 1 loop
-                  State (Index) := State (Index) + Normed (Index);
-               end loop;
-
-               --  Feed-forward block.
-               if Current.Feed_Norm = null then
-                  Normed (0 .. Width - 1) := Held_Norm (0 .. Width - 1);
-               elsif Item.Kind in Falcon | Phi2 | GPT2 then
-                  Normalize_Centred
-                    (State, Current.Feed_Norm.all,
-                     Current.Feed_Norm_Bias, Normed);
-               else
-                  Normalize (State, Current.Feed_Norm.all, Normed);
-               end if;
-
-               if Item.Experts > 0 then
-                  --  A mixture: the router scores the experts, the softmax
-                  --  turns the scores into shares, the highest few are kept
-                  --  and their shares put back on a scale of one, and each
-                  --  of them runs the block a dense model has one of.
-                  declare
-                     Width_Feed : constant Natural := Item.Expert_Feed;
-
-                     Scores : Real_Vector (0 .. Item.Experts - 1) :=
-                       [others => 0.0];
-                     Taken  : array (0 .. Item.Experts - 1) of Boolean :=
-                       [others => False];
-                     Picked : array (0 .. Item.Experts_Used - 1) of Natural :=
-                       [others => 0];
-                     Share  : array (0 .. Item.Experts_Used - 1) of Long_Float
-                       := [others => 0.0];
-
-                     Input  : constant Real_Vector := Normed;
-                     Sum    : Real_Vector (0 .. Width - 1) := [others => 0.0];
-
-                     Largest, Total : Long_Float;
-                  begin
-                     Project (Current.Router.all, Input, Scores);
-
-                     Largest := Scores (0);
-                     for Index in Scores'Range loop
-                        if Scores (Index) > Largest then
-                           Largest := Scores (Index);
-                        end if;
-                     end loop;
-
-                     Total := 0.0;
-                     for Index in Scores'Range loop
-                        Scores (Index) := Functions.Exp (Scores (Index)
-                                                         - Largest);
-                        Total := Total + Scores (Index);
-                     end loop;
-                     for Index in Scores'Range loop
-                        Scores (Index) := Scores (Index) / Total;
-                     end loop;
-
-                     --  The highest few, ties going to the lower-numbered
-                     --  expert.
-                     Total := 0.0;
-                     for Slot in Picked'Range loop
-                        declare
-                           Best : Integer := -1;
-                        begin
-                           for Index in Scores'Range loop
-                              if not Taken (Index)
-                                and then (Best < 0
-                                          or else Scores (Index)
-                                                  > Scores (Best))
-                              then
-                                 Best := Index;
-                              end if;
-                           end loop;
-
-                           Taken (Best) := True;
-                           Picked (Slot) := Best;
-                           Share (Slot) := Scores (Best);
-                           Total := Total + Share (Slot);
-                        end;
-                     end loop;
-
-                     for Slot in Share'Range loop
-                        Share (Slot) := Share (Slot) / Total;
-                     end loop;
-
-                     for Slot in Picked'Range loop
-                        declare
-                           --  Where this expert's rows start in each stack.
-                           Rows_Feed : constant Natural :=
-                             Picked (Slot) * Width_Feed;
-                           Rows_Down : constant Natural :=
-                             Picked (Slot) * Width;
-
-                           Gate : Real_Vector (0 .. Width_Feed - 1) :=
-                             [others => 0.0];
-                           Up   : Real_Vector (0 .. Width_Feed - 1) :=
-                             [others => 0.0];
-                           Out_Row : Real_Vector (0 .. Width - 1) :=
-                             [others => 0.0];
-                        begin
-                           Project_Rows
-                             (Current.Gate_Experts.all, Rows_Feed, Input,
-                              Gate);
-                           Project_Rows
-                             (Current.Up_Experts.all, Rows_Feed, Input, Up);
-
-                           --  Through the same gate the dense block uses,
-                           --  which is the architecture's and not a copy of
-                           --  one. This was the logistic written out, and a
-                           --  mixture under an architecture with a
-                           --  different gate then disagreed with the engine
-                           --  by two logits in three -- while every gate
-                           --  either implementation printed matched, because
-                           --  the dense blocks were never the ones that
-                           --  differed.
-                           for Index in Gate'Range loop
-                              Gate (Index) :=
-                                Gated (Gate (Index)) * Up (Index);
-                           end loop;
-
-                           Project_Rows
-                             (Current.Down_Experts.all, Rows_Down, Gate,
-                              Out_Row);
-
-                           for Index in Sum'Range loop
-                              Sum (Index) :=
-                                Sum (Index) + Share (Slot) * Out_Row (Index);
-                           end loop;
-                        end;
-                     end loop;
-
-                     Normed := Sum;
-                  end;
-               else
-                  declare
-                     Gate : Real_Vector (0 .. Item.Feed_Forward - 1) :=
-                       [others => 0.0];
-                     Up   : Real_Vector (0 .. Item.Feed_Forward - 1) :=
-                       [others => 0.0];
-                  begin
-                     --  No gate is its own arrangement, not a gate of ones:
-                     --  one projection up, a Gaussian unit, one down.
-                     if Current.Gate = null then
-                        Project (Current.Up.all, Normed, Gate);
-
-                        --  The bias belongs to the projection, so it is
-                        --  added before the unit rather than after it.
-                        if Current.Up_Bias /= null then
-                           for Index in Gate'Range loop
-                              Gate (Index) :=
-                                Gate (Index) + Current.Up_Bias.all (Index);
-                           end loop;
-                        end if;
-
-                        for Index in Gate'Range loop
-                           Gate (Index) := Gated (Gate (Index));
-                        end loop;
-                     else
-                        Project (Current.Gate.all, Normed, Gate);
-                        Project (Current.Up.all, Normed, Up);
-
-                        for Index in Gate'Range loop
-                           Gate (Index) := Gated (Gate (Index)) * Up (Index);
-                        end loop;
-                     end if;
-
-                     Project (Current.Down.all, Gate, Normed);
-
-                     if Current.Down_Bias /= null then
-                        for Index in 0 .. Width - 1 loop
-                           Normed (Index) :=
-                             Normed (Index) + Current.Down_Bias.all (Index);
-                        end loop;
-                     end if;
-                  end;
-               end if;
-
-               if Current.Post_Feed_Norm /= null then
-                  declare
-                     Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
-                  begin
-                     Normalize (Normed, Current.Post_Feed_Norm.all, Room);
-                     Normed (0 .. Width - 1) := Room;
-                  end;
-               end if;
-
-               for Index in 0 .. Width - 1 loop
-                  State (Index) := State (Index) + Normed (Index);
-               end loop;
-            end;
+         for Index in 0 .. Width - 1 loop
+            Whole (Step, Index) := State (Index);
          end loop;
       end loop;
 
-      if Item.Kind in Falcon | Phi2 | GPT2 then
-         Normalize_Centred
-           (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
-      else
-         Normalize (State, Item.Output_Norm.all, Normed);
+      for Block in 0 .. Item.Layers - 1 loop
+         declare
+            Current : Layer renames Item.Blocks (Block);
+         begin
+            --  What every position projects, and its keys and values
+            --  written into the history before any attention reads one.
+            for Step in 0 .. Steps - 1 loop
+               declare
+                  Query   : Real_Vector (0 .. Q_Width - 1) :=
+                    [others => 0.0];
+                  Key_Row : Real_Vector (0 .. KV_Width - 1) :=
+                    [others => 0.0];
+                  Val_Row : Real_Vector (0 .. V_Width - 1) :=
+                    [others => 0.0];
+                  Slot    : constant Natural := Block * Steps + Step;
+               begin
+                  for Index in 0 .. Width - 1 loop
+                     State (Index) := Whole (Step, Index);
+                  end loop;
+
+                  --  Bert's block reads the residual as it stands: what
+                  --  normalized it was the block before this one, on the
+                  --  way out.
+                  if Current.Attention_Norm = null then
+                     Normed (0 .. Width - 1) := State (0 .. Width - 1);
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 then
+                     Normalize_Centred
+                       (State, Current.Attention_Norm.all,
+                        Current.Attention_Norm_Bias, Normed);
+                  else
+                     Normalize (State, Current.Attention_Norm.all, Normed);
+                  end if;
+
+                  --  Kept, because Falcon's feed-forward reads this and not
+                  --  what attention produced. Asked of the architecture and
+                  --  not of the feed normalization being absent: Bert has
+                  --  none either and does not run its sublayers in
+                  --  parallel.
+                  if Item.Kind in Falcon | Phi2 then
+                     Held_Norm (0 .. Width - 1) := Normed (0 .. Width - 1);
+                  end if;
+                  Project (Current.Query.all, Normed, Query);
+                  Project (Current.Key.all, Normed, Key_Row);
+                  Project (Current.Value.all, Normed, Val_Row);
+
+                  --  The bias belongs to the projection, so it is added to
+                  --  what the projection produced and before the rotation acts
+                  --  on it. That ordering is the one thing the engine's own
+                  --  tests cannot check, because a fixture has nothing to be
+                  --  right against; this is the something.
+                  if Current.Query_Bias /= null then
+                     for Index in Query'Range loop
+                        Query (Index) :=
+                          Query (Index) + Current.Query_Bias.all (Index);
+                     end loop;
+                     for Index in Key_Row'Range loop
+                        Key_Row (Index) :=
+                          Key_Row (Index) + Current.Key_Bias.all (Index);
+                     end loop;
+                     for Index in Val_Row'Range loop
+                        Val_Row (Index) :=
+                          Val_Row (Index) + Current.Value_Bias.all (Index);
+                     end loop;
+                  end if;
+
+                  --  Qwen3 normalizes each head against itself before the
+                  --  rotation, with a gain shared across the heads. Written out
+                  --  here rather than shared with the engine, as the rotation
+                  --  is.
+                  if Current.Query_Norm /= null then
+                     Normalize_Heads
+                       (Query, Item.Heads, Item.Head_Size,
+                        Current.Query_Norm.all);
+                     Normalize_Heads
+                       (Key_Row, Item.KV_Heads, Item.Head_Size,
+                        Current.Key_Norm.all);
+                  end if;
+
+                  Rotate (Query, Item.Heads, Step, Block);
+                  Rotate (Key_Row, Item.KV_Heads, Step, Block);
+
+                  for Index in 0 .. KV_Width - 1 loop
+                     Keys (Slot, Index) := Key_Row (Index);
+                  end loop;
+                  for Index in 0 .. V_Width - 1 loop
+                     Values (Slot, Index) := Val_Row (Index);
+                  end loop;
+
+                  --  Held for the second pass, which is where this
+                  --  position attends: the queries it just made, and
+                  --  the normalized input its feed-forward reads where
+                  --  the architecture runs its two sublayers from the
+                  --  same one.
+                  for Index in 0 .. Q_Width - 1 loop
+                     Queries (Step, Index) := Query (Index);
+                  end loop;
+
+                  if Item.Kind in Falcon | Phi2 then
+                     for Index in 0 .. Width - 1 loop
+                        Kept (Step, Index) := Held_Norm (Index);
+                     end loop;
+                  end if;
+               end;
+            end loop;
+
+            --  And now that every key and value of this block is
+            --  written, what each position makes of them.
+            for Step in 0 .. Steps - 1 loop
+               declare
+                  Query   : Real_Vector (0 .. Q_Width - 1) :=
+                    [others => 0.0];
+                  Blended : Real_Vector (0 .. B_Width - 1) :=
+                    [others => 0.0];
+               begin
+                  for Index in 0 .. Width - 1 loop
+                     State (Index) := Whole (Step, Index);
+                  end loop;
+                  for Index in 0 .. Q_Width - 1 loop
+                     Query (Index) := Queries (Step, Index);
+                  end loop;
+                  if Item.Kind in Falcon | Phi2 then
+                     for Index in 0 .. Width - 1 loop
+                        Held_Norm (Index) := Kept (Step, Index);
+                     end loop;
+                  end if;
+
+                  --  Attention. The key and value heads are expanded to one per
+                  --  query head rather than mapped, so a grouping mistake in the
+                  --  engine cannot be reproduced here.
+                  declare
+                     Group : constant Natural := Item.Heads / Item.KV_Heads;
+                     Scale : constant Long_Float :=
+                       1.0 / Functions.Sqrt (Long_Float (Item.Head_Size));
+                  begin
+                     for Head in 0 .. Item.Heads - 1 loop
+                        declare
+                           Source_Head : constant Natural := Head / Group;
+                           --  The earliest position this one may look at. With
+                           --  a window of four, a query at position ten reads
+                           --  seven through ten.
+                           --  Gemma2 windows every other layer, starting with
+                           --  the first; everything else here windows all of
+                           --  them or none.
+                           --  Which layers slide a window: all of them where
+                           --  the architecture states no pattern, and where it
+                           --  does, all but the last of each period -- every
+                           --  second layer for Gemma2 and every sixth for
+                           --  Gemma3.
+                           Windowed : constant Boolean :=
+                             Item.Window /= 0
+                             and then (Item.Window_Every = 0
+                                       or else Block mod Item.Window_Every
+                                               /= Item.Window_Every - 1);
+
+                           --  The last position this query may read: its
+                           --  own where the model generates, and the end of
+                           --  the text where it attends both ways.
+                           Ends : constant Natural :=
+                             (if Item.Kind = Bert then Steps - 1 else Step);
+
+                           First : constant Natural :=
+                             (if not Windowed or else Step < Item.Window
+                              then 0 else Step - Item.Window + 1);
+
+                           Scores : Real_Vector (First .. Ends) :=
+                             [others => 0.0];
+                           Largest : Long_Float;
+                           Total   : Long_Float := 0.0;
+                        begin
+                           for Past in First .. Ends loop
+                              declare
+                                 Where : constant Natural := Block * Steps + Past;
+                                 Total_Score : Long_Float := 0.0;
+                              begin
+                                 for Component in 0 .. Item.Head_Size - 1 loop
+                                    Total_Score := Total_Score
+                                      + Query (Head * Item.Head_Size + Component)
+                                        * Keys (Where,
+                                                Source_Head * Item.Head_Size
+                                                + Component);
+                                 end loop;
+                                 --  Held under the bound the architecture
+                                 --  states, before the softmax reads it: a
+                                 --  bound applied afterwards would be a bound
+                                 --  on a probability and mean something else.
+                                 Scores (Past) :=
+                                   (if Item.Attention_Cap > 0.0
+                                    then Item.Attention_Cap
+                                         * Hyperbolic
+                                             (Total_Score * Scale
+                                              / Item.Attention_Cap)
+                                    else Total_Score * Scale);
+                              end;
+                           end loop;
+
+                           Largest := Scores (First);
+                           for Past in Scores'Range loop
+                              if Scores (Past) > Largest then
+                                 Largest := Scores (Past);
+                              end if;
+                           end loop;
+
+                           for Past in Scores'Range loop
+                              Scores (Past) := Functions.Exp (Scores (Past) - Largest);
+                              Total := Total + Scores (Past);
+                           end loop;
+
+                           for Component in 0 .. Item.Value_Size - 1 loop
+                              declare
+                                 Sum : Long_Float := 0.0;
+                              begin
+                                 for Past in First .. Ends loop
+                                    Sum := Sum + Scores (Past)
+                                      * Values (Block * Steps + Past,
+                                                Source_Head * Item.Value_Size
+                                                + Component);
+                                 end loop;
+                                 Blended (Head * Item.Value_Size + Component) :=
+                                   Sum / Total;
+                              end;
+                           end loop;
+                        end;
+                     end loop;
+                  end;
+
+                  Project (Current.Attention_Out.all, Blended, Normed);
+
+                  if Current.Out_Bias /= null then
+                     for Index in 0 .. Width - 1 loop
+                        Normed (Index) :=
+                          Normed (Index) + Current.Out_Bias.all (Index);
+                     end loop;
+                  end if;
+
+                  --  Gemma2 normalizes what the sublayer produced before it
+                  --  goes back into the residual; Bert adds it and then
+                  --  normalizes the sum. The same tensor on either side of
+                  --  the same addition, and two different models.
+                  if Current.Post_Attention_Norm /= null
+                    and then Item.Kind /= Bert
+                  then
+                     declare
+                        Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
+                     begin
+                        Normalize (Normed, Current.Post_Attention_Norm.all, Room);
+                        Normed (0 .. Width - 1) := Room;
+                     end;
+                  end if;
+
+                  for Index in 0 .. Width - 1 loop
+                     State (Index) := State (Index) + Normed (Index);
+                  end loop;
+
+                  if Current.Post_Attention_Norm /= null
+                    and then Item.Kind = Bert
+                  then
+                     declare
+                        Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
+                     begin
+                        Normalize_Centred
+                          (State, Current.Post_Attention_Norm.all,
+                           Current.Post_Attention_Norm_Bias, Room);
+                        State (0 .. Width - 1) := Room;
+                     end;
+                  end if;
+
+                  --  Feed-forward block. It reads the block's own
+                  --  normalized input where the two sublayers run in
+                  --  parallel, the residual as it stands where the block
+                  --  normalized it on the way out of attention, and a fresh
+                  --  normalization of the residual where they run one after
+                  --  the other.
+                  if Item.Kind in Falcon | Phi2 then
+                     Normed (0 .. Width - 1) := Held_Norm (0 .. Width - 1);
+                  elsif Current.Feed_Norm = null then
+                     Normed (0 .. Width - 1) := State (0 .. Width - 1);
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 then
+                     Normalize_Centred
+                       (State, Current.Feed_Norm.all,
+                        Current.Feed_Norm_Bias, Normed);
+                  else
+                     Normalize (State, Current.Feed_Norm.all, Normed);
+                  end if;
+
+                  if Item.Experts > 0 then
+                     --  A mixture: the router scores the experts, the softmax
+                     --  turns the scores into shares, the highest few are kept
+                     --  and their shares put back on a scale of one, and each
+                     --  of them runs the block a dense model has one of.
+                     declare
+                        Width_Feed : constant Natural := Item.Expert_Feed;
+
+                        Scores : Real_Vector (0 .. Item.Experts - 1) :=
+                          [others => 0.0];
+                        Taken  : array (0 .. Item.Experts - 1) of Boolean :=
+                          [others => False];
+                        Picked : array (0 .. Item.Experts_Used - 1) of Natural :=
+                          [others => 0];
+                        Share  : array (0 .. Item.Experts_Used - 1) of Long_Float
+                          := [others => 0.0];
+
+                        Input  : constant Real_Vector := Normed;
+                        Sum    : Real_Vector (0 .. Width - 1) := [others => 0.0];
+
+                        Largest, Total : Long_Float;
+                     begin
+                        Project (Current.Router.all, Input, Scores);
+
+                        Largest := Scores (0);
+                        for Index in Scores'Range loop
+                           if Scores (Index) > Largest then
+                              Largest := Scores (Index);
+                           end if;
+                        end loop;
+
+                        Total := 0.0;
+                        for Index in Scores'Range loop
+                           Scores (Index) := Functions.Exp (Scores (Index)
+                                                            - Largest);
+                           Total := Total + Scores (Index);
+                        end loop;
+                        for Index in Scores'Range loop
+                           Scores (Index) := Scores (Index) / Total;
+                        end loop;
+
+                        --  The highest few, ties going to the lower-numbered
+                        --  expert.
+                        Total := 0.0;
+                        for Slot in Picked'Range loop
+                           declare
+                              Best : Integer := -1;
+                           begin
+                              for Index in Scores'Range loop
+                                 if not Taken (Index)
+                                   and then (Best < 0
+                                             or else Scores (Index)
+                                                     > Scores (Best))
+                                 then
+                                    Best := Index;
+                                 end if;
+                              end loop;
+
+                              Taken (Best) := True;
+                              Picked (Slot) := Best;
+                              Share (Slot) := Scores (Best);
+                              Total := Total + Share (Slot);
+                           end;
+                        end loop;
+
+                        for Slot in Share'Range loop
+                           Share (Slot) := Share (Slot) / Total;
+                        end loop;
+
+                        for Slot in Picked'Range loop
+                           declare
+                              --  Where this expert's rows start in each stack.
+                              Rows_Feed : constant Natural :=
+                                Picked (Slot) * Width_Feed;
+                              Rows_Down : constant Natural :=
+                                Picked (Slot) * Width;
+
+                              Gate : Real_Vector (0 .. Width_Feed - 1) :=
+                                [others => 0.0];
+                              Up   : Real_Vector (0 .. Width_Feed - 1) :=
+                                [others => 0.0];
+                              Out_Row : Real_Vector (0 .. Width - 1) :=
+                                [others => 0.0];
+                           begin
+                              Project_Rows
+                                (Current.Gate_Experts.all, Rows_Feed, Input,
+                                 Gate);
+                              Project_Rows
+                                (Current.Up_Experts.all, Rows_Feed, Input, Up);
+
+                              --  Through the same gate the dense block uses,
+                              --  which is the architecture's and not a copy of
+                              --  one. This was the logistic written out, and a
+                              --  mixture under an architecture with a
+                              --  different gate then disagreed with the engine
+                              --  by two logits in three -- while every gate
+                              --  either implementation printed matched, because
+                              --  the dense blocks were never the ones that
+                              --  differed.
+                              for Index in Gate'Range loop
+                                 Gate (Index) :=
+                                   Gated (Gate (Index)) * Up (Index);
+                              end loop;
+
+                              Project_Rows
+                                (Current.Down_Experts.all, Rows_Down, Gate,
+                                 Out_Row);
+
+                              for Index in Sum'Range loop
+                                 Sum (Index) :=
+                                   Sum (Index) + Share (Slot) * Out_Row (Index);
+                              end loop;
+                           end;
+                        end loop;
+
+                        Normed := Sum;
+                     end;
+                  else
+                     declare
+                        Gate : Real_Vector (0 .. Item.Feed_Forward - 1) :=
+                          [others => 0.0];
+                        Up   : Real_Vector (0 .. Item.Feed_Forward - 1) :=
+                          [others => 0.0];
+                     begin
+                        --  No gate is its own arrangement, not a gate of ones:
+                        --  one projection up, a Gaussian unit, one down.
+                        if Current.Gate = null then
+                           Project (Current.Up.all, Normed, Gate);
+
+                           --  The bias belongs to the projection, so it is
+                           --  added before the unit rather than after it.
+                           if Current.Up_Bias /= null then
+                              for Index in Gate'Range loop
+                                 Gate (Index) :=
+                                   Gate (Index) + Current.Up_Bias.all (Index);
+                              end loop;
+                           end if;
+
+                           for Index in Gate'Range loop
+                              Gate (Index) := Gated (Gate (Index));
+                           end loop;
+                        else
+                           Project (Current.Gate.all, Normed, Gate);
+                           Project (Current.Up.all, Normed, Up);
+
+                           for Index in Gate'Range loop
+                              Gate (Index) := Gated (Gate (Index)) * Up (Index);
+                           end loop;
+                        end if;
+
+                        Project (Current.Down.all, Gate, Normed);
+
+                        if Current.Down_Bias /= null then
+                           for Index in 0 .. Width - 1 loop
+                              Normed (Index) :=
+                                Normed (Index) + Current.Down_Bias.all (Index);
+                           end loop;
+                        end if;
+                     end;
+                  end if;
+
+                  if Current.Post_Feed_Norm /= null
+                    and then Item.Kind /= Bert
+                  then
+                     declare
+                        Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
+                     begin
+                        Normalize (Normed, Current.Post_Feed_Norm.all, Room);
+                        Normed (0 .. Width - 1) := Room;
+                     end;
+                  end if;
+
+                  for Index in 0 .. Width - 1 loop
+                     State (Index) := State (Index) + Normed (Index);
+                  end loop;
+
+                  if Current.Post_Feed_Norm /= null
+                    and then Item.Kind = Bert
+                  then
+                     declare
+                        Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
+                     begin
+                        Normalize_Centred
+                          (State, Current.Post_Feed_Norm.all,
+                           Current.Post_Feed_Norm_Bias, Room);
+                        State (0 .. Width - 1) := Room;
+                     end;
+                  end if;
+
+                  for Index in 0 .. Width - 1 loop
+                     Whole (Step, Index) := State (Index);
+                  end loop;
+               end;
+            end loop;
+         end;
+      end loop;
+
+      --  The last position, which is the one a caller asking for a
+      --  distribution is asking about.
+      for Index in 0 .. Width - 1 loop
+         State (Index) := Whole (Steps - 1, Index);
+      end loop;
+
+      --  Every position's state, for the caller who asked for those. Taken
+      --  from what the last block left rather than from a normalization
+      --  after it: Bert is the model this is for and Bert's last block
+      --  normalized what it produced.
+      if Want_States then
+         for Step in 0 .. Steps - 1 loop
+            for Index in 0 .. Width - 1 loop
+               States (States'First + Step * Width + Index) :=
+                 Whole (Step, Index);
+            end loop;
+         end loop;
       end if;
-      Project (Item.Output.all, Normed, Logits);
+
+      if Item.Output /= null then
+         if Item.Kind in Falcon | Phi2 | GPT2 then
+            Normalize_Centred
+              (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
+         else
+            Normalize (State, Item.Output_Norm.all, Normed);
+         end if;
+         Project (Item.Output.all, Normed, Logits);
+      end if;
 
       if Item.Output_Bias /= null then
          for Index in Logits'Range loop
@@ -2567,12 +2854,48 @@ package body Reference_Transformer is
 
       Free_History (Keys);
       Free_History (Values);
+      Free_History (Whole);
+      Free_History (Queries);
+      Free_History (Kept);
       Ok := True;
    exception
       when others =>
          Free_History (Keys);
          Free_History (Values);
+         Free_History (Whole);
+         Free_History (Queries);
+         Free_History (Kept);
          Ok := False;
+   end Evaluate;
+
+   ---------
+   -- Run --
+   ---------
+
+   procedure Run
+     (Item   : in out Model;
+      Tokens : Token_Vector;
+      Logits : out Real_Vector;
+      Ok     : out Boolean)
+   is
+      Nothing : Real_Vector (1 .. 0);
+   begin
+      Evaluate (Item, Tokens, Logits, Nothing, False, Ok);
    end Run;
+
+   ----------------
+   -- Run_States --
+   ----------------
+
+   procedure Run_States
+     (Item   : in out Model;
+      Tokens : Token_Vector;
+      States : out Real_Vector;
+      Ok     : out Boolean)
+   is
+      Nothing : Real_Vector (1 .. 0);
+   begin
+      Evaluate (Item, Tokens, Nothing, States, True, Ok);
+   end Run_States;
 
 end Reference_Transformer;
