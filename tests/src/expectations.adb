@@ -209,6 +209,66 @@ package body Expectations is
                               return;
                         end;
 
+                     elsif Name = "embd" then
+                        --  Recorded in order and stored by the index the
+                        --  file names, so a file that skips one or writes
+                        --  them out of order is refused rather than read as
+                        --  a shorter vector.
+                        declare
+                           Space : Natural := Value'First;
+                        begin
+                           while Space <= Value'Last
+                             and then Value (Space) /= ' '
+                           loop
+                              Space := Space + 1;
+                           end loop;
+
+                           if Space > Value'Last
+                             or else Item.Embedding_Used
+                                     >= Item.Embedding'Length
+                           then
+                              Ada.Text_IO.Close (Handle);
+                              Reject ("malformed embd directive");
+                              return;
+                           end if;
+
+                           if Natural'Value (Value (Value'First .. Space - 1))
+                              /= Item.Embedding_Used
+                           then
+                              Ada.Text_IO.Close (Handle);
+                              Reject ("an embd index is out of order");
+                              return;
+                           end if;
+
+                           Item.Embedding_Used := Item.Embedding_Used + 1;
+                           Item.Embedding (Item.Embedding_Used) :=
+                             Long_Float'Value
+                               (T.Trim (Value (Space + 1 .. Value'Last)));
+                           Item.Has_Embedding := True;
+                        exception
+                           when others =>
+                              Ada.Text_IO.Close (Handle);
+                              Reject ("malformed embd directive");
+                              return;
+                        end;
+
+                     elsif Name = "pooling" then
+                        declare
+                           Named : constant String := T.Trim (Value);
+                        begin
+                           if Named = "mean" then
+                              Item.Pooling := Pool_Mean;
+                           elsif Named = "cls" then
+                              Item.Pooling := Pool_Cls;
+                           elsif Named = "last" then
+                              Item.Pooling := Pool_Last;
+                           else
+                              Ada.Text_IO.Close (Handle);
+                              Reject ("unknown pooling: " & Named);
+                              return;
+                           end if;
+                        end;
+
                      elsif Name = "tolerance" then
                         begin
                            Item.Tolerance := Long_Float'Value (Value);
@@ -247,6 +307,7 @@ package body Expectations is
 
       if not Item.Has_Tokens and then not Item.Has_Greedy
         and then not Item.Has_Text and then Item.Logits_Used = 0
+        and then not Item.Has_Embedding
       then
          Reject ("the file records nothing to compare against");
          return;

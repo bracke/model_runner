@@ -544,9 +544,23 @@ package body Model_Runner.Tokenizer is
 
       --  The same rule for the flags: absent means the model does not say,
       --  present but not a boolean means the file is wrong about itself.
+      --
+      --  Except on the WordPiece road, where absent does not mean the model
+      --  does not say. A word-piece text is wrapped in its two markers by
+      --  construction -- that is what the road is, not a policy a file
+      --  chooses -- and a published all-MiniLM states the two identifiers
+      --  and neither flag. Read as "does not say", it embedded six tokens
+      --  where the model was trained on eight, and the vector that came
+      --  back was a plausible 0.994 away from the right one: close enough
+      --  to look correct beside anything but a second runtime.
       declare
          Flag : Boolean;
       begin
+         if Item.Model = Kind_WordPiece then
+            Item.Add_Beginning := True;
+            Item.Add_End := True;
+         end if;
+
          Containers.Get_Boolean
            (Source, "tokenizer.ggml.add_bos_token", Flag, Scratch);
          if E.Is_Ok (Scratch) then

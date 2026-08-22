@@ -13,9 +13,8 @@ Keep a Changelog and the project uses semantic versioning.
   gated -- by the sigmoid-weighted unit rather than the Gaussian one `bert`
   uses, because two architectures of one shape need not share that. It
   carries no bias on any projection; only the two normalizations a block and
-  the one over the embedding have one. It pairs its rotation as `llama` does
-  rather than as everything since, which is the one thing about it that is
-  neither `bert`'s nor `phi3`'s.
+  the one over the embedding have one. It splits its rotation as everything
+  since `llama` does, element i against element i + rotary/2.
 
   Every one of those was read off nomic-embed-text-v1.5 before anything was
   written, which is the order the last architecture taught: a fixture built
@@ -114,6 +113,32 @@ Keep a Changelog and the project uses semantic versioning.
   submitted on its own, on the same cache with the same queries.
 
 ### Changed
+
+- **Two faults a second runtime found and 857,184 comparisons could not.**
+  The engine, the fixture and the independent implementation were written
+  from one reading of one description, so all three agreed with each other
+  about the same two mistakes. llama.cpp was written by other people from
+  the file format, and disagreed.
+
+  A WordPiece text is wrapped in `[CLS]` and `[SEP]` by construction -- that
+  is what the road is, not a policy a file chooses. A published all-MiniLM
+  states `bos_token_id` and `eos_token_id` and neither flag, and absent was
+  read as "the model does not say", so six tokens went in where the model
+  was trained on eight. Cosine 0.994 against the other runtime; 0.9999 with
+  the markers where they belong.
+
+  And `nomic-bert` splits its rotation, element i against element
+  i + rotary/2. It had been written pairing element i with its neighbour, on
+  a recollection of what llama.cpp does rather than on llama.cpp. Cosine
+  0.947; 0.9993 corrected.
+
+  On F16 weights the two now agree to 8.1e-05 and 8.8e-05 worst absolute.
+  The larger gap on quantized weights is the other runtime's: ggml quantizes
+  activations to eight bits before every dot product against a quantized
+  weight, and reads GELU out of a table indexed and stored in f16 whose own
+  worst error is 0.002 an activation. Recorded in
+  `tests/fixtures/embedding-runtimes.expect`, with the F16 agreement as what
+  licenses saying whose arithmetic the difference is.
 
 - **A real bert file found two things the fixture had invented.** The
   architecture was crossed in every shape and format against an independent

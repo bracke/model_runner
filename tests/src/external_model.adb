@@ -8,8 +8,10 @@
 --  tool ever does publish a timing, put it on the list there instead.
 
 with Ada.Directories;
+with Ada.Numerics.Long_Elementary_Functions;
 
 with Model_Runner.Backend.CPU;
+with Model_Runner.Tensors;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Byte_Sources.Files;
@@ -375,6 +377,16 @@ package body External_Model is
 
       --  Self-consistency: valid UTF-8, reproducible under a fixed seed, and
       --  unchanged by the worker count.
+      --
+      --  All three are about generated text, and a model with no projection
+      --  to a distribution has none: it is asked for the thing it does
+      --  produce and compared on that instead. Skipped rather than refused,
+      --  because a refusal here would read as a fault in a model that is
+      --  behaving exactly as its architecture says.
+      if not L.Config (Engine).Has_Head then
+         goto Compare_Embedding;
+      end if;
+
       declare
          First   : String (1 .. Max_Captured);
          Second  : String (1 .. Max_Captured);
@@ -603,6 +615,233 @@ package body External_Model is
                return;
             end if;
          end;
+      end if;
+
+      --  A recording of a pooled embedding, which is what a model with no
+      --  projection to a distribution has to be compared on. It takes its
+      --  own road: there is no greedy decoding to trace and no logits to
+      --  read, and asking for either is refused by name.
+      --
+      --  This is the only comparison in this repository that does not rest
+      --  on a reading of an architecture made here, and it earned that
+      --  standing the first time it was run: it found a WordPiece text
+      --  going unwrapped and a rotation paired the wrong way, both of which
+      --  the sweep, the fixture check and an implementation written from
+      --  the same description all agreed about.
+      <<Compare_Embedding>>
+
+      --  What a model with no distribution can be compared on: the
+      --  tokenization, and the vector it produces. Both are optional and a
+      --  recording may carry either.
+      if Expected.Valid and then Expected.Has_Tokens
+        and then not L.Config (Engine).Has_Head
+      then
+         Result.Reference_Run := True;
+
+         declare
+            Words : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Engine);
+            Mine   : Vocab.Token_Array (1 .. 8192);
+            Used   : Natural;
+            Status : E.Error_Info;
+         begin
+            Vocab.Encode
+              (Words.all, Expectations.Prompt_Text (Expected),
+               False, False, Mine, Used, Status);
+            if E.Is_Error (Status) then
+               Give_Up (Failed, "the prompt did not tokenize");
+               return;
+            end if;
+
+            Result.Tokens_Match := Used = Expected.Tokens_Used;
+            if Result.Tokens_Match then
+               for Index in 1 .. Used loop
+                  if Integer (Mine (Index)) /= Expected.Tokens (Index) then
+                     Result.Tokens_Match := False;
+                     exit;
+                  end if;
+               end loop;
+            end if;
+
+            if not Result.Tokens_Match then
+               Give_Up
+                 (Failed,
+                  "tokenization differs from "
+                  & Expectations.Runtime_Text (Expected));
+               return;
+            end if;
+         end;
+      end if;
+
+      if Expected.Valid and then Expected.Has_Embedding then
+         Result.Reference_Run := True;
+
+         declare
+            Settings : constant L.Configuration := L.Config (Engine);
+            Width    : constant N.Element_Count :=
+              N.Element_Count (Settings.Embedding);
+
+            Text_Tokens : Vocab.Token_Array (1 .. 8192);
+            Text_Used   : Natural;
+            Status      : E.Error_Info;
+
+            Live   : L.Session;
+            Room   : Model_Runner.Tensors.Real_Array_Access := null;
+            Nothing : N.Real_Array (1 .. 0);
+            Pooled : N.Real_Array (0 .. Width - 1) := [others => 0.0];
+            Length : Long_Float := 0.0;
+
+            use type Model_Runner.Tensors.Real_Array_Access;
+            use type N.Real;
+         begin
+            if Natural (Width) /= Expected.Embedding_Used then
+               Give_Up
+                 (Failed,
+                  "the recording has" & Natural'Image (Expected.Embedding_Used)
+                  & " components and the model is"
+                  & N.Element_Count'Image (Width) & " wide");
+               return;
+            end if;
+
+            declare
+               Words : constant access constant Vocab.Vocabulary :=
+                 L.Vocabulary (Engine);
+            begin
+               Vocab.Encode
+                 (Words.all, Expectations.Prompt_Text (Expected),
+                  Vocab.Adds_Beginning (Words.all),
+                  Vocab.Adds_End (Words.all),
+                  Text_Tokens, Text_Used, Status);
+            end;
+            if E.Is_Error (Status) or else Text_Used = 0 then
+               Give_Up (Failed, "the prompt did not tokenize");
+               return;
+            end if;
+
+            L.Open (Live, Engine, Status => Status);
+            if E.Is_Error (Status) then
+               Give_Up (Failed, "no session for the embedding comparison");
+               return;
+            end if;
+
+            Model_Runner.Tensors.Allocate
+              (N.Element_Count (Text_Used) * Width, Room);
+            if Room = null then
+               L.Close (Live);
+               Give_Up (Failed, "no room for the states");
+               return;
+            end if;
+
+            --  The whole text in one call, which is what a model that
+            --  attends both ways requires and what it is given here.
+            L.Evaluate_Batch
+              (Live, Engine, Text_Tokens (1 .. Text_Used), Nothing,
+               States => Room, Status => Status);
+            if E.Is_Error (Status) then
+               Model_Runner.Tensors.Free (Room);
+               L.Close (Live);
+               Give_Up
+                 (Failed,
+                  "the text would not evaluate: "
+                  & E.Error_Code'Image (Status.Code));
+               return;
+            end if;
+
+            --  Pooled the way the reference pooled, then to unit length,
+            --  because that is the vector it wrote down.
+            case Expected.Pooling is
+               when Expectations.Pool_Mean =>
+                  for Which in 0 .. N.Element_Count (Text_Used) - 1 loop
+                     for Element in Pooled'Range loop
+                        Pooled (Element) := Pooled (Element)
+                          + Room.all (Which * Width + Element);
+                     end loop;
+                  end loop;
+                  for Element in Pooled'Range loop
+                     Pooled (Element) :=
+                       N.Real (Long_Float (Pooled (Element))
+                               / Long_Float (Text_Used));
+                  end loop;
+
+               when Expectations.Pool_Cls =>
+                  for Element in Pooled'Range loop
+                     Pooled (Element) := Room.all (Element);
+                  end loop;
+
+               when Expectations.Pool_Last =>
+                  for Element in Pooled'Range loop
+                     Pooled (Element) :=
+                       Room.all
+                         ((N.Element_Count (Text_Used) - 1) * Width + Element);
+                  end loop;
+            end case;
+
+            Model_Runner.Tensors.Free (Room);
+            L.Close (Live);
+
+            for Element of Pooled loop
+               Length := Length + Long_Float (Element) * Long_Float (Element);
+            end loop;
+            Length := Ada.Numerics.Long_Elementary_Functions.Sqrt (Length);
+
+            if Length > 0.0 then
+               for Element of Pooled loop
+                  Element := N.Real (Long_Float (Element) / Length);
+               end loop;
+            end if;
+
+            --  Component by component against the tolerance, and the cosine
+            --  reported beside it: the components say where they differ and
+            --  the cosine says whether it matters.
+            declare
+               Dot : Long_Float := 0.0;
+            begin
+               for Index in 1 .. Expected.Embedding_Used loop
+                  declare
+                     Mine : constant Long_Float :=
+                       Long_Float (Pooled (N.Element_Count (Index - 1)));
+                     Gap  : constant Long_Float :=
+                       abs (Mine - Expected.Embedding (Index));
+                  begin
+                     Dot := Dot + Mine * Expected.Embedding (Index);
+                     Result.Components := Result.Components + 1;
+                     Result.Worst_Component :=
+                       Long_Float'Max (Result.Worst_Component, Gap);
+
+                     if Gap > Expected.Tolerance then
+                        Result.Cosine := Dot;
+                        Give_Up
+                          (Failed,
+                           "component" & Natural'Image (Index - 1)
+                           & " differs from "
+                           & Expectations.Runtime_Text (Expected) & " by "
+                           & T.Image (Gap, 6));
+                        return;
+                     end if;
+                  end;
+               end loop;
+
+               Result.Cosine := Dot;
+            end;
+         end;
+
+      end if;
+
+      --  A model with no distribution has now been asked everything it can
+      --  be asked, whichever of the two the recording carried.
+      if Expected.Valid and then not L.Config (Engine).Has_Head then
+         Result.Result := Ran;
+         Say ("architecture "
+              & Containers.String_Value (Container, "general.architecture")
+              & ", compared against " & Expectations.Runtime_Text (Expected)
+              & (if Result.Tokens_Match then ", tokens match" else "")
+              & (if Result.Components > 0
+                 then ": " & T.Image (Long_Long_Integer (Result.Components))
+                      & " components, worst "
+                      & T.Image (Result.Worst_Component, 8)
+                      & ", cosine " & T.Image (Result.Cosine, 8)
+                 else ""));
+         return;
       end if;
 
       --  Comparison against what a trusted reference runtime recorded.

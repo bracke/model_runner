@@ -129,6 +129,22 @@ projection in it carries a bias. Reading it also found the fault that made
 layer five overflow, which no fixture could have found because the fixture
 was written after it.
 
+### The F16 pair, for comparing against a second runtime
+
+| | |
+|---|---|
+| Files | `all-MiniLM-L6-v2-ggml-model-f16.gguf`, `nomic-embed-text-v1.5.f16.gguf` |
+| Sizes | 45 949 216 and 274 290 560 bytes |
+| Sources | the same two repositories as the quantized files above |
+| Licence | Apache-2.0 |
+
+Obtained because the quantized files could not settle the question they were
+asked. Against llama.cpp the Q8_0 files differ by 0.0026 and 0.0048, and
+until the weights stopped being quantized there was no way to say whose
+arithmetic that belonged to. On F16 the two implementations agree to 8e-05,
+which places the difference in ggml's activation quantization and its
+GELU table rather than here.
+
 ### Llama-3.2-1B-Instruct, Q4_K_M
 
 | | |

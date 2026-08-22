@@ -25,11 +25,12 @@
 runtime published vocabulary, bert-base-uncased
 model all-MiniLM-L6-v2-Q8_0.gguf
 
-prompt a test sentence
-tokens 1037 3231 6251
+# One prompt, because a recording describes one. "unaffable" is the canonical
+# WordPiece example and the one that says most: it is spelled from a piece
+# that starts a word and two that continue it, so a reader with the marker
+# convention backwards cannot produce these three identifiers by accident.
+# The other two checked by hand were "a test sentence" -> 1037 3231 6251 and
+# "Hello, World!" -> 7592 1010 2088 999.
 
 prompt unaffable
 tokens 14477 20961 3468
-
-prompt Hello, World!
-tokens 7592 1010 2088 999

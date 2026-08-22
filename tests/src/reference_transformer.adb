@@ -2208,11 +2208,11 @@ package body Reference_Transformer is
                   --  of this implementation is to be arrived at separately,
                   --  and a shared rotation would agree with itself.
                   Even  : constant Natural :=
-                    (if Item.Kind in Llama | Nomic_Bert
+                    (if Item.Kind = Llama
                      then Head * Item.Head_Size + 2 * Pair
                      else Head * Item.Head_Size + Pair);
                   Odd   : constant Natural :=
-                    (if Item.Kind in Llama | Nomic_Bert
+                    (if Item.Kind = Llama
                      then Even + 1
                      else Even + Item.Rotary / 2);
                   Left  : constant Long_Float := Vector (Even);

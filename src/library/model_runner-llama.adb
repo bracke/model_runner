@@ -147,13 +147,10 @@ package body Model_Runner.Llama is
                --  wrong one reads as a model that has lost the thread.
                Settings.Pairing :=
                  (case Kind is
-                    --  Nomic_Bert pairs element i with its neighbour as
-                    --  Llama does rather than with element i + rotary/2.
-                    --  It is the only architecture of Bert's shape that
-                    --  rotates at all, and it rotates the older way.
-                    when Llama | Nomic_Bert => K.Interleaved,
+                    when Llama => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3
-                       | Phi3 | Falcon | Phi2 | GPT2 | Bert =>
+                       | Phi3 | Falcon | Phi2 | GPT2 | Bert
+                       | Nomic_Bert =>
                       K.Split);
 
                --  What a position may see. Every architecture here

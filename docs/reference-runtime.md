@@ -83,6 +83,43 @@ was copied here. Both drifts are the argument for keeping the hand-copied ones
 few, and the numbers stand as recorded until somebody with the model runs them
 again.
 
+## The embedding models, against the same runtime
+
+The three recordings above are of language models and compare tokens and a
+greedy continuation. The two embedding architectures are compared on the
+thing they produce -- a pooled vector -- and the comparison is recorded in
+`tests/fixtures/all-minilm-embedding.expect` and
+`tests/fixtures/nomic-embed-embedding.expect`, which `tests external-model`
+reads and checks rather than merely holding for a reader.
+
+It is the only comparison in this repository that does not rest on a reading
+of a description made here. The engine, the fixture and
+`Reference_Transformer` were written from one such reading, so all three
+agreed with each other about two things that were wrong, through 857,184
+sweep comparisons and a fixture check that moves every tensor:
+
+- A WordPiece text is wrapped in `[CLS]` and `[SEP]` by construction. A
+  published all-MiniLM states the two identifiers and neither flag, and
+  absent was read as "the model does not say", so six tokens went in where
+  the model was trained on eight. Cosine 0.994 against the other runtime.
+- `nomic-bert` splits its rotation. It had been written pairing element *i*
+  with its neighbour, from a recollection rather than from anything. Cosine
+  0.947.
+
+With both corrected, the two implementations agree on F16 weights to
+**8.1e-05** and **8.8e-05** worst absolute -- five significant figures, which
+is accumulation order and nothing else.
+
+On Q8_0 weights they differ by 0.0026 and 0.0048, and that difference
+belongs to the other runtime rather than to this one. ggml quantizes the
+activations to eight bits before every dot product against a quantized
+weight, and evaluates GELU through a table indexed and stored in f16 whose
+own worst error is 0.002 an activation. This engine decodes a weight and
+multiplies in binary32 accumulating in binary64. The gap scales with depth,
+six layers against twelve, which is what compounding a per-matmul
+approximation looks like -- and the F16 agreement is what licenses saying so
+rather than merely preferring our own arithmetic.
+
 ## Where greedy decoding parts company
 
 Greedy output agrees with `llama.cpp` for the first several tokens and then

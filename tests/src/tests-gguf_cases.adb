@@ -2432,6 +2432,68 @@ package body Tests.GGUF_Cases is
    --
    --  Each case here is one thing the folding or the spelling does, chosen
    --  against a reader that leaves it out rather than by inspection.
+   ------------------------------------------------
+   -- Word_Piece_Wraps_A_Text_By_Construction --
+   ------------------------------------------------
+
+   --  A WordPiece text is wrapped in its two markers whether the file says
+   --  so or not, because that is what the road is rather than a policy a
+   --  file chooses.
+   --
+   --  This is the rule a published all-MiniLM states by saying nothing: it
+   --  names the two identifiers and carries neither flag. Read as "the model
+   --  does not say", six tokens went to a model trained on eight, and the
+   --  embedding that came back was a plausible 0.994 from the right one --
+   --  which nothing here could see, because the fixture used to state the
+   --  flags and so answered a question real files leave alone.
+   procedure Word_Piece_Wraps_A_Text_By_Construction
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+      use type Vocab.Token_Id;
+
+      Image  : B.Byte_Array_Access;
+      Item   : Containers.Container;
+      Words  : Vocab.Vocabulary;
+      Parse  : E.Error_Info;
+      Status : E.Error_Info;
+
+      Tokens : Vocab.Token_Array (1 .. 32);
+      Last   : Natural;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert);
+      Parse_Image (Image.all, Item, Parse);
+      Assert (E.Is_Ok (Parse), "the bert fixture did not parse");
+
+      Vocab.Load (Words, Item, Status => Status);
+      Assert (E.Is_Ok (Status), "the WordPiece vocabulary did not load");
+
+      --  The fixture states neither flag, as a published file does not.
+      Assert (Vocab.Adds_Beginning (Words),
+              "a WordPiece vocabulary stating no flag did not ask for its "
+              & "beginning marker");
+      Assert (Vocab.Adds_End (Words),
+              "a WordPiece vocabulary stating no flag did not ask for its "
+              & "end marker");
+
+      --  And a text encoded with them asked for carries both, around the
+      --  pieces rather than instead of them.
+      Vocab.Encode (Words, "abc", True, True, Tokens, Last, Status);
+      Assert (E.Is_Ok (Status), "encoding failed");
+      Assert (Last = 3,
+              "expected the marked word between two markers, got"
+              & Natural'Image (Last));
+      Assert (Tokens (1) = Vocab.Beginning_Token (Words),
+              "the first token is not the beginning marker");
+      Assert (Tokens (Last) = Vocab.End_Token (Words),
+              "the last token is not the end marker");
+
+      Vocab.Close (Words);
+      Containers.Close (Item);
+      B.Free (Image);
+   end Word_Piece_Wraps_A_Text_By_Construction;
+
    procedure Word_Piece_Folds_A_Text_Before_It_Spells
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -5513,6 +5575,10 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Word_Piece_Folds_A_Text_Before_It_Spells'Access,
          "the WordPiece tokenizer folds a text before it spells it");
+      Register_Routine
+        (T, Word_Piece_Wraps_A_Text_By_Construction'Access,
+         "a WordPiece text is wrapped in its markers whether the file says "
+         & "so or not");
       Register_Routine
         (T, Word_Piece_Decoding_Puts_Spaces_Back'Access,
          "a WordPiece piece decodes to the word it helps spell");

@@ -708,9 +708,22 @@ package body Tiny_Model is
       Fixtures.Add_U32
         (Builder, "tokenizer.ggml.eos_token_id",
          Interfaces.Unsigned_32 (End_Token));
-      Fixtures.Add_Bool
-        (Builder, "tokenizer.ggml.add_bos_token", Adds_Beginning);
-      Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
+      --  The two flags, except on the road where a published file states
+      --  neither. A WordPiece text is wrapped in its markers by
+      --  construction, and an all-MiniLM says so by saying nothing: it
+      --  states the two identifiers and no flag at all.
+      --
+      --  Written here for every road at first, which meant this fixture
+      --  answered a question real files leave to the road -- so the engine
+      --  reading absent as "the model does not say" could not be caught by
+      --  anything here. It was caught by a second runtime instead, at a
+      --  cosine of 0.994. A fixture that states what no file states is a
+      --  fixture that cannot fail the way a file makes you fail.
+      if Kind not in Bert | Nomic_Bert then
+         Fixtures.Add_Bool
+           (Builder, "tokenizer.ggml.add_bos_token", Adds_Beginning);
+         Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
+      end if;
 
       --  The per-dimension divisors, when the file carries them. Written
       --  deliberately rather than drawn from the sequence: a divisor near

@@ -48,6 +48,14 @@ package External_Model is
       Thread_Stable  : Boolean := False;
       Compared      : Natural := 0;
       Worst_Gap     : Long_Float := 0.0;
+
+      --  The pooled embedding, where the recording carries one. Counted
+      --  apart from the logits because it answers a different question: a
+      --  logit is the last position's state through one more matrix, and
+      --  this is every position's before that matrix, pooled.
+      Components    : Natural := 0;
+      Worst_Component : Long_Float := 0.0;
+      Cosine        : Long_Float := 0.0;
       Reference_Run : Boolean := False;
       --  Whether the same model was run again without repacking, and
       --  whether it produced the same text. Only a model of a useful size

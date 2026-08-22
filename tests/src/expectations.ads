@@ -19,7 +19,10 @@
 --     greedy_text TEXT              the text greedy decoding produced, with
 --                                   backslash-n and backslash-t escapes
 --     logit INDEX VALUE             one expected logit for the first position
---     tolerance VALUE               absolute tolerance for logit comparison
+--     pooling mean|cls|last         how the reference reduced the states
+--     embd INDEX VALUE              one component of the pooled, unit-length
+--                                   embedding the reference produced
+--     tolerance VALUE               absolute tolerance for the comparison
 --
 --  Only the directives that are present are checked, so a file recording just
 --  the tokenization is a valid and useful expectation.
@@ -33,6 +36,13 @@ package Expectations is
    Max_Tokens : constant := 4096;
    Max_Logits : constant := 256;
 
+   --  Components of a pooled embedding a reference runtime produced. Wide
+   --  enough for the models this is used on -- 384 and 768 -- because what
+   --  is compared is the whole vector rather than a sample of it: a cosine
+   --  taken over part of a vector says nothing about the rest, and the
+   --  faults this comparison exists to catch moved every component.
+   Max_Components : constant := 1024;
+
    type Token_List is array (1 .. Max_Tokens) of Integer;
 
    type Logit_Entry is record
@@ -41,6 +51,11 @@ package Expectations is
    end record;
 
    type Logit_List is array (1 .. Max_Logits) of Logit_Entry;
+
+   type Component_List is array (1 .. Max_Components) of Long_Float;
+
+   --  How the reference reduced a text's states to one vector.
+   type Pooling_Kind is (Pool_Mean, Pool_Cls, Pool_Last);
 
    Max_Text : constant := 4096;
 
@@ -64,6 +79,16 @@ package Expectations is
       Has_Text      : Boolean := False;
       Logits        : Logit_List := [others => <>];
       Logits_Used   : Natural := 0;
+
+      --  The pooled, unit-length embedding the reference produced, in
+      --  order, and how it pooled. Held whole: this is the only comparison
+      --  here that does not rest on a reading of an architecture made in
+      --  this repository, so it is worth the four kilobytes.
+      Embedding      : Component_List := [others => 0.0];
+      Embedding_Used : Natural := 0;
+      Has_Embedding  : Boolean := False;
+      Pooling        : Pooling_Kind := Pool_Mean;
+
       Tolerance     : Long_Float := 1.0E-2;
       Problem       : String (1 .. 200) := [others => ' '];
       Problem_Last  : Natural := 0;
