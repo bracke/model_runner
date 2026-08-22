@@ -84,6 +84,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A real bert file found two things the fixture had invented.** The
+  architecture was crossed in every shape and format against an independent
+  implementation and agreed to 2.5e-06, and then a published
+  all-MiniLM-L6-v2 was read and neither thing survived contact.
+
+  It states no `bert.rope.dimension_count`, because there is no rotation to
+  state, and the width is read with the head size as its default -- so every
+  query and key of a model that never rotates was turned. The fixture wrote
+  the key as zero, so the sweep compared a rotation-free engine against a
+  rotation-free reference and agreed.
+
+  And its vocabulary marks a word's *first* piece with U+2581 rather than
+  marking continuations with two hashes, which is the reverse of what the
+  architecture describes: of 30,522 pieces not one begins with the hashes
+  and 23,695 begin with the marker. Written from the paper, the engine
+  spelled every word out of continuation pieces -- "a" found the bare "a"
+  that continues a word rather than the marked one that starts it. Nothing
+  refused. Two unrelated sentences scored 0.479 where they score 0.007 now,
+  and "unaffable" came back as one unknown where it now spells as
+  una + ##ff + ##able, which is the canonical example and is published.
+
+  Both are the shape of trap the gpt2 output bias fell into, and both were
+  invisible to a sweep, a fixture check and a second implementation, because
+  all three were written from the same description. `tests/fixtures/
+  all-minilm-l6-v2.expect` records the published identifiers so the
+  convention is pinned to something outside this repository.
+
 - **The fixture check knows what a model has no reading of.** It asked every
   architecture for a token at a time and on every backend, which a model that
   attends both ways has neither of: there is no computing a position of it

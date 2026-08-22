@@ -430,6 +430,14 @@ package body Reference_Tokenizer is
    is
       package Handling renames Ada.Wide_Wide_Characters.Handling;
 
+      --  What a converted vocabulary marks a word's first piece with, which
+      --  is the same U+2581 SentencePiece writes a space as. Written out
+      --  here rather than taken from the engine, as everything else in this
+      --  file is.
+      Mark : constant String :=
+        [Character'Val (16#E2#), Character'Val (16#96#),
+         Character'Val (16#81#)];
+
       function Wide (Code : Natural) return Wide_Wide_Character
       is (Wide_Wide_Character'Val (Code));
 
@@ -487,13 +495,24 @@ package body Reference_Tokenizer is
                      Piece : constant String :=
                        Item.Pieces (Index).Text
                          (1 .. Item.Pieces (Index).Last);
+
+                     --  A piece that starts a word carries the marker and
+                     --  one that continues a word does not, so which of
+                     --  the two a position may take is decided here and
+                     --  the marker never reaches the comparison.
+                     Marked : constant Boolean :=
+                       Piece'Length > Mark'Length
+                       and then Piece (Piece'First
+                                       .. Piece'First + Mark'Length - 1)
+                                = Mark;
+
                      Body_Of : constant String :=
-                       (if From = 1 then Piece
-                        elsif Piece'Length > 2
-                          and then Piece (Piece'First .. Piece'First + 1)
-                                   = "##"
-                        then Piece (Piece'First + 2 .. Piece'Last)
-                        else "");
+                       (if From = 1
+                        then (if Marked
+                              then Piece (Piece'First + Mark'Length
+                                          .. Piece'Last)
+                              else "")
+                        else (if Marked then "" else Piece));
                   begin
                      if Body_Of'Length > 0
                        and then From + Body_Of'Length - 1 <= Held

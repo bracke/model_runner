@@ -49,8 +49,10 @@ package Model_Runner.Tokenizer is
    --  WordPiece neither merges nor ranks: it changes the text first --
    --  lower-cased, accents off, punctuation and ideographs cut loose -- and
    --  then spells each word from the front with the longest piece the
-   --  vocabulary carries, writing every piece after the first with two
-   --  leading hashes.
+   --  vocabulary carries. A piece that starts a word is written with a
+   --  leading U+2581 and one that continues it is written bare, which is
+   --  the reverse of the two-hash convention the architecture's papers
+   --  describe and is what a converted vocabulary actually holds.
    type Model_Kind is
      (Kind_SentencePiece, Kind_BPE, Kind_WordPiece, Kind_Unsupported);
 

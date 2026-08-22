@@ -508,30 +508,42 @@ package body Tiny_Model is
       --  The WordPiece vocabulary. Sixteen pieces again, at the same three
       --  control identifiers, so a test that varies the end token means the
       --  same thing on all three roads. What is its own is the shape of the
-      --  pieces: a word is spelled from one that starts it and any number
-      --  written with two leading hashes that continue it, so "abc" is
-      --  reachable both as one piece and as "ab" and "##c" -- and which of
-      --  those a reader takes is the whole of what this road decides.
+      --  pieces: a piece that starts a word carries a leading U+2581 and one
+      --  that continues a word is written bare, so "abc" is reachable both
+      --  as one marked piece and as marked "ab" with bare "c" -- and which
+      --  of those a reader takes is the whole of what this road decides.
+      --
+      --  Written with two leading hashes at first, because that is the
+      --  convention the architecture's papers describe. No converted
+      --  vocabulary uses it: of the thirty thousand pieces in a published
+      --  all-MiniLM not one begins with the hashes and twenty-four thousand
+      --  begin with this marker. A fixture written from the paper made both
+      --  the engine and the reader written against it agree about a model
+      --  nobody ships, and a real file then embedded text nobody wrote.
       if Kind = Bert then
          declare
+            Mark : constant String :=
+              [Character'Val (16#E2#), Character'Val (16#96#),
+               Character'Val (16#81#)];
+
             type Text_Access is access constant String;
             Pieces : constant array (1 .. Vocabulary) of Text_Access :=
               [new String'("[UNK]"),
                new String'("[CLS]"),
                new String'("[SEP]"),
                new String'("[PAD]"),
-               new String'("a"),
+               new String'(Mark & "a"),
+               new String'(Mark & "b"),
+               new String'(Mark & "c"),
+               new String'(Mark & "ab"),
                new String'("b"),
                new String'("c"),
-               new String'("ab"),
-               new String'("##b"),
-               new String'("##c"),
-               new String'("##bc"),
-               new String'("abc"),
-               new String'("x"),
-               new String'("##a"),
-               new String'("1"),
-               new String'("2")];
+               new String'("bc"),
+               new String'(Mark & "abc"),
+               new String'(Mark & "x"),
+               new String'("a"),
+               new String'(Mark & "1"),
+               new String'(Mark & "2")];
          begin
             Fixtures.Begin_Array
               (Builder, "tokenizer.ggml.tokens", G.Value_String, Vocabulary);

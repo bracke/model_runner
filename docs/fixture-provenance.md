@@ -89,6 +89,27 @@ five per cent, until the worker pool stopped leaving a core idle; the smaller
 weights were relieving a contention that no longer exists. The README says so
 where the figures are.
 
+### all-MiniLM-L6-v2, Q8_0
+
+| | |
+|---|---|
+| File | `all-MiniLM-L6-v2-Q8_0.gguf` |
+| Size | 25 008 064 bytes |
+| Source | `second-state/All-MiniLM-L6-v2-Embedding-GGUF` on Hugging Face |
+| Upstream model | `sentence-transformers/all-MiniLM-L6-v2` |
+| Licence | Apache-2.0 |
+| Quantisation | Q8_0 |
+
+The only `bert` file this repository has been run against, and the reason
+`tests/fixtures/all-minilm-l6-v2.expect` exists. Two things about a real
+file were not in the synthetic one and neither would refuse: it states no
+`bert.rope.dimension_count`, so a width read with the head size as its
+default turned every query and key of a model that never rotates; and its
+vocabulary marks a word's first piece with U+2581 rather than marking
+continuations with two hashes, which is the reverse of what the architecture
+describes. Twenty-five megabytes, so it is not committed either, but it is
+small enough that obtaining it is not the obstacle the language models are.
+
 ### Llama-3.2-1B-Instruct, Q4_K_M
 
 | | |

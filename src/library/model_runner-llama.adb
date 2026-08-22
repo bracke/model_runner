@@ -558,6 +558,31 @@ package body Model_Runner.Llama is
          end;
       end if;
 
+      --  Whether a position may see what follows it, where the file says so.
+      --
+      --  The architecture's name is a good default and not an answer: a
+      --  published all-MiniLM states `bert.attention.causal` as false
+      --  rather than leaving it to be assumed, and a file that states the
+      --  other thing means it. Read here so that what decides the
+      --  arithmetic is the file, which is the rule everywhere else in this
+      --  profile and was an assumption only here.
+      declare
+         Named : Boolean;
+         Local : E.Error_Info;
+      begin
+         Containers.Get_Boolean
+           (Source, Model_Key (Settings.Kind, "attention.causal"), Named,
+            Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+
+         if E.Is_Ok (Local) then
+            Settings.Causal := Named;
+         end if;
+      end;
+
       --  A window is a bound on how far back a position may look, and a
       --  model that looks both ways has not got such a thing: there is no
       --  "back" to bound. A file stating one under a bidirectional
@@ -678,8 +703,19 @@ package body Model_Runner.Llama is
          Status := Local;
          return;
       end if;
+      --  Bert does not rotate at all, so the width is zero however the file
+      --  reads: it learns where a token is instead, and a published file
+      --  states no rotary width because there is nothing to state. Left to
+      --  the default below, an absent key would have taken the head size
+      --  and turned every query and key of a model that never rotates --
+      --  which the sweep could not have caught, because the fixture wrote
+      --  the key as zero and so agreed with itself about a model nobody
+      --  ships. That is the same trap gpt2's output bias fell into, found
+      --  the same way: by reading a file somebody else published.
       Settings.Rotary :=
-        (if E.Is_Ok (Local) then Natural (Number) else Settings.Head_Size);
+        (if Settings.Kind = Bert then 0
+         elsif E.Is_Ok (Local) then Natural (Number)
+         else Settings.Head_Size);
 
       if Settings.Rotary > Settings.Head_Size
         or else Settings.Rotary mod 2 /= 0
@@ -5410,10 +5446,28 @@ package body Model_Runner.Llama is
             then Max_Batch
             else Element_Count (Settings.Context_Length));
       begin
+         --  A causal model handed more than the batch bound is a caller
+         --  asking for a shape this does not evaluate, and a shape mismatch
+         --  is what that is. A model that attends both ways handed more
+         --  than its context is something else: the text does not fit the
+         --  model, which is an ordinary thing for a caller to do and not a
+         --  shape they got wrong. Saying "mismatched shapes" to somebody
+         --  who embedded a long document tells them nothing they can act
+         --  on.
          if Count = 0 or else Count > Limit then
-            Status := E.Make (E.Tensor_Shape_Mismatch);
-            E.Add_Integer (Status, "input", Long_Long_Integer (Count));
-            E.Add_Integer (Status, "limit", Long_Long_Integer (Limit));
+            if Count > Limit and then not Settings.Causal then
+               Status := E.Make (E.Arch_Context_Too_Large);
+               E.Add_Integer
+                 (Status, "requested", Long_Long_Integer (Count),
+                  E.Param_Tokens);
+               E.Add_Integer
+                 (Status, "maximum", Long_Long_Integer (Limit),
+                  E.Param_Tokens);
+            else
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               E.Add_Integer (Status, "input", Long_Long_Integer (Count));
+               E.Add_Integer (Status, "limit", Long_Long_Integer (Limit));
+            end if;
             return;
          end if;
       end;

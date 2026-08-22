@@ -940,8 +940,24 @@ package body Model_Runner.Tokenizer is
    --  and the two arrive at different pieces for the same word.
    package Word_Piece is
 
-      --  The mark a piece that continues a word is written with.
-      Continues : constant String := "##";
+      --  The mark a piece that *starts* a word is written with, which is
+      --  the same U+2581 SentencePiece writes a space as.
+      --
+      --  This is the opposite of the convention the architecture's own
+      --  papers describe, where a word starts bare and a continuation
+      --  carries two leading hashes. A GGUF vocabulary is written the other
+      --  way round: of the thirty thousand pieces in a published
+      --  all-MiniLM, not one begins with the hashes and twenty-four
+      --  thousand begin with this. The conversion rewrites them, and what
+      --  this road reads is the file rather than the paper.
+      --
+      --  Written the paper's way first, and every word came back as a
+      --  continuation piece: "a" found the bare "a" that continues a word
+      --  rather than the marked one that starts it, so a real model
+      --  embedded text nobody wrote. The fixture had invented the hashes
+      --  and agreed with itself, which is what a fixture written from a
+      --  description does when the description is of something else.
+      Starts_Word : constant String := Space_Marker;
 
       --  Whether a code point ends the word before it and stands alone.
       --
@@ -1339,8 +1355,9 @@ package body Model_Runner.Tokenizer is
                         declare
                            Piece : constant String :=
                              (if From = Word'First
-                              then Word (From .. Stop)
-                              else Word_Piece.Continues & Word (From .. Stop));
+                              then Word_Piece.Starts_Word
+                                   & Word (From .. Stop)
+                              else Word (From .. Stop));
                         begin
                            Found := Find (Item, Piece);
                            exit when Found /= No_Token;
@@ -1893,16 +1910,21 @@ package body Model_Runner.Tokenizer is
       --  this decoder, and it is why nothing here claims a round trip for
       --  this road.
       if Item.Model = Kind_WordPiece then
-         if Raw'Length >= Word_Piece.Continues'Length
+         if Raw'Length >= Word_Piece.Starts_Word'Length
            and then Raw (Raw'First .. Raw'First
-                         + Word_Piece.Continues'Length - 1)
-                    = Word_Piece.Continues
+                         + Word_Piece.Starts_Word'Length - 1)
+                    = Word_Piece.Starts_Word
          then
-            return Raw (Raw'First + Word_Piece.Continues'Length .. Raw'Last);
-         elsif First then
-            return Raw;
+            declare
+               Body_Of : constant String :=
+                 Raw (Raw'First + Word_Piece.Starts_Word'Length .. Raw'Last);
+            begin
+               return (if First then Body_Of else " " & Body_Of);
+            end;
          else
-            return " " & Raw;
+            --  A bare piece continues the word before it, so it joins what
+            --  came before with nothing between.
+            return Raw;
          end if;
       end if;
 

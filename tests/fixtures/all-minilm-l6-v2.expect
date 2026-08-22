@@ -1,0 +1,35 @@
+# Recorded from the published vocabulary rather than from a second runtime;
+# see docs/fixture-provenance.md for where to obtain the model. No mandatory
+# test reads this file.
+#
+# What it pins is the one thing a synthetic fixture cannot: the convention a
+# converted WordPiece vocabulary is actually written in. The architecture's
+# papers say a word starts bare and a continuation carries two leading
+# hashes. A GGUF vocabulary says the reverse -- a word's first piece carries
+# a leading U+2581 and a continuation is bare -- and of the 30,522 pieces in
+# this file not one begins with the hashes while 23,695 begin with the
+# marker.
+#
+# Written from the paper, the engine spelled every word out of continuation
+# pieces: "a" found the bare "a" that continues a word rather than the
+# marked one that starts it. Nothing refused, and a real model embedded text
+# nobody wrote -- an unrelated pair of sentences scored 0.479 where it
+# scores 0.007 now. The fixture had invented the hashes, so the engine and
+# the reader written independently against the same description agreed with
+# each other about a model nobody ships.
+#
+# The identifiers below are bert-base-uncased's, which all-MiniLM-L6-v2
+# carries unchanged and which are published: "unaffable" is the canonical
+# WordPiece example and spells as una + ##ff + ##able.
+
+runtime published vocabulary, bert-base-uncased
+model all-MiniLM-L6-v2-Q8_0.gguf
+
+prompt a test sentence
+tokens 1037 3231 6251
+
+prompt unaffable
+tokens 14477 20961 3468
+
+prompt Hello, World!
+tokens 7592 1010 2088 999
