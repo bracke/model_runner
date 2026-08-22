@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **nomic-bert, written from the file.** `bert`'s arrangement with three of
+  its parts replaced: it rotates where `bert` learns a row for the position,
+  its queries, keys and values are written fused, and its feed-forward is
+  gated -- by the sigmoid-weighted unit rather than the Gaussian one `bert`
+  uses, because two architectures of one shape need not share that. It
+  carries no bias on any projection; only the two normalizations a block and
+  the one over the embedding have one. It pairs its rotation as `llama` does
+  rather than as everything since, which is the one thing about it that is
+  neither `bert`'s nor `phi3`'s.
+
+  Every one of those was read off nomic-embed-text-v1.5 before anything was
+  written, which is the order the last architecture taught: a fixture built
+  from a description is a fixture that agrees with a reader built from the
+  same description.
+
+  What the file found that the fixture could not: layer five produced a
+  value that is not finite, because `Join_Residual` normalizes only where it
+  has a buffer to do it in and that buffer is allocated from a list this
+  architecture was not on. A missing entry there is not a refusal -- it is
+  arithmetic quietly skipped, so the residual was never normalized and grew
+  until it overflowed. The same shape of fault as the one the batched
+  evaluator had for `bert`, in a different buffer, and the allocation now
+  asks the arrangement rather than a list.
+
+  Also: the second of the two post-normalizations was written inside the
+  gateless feed-forward branch, which a gated architecture never reaches.
+  Both belong to the arrangement rather than to the shape of the block below
+  them, and they are written together now. `Normalizes_After` names the
+  arrangement once instead of spelling two architectures at the dozen places
+  that mean it.
+
 - **Bert, and `embed` on the models people actually embed with.** The first
   architecture here that does not generate: it reads a whole text at once and
   produces a state for every position of it. Three things follow, and none of

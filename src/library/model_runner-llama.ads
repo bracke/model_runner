@@ -168,9 +168,36 @@ package Model_Runner.Llama is
    --  row for where the token is, and a row for which segment it belongs to,
    --  summed and normalized before the first layer. The position row is
    --  GPT2's, which is why there is no rotation anywhere in the model.
+   --  Nomic_Bert is Bert's arrangement with three of its parts replaced. It
+   --  rotates where Bert learns a row for the position, so it carries no
+   --  position table at all; its queries, keys and values are written fused
+   --  as Phi3 writes them; and its feed-forward is gated where Bert's is a
+   --  single projection through a Gaussian unit. What it keeps is what
+   --  makes Bert what it is: attention both ways, a normalization after
+   --  each residual add rather than before each sublayer, a segment row
+   --  beside the token's, and no projection to a distribution.
+   --
+   --  It carries no bias on any projection either -- only the two
+   --  normalizations a block and the one over the embedding have one --
+   --  which is why every bias here is asked for by architecture rather
+   --  than taken if present.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2, Bert);
+      Phi2, GPT2, Bert, Nomic_Bert);
+
+   --  Whether an architecture normalizes after adding a sublayer to the
+   --  residual rather than before handing the block its input.
+   --
+   --  Written once because it decides four things that are far apart: which
+   --  normalization tensors a block carries, what the block is given, which
+   --  side of the addition the gain falls on, and whether there is a final
+   --  normalization at all. Named rather than listed at each, so a third
+   --  architecture of this shape adds itself here.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True where the normalization follows the residual add.
+   function Normalizes_After (Item : Architecture) return Boolean
+   is (Item in Bert | Nomic_Bert);
 
    --  The identifier a file carries for an architecture.
    --
@@ -189,7 +216,8 @@ package Model_Runner.Llama is
          when Falcon    => "falcon",
          when Phi2      => "phi2",
          when GPT2      => "gpt2",
-         when Bert      => "bert");
+         when Bert      => "bert",
+         when Nomic_Bert => "nomic-bert");
 
    --  How a file says the states of a text should be reduced to one vector.
    --

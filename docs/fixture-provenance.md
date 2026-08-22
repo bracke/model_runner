@@ -110,6 +110,25 @@ continuations with two hashes, which is the reverse of what the architecture
 describes. Twenty-five megabytes, so it is not committed either, but it is
 small enough that obtaining it is not the obstacle the language models are.
 
+### nomic-embed-text-v1.5, Q8_0
+
+| | |
+|---|---|
+| File | `nomic-embed-text-v1.5.Q8_0.gguf` |
+| Size | 146 146 432 bytes |
+| Source | `nomic-ai/nomic-embed-text-v1.5-GGUF` on Hugging Face |
+| Upstream model | `nomic-ai/nomic-embed-text-v1.5` |
+| Licence | Apache-2.0 |
+| Quantisation | Q8_0 |
+
+The `nomic-bert` file this profile was written from. Every difference from
+`bert` was read out of it rather than out of a description: that it states
+`rope.freq_base` and no position table, that its queries, keys and values
+are fused into one tensor, that its feed-forward is gated, and that no
+projection in it carries a bias. Reading it also found the fault that made
+layer five overflow, which no fixture could have found because the fixture
+was written after it.
+
 ### Llama-3.2-1B-Instruct, Q4_K_M
 
 | | |

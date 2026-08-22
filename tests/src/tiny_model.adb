@@ -355,7 +355,8 @@ package body Tiny_Model is
            when Falcon    => "falcon",
            when Phi2      => "phi2",
            when GPT2      => "gpt2",
-           when Bert      => "bert");
+           when Bert      => "bert",
+           when Nomic_Bert => "nomic-bert");
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
@@ -385,7 +386,7 @@ package body Tiny_Model is
       --  one. A fixture that wrote the other key would be a file the
       --  engine reads by falling back rather than by reading what bert
       --  files actually say.
-      if Kind = Bert then
+      if Kind in Bert | Nomic_Bert then
          Fixtures.Add_F32
            (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0E-5);
       else
@@ -402,8 +403,14 @@ package body Tiny_Model is
       --  Which pooling the model was trained for, which is a thing a bert
       --  file states and a decoder does not. Written as the first position,
       --  because that is what these vocabularies put a marker at.
-      if Kind = Bert then
+      if Kind in Bert | Nomic_Bert then
          Fixtures.Add_U32 (Builder, Prefix & ".pooling_type", 2);
+
+         --  Stated rather than left to the architecture's name, because a
+         --  published file states it and a fixture that did not would let a
+         --  reader which ignores the key pass.
+         Fixtures.Add_Bool
+           (Builder, Prefix & ".attention.causal", False);
       end if;
 
       --  The head widths, when the file states them apart.
@@ -487,7 +494,7 @@ package body Tiny_Model is
       --  does not exist.
       Fixtures.Add_String
         (Builder, "tokenizer.ggml.model",
-         (if Kind = Bert then "bert"
+         (if Kind in Bert | Nomic_Bert then "bert"
           elsif Byte_Pair then "gpt2"
           else "llama"));
 
@@ -520,7 +527,7 @@ package body Tiny_Model is
       --  begin with this marker. A fixture written from the paper made both
       --  the engine and the reader written against it agree about a model
       --  nobody ships, and a real file then embedded text nobody wrote.
-      if Kind = Bert then
+      if Kind in Bert | Nomic_Bert then
          declare
             Mark : constant String :=
               [Character'Val (16#E2#), Character'Val (16#96#),
@@ -729,7 +736,7 @@ package body Tiny_Model is
       --  written because the architecture states it, and a fixture that
       --  wrote one row would let a reader that ignores the segment
       --  entirely agree with one that reads it.
-      if Kind = Bert then
+      if Kind in Bert | Nomic_Bert then
          Weight ("token_types.weight", [G.U64 (Embedding), G.U64 (2)]);
          Norm ("token_embd_norm.weight");
          Norm_Of ("token_embd_norm.bias", Embedding);
@@ -739,7 +746,7 @@ package body Tiny_Model is
          --  Every architecture but Bert normalizes on the way into the
          --  block. Bert's two normalizations are on the way out of its two
          --  sublayers and are written below.
-         if Kind /= Bert then
+         if Kind not in Bert | Nomic_Bert then
             Norm (Layer_Name (Index, "attn_norm.weight"));
          end if;
 
@@ -774,7 +781,7 @@ package body Tiny_Model is
                   [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
                   G.Type_F32, Fixtures.Encode_F32 (Values));
             end;
-         elsif Kind in Phi3 | Falcon | Phi2 | GPT2 then
+         elsif Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
             --  One tensor holding all three, in the order a reader has to
             --  take them out: queries, then keys, then values -- and drawn
             --  as three, in the order every other architecture draws them,
@@ -806,7 +813,7 @@ package body Tiny_Model is
          --  carried both would say two different things about the same
          --  projection, and a reader that preferred one would agree with a
          --  reader that preferred the other about nothing.
-         if Kind not in Phi3 | Falcon | Phi2 | GPT2 then
+         if Kind not in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
             Weight (Layer_Name (Index, "attn_k.weight"),
                     [G.U64 (Embedding), G.U64 (KV_Heads * Key_Size)]);
             Weight (Layer_Name (Index, "attn_v.weight"),
@@ -882,12 +889,20 @@ package body Tiny_Model is
          --  Bert's normalization over the residual once attention has been
          --  added to it, and the one over the residual once the
          --  feed-forward has. Both centre and both carry a shift.
-         if Kind = Bert then
+         --  Both of the arrangement's normalizations, written together
+         --  because both belong to it rather than to the shape of the
+         --  feed-forward below: the second was written inside the gateless
+         --  block, which the gated one of these two architectures never
+         --  reaches.
+         if Kind in Bert | Nomic_Bert then
             Norm (Layer_Name (Index, "attn_output_norm.weight"));
             Norm_Of (Layer_Name (Index, "attn_output_norm.bias"), Embedding);
+            Norm (Layer_Name (Index, "layer_output_norm.weight"));
+            Norm_Of
+              (Layer_Name (Index, "layer_output_norm.bias"), Embedding);
          end if;
 
-         if Kind not in Falcon | Phi2 | Bert then
+         if Kind not in Falcon | Phi2 | Bert | Nomic_Bert then
             Norm (Layer_Name (Index, "ffn_norm.weight"));
 
             --  The shift beside it, which a centring architecture carries
@@ -929,11 +944,7 @@ package body Tiny_Model is
 
             --  And the second of Bert's two normalizations, over the
             --  residual the feed-forward has just been added to.
-            if Kind = Bert then
-               Norm (Layer_Name (Index, "layer_output_norm.weight"));
-               Norm_Of
-                 (Layer_Name (Index, "layer_output_norm.bias"), Embedding);
-            end if;
+
          elsif Kind = Phi3 then
             --  The gate and the up projection in one tensor, gate first,
             --  and drawn as two for the same reason.
@@ -964,7 +975,7 @@ package body Tiny_Model is
 
       --  Bert has no normalization between its last layer and whatever
       --  reads it: its last layer already normalized what it produced.
-      if Kind /= Bert then
+      if Kind not in Bert | Nomic_Bert then
          Norm ("output_norm.weight");
          if Kind in Falcon | Phi2 | GPT2 then
             Norm ("output_norm.bias");
@@ -982,7 +993,7 @@ package body Tiny_Model is
       --  ties none: writing one here would let a reader that invents a head
       --  for such a model pass, which is exactly the reading the engine
       --  refuses.
-      if Kind /= Bert then
+      if Kind not in Bert | Nomic_Bert then
          Weight ("output.weight", [G.U64 (Embedding), Vocabulary]);
       end if;
 

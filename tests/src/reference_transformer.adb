@@ -840,7 +840,8 @@ package body Reference_Transformer is
          when Falcon    => "falcon.",
          when Phi2      => "phi2.",
          when GPT2      => "gpt2.",
-         when Bert      => "bert.");
+         when Bert      => "bert.",
+         when Nomic_Bert => "nomic-bert.");
 
    procedure Load
      (Item   : in out Model;
@@ -1219,6 +1220,8 @@ package body Reference_Transformer is
             Item.Kind := GPT2;
          elsif Named = "bert" then
             Item.Kind := Bert;
+         elsif Named = "nomic-bert" then
+            Item.Kind := Nomic_Bert;
          else
             return;
          end if;
@@ -1319,7 +1322,7 @@ package body Reference_Transformer is
          Containers.Get_Float
            (Source,
             Prefix (Item)
-            & (if Item.Kind = Bert
+            & (if Item.Kind in Bert | Nomic_Bert
                then "attention.layer_norm_epsilon"
                else "attention.layer_norm_rms_epsilon"),
             0.0, 1.0, Value, Status);
@@ -1407,7 +1410,7 @@ package body Reference_Transformer is
 
       --  Bert's segment table and the normalization over the sum of the
       --  three embeddings.
-      if Item.Kind = Bert then
+      if Item.Kind in Bert | Nomic_Bert then
          Item.Segments := Read_Matrix ("token_types.weight", Present);
          if not Present then
             return;
@@ -1427,7 +1430,7 @@ package body Reference_Transformer is
 
       --  Every architecture but Bert normalizes between the last layer and
       --  whatever reads it. Bert's last layer normalized what it produced.
-      if Item.Kind /= Bert then
+      if Item.Kind not in Bert | Nomic_Bert then
          Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
          if Present and then Item.Kind in Falcon | Phi2 | GPT2 then
             Item.Output_Norm_Bias :=
@@ -1447,7 +1450,7 @@ package body Reference_Transformer is
       end;
 
       Item.Output := Read_Matrix ("output.weight", Present);
-      if not Present and then Item.Kind = Bert then
+      if not Present and then Item.Kind in Bert | Nomic_Bert then
          --  No projection and nothing to tie one to. What this model
          --  produces is states, and the comparison against the engine is of
          --  those rather than of logits.
@@ -1471,7 +1474,7 @@ package body Reference_Transformer is
             --  Every architecture but Bert normalizes on the way into the
             --  block; Bert's two normalizations are on the way out of its
             --  two sublayers and are read below.
-            if Item.Kind /= Bert then
+            if Item.Kind not in Bert | Nomic_Bert then
                Current.Attention_Norm :=
                  Read_Vector (Layer_Name (Index, "attn_norm.weight"), Present);
                if not Present then
@@ -1479,7 +1482,7 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            if Item.Kind = Bert then
+            if Item.Kind in Bert | Nomic_Bert then
                Current.Post_Attention_Norm :=
                  Read_Vector
                    (Layer_Name (Index, "attn_output_norm.weight"), Present);
@@ -1538,7 +1541,7 @@ package body Reference_Transformer is
 
             --  Phi3's three attention projections come out of one tensor,
             --  in the order the rows are written: queries, keys, values.
-            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 then
+            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
                Current.Query :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             0, Item.Heads * Item.Head_Size, Present);
@@ -1550,7 +1553,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 then
+            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
                Current.Key :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             Item.Heads * Item.Head_Size,
@@ -1563,7 +1566,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 then
+            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
                Current.Value :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             (Item.Heads + Item.KV_Heads) * Item.Head_Size,
@@ -1669,7 +1672,7 @@ package body Reference_Transformer is
             --  feed-forward reads what attention read.
             --  Bert has none either, for the other reason: it normalizes
             --  on the way out of each sublayer rather than into it.
-            if Item.Kind not in Falcon | Phi2 | Bert then
+            if Item.Kind not in Falcon | Phi2 | Bert | Nomic_Bert then
                Current.Feed_Norm :=
                  Read_Vector (Layer_Name (Index, "ffn_norm.weight"), Present);
                if not Present then
@@ -2205,11 +2208,11 @@ package body Reference_Transformer is
                   --  of this implementation is to be arrived at separately,
                   --  and a shared rotation would agree with itself.
                   Even  : constant Natural :=
-                    (if Item.Kind = Llama
+                    (if Item.Kind in Llama | Nomic_Bert
                      then Head * Item.Head_Size + 2 * Pair
                      else Head * Item.Head_Size + Pair);
                   Odd   : constant Natural :=
-                    (if Item.Kind = Llama
+                    (if Item.Kind in Llama | Nomic_Bert
                      then Even + 1
                      else Even + Item.Rotary / 2);
                   Left  : constant Long_Float := Vector (Even);
@@ -2482,7 +2485,8 @@ package body Reference_Transformer is
                            --  own where the model generates, and the end of
                            --  the text where it attends both ways.
                            Ends : constant Natural :=
-                             (if Item.Kind = Bert then Steps - 1 else Step);
+                             (if Item.Kind in Bert | Nomic_Bert
+                              then Steps - 1 else Step);
 
                            First : constant Natural :=
                              (if not Windowed or else Step < Item.Window
@@ -2563,7 +2567,7 @@ package body Reference_Transformer is
                   --  normalizes the sum. The same tensor on either side of
                   --  the same addition, and two different models.
                   if Current.Post_Attention_Norm /= null
-                    and then Item.Kind /= Bert
+                    and then Item.Kind not in Bert | Nomic_Bert
                   then
                      declare
                         Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
@@ -2578,7 +2582,7 @@ package body Reference_Transformer is
                   end loop;
 
                   if Current.Post_Attention_Norm /= null
-                    and then Item.Kind = Bert
+                    and then Item.Kind in Bert | Nomic_Bert
                   then
                      declare
                         Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
@@ -2770,7 +2774,7 @@ package body Reference_Transformer is
                   end if;
 
                   if Current.Post_Feed_Norm /= null
-                    and then Item.Kind /= Bert
+                    and then Item.Kind not in Bert | Nomic_Bert
                   then
                      declare
                         Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
@@ -2785,7 +2789,7 @@ package body Reference_Transformer is
                   end loop;
 
                   if Current.Post_Feed_Norm /= null
-                    and then Item.Kind = Bert
+                    and then Item.Kind in Bert | Nomic_Bert
                   then
                      declare
                         Room : Real_Vector (0 .. Width - 1) := [others => 0.0];

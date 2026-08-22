@@ -69,7 +69,7 @@ package Tiny_Model is
    --  projection to a distribution at all.
    type Fixture_Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2, Bert);
+      Phi2, GPT2, Bert, Nomic_Bert);
 
    --  Write the tiny model to a file.
    --
@@ -189,20 +189,25 @@ package Tiny_Model is
    --  one more than can be kept true by hand, so it is said here, beside the
    --  mapping that says what a shape is, and both read it.
    --
-   --  @param Kind  Architecture to ask about.
-   --  @param Shape Shape to ask about.
-   --  @return True when that architecture cannot be built in that shape.
-   function Cannot_Hold
-     (Kind : Fixture_Architecture; Shape : Fixture_Shape) return Boolean
    --  Bert cannot hold three of the five. It has no gate, so a mixture
    --  would route to experts it cannot run; it has no rotation, so a
    --  stretched one hands it a table of divisors with no elements; and a
    --  window is a bound on how far back a position may look, which means
    --  nothing to a model where every position already sees every other.
+   --  Nomic_Bert cannot hold the windowed shape for Bert's reason and can
+   --  hold the other three: it rotates, so a stretched rotation means
+   --  something to it, and its feed-forward is gated, so a router has
+   --  experts to route to.
+   --
+   --  @param Kind  Architecture to ask about.
+   --  @param Shape Shape to ask about.
+   --  @return True when that architecture cannot be built in that shape.
+   function Cannot_Hold
+     (Kind : Fixture_Architecture; Shape : Fixture_Shape) return Boolean
    is (case Shape is
          when Mixed => Kind in Falcon | Phi2 | GPT2 | Bert,
          when Stretched => Kind in GPT2 | Bert,
-         when Windowed => Kind = Bert,
+         when Windowed => Kind in Bert | Nomic_Bert,
          when others => False);
 
    --  Write a fixture in one of those shapes.

@@ -147,7 +147,11 @@ package body Model_Runner.Llama is
                --  wrong one reads as a model that has lost the thread.
                Settings.Pairing :=
                  (case Kind is
-                    when Llama => K.Interleaved,
+                    --  Nomic_Bert pairs element i with its neighbour as
+                    --  Llama does rather than with element i + rotary/2.
+                    --  It is the only architecture of Bert's shape that
+                    --  rotates at all, and it rotates the older way.
+                    when Llama | Nomic_Bert => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3
                        | Phi3 | Falcon | Phi2 | GPT2 | Bert =>
                       K.Split);
@@ -157,7 +161,7 @@ package body Model_Runner.Llama is
                --  that does not exist yet -- except Bert, which does not
                --  generate at all: it reads a text that is already whole
                --  and every position of it may see every other.
-               Settings.Causal := Kind /= Bert;
+               Settings.Causal := not Normalizes_After (Kind);
 
                --  And whether it can turn a state into a distribution at
                --  all. Decided here rather than where the output projection
@@ -165,7 +169,7 @@ package body Model_Runner.Llama is
                --  and `inspect` reports what a file says without resolving
                --  a tensor: read from the resolution, it said every model
                --  had a head, including the one that has none.
-               Settings.Has_Head := Kind /= Bert;
+               Settings.Has_Head := not Normalizes_After (Kind);
                Found := True;
             end if;
          end loop;
@@ -254,7 +258,7 @@ package body Model_Runner.Llama is
       --  asked for its own key and falls back to the other, so a file that
       --  states either is read and a file that states neither takes the
       --  default both would.
-      if Settings.Kind = Bert then
+      if Normalizes_After (Settings.Kind) then
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
             0.0, 1.0, Value, Local);
@@ -264,7 +268,7 @@ package body Model_Runner.Llama is
          end if;
       end if;
 
-      if Settings.Kind /= Bert or else E.Is_Error (Local) then
+      if not Normalizes_After (Settings.Kind) or else E.Is_Error (Local) then
          Containers.Get_Float
            (Source,
             Model_Key (Settings.Kind, "attention.layer_norm_rms_epsilon"),
@@ -286,7 +290,7 @@ package body Model_Runner.Llama is
       --  of reducing a text to a vector at all -- it names a scoring head
       --  this program does not have -- so it is refused by name rather than
       --  read as one of the three that are.
-      if Settings.Kind = Bert then
+      if Normalizes_After (Settings.Kind) then
          Containers.Get_Integer
            (Source, Model_Key (Settings.Kind, "pooling_type"), 0, 4, Number,
             Local);
@@ -1353,7 +1357,7 @@ package body Model_Runner.Llama is
       Bias   : T.Real_Array_Access;
       Target : out Real_Array) is
    begin
-      if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert
+      if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert
         and then Bias /= null
       then
          K.Layer_Norm (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
@@ -1435,7 +1439,7 @@ package body Model_Runner.Llama is
       Bias     : T.Real_Array_Access;
       Room     : T.Real_Array_Access) is
    begin
-      if Item.Settings.Kind /= Bert then
+      if not Normalizes_After (Item.Settings.Kind) then
          Post_Norm (Item, Gain, Produced, Room);
          K.Add (Residual, Produced);
          return;
@@ -1710,7 +1714,9 @@ package body Model_Runner.Llama is
          --  first layer sees it. Bert normalizes what it embedded; every
          --  other architecture here hands layer zero the embedding row as it
          --  stands, or scales it by a constant, and has no tensor for this.
-         if E.Is_Ok (Status) and then Item.Settings.Kind = Bert then
+         if E.Is_Ok (Status)
+           and then Normalizes_After (Item.Settings.Kind)
+         then
             Resolve_Norm
               (Item, Source, "token_embd_norm.weight", Width,
                Item.Embedding_Norm, Status);
@@ -1731,7 +1737,7 @@ package body Model_Runner.Llama is
          --  thing its last layer did was normalize what it produced, and a
          --  file carrying a tensor for a second one would be describing a
          --  model this does not compute.
-         if Item.Settings.Kind /= Bert then
+         if not Normalizes_After (Item.Settings.Kind) then
             Resolve_Norm
               (Item, Source, "output_norm.weight", Width, Item.Output_Norm,
                Status);
@@ -1825,7 +1831,7 @@ package body Model_Runner.Llama is
                --  architecture here has one except Bert, which normalizes
                --  on the way out of each sublayer instead and carries no
                --  tensor for this at all.
-               if Item.Settings.Kind /= Bert then
+               if not Normalizes_After (Item.Settings.Kind) then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_norm.weight"),
                      Width, Current.Attention_Norm, Status);
@@ -1844,7 +1850,7 @@ package body Model_Runner.Llama is
                --  normalizes what the sublayer produced and adds that,
                --  and Bert adds what the sublayer produced and normalizes
                --  the sum.
-               if Item.Settings.Kind = Bert then
+               if Normalizes_After (Item.Settings.Kind) then
                   Resolve_Norm
                     (Item, Source,
                      Layer_Key (Index, "attn_output_norm.weight"), Width,
@@ -1901,7 +1907,9 @@ package body Model_Runner.Llama is
                   exit when E.Is_Error (Status);
                end if;
 
-               if Item.Settings.Kind in Phi3 | Falcon | Phi2 | GPT2 then
+               if Item.Settings.Kind
+                  in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert
+               then
                   Resolve_Part
                     (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
                      Wide + KV + KV_Out, Width, 0, Wide,
@@ -2021,7 +2029,9 @@ package body Model_Runner.Llama is
                --  Falcon has one normalization a block, not two: attention
                --  and the feed-forward read the same normalized input. The
                --  feed norm stays null and the block below reads that.
-               if Item.Settings.Kind not in Falcon | Phi2 | Bert then
+               if Item.Settings.Kind not in Falcon | Phi2
+                 and then not Normalizes_After (Item.Settings.Kind)
+               then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "ffn_norm.weight"),
                      Width, Current.Feed_Norm, Status);
@@ -4421,7 +4431,14 @@ package body Model_Runner.Llama is
          --  block normalized on the way in, because both of its sublayers
          --  read it. Different uses, one buffer, and both want it as wide as
          --  the embedding.
-         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon | Phi2 | Bert
+         --  Asked partly of the arrangement rather than wholly of a list,
+         --  because a list is what an architecture gets left off. Nomic_Bert
+         --  was: Join_Residual normalizes only where it has room to do it
+         --  in, so a missing buffer is not a refusal but a residual that is
+         --  never normalized, and the values grew until layer five could
+         --  not hold them.
+         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon | Phi2
+           or else Normalizes_After (Source.Settings.Kind)
          then
             T.Allocate (Width, Item.Post_Room);
          end if;
@@ -5932,7 +5949,7 @@ package body Model_Runner.Llama is
                   --  residual as it stands where the block normalized it on
                   --  the way out, and a fresh normalization of the residual
                   --  where they run one after the other.
-                  if Source.Settings.Kind = Bert then
+                  if Normalizes_After (Source.Settings.Kind) then
                      Norm.all (Origin .. Origin + Width - 1) :=
                        Acts.all (Origin .. Origin + Width - 1);
                   elsif Current.Feed_Norm = null then

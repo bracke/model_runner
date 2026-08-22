@@ -172,11 +172,11 @@ package body Conformance is
       --  that matrix. It answers fewer of the sweep's asks than the others,
       --  because it has no single-token path and no way to take a text in
       --  pieces, and the ones it declines are counted.
-      Crossed : constant array (1 .. 11) of Tiny_Model.Fixture_Architecture :=
+      Crossed : constant array (1 .. 12) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
          Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3,
          Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2,
-         Tiny_Model.GPT2, Tiny_Model.Bert];
+         Tiny_Model.GPT2, Tiny_Model.Bert, Tiny_Model.Nomic_Bert];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -213,7 +213,7 @@ package body Conformance is
          Which  : Sequence_Index;
          Made   : out Boolean) is
       begin
-         if Current_Kind = Tiny_Model.Bert then
+         if Current_Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert then
             declare
                Span : constant Natural := Tokens'Length * Current_Width;
             begin
@@ -348,7 +348,8 @@ package body Conformance is
 
          --  Whether this architecture attends both ways, which decides what
          --  there is to compare and which of the sweep's asks it can answer.
-         Both_Ways : constant Boolean := Current_Kind = Tiny_Model.Bert;
+         Both_Ways : constant Boolean :=
+           Current_Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert;
       begin
          --  A model that attends both ways has no single-token evaluation
          --  and no way to take a text in pieces: a position cannot be

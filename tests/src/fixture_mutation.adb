@@ -641,7 +641,9 @@ package body Fixture_Mutation is
                      --  single-token path nor the backend that declines
                      --  batching is a way to read one. Asking anyway
                      --  produced a refusal a reader would take for a fault.
-                     if Kind = Tiny_Model.Bert and then not Read.Batched then
+                     if Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert
+                       and then not Read.Batched
+                     then
                         Result.Unasked := Result.Unasked + 1;
                      else
                         Examine
@@ -671,7 +673,8 @@ package body Fixture_Mutation is
                   --  a path nothing took.
                   Examine (Kind, Plain, Format,
                            Model_Runner.Backend.Backend_Device,
-                           Batched => Kind = Tiny_Model.Bert);
+                           Batched =>
+                             Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert);
                end loop;
             end loop;
          elsif Say /= null then
