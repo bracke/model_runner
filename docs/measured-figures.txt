@@ -175,6 +175,62 @@
 # load and generate -- but it is a gap: no fixture here ties, so the fallback
 # is exercised only by files a caller supplies.
 
+# 2026-08-23, the whole Speed section taken again in one sitting. Every figure
+# the README publishes there was retaken on a host that is its own again --
+# the virtual machine that took two thirds of a processor through the last two
+# sittings is gone -- so the section can be read against itself for the first
+# time since it acquired that caveat.
+#
+# The library was at the release profile, which is what the tests crate pins
+# it to; the harness around it was measured at both profiles and the kernel
+# table came out the same to a hundredth of a nanosecond either way, which
+# settles a question this file had not asked before: what the profile of the
+# harness does to these numbers is nothing, because the work is in the
+# library.
+#
+#   twelve tokens, processor    1.315 s wall, 0.282 evaluating and 1.033
+#                               generating, 8.51 s processor, load 0.23-0.91
+#   the same at fourteen threads 1.278 s wall, 16.40 s processor
+#   twelve tokens, device       1.321 s wall, 0.192 and 0.947, 0.32 s processor
+#   110 tokens, prompt only     5.376 s processor path, 32.00 s processor;
+#                               1.212 s on the device for 0.26 s of processor
+#   four tokens, reference      9.605 s wall against 0.648 s, same digest
+#   drafted, q2_k drafting q8_0 5.112 s, 24 proposed, 9 accepted
+#   repack, q8_0 generation     1.014 s stored, 1.499 f32, 1.022 bf16
+#   repack, q2_k generation     1.304 s stored, 1.363 f32, 0.955 bf16
+#   batch sweep, 110 tokens     10.49 s at one, 5.05 s at 128
+#   shares, pinned, q8_0        2501 Me/s at one, 13771 at eight
+#   device residency            14.38, 3.07 and 1.65 tokens/s
+#
+# Three of these reversed a published reading rather than moving it. Fourteen
+# threads now takes three per cent off the wall for ninety-three per cent more
+# processor time, where the last sitting had it eleven per cent worse; the
+# eighth share now pays where it used to cost six per cent; and repacking to
+# f32 now costs time on both files where it used to pay on the two-bit one.
+# All three have the same shape of cause: the kernels got fast enough that the
+# run waits on memory, and every one of those three trades buys arithmetic
+# with bytes.
+#
+# The device table stopped being a four-to-one win on the short run and became
+# a dead heat, and nothing about the device moved. The processor side got
+# three times faster since that table was taken. What the device still wins by
+# is processor time -- 0.32 s against 8.51 -- and the prompt, where there is
+# arithmetic enough to hide what a submission costs.
+#
+# The four row-product rows that swing with code layout swung back. q4_0 0.33,
+# 0.59, 0.32; IQ4_NL 1.44, 0.59, 1.38; IQ4_XS 0.95, 0.48, 0.92; Q2_K 0.79,
+# 1.01, 0.73. The 2026-08-15 entry above explains the first swing and no
+# decoder has changed since, so it explains this one: these four are the
+# gather-bound and shift-bound loops, and what they measure is the code and
+# its layout together. Three runs at loads from 1.20 to 1.88, on two build
+# profiles, agree to a hundredth of a nanosecond, so the reading is not the
+# question.
+#
+# Two figures could not be retaken and say so in the README rather than being
+# carried over quietly: the Q4_K row of the repacking table and the
+# four-bit-against-eight-bit end-to-end pair. Both want a Q4_K file of
+# TinyLlama-1.1B, which this machine no longer has.
+
 # 2026-08-23, qwen3moe on a published file. Five prompt tokens and twelve
 # generated: 6.665 s wall -- 1.715 s evaluating the prompt and 4.950 s
 # generating -- and 41.68 s of processor time, digest 0721a909c5c304bb.
