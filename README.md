@@ -1346,9 +1346,15 @@ with the case and with the run: four-bit is ahead serially and at eight shares
 with one vector and behind batched, and it was the other way round in the
 sitting before this one, and the other way round again in the one before that.
 That is the finding -- they are level, and a gap either way at one shape is the
-machine rather than the format. The end-to-end pair that used to close this
-paragraph, 2.06 and 2.18 s against 2.06 and 2.26, is not retaken: it wants a
-four-bit file of this model, and this machine no longer has one.
+machine rather than the format. End to end they are level too, and the two
+files have to be read a token at a time to see it: alternating the two round
+by round, four-bit generates at 86.8 and 92.4 ms a token against eight-bit at
+92.7 and 89.3, which is two readings each that bracket one another. The wall
+times themselves -- 1.133 and 1.199 s against 1.400 and 1.364 -- say nothing
+about the formats, because the four-bit file answers this prompt in ten tokens
+and the eight-bit one in twelve. The pair this replaces, 2.06 and 2.18 s
+against 2.06 and 2.26, was quoted as a wall time and had the same ten against
+twelve inside it, unnoticed.
 
 It is worth keeping as a lesson rather than a result. A measurement taken
 while something else is the bottleneck measures that other thing, and the way
@@ -1832,18 +1838,23 @@ twenty-three — so it can change what the model says, and is the faster of the
 two. A matrix already in the target format is left alone, and when nothing is
 left pointing into the file's own bytes they are released.
 
-Twelve tokens from the short prompt, generation only, medians of three:
+Twelve tokens from the short prompt, generation only, medians of three. The
+four-bit file answers this prompt in ten and stops, so its row is ten tokens
+and carries the per-token figure beside it; the rows are comparable to each
+other along that column and within themselves along the others:
 
-| weights | as stored | `f32` | `bf16` |
-|---|---|---|---|
-| Q8_0 | **1.014 s** | 1.499 s | 1.022 s |
-| Q2_K | 1.304 s | 1.363 s | **0.955 s** |
+| weights | generated | as stored | `f32` | `bf16` | as stored, a token |
+|---|---|---|---|---|---|
+| Q8_0 | 12 | **1.014 s** | 1.499 s | 1.022 s | 84.5 ms |
+| Q4_K_M | 10 | **0.807 s** | 1.107 s | 0.835 s | 80.7 ms |
+| Q2_K | 12 | 1.304 s | 1.363 s | **0.955 s** | 108.7 ms |
 
-So repacking now pays for Q2_K and not for Q8_0: `bf16` takes twenty-seven
-per cent off the two-bit file and nothing off the eight-bit one, and `f32`
-costs time in both — half as much again on Q8_0. That reverses the reading
-this table had when the same three modes were last measured, where `f32` paid
-for Q2_K and `bf16` paid everywhere.
+So repacking now pays for Q2_K and for neither of the others: `bf16` takes
+twenty-seven per cent off the two-bit file, nothing off the eight-bit one and
+three per cent *onto* the four-bit one, and `f32` costs time in all three —
+half as much again on Q8_0. That reverses the reading this table had when the
+same three modes were last measured, where `f32` paid for Q2_K and `bf16` paid
+everywhere.
 
 The kernels explain the reversal. A binary32 row product is still the fastest
 per element — 0.26 ns against 0.32 for BF16, 0.39 for Q8_0 and 0.73 for Q2_K
@@ -1855,11 +1866,13 @@ bytes to fetch. Q8_0 decodes fast enough now that there is nothing left to
 buy; Q2_K is the slowest format here to decode and is the one where buying it
 still wins.
 
-The Q4_K row is missing rather than retaken: this machine has no Q4_K file of
-this model any more, and a row measured on a different model is not a row in
-this table. It read 1.44 s stored, 1.55 s repacked to `f32` and 1.40 s to
-`bf16` when it was last taken, which the pattern above no longer predicts, so
-it is quoted here as history rather than as a figure.
+The Q4_K row was missing from the reading before this one, this machine having
+had no four-bit file of this model at the time; it was fetched to take it,
+which is why the file named in
+[docs/fixture-provenance.md](docs/fixture-provenance.md) is now the one
+TheBloke published rather than one requantized here. The row read 1.44 s
+stored, 1.55 s to `f32` and 1.40 s to `bf16` when it was last taken, on a
+file made the other way and a machine two sittings ago.
 
 The decoding itself is handed to as many tasks as the run has workers, since
 the matrices are independent and each writes its own region: thirteen seconds

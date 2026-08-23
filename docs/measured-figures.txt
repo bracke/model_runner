@@ -226,10 +226,23 @@
 # profiles, agree to a hundredth of a nanosecond, so the reading is not the
 # question.
 #
-# Two figures could not be retaken and say so in the README rather than being
-# carried over quietly: the Q4_K row of the repacking table and the
-# four-bit-against-eight-bit end-to-end pair. Both want a Q4_K file of
-# TinyLlama-1.1B, which this machine no longer has.
+# Two figures wanted a four-bit file of TinyLlama-1.1B that this machine did
+# not have. One was fetched -- TheBloke's published Q4_K_M, 668 788 096 bytes,
+# sha256 9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0,
+# which replaces the locally requantized file the provenance page used to
+# name -- and both were taken:
+#
+#   repack, q4_k_m generation   0.807 s stored, 1.107 f32, 0.835 bf16
+#   four-bit against eight-bit  86.8 and 92.4 ms a token against 92.7 and
+#                               89.3, alternating, two readings each
+#
+# Reading them needed something the old pair did not say. The four-bit file
+# answers the short prompt in ten tokens and the eight-bit one in twelve, so
+# a wall time compares two different amounts of work: 1.133 s against 1.400 s
+# is the token count and not the format. The pair this replaces, 2.06 and
+# 2.18 s against 2.06 and 2.26, was quoted as a wall time and had the same
+# ten against twelve inside it with nothing saying so. The figures above are
+# per token, and the repacking row carries its count.
 
 # 2026-08-23, qwen3moe on a published file. Five prompt tokens and twelve
 # generated: 6.665 s wall -- 1.715 s evaluating the prompt and 4.950 s

@@ -69,20 +69,27 @@ model. Obtain it yourself if you want to run the comparison.
 |---|---|
 | File | `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf` |
 | Size | 668 788 096 bytes |
-| Source | made locally from the Q8_0 file above |
-| Made by | `llama-quantize --allow-requantize IN OUT Q4_K_M` |
-| Licence | Apache-2.0, inherited from the upstream model |
+| SHA-256 | `9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0` |
+| Source | `TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF` on Hugging Face |
+| Upstream model | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
+| Licence | Apache-2.0 |
+| Quantisation | Q4_K_M, converted by TheBloke from the upstream weights |
 
-Requantizing from Q8_0 rather than from the original weights is not how a
-model should be made, and `llama.cpp` refuses it without `--allow-requantize`
-for good reason: the values pass through two lossy steps instead of one. It is
-the right way to make **this** file, whose only purpose is to be the same model
-with tensors of several types in it -- Q4_K, Q6_K and F32 together, read per
-tensor. Everything else about it is held constant, which is what makes the
-comparison about the types rather than about the model.
+This entry used to describe a file made here, by
+`llama-quantize --allow-requantize` from the Q8_0 file above, and said in this
+paragraph that requantizing through two lossy steps is not how a model should
+be made. It is not made that way any more. The file the figures now use is the
+one TheBloke published, at the same size and with the same three types in it
+-- Q4_K, Q6_K and F32 together, read per tensor -- which is the only property
+this file is here for, and it is obtainable by name rather than reproducible
+only by whoever still has the tool. The digest above is what was fetched, so
+that a reader can tell whether they have the same bytes.
 
 Do not use it to judge what a model says. It answers `The capital of France
-is` with ` Paris.`, as the Q8_0 file does, and that is all it is asked.
+is` with ` Paris.`, as the Q8_0 file does, and that is all it is asked. It
+answers the short speed prompt in ten tokens where the Q8_0 file takes twelve,
+which is not a fault and is why the figures it appears in are read a token at
+a time.
 
 It is also no longer faster than the Q8_0 file end to end. It was, by three to
 five per cent, until the worker pool stopped leaving a core idle; the smaller
