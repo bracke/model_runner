@@ -321,6 +321,24 @@
 #
 # What it costs is below. What the file did find was in the template rather
 # than in the arithmetic.
+#
+# 2026-08-23, and the tool-calling loop closed on it. The template rendering
+# a tool conversation byte for byte against jinja2 says the prompt is right;
+# it does not say the model does anything with it. Offered one tool -- a
+# weather function taking a city -- and asked for the weather in Aarhus, the
+# model answered with a call and nothing else: get_weather {"city":
+# "Aarhus"}, reported by name on standard error as the caller needs it to be.
+# Handed its own reply back with the tool's answer as a turn of its own, it
+# read all three fields out of that answer and wrote them as a sentence: 17
+# degrees, light rain, wind 22. Asked something that needs no tool with the
+# same tool still offered, it answered directly and called nothing, which is
+# the other half of the same check and the half a mis-rendered tools block
+# would fail by calling for everything.
+#
+# Three runs at fifteen threads, thinking turned off, 78 s, 110 s and 73 s
+# wall. That is the first time the calls a model asks for and the answers
+# handed back to it have been through a published mixture rather than a
+# fixture or a template comparison.
 # The engine loaded it, generated from it and agreed with itself; `run`
 # refused it, because the template a current mixture ships is written in a
 # larger subset than the one a current dense model ships. Five things were
