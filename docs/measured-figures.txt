@@ -175,6 +175,40 @@
 # load and generate -- but it is a gap: no fixture here ties, so the fallback
 # is exercised only by files a caller supplies.
 
+# 2026-08-23, qwen3moe on a published file. Five prompt tokens and twelve
+# generated: 6.665 s wall -- 1.715 s evaluating the prompt and 4.950 s
+# generating -- and 41.68 s of processor time, digest 0721a909c5c304bb.
+# Median of three at the default thread count, load 1.14 to 3.02.
+#
+# model: Qwen3-30B-A3B as published -- 11258610240 bytes, 579 tensors,
+# 30 532 122 624 parameters of which about three billion run for a position,
+# 128 experts of 768 with 8 of them chosen, context 40960, its tensors in
+# Q2_K, Q3_K, Q4_K, Q6_K and F32.
+#
+# Beside TinyLlama-1.1B Q8_0, taken the same hour on the same machine by the
+# same command: 1.306 s for the same twelve tokens. Five times the wall for
+# about twenty-eight times the parameters, which is the mixture doing what a
+# mixture is for -- what a token costs is the eight experts that run and not
+# the hundred and twenty that do not. Against the 1.871 s this file publishes
+# for that model the ratio is three and a half rather than five; that figure
+# is an older engine, so the same-hour pair is the one to read.
+#
+# Loading is the part this figure does not carry, and for a file this size it
+# is the part a caller notices. Eleven gigabytes cost 5.248 s to open with the
+# file in the page cache and 38.684 s with its pages dropped from the cache
+# first. The twelve tokens cost the same either way -- 6.458 s wall on the
+# cold run, the same digest -- so what the cold read buys is entirely in the
+# opening. A first run of the day is thirty-eight seconds of disk before it
+# is anything else.
+#
+# And what `run` costs end to end, which is more than either: 15.6 s at the
+# context the file declares and 12.1 s at 512, both warm and at fifteen
+# threads. The difference is the session rather than the tokens -- 40960
+# positions of key and value across 48 layers is the 8.4 GB `inspect` prints,
+# allocated before the first token and not wanted by a caller who asked for
+# twelve. The figure above is the tokens; this is what asking for them on
+# this file costs.
+
 # 2026-08-18, which architectures have been read from a file somebody else
 # wrote. Every one of the ten the sweep crosses, validated with `tests
 # external-model` -- it loads the file, generates, and checks that two runs
@@ -216,7 +250,8 @@
 # gpt2's output bias was, and no amount of agreement between two
 # implementations reading the same fixture will say so.
 #
-# What the file did find was in the template rather than in the arithmetic.
+# What it costs is below. What the file did find was in the template rather
+# than in the arithmetic.
 # The engine loaded it, generated from it and agreed with itself; `run`
 # refused it, because the template a current mixture ships is written in a
 # larger subset than the one a current dense model ships. Five things were
