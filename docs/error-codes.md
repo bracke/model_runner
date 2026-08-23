@@ -138,6 +138,19 @@ ordinal is never reused, not because they might appear.
 | `MR-GRAM-0007` | `error.grammar.rejected_every_token` | recovery_none | 2 | raised |
 | `MR-GRAM-0008` | `error.grammar.schema_unsupported` | recovery_none | 2 | raised |
 
+## TOOLS
+
+| Code | Message key | Recovery | Exit | State |
+| --- | --- | --- | --- | --- |
+| `MR-TOOLS-0001` | `error.tools.invalid_json` | recovery_none | 2 | raised |
+| `MR-TOOLS-0002` | `error.tools.not_an_object` | recovery_none | 2 | raised |
+| `MR-TOOLS-0003` | `error.tools.missing_name` | recovery_none | 2 | raised |
+| `MR-TOOLS-0004` | `error.tools.too_many` | recovery_resource_limited | 2 | raised |
+| `MR-TOOLS-0005` | `error.tools.too_large` | recovery_resource_limited | 2 | raised |
+| `MR-TOOLS-0006` | `error.tools.nesting_too_deep` | recovery_none | 2 | raised |
+| `MR-TOOLS-0007` | `error.tools.call_malformed` | recovery_none | 3 | raised |
+| `MR-TOOLS-0008` | `error.tools.not_in_template` | recovery_unsupported | 4 | raised |
+
 ## ARCH
 
 | Code | Message key | Recovery | Exit | State |

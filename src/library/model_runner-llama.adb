@@ -51,6 +51,15 @@ package body Model_Runner.Llama is
      constant array (Cache_Precision) of Interfaces.Unsigned_64 :=
        [Exact => 4, Halved => 2, Eighth => 1];
 
+   --  The per-layer tensors jina-bert-v2's code variant carries and its text
+   --  variant does not. Named here so the refusal below spells each one
+   --  exactly as the file does.
+   type Tensor_Name is access constant String;
+   Unread_Jina_Norms : constant array (1 .. 3) of Tensor_Name :=
+     [new String'("attn_norm_2.weight"),
+      new String'("attn_q_norm.weight"),
+      new String'("attn_k_norm.weight")];
+
    --  Metadata keys are built once, here, so that no other package spells a
    --  tensor or metadata name.
    function Layer_Key (Index : Natural; Suffix : String) return String
@@ -150,7 +159,7 @@ package body Model_Runner.Llama is
                     when Llama => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3
                        | Phi3 | Falcon | Phi2 | GPT2 | Bert
-                       | Nomic_Bert =>
+                       | Nomic_Bert | Jina_Bert_V2 =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -642,6 +651,35 @@ package body Model_Runner.Llama is
            (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
       end if;
 
+      --  How steeply a head's attention falls off with distance, for the
+      --  one architecture here that is told where a token is by the scores
+      --  rather than by a rotation or a learned row.
+      --
+      --  Written rather than read. The key exists in the format --
+      --  `<arch>.attention.max_alibi_bias` -- and no published
+      --  jina-bert-v2 states it; the other runtime carries eight for this
+      --  architecture in its own source and reads nothing. A file that does
+      --  state one is refused rather than cut to eight, because a slope
+      --  ladder is what tells the model where a token is and a wrong one
+      --  answers rather than refuses.
+      if Settings.Kind = Jina_Bert_V2 then
+         Settings.Max_Bias := 8.0;
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "attention.max_alibi_bias"),
+            0.0, 1.0E6, Value, Local);
+         if E.Is_Ok (Local) and then N.Real (Value) /= Settings.Max_Bias then
+            Status := E.Make (E.Arch_Unsupported_Feature);
+            E.Add_Text
+              (Status, "feature", "attention.max_alibi_bias other than 8",
+               E.Param_Identifier);
+            return;
+         elsif Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+      end if;
+
       if Settings.Heads mod Settings.KV_Heads /= 0 then
          Status := E.Make (E.Arch_Invalid_Head_Counts);
          E.Add_Integer (Status, "heads", Long_Long_Integer (Settings.Heads));
@@ -714,7 +752,7 @@ package body Model_Runner.Llama is
       --  ships. That is the same trap gpt2's output bias fell into, found
       --  the same way: by reading a file somebody else published.
       Settings.Rotary :=
-        (if Settings.Kind = Bert then 0
+        (if Settings.Kind in Bert | Jina_Bert_V2 then 0
          elsif E.Is_Ok (Local) then Natural (Number)
          else Settings.Head_Size);
 
@@ -1251,6 +1289,7 @@ package body Model_Runner.Llama is
    function Gate_Unit (Item : Model'Class) return Natural
    is (if Item.Settings.Kind
           in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
+             | Jina_Bert_V2
        then 1 else 0);
 
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
@@ -1258,6 +1297,7 @@ package body Model_Runner.Llama is
    begin
       if Item.Settings.Kind
          in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
+            | Jina_Bert_V2
       then
          K.GELU (Target);
       else
@@ -1354,7 +1394,8 @@ package body Model_Runner.Llama is
       Bias   : T.Real_Array_Access;
       Target : out Real_Array) is
    begin
-      if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert
+      if Item.Settings.Kind
+           in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
         and then Bias /= null
       then
          K.Layer_Norm (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
@@ -1873,6 +1914,27 @@ package body Model_Runner.Llama is
                   exit when E.Is_Error (Status);
                end if;
 
+               --  What the code variant of this architecture carries and
+               --  the text one does not: a third normalization inside the
+               --  attention sublayer, and one over the queries and one over
+               --  the keys. None of the three is computed here, and a file
+               --  carrying any of them is refused by name rather than read
+               --  as a model with three normalizations missing -- which is
+               --  an embedding, and a plausible one.
+               if Item.Settings.Kind = Jina_Bert_V2 then
+                  for Name of Unread_Jina_Norms loop
+                     if Containers.Find_Tensor
+                          (Source, Layer_Key (Index, Name.all)) /= 0
+                     then
+                        Status := E.Make (E.Arch_Unsupported_Feature);
+                        E.Add_Text
+                          (Status, "feature", Name.all, E.Param_Identifier);
+                        exit;
+                     end if;
+                  end loop;
+                  exit when E.Is_Error (Status);
+               end if;
+
                --  Gemma2 normalizes what each sublayer produced as well as
                --  what it was given. Required rather than optional: a
                --  gemma2 file without them is not one this build can
@@ -1973,8 +2035,9 @@ package body Model_Runner.Llama is
                end if;
 
                --  Bert biases the same three and writes them as Qwen2
-               --  does, one vector a projection rather than three in one.
-               if Item.Settings.Kind in Qwen2 | Bert then
+               --  does, one vector a projection rather than three in one,
+               --  and jina-bert-v2 does the same.
+               if Item.Settings.Kind in Qwen2 | Bert | Jina_Bert_V2 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_q.bias"),
                      Wide, Current.Query_Bias, Status);
@@ -2015,8 +2078,9 @@ package body Model_Runner.Llama is
                exit when E.Is_Error (Status);
 
                --  And the bias on the way out of attention, which Phi2,
-               --  GPT2 and Bert have and the rest have not.
-               if Item.Settings.Kind in Phi2 | GPT2 | Bert then
+               --  GPT2, Bert and jina-bert-v2 have and the rest have not.
+               if Item.Settings.Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2
+               then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_output.bias"),
                      Width, Current.Out_Bias, Status);
@@ -2125,6 +2189,17 @@ package body Model_Runner.Llama is
                     (Item, Source, Layer_Key (Index, "ffn_down.weight"),
                      Width, Feed, Current.Down, Status, Repack);
                   exit when E.Is_Error (Status);
+
+                  --  The one gated architecture here that shifts what it
+                  --  projects down. Every other one carries no bias
+                  --  anywhere in its feed-forward, which is why this is
+                  --  asked for by architecture and not taken if present.
+                  if Item.Settings.Kind = Jina_Bert_V2 then
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ffn_down.bias"),
+                        Width, Current.Down_Bias, Status);
+                     exit when E.Is_Error (Status);
+                  end if;
                else
                   Resolve_Experts
                     (Item, Source, Index, Current, Status, Repack);
@@ -2614,6 +2689,50 @@ package body Model_Runner.Llama is
    --  next on the exact path, which is the default and the one every
    --  published figure was measured on. Both are reached by the conformance
    --  sweep, so neither is a copy nothing runs.
+   --  How steeply one head's attention falls off with distance.
+   --
+   --  The ladder the architecture's own runtime computes, and it is not a
+   --  straight geometric one. The heads up to the largest power of two not
+   --  above the head count take m0 to the power h + 1, where m0 is two to
+   --  the minus max_bias over that power; the heads above it take m1 to the
+   --  power 2 (h - that) + 1, where m1 is the same with half the bias.
+   --  Twelve heads take eight of the first and four of the second, so a
+   --  ladder written as the first alone is right for two thirds of them and
+   --  wrong for the rest -- which is an embedding rather than a refusal, and
+   --  is why the file this was checked against is the twelve-head one.
+   --
+   --  Zero bias gives zero slope, which is no bias at all, and every
+   --  architecture that rotates or learns a row for the position takes that.
+   function Head_Slope
+     (Max_Bias : Real; Head : Element_Count; Heads : Element_Count)
+      return Real
+   is
+      Power : Element_Count := 1;
+   begin
+      if Max_Bias <= 0.0 then
+         return 0.0;
+      end if;
+
+      while Power * 2 <= Heads loop
+         Power := Power * 2;
+      end loop;
+
+      declare
+         Rungs : constant N.Wide_Real := N.Wide_Real (Power);
+         Bias  : constant N.Wide_Real := N.Wide_Real (Max_Bias);
+         M0    : constant N.Wide_Real := N.Power (2.0, -(Bias / Rungs));
+         M1    : constant N.Wide_Real :=
+           N.Power (2.0, -(Bias / 2.0 / Rungs));
+      begin
+         if Head < Power then
+            return Real (N.Power (M0, N.Wide_Real (Head + 1)));
+         else
+            return Real
+              (N.Power (M1, N.Wide_Real (2 * (Head - Power) + 1)));
+         end if;
+      end;
+   end Head_Slope;
+
    procedure Blend_Exact
      (Query      : Real_Array;
       Keys       : Real_Array;
@@ -2632,6 +2751,15 @@ package body Model_Runner.Llama is
 
       --  The bound the architecture states on a score, or zero for none.
       Cap        : Real;
+
+      --  How steeply attention falls off with distance, or zero for an
+      --  architecture that says where a token is some other way, and where
+      --  the query itself is. The second is not Last: for a model that
+      --  reads a whole text at once every slot of the batch sees the same
+      --  last position, so the query's own position never reaches here
+      --  unless it is passed. It has no default for that reason.
+      Max_Bias   : Real;
+      Query_At   : Element_Count;
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
@@ -2664,6 +2792,24 @@ package body Model_Runner.Llama is
             --  architecture a test per score -- twelve tokens went from
             --  1.83 s to 2.07 s and the processor time with it, for a
             --  feature one architecture of six uses.
+            --  And the fall-off with distance, in a loop of its own for the
+            --  same reason and under the same guard. Unsigned, because the
+            --  one architecture that takes it reads a whole text and a
+            --  position is as far from what follows it as from what came
+            --  before.
+            declare
+               Slope : constant Real := Head_Slope (Max_Bias, Head, Heads);
+            begin
+               if Slope > 0.0 then
+                  for Step in First .. Last loop
+                     Scores (Scores'First + Step) :=
+                       Scores (Scores'First + Step)
+                       - Slope
+                         * Real (abs (Integer (Step) - Integer (Query_At)));
+                  end loop;
+               end if;
+            end;
+
             if Cap > 0.0 then
                for Step in First .. Last loop
                   Scores (Scores'First + Step) :=
@@ -2815,7 +2961,7 @@ package body Model_Runner.Llama is
          Natural (KV_Width), Natural (V_Width),
          Scale, Source.Settings.Attention_Cap, Target, Took,
          Positions => Natural (Positions), Window => Window,
-         Causal => Causal);
+         Causal => Causal, Max_Bias => Source.Settings.Max_Bias);
 
       if Took then
          Usable := True;
@@ -2841,6 +2987,12 @@ package body Model_Runner.Llama is
             --  asking.
             Ends  : constant Element_Count :=
               (if Causal then Last + Slot else Last);
+
+            --  And where this slot's own query sits, which Ends is not for
+            --  a model that reads both ways: there every slot shares Ends
+            --  and only this differs between them.
+            Asking : constant Element_Count :=
+              (if Causal then Ends else Last - (Positions - 1) + Slot);
             Since : constant Element_Count :=
               (if Window = 0 then First
                elsif Ends + 1 > Element_Count (Window)
@@ -2859,7 +3011,7 @@ package body Model_Runner.Llama is
                K_Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                Value_Size, Element_Count (Source.Settings.Group_Size),
                Since, Ends, Scale, Source.Settings.Attention_Cap,
-               Item.Scores.all,
+               Source.Settings.Max_Bias, Asking, Item.Scores.all,
                Target (Target'First + B_At .. Target'First + B_At
                        + Blend_Span - 1), Fine);
 
@@ -2942,6 +3094,8 @@ package body Model_Runner.Llama is
       Last       : Element_Count;
       Scale      : Real;
       Cap        : Real;
+      Max_Bias   : Real;
+      Query_At   : Element_Count;
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
@@ -2974,6 +3128,24 @@ package body Model_Runner.Llama is
                   Scores (Scores'First + Step) := Real (Sum) * Scale;
                end;
             end loop;
+
+            --  And the fall-off with distance, in a loop of its own for the
+            --  same reason and under the same guard. Unsigned, because the
+            --  one architecture that takes it reads a whole text and a
+            --  position is as far from what follows it as from what came
+            --  before.
+            declare
+               Slope : constant Real := Head_Slope (Max_Bias, Head, Heads);
+            begin
+               if Slope > 0.0 then
+                  for Step in First .. Last loop
+                     Scores (Scores'First + Step) :=
+                       Scores (Scores'First + Step)
+                       - Slope
+                         * Real (abs (Integer (Step) - Integer (Query_At)));
+                  end loop;
+               end if;
+            end;
 
             if Cap > 0.0 then
                for Step in First .. Last loop
@@ -3029,6 +3201,8 @@ package body Model_Runner.Llama is
       Last       : Element_Count;
       Scale      : Real;
       Cap        : Real;
+      Max_Bias   : Real;
+      Query_At   : Element_Count;
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
@@ -3059,6 +3233,24 @@ package body Model_Runner.Llama is
 
             --  As above: the bound in a loop of its own, and only when
             --  there is one.
+            --  And the fall-off with distance, in a loop of its own for the
+            --  same reason and under the same guard. Unsigned, because the
+            --  one architecture that takes it reads a whole text and a
+            --  position is as far from what follows it as from what came
+            --  before.
+            declare
+               Slope : constant Real := Head_Slope (Max_Bias, Head, Heads);
+            begin
+               if Slope > 0.0 then
+                  for Step in First .. Last loop
+                     Scores (Scores'First + Step) :=
+                       Scores (Scores'First + Step)
+                       - Slope
+                         * Real (abs (Integer (Step) - Integer (Query_At)));
+                  end loop;
+               end if;
+            end;
+
             if Cap > 0.0 then
                for Step in First .. Last loop
                   Scores (Scores'First + Step) :=
@@ -5157,6 +5349,7 @@ package body Model_Runner.Llama is
                      Head_Size, Value_Size,
                      Element_Count (Settings.Group_Size),
                      First, Reserved, Scale, Settings.Attention_Cap,
+                     Settings.Max_Bias, Reserved,
                      Item.Scores.all, Item.Attention.all, Usable);
                elsif Item.Held = Exact and then Resident then
                   --  Attention and the matrix that reads its result, named
@@ -5171,7 +5364,8 @@ package body Model_Runner.Llama is
                      Natural (Item.Keys.all'Length + V_Base),
                      Natural (KV_Width), Natural (V_Width), Scale,
                      Settings.Attention_Cap, Current.Attention_Out,
-                     Item.Normalized, Projected);
+                     Item.Normalized, Projected,
+                     Max_Bias => Settings.Max_Bias);
 
                   if Projected then
                      Usable := True;
@@ -5187,6 +5381,7 @@ package body Model_Runner.Llama is
                      Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                      Value_Size, Element_Count (Settings.Group_Size),
                      First, Reserved, Scale, Settings.Attention_Cap,
+                     Settings.Max_Bias, Reserved,
                      Item.Scores.all, Item.Attention.all, Usable);
                else
                   Blend_Halved
@@ -5194,6 +5389,7 @@ package body Model_Runner.Llama is
                      Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                      Value_Size, Element_Count (Settings.Group_Size),
                      First, Reserved, Scale, Settings.Attention_Cap,
+                     Settings.Max_Bias, Reserved,
                      Item.Scores.all, Item.Attention.all, Usable);
                end if;
 
@@ -5881,7 +6077,8 @@ package body Model_Runner.Llama is
                         Head_Size, Value_Size,
                         Element_Count (Settings.Group_Size),
                         First_Step, Last_Step, Scale,
-                        Settings.Attention_Cap, Item.Scores.all,
+                        Settings.Attention_Cap, Settings.Max_Bias,
+                        Reserved + Which, Item.Scores.all,
                         Attend.all (B_At .. B_At + Blend - 1), Usable);
                   elsif Item.Held = Exact then
                      Blend_Exact
@@ -5890,7 +6087,8 @@ package body Model_Runner.Llama is
                         Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                         Value_Size, Element_Count (Settings.Group_Size),
                         First_Step, Last_Step, Scale,
-                        Settings.Attention_Cap, Item.Scores.all,
+                        Settings.Attention_Cap, Settings.Max_Bias,
+                        Reserved + Which, Item.Scores.all,
                         Attend.all (B_At .. B_At + Blend - 1), Usable);
                   else
                      Blend_Halved
@@ -5899,7 +6097,8 @@ package body Model_Runner.Llama is
                         Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                         Value_Size, Element_Count (Settings.Group_Size),
                         First_Step, Last_Step, Scale,
-                        Settings.Attention_Cap, Item.Scores.all,
+                        Settings.Attention_Cap, Settings.Max_Bias,
+                        Reserved + Which, Item.Scores.all,
                         Attend.all (B_At .. B_At + Blend - 1), Usable);
                   end if;
 

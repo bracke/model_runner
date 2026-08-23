@@ -3,6 +3,7 @@ private with Ada.Finalization;
 with Model_Runner.Conversation;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
+with Model_Runner.Tools;
 
 --  Bounded chat-template rendering.
 --
@@ -20,7 +21,20 @@ with Model_Runner.Limits;
 --    {% for message in LIST %} ... {% endfor %}
 --    {% if cond %} ... {% elif cond %} ... {% else %} ... {% endif %}
 --    {% set name = value %}  value being a term expression, none, another
---                            name, or a list with a leading slice removed
+--                            name, a list with a leading slice removed, one
+--                            message of a list, or a namespace
+--    {% for name in range(a, b, c) %} ... {% endfor %}   counting rather
+--                            than walking a list; a, b and c are term
+--                            expressions and c may count down
+--    {% for name in tools %} ... {% endfor %}   walking the tools a caller
+--                            offered, each of which is a value with no text
+--                            of its own: it is written with | tojson and
+--                            refused anywhere else
+--    {% for tool_call in message.tool_calls %} ... {% endfor %}   walking
+--                            the calls one turn asked for. The variable is
+--                            named tool_call for the reason the list loop's
+--                            is named message: the fields this engine can
+--                            read from one are a call's fields
 --    {%- ... -%} and {{- ... -}}   whitespace control on either side
 --
 --  Terms usable in output and in comparisons
@@ -31,25 +45,67 @@ with Model_Runner.Limits;
 --    bos_token  eos_token
 --    message['role']    message.role
 --    message['content'] message.content
+--    message.tool_calls        whether this turn asked for tools, which is
+--                              a question and not text: a template asks it
+--                              in a condition and walks the answer
+--    tool_call.name  tool_call.arguments   the call the loop above binds
 --    messages[0]['role']       and its like, relative to what the name
 --                              messages refers to at that point
 --    add_generation_prompt
 --    loop.first  loop.last  loop.index0  loop.index
---    any name the template has assigned
---    | trim  and  | length
+--    any name the template has assigned, including a namespace's fields
+--    messages[TERM]['role']  and  messages[TERM].role, the position being
+--                            worked out rather than written
+--    | trim  and  | length, the second answering a list's length as well as
+--                            a text's
+--    | tojson, which writes a tool as JSON and any text as a JSON string
+--    .strip(S)  .lstrip(S)  .rstrip(S), the argument optional
+--    .split(S)[0]  and  .split(S)[-1], which is how a template takes a
+--                            reply apart at the marker its reasoning is in;
+--                            up to four of these may follow one another
 --
 --  Conditions are an or-list of and-lists of clauses, each clause optionally
 --  negated by 'not', optionally parenthesised, and optionally comparing two
---  terms with '==' or '!=' or testing one with 'is defined', 'is none' or
---  "'field' in message", any of which may be negated with 'is not'.
+--  terms with '==', '!=', '<', '<=', '>' or '>=' -- the four orderings
+--  reading both sides as whole numbers -- or testing one with 'is defined',
+--  'is none', 'is true', 'is false' or 'is string', or asking whether text
+--  occurs in text with "'x' in name" or whether a message carries a field
+--  with "'field' in message". Any of them may be negated with 'is not', and
+--  'in' with 'not in'.
+--
+--  A bare operand is a condition too, and is true when it holds something
+--  other than nothing: the empty string, none and a name never assigned are
+--  all false. A name the template never assigned is nothing when a condition
+--  asks about it -- which is what "if tools" is for -- and an error when the
+--  output asks for it, because printing the empty string where the template
+--  meant text says nothing about the mistake.
+--
+--  Terms in an operand join with '+', which runs their text together, or
+--  with '-', which reads both sides as whole numbers and subtracts. An
+--  operand holding one subtraction is a number and answers as one.
 --
 --  Structural constructs outside the subset -- macro, include, import,
 --  extends, filter blocks -- are rejected at compile time with
 --  Template_Unsupported_Construct, because a program whose shape cannot be
 --  read cannot be reasoned about at all.
 --
---  Expressions outside the subset -- function calls, JSON encoding, date
---  formatting, arithmetic, indexing into anything but messages -- compile to
+--  Tools. A caller may offer the model tools, and a template that reads
+--  them writes their definitions into the prompt itself. What this engine
+--  gives such a template is the name tools -- false when nothing was
+--  offered, which is exactly what "if tools" asks -- a loop over it, and
+--  the tojson filter that writes one out.
+--
+--  And what the model asks for back. A turn may carry tool calls beside its
+--  text, which is what message.tool_calls asks about and what the loop over
+--  it walks; each call answers to tool_call.name and tool_call.arguments.
+--  A call kept as the text the model wrote would reach the next turn too --
+--  it is still in the reply -- but it would reach it in the model's own
+--  spelling rather than in the one the template writes, and the two are not
+--  the same bytes. A template's own branch is the only thing that knows
+--  which they should be.
+--
+--  Expressions outside the subset -- function calls, date formatting,
+--  arithmetic, indexing into anything but messages -- compile to
 --  an instruction that refuses when it is reached. Templates shipped with
 --  current models describe tool calling in branches a conversation of plain
 --  messages never enters, and refusing the template for a branch nobody takes
@@ -164,6 +220,16 @@ package Model_Runner.Templates is
    --  @return True when Compile succeeded.
    function Is_Compiled (Item : Compiled) return Boolean;
 
+   --  Whether the caller has asked a model that reasons before it answers
+   --  to do so, and the third answer: nothing at all.
+   --
+   --  A template asks after this by name, and asks first whether the name
+   --  was given a value: a model whose caller says nothing is left to do
+   --  what it was trained to do, and a model told not to reason is given the
+   --  empty reasoning block its template writes for that. The three are
+   --  different and a boolean cannot hold them.
+   type Thinking_Choice is (Thinking_Unstated, Thinking_On, Thinking_Off);
+
    --  Render a conversation.
    --
    --  @param Item Compiled template.
@@ -171,10 +237,16 @@ package Model_Runner.Templates is
    --  @param Beginning_Token Text substituted for bos_token.
    --  @param End_Token Text substituted for eos_token.
    --  @param Add_Generation_Prompt Value of add_generation_prompt.
+   --  @param Thinking Value of enable_thinking, or that the caller said
+   --    nothing about it.
    --  @param Target Buffer receiving the rendered prompt.
    --  @param Last Number of bytes written; 0 on failure.
    --  @param Status Success, Template_Output_Too_Large,
    --    Template_Iteration_Limit or Template_Missing.
+   --  @param Tools The tools the caller offers, or null when there are
+   --    none. A template that never mentions them renders the same either
+   --    way, which is why a caller with tools asks Reads_Tools first rather
+   --    than finding out from a prompt that says nothing about them.
    procedure Render
      (Item                  : Compiled;
       Messages              : Model_Runner.Conversation.History;
@@ -183,7 +255,16 @@ package Model_Runner.Templates is
       Add_Generation_Prompt : Boolean;
       Target                : out String;
       Last                  : out Natural;
-      Status                : out Model_Runner.Errors.Error_Info);
+      Status                : out Model_Runner.Errors.Error_Info;
+      Thinking              : Thinking_Choice := Thinking_Unstated;
+      Tools                 : access constant Model_Runner.Tools.Definitions
+        := null);
+
+   --  Report whether a template reads the tools a caller may offer.
+   --
+   --  @param Item Compiled template.
+   --  @return True when the template mentions the name tools.
+   function Reads_Tools (Item : Compiled) return Boolean;
 
 private
 
@@ -199,6 +280,15 @@ private
       Term_Loop_Last,
       Term_Loop_Index_Zero,
       Term_Loop_Index_One,
+
+      --  The calls one turn asked for: whether there are any, and the two
+      --  fields one of them has. The first is a question rather than text
+      --  -- a template writes "if message.tool_calls" to find out whether
+      --  the turn called anything -- and the other two are read from
+      --  whichever call the loop over them has bound.
+      Term_Message_Calls,
+      Term_Call_Name,
+      Term_Call_Arguments,
 
       --  A named message rather than the one being looped over:
       --  messages[0]['role'] and its like. Offset carries the index, counted
@@ -231,13 +321,74 @@ private
 
    --  The filters this engine applies. Any other filter makes the term
    --  unsupported rather than the template unusable.
-   type Filter_Kind is (Filter_None, Filter_Trim, Filter_Length);
+   type Filter_Kind is
+     (Filter_None, Filter_Trim, Filter_Length,
+
+      --  Write the value as JSON. A tool has no text of its own and this is
+      --  the only way a template may write one; text has text, and what
+      --  this makes of it is a quoted JSON string.
+      Filter_JSON);
+
+   --  What a template does to a piece of text after it has it: take
+   --  whitespace off one end or both, or cut it at a marker and keep one
+   --  side. A model whose replies carry their reasoning in a marked block
+   --  writes its template this way, and there is no reading such a reply
+   --  back into a conversation without it.
+   type Method_Kind is
+     (Method_None,
+      Method_Strip,
+      Method_Left_Strip,
+      Method_Right_Strip,
+      Method_Split_First,
+      Method_Split_Last);
+
+   --  One method and where its one argument was kept: the characters to
+   --  take off, or the marker to cut at.
+   type Method_Step is record
+      Kind : Method_Kind := Method_None;
+      At_Operand : Natural := 0;
+   end record;
+
+   --  How many methods may follow one another. Four is what the template
+   --  that prompted them writes: cut at the closing marker, trim, cut at the
+   --  opening one, trim again.
+   Max_Methods : constant := 4;
+
+   type Method_Chain is array (1 .. Max_Methods) of Method_Step;
+
+   --  How a term joins the one before it inside an operand. Plus is what
+   --  Jinja's '+' does to two strings, which is to run them together;
+   --  Minus reads both sides as whole numbers and subtracts, which is what
+   --  a template does to turn a length into a last index.
+   type Join_Kind is (Join_Plus, Join_Minus);
 
    type Term is record
       Kind   : Term_Kind := Term_Literal;
       Offset : Natural := 0;
       Length : Natural := 0;
       Filter : Filter_Kind := Filter_None;
+      Join   : Join_Kind := Join_Plus;
+
+      --  Whether this term is a number by construction rather than by what
+      --  it happens to hold: a bare number, a loop counter, a length. What
+      --  it decides is what '+' means between two of them -- the language
+      --  this is written in adds numbers and runs text together, and a
+      --  template asking for messages[loop.index0 + 1] means the message
+      --  after this one and not the one at position "01".
+      Numeric : Boolean := False;
+
+      --  Where the index of an indexed term was kept, for the terms whose
+      --  index is worked out rather than written: messages[loop.index0 - 1]
+      --  and its like. Zero where Offset holds the index as the template
+      --  wrote it.
+      Index_At : Natural := 0;
+
+      --  What is done to the text once it has been read, in the order it is
+      --  written. A template that cuts a reply at its reasoning marker and
+      --  then trims what is left writes four of these in a row, so they are
+      --  a chain rather than one.
+      Methods : Method_Chain := [others => <>];
+      Chained : Natural := 0;
 
       --  What an unsupported term is unsupported for. A filter and a name
       --  are different things to have got wrong, and the reader can act on
@@ -267,7 +418,32 @@ private
       Compare_Is_Not_None,
 
       --  'name' in message: whether a message carries that field.
-      Compare_In_Message);
+      Compare_In_Message,
+
+      --  'text' in EXPRESSION: whether the left side occurs in the right.
+      --  A different question from the one above and asked with the same
+      --  word, which is why the two are told apart by what follows 'in'
+      --  rather than by the word itself.
+      Compare_In_Text,
+      Compare_Not_In_Text,
+
+      --  Numeric order. Both sides are read as whole numbers, and a side
+      --  that is not one makes the clause false rather than an error: a
+      --  template comparing a name it never assigned is asking about
+      --  nothing, and nothing is not greater than anything.
+      Compare_Less,
+      Compare_Less_Or_Equal,
+      Compare_Greater,
+      Compare_Greater_Or_Equal,
+
+      --  'is true', 'is false' and 'is string', which templates use to tell
+      --  a flag that was set to false from one that was never set at all.
+      Compare_Is_True,
+      Compare_Is_Not_True,
+      Compare_Is_False,
+      Compare_Is_Not_False,
+      Compare_Is_String,
+      Compare_Is_Not_String);
 
    type Clause is record
       Negated : Boolean := False;
@@ -313,6 +489,33 @@ private
       Op_Set_None,      --  assign none
       Op_Set_Copy,      --  assign another variable's value, whatever it is
       Op_Set_Slice,     --  assign a list with its first Length entries gone
+
+      --  Iterate over whole numbers rather than over messages. Value_At
+      --  names the first of three consecutive operands -- where the count
+      --  starts, where it stops, and what it steps by -- and Offset names
+      --  the variable each number is written to. A template uses one to walk
+      --  the conversation backwards, which no list of messages can express.
+      Op_Range_Begin,
+      Op_Range_Next,
+
+      --  Bind a name to one message of a list, which is what a template does
+      --  when it walks the conversation by index rather than by loop.
+      Op_Set_Message,
+
+      --  Walk the tools a caller offered, binding each to a name. A loop of
+      --  its own rather than the list loop with another list in it: what it
+      --  binds is not a message and has no role and no content, and the
+      --  fields a message has are the fields the list loop can read.
+      Op_Tool_Begin,
+      Op_Tool_Next,
+
+      --  Walk the calls the bound message asked for. A third loop for the
+      --  third thing there is to walk, and for the same reason as the
+      --  second: a call is not a message and not a tool, and what can be
+      --  read from one is neither's fields.
+      Op_Call_Begin,
+      Op_Call_Next,
+
       Op_Unsupported);  --  refuse, naming the construct, if ever reached
 
    --  An instruction names its operand and its condition rather than
@@ -374,6 +577,28 @@ private
 
       Names     : Variable_Name_Array := [others => <>];
       Name_Used : Natural := 0;
+
+      --  Where the name a reasoning model's template asks after lives, or
+      --  zero when the template never mentions it. Made when the template
+      --  reads it rather than up front, so a template that says nothing
+      --  about reasoning spends no slot on it.
+      Thinking_Slot : Natural := 0;
+
+      --  And where the name the tools arrive under lives. Zero says the
+      --  template never asks about tools, which is what tells a caller with
+      --  tools that this model has nowhere to put them.
+      Tools_Slot : Natural := 0;
+
+      --  And where the name one tool call goes by lives, or zero when the
+      --  template walks no calls. The name is fixed for the reason the
+      --  list loop's is: the fields readable from what it binds are a
+      --  call's fields, so the loop that binds it is the loop that names it.
+      Call_Slot : Natural := 0;
+
+      --  Where the name message lives. A template binds it two ways -- as a
+      --  loop's variable and by assignment -- and both are the same name, so
+      --  message.role reads whichever binding is in force.
+      Message_Slot : Natural := 0;
 
       --  Taken from the bounds this was compiled with, so that rendering
       --  needs no bounds of its own.

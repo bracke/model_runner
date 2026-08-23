@@ -41,6 +41,7 @@ package Model_Runner.Errors is
       Domain_Sampling,
       Domain_Conversation,
       Domain_Grammar,
+      Domain_Tools,
       Domain_Internal);
 
    --  How serious a condition is for the operation that reported it.
@@ -172,6 +173,22 @@ package Model_Runner.Errors is
       Grammar_Too_Ambiguous,
       Grammar_Rejected_Every_Token,
       Grammar_Schema_Unsupported,
+
+      --  The tools a caller offers a model, and the calls it writes back.
+      Tools_Invalid_JSON,
+      Tools_Not_An_Object,
+      Tools_Missing_Name,
+      Tools_Too_Many,
+      Tools_Too_Large,
+      Tools_Nesting_Too_Deep,
+      Tools_Call_Malformed,
+
+      --  A model whose chat template says nothing about tools was given
+      --  some. Refused rather than dropped: the definitions would reach
+      --  nothing, and a model that never heard of a tool cannot call it --
+      --  which shows as a model that simply answers, and says nothing about
+      --  why.
+      Tools_Not_In_Template,
 
       --  Architecture profile.
       Arch_Missing_Identifier,

@@ -32,6 +32,7 @@ with Model_Runner.Tokenizer;
 
 with Conformance;
 with BPE_Vocabulary;
+with Unigram_Vocabulary;
 with Reference_Tokenizer;
 with Reference_Transformer;
 with Tiny_Model;
@@ -3090,20 +3091,34 @@ package body Tests.Inference_Cases is
       Tab : constant String := [1 => Character'Val (16#09#)];
 
       type Case_Text is access constant String;
-      Rules : constant array (1 .. 5) of Case_Text :=
-        [new String'("gpt-2"),
+      --  One name per rule, and then one more name for each rule that
+      --  another name is mapped onto. The engine and this reader each carry
+      --  their own table from a name to a rule, and nothing else compares
+      --  the two: a name mapped one way here and another way there would
+      --  otherwise be found by no test at all. Starcoder was such a name
+      --  and was wrong.
+      Rules : constant array (1 .. 12) of Case_Text :=
+        [new String'(""),
+         new String'("default"),
+         new String'("gpt-2"),
+         new String'("mpt"),
          new String'("falcon"),
          new String'("smollm"),
+         new String'("starcoder"),
+         new String'("command-r"),
          new String'("llama3"),
-         new String'("qwen2")];
+         new String'("dbrx"),
+         new String'("qwen2"),
+         new String'("stablelm2")];
 
       --  Text that reaches every part of the rule: a bare word, the markers
       --  a chat template writes and two strings that open a bracket without
       --  being one, a word whose merges are decided by rank rather than by
       --  position, a word led by a space, a tab before a word, runs of
-      --  digits of each length the three groupings tell apart, and a
-      --  contraction.
-      Cases : constant array (1 .. 10) of Case_Text :=
+      --  digits of each length the groupings tell apart, a contraction, a
+      --  space before a full stop and before a grave accent, and a run of
+      --  punctuation with a letter on each side.
+      Cases : constant array (1 .. 15) of Case_Text :=
         [new String'("ab"),
          new String'("<|im_start|>ab<|im_end|>"),
          new String'("<ab"),
@@ -3113,7 +3128,12 @@ package body Tests.Inference_Cases is
          new String'("x" & Tab & "ab"),
          new String'("ab 1234"),
          new String'("x 12 abc"),
-         new String'("ab's 4321")];
+         new String'("ab's 4321"),
+         new String'("a's"),
+         new String'("x ."),
+         new String'("x `"),
+         new String'("ab.`'x 1"),
+         new String'("x 1234567 ab")];
    begin
       for Rule of Rules loop
          declare
@@ -3192,6 +3212,123 @@ package body Tests.Inference_Cases is
          end;
       end loop;
    end Byte_Pair_Matches_An_Independent_One;
+
+   procedure Unigram_Matches_An_Independent_One
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+      use type Reference_Tokenizer.Model_Kind;
+
+      type Case_Text is access constant String;
+
+      --  Text that reaches each part of the road: the one word where the
+      --  two roads part, a word the vocabulary spells exactly, a character
+      --  it cannot spell at all, two such characters in a row -- which the
+      --  road answers with one unknown and not two -- a marker, and spaces,
+      --  which this vocabulary keeps rather than merges.
+      Cases : constant array (1 .. 9) of Case_Text :=
+        [new String'("abc"),
+         new String'("ab"),
+         new String'("a"),
+         new String'("z"),
+         new String'("zz"),
+         new String'("azb"),
+         new String'("a b"),
+         new String'("a  b"),
+         new String'("<s>abc</s>")];
+
+      Image  : B.Byte_Array_Access;
+      Parsed : Containers.Container;
+      Status : E.Error_Info;
+      Loaded : Boolean;
+   begin
+      Unigram_Vocabulary.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Words  : Vocab.Vocabulary;
+         Second : Reference_Tokenizer.Vocabulary;
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the unigram fixture did not parse");
+
+         Vocab.Load (Words, Parsed, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the engine did not read the unigram vocabulary: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Vocab.Kind (Words) = Vocab.Kind_Unigram,
+                 "the engine read it as something else");
+
+         Reference_Tokenizer.Load (Second, Parsed, Loaded);
+         Assert (Loaded, "the reference did not read the vocabulary");
+         Assert (Reference_Tokenizer.Kind (Second)
+                 = Reference_Tokenizer.Unigram,
+                 "the reference read it as something else");
+
+         --  The whole reason this road exists, said as an assertion rather
+         --  than only as a comment: on this text the best path is not what
+         --  merging arrives at. Merging takes the marker and "a" together,
+         --  then that and "b", and is left with the marker-a-b piece and
+         --  "c" -- which sums to -7. The best path takes marker-a and "bc",
+         --  which sums to -6 and which no order of merges can reach.
+         declare
+            Mine   : Vocab.Token_Array (1 .. 16);
+            Mine_N : Natural;
+         begin
+            Vocab.Encode (Words, "abc", False, False, Mine, Mine_N, Status);
+            Assert (E.Is_Ok (Status), "encoding ""abc"" failed");
+            Assert (Mine_N = 2,
+                    "the best path over ""abc"" is two pieces, not"
+                    & Natural'Image (Mine_N));
+            Assert (Mine (1) = 7 and then Mine (2) = 9,
+                    "the best path over ""abc"" was not the marked a and bc:"
+                    & Vocab.Token_Id'Image (Mine (1))
+                    & Vocab.Token_Id'Image (Mine (2)));
+         end;
+
+         for Which of Cases loop
+            declare
+               Mine     : Vocab.Token_Array (1 .. 64);
+               Mine_N   : Natural;
+               Theirs   : Reference_Tokenizer.Token_Vector (1 .. 64);
+               Theirs_N : Natural;
+            begin
+               Vocab.Encode
+                 (Words, Which.all, False, False, Mine, Mine_N, Status);
+               Assert (E.Is_Ok (Status),
+                       "the engine refused """ & Which.all & """: "
+                       & E.Error_Code'Image (Status.Code));
+
+               Reference_Tokenizer.Encode
+                 (Second, Which.all, False, Theirs, Theirs_N);
+
+               Assert (Mine_N = Theirs_N,
+                       "the two disagree on how many tokens """
+                       & Which.all & """ makes:"
+                       & Natural'Image (Mine_N) & " against"
+                       & Natural'Image (Theirs_N));
+
+               for Index in 1 .. Natural'Min (Mine_N, Theirs_N) loop
+                  Assert (Integer (Mine (Index)) = Theirs (Index),
+                          "the two disagree on token"
+                          & Natural'Image (Index) & " of """
+                          & Which.all & """:"
+                          & Vocab.Token_Id'Image (Mine (Index))
+                          & " against" & Integer'Image (Theirs (Index)));
+               end loop;
+            end;
+         end loop;
+
+         Reference_Tokenizer.Close (Second);
+         Vocab.Close (Words);
+         Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end Unigram_Matches_An_Independent_One;
 
    --  A byte-pair model, driven rather than called.
    --
@@ -5301,6 +5438,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Byte_Pair_Matches_An_Independent_One'Access,
          "the byte-pair tokenizer agrees with one written from the "
+         & "description");
+      Register_Routine
+        (T, Unigram_Matches_An_Independent_One'Access,
+         "the unigram tokenizer agrees with one written from the "
          & "description");
       Register_Routine
         (T, Byte_Pair_Model_Runs_End_To_End'Access,

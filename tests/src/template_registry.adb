@@ -34,7 +34,7 @@ package body Template_Registry is
       return Room (1 .. Used);
    end Too_Many_Names;
 
-   Held : constant array (1 .. 22) of Example :=
+   Held : constant array (1 .. 34) of Example :=
      [(new String'("Literal text"),
        new String'("hello"),
        Works),
@@ -45,6 +45,69 @@ package body Template_Registry is
 
       (new String'("`{% for message in LIST %}`"),
        new String'("{% for message in messages %}x{% endfor %}"),
+       Works),
+
+      (new String'("`{% for name in range(a, b, c) %}`"),
+       new String'("{% for i in range(2, -1, -1) %}{{ i }}{% endfor %}"),
+       Works),
+
+      (new String'("`<`, `<=`, `>`, `>=`"),
+       new String'("{% if 2 > 1 and 1 < 2 and 2 >= 2 and 1 <= 1 %}y"
+                   & "{% endif %}"),
+       Works),
+
+      (new String'("A bare operand as a condition"),
+       new String'("{% if 'a' %}y{% endif %}{% if never %}n{% endif %}"),
+       Works),
+
+      (new String'("`namespace()` and its fields"),
+       new String'("{% set ns = namespace(a=true) %}"
+                   & "{% if ns.a %}y{% endif %}"),
+       Works),
+
+      (new String'("`-` between terms"),
+       new String'("{{ messages|length - 1 }}"
+                   & "{% for message in messages %}"
+                   & "{{ messages[loop.index0 + 1].role }}{% endfor %}"),
+       Works),
+
+      (new String'("`'x' in TEXT`, `'x' not in TEXT`"),
+       new String'("{% if 'b' in 'abc' and 'z' not in 'abc' %}y{% endif %}"),
+       Works),
+
+      (new String'("`.strip(S)`, `.lstrip(S)`, `.rstrip(S)`, "
+                   & "`.split(S)[0]`, `.split(S)[-1]`"),
+       new String'("{% set t = 'a|b|c' %}"
+                   & "{{ t.split('|')[0] }}{{ t.split('|')[-1] }}"
+                   & "{{ t.strip('a') }}{{ t.lstrip('a') }}"
+                   & "{{ t.rstrip('c') }}"),
+       Works),
+
+      (new String'("Date formatting"),
+       new String'("{{ strftime_now('%Y') }}"),
+       Refused_At_Render),
+
+      (new String'("`{% for name in tools %}`"),
+       new String'("{% for tool in tools %}{{ tool | tojson }}{% endfor %}"),
+       Works),
+
+      (new String'("`{% for tool_call in message.tool_calls %}`"),
+       new String'("{% for message in messages %}"
+                   & "{% for tool_call in message.tool_calls %}"
+                   & "{{ tool_call.name }}{% endfor %}{% endfor %}"),
+       Works),
+
+      (new String'("`message.tool_calls`, `tool_call.name`, "
+                   & "`tool_call.arguments`"),
+       new String'("{% for message in messages %}"
+                   & "{% if message.tool_calls %}"
+                   & "{% for tool_call in message.tool_calls %}"
+                   & "{{ tool_call.name }}{{ tool_call.arguments }}"
+                   & "{% endfor %}{% endif %}{% endfor %}"),
+       Works),
+
+      (new String'("`\| tojson`"),
+       new String'("{{ 'text' | tojson }}"),
        Works),
 
       (new String'("`{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}`"),
@@ -86,10 +149,13 @@ package body Template_Registry is
                    & "{% set n = none %}"),
        Works),
 
-      (new String'("`is defined`, `is none`, `is not ...`"),
+      (new String'("`is defined`, `is none`, `is true`, `is false`, "
+                   & "`is string`, `is not ...`"),
        new String'("{% if not tools is defined %}{% set tools = none %}"
                    & "{% endif %}{% if tools is none %}a{% endif %}"
-                   & "{% if bos_token is not none %}b{% endif %}"),
+                   & "{% if bos_token is not none %}b{% endif %}"
+                   & "{% if true is true and false is false %}c{% endif %}"
+                   & "{% if bos_token is string %}d{% endif %}"),
        Works),
 
       (new String'("`'field' in message`"),
@@ -131,7 +197,7 @@ package body Template_Registry is
        new String'("{{ bos_token | upper }}"),
        Refused_At_Render),
 
-      (new String'("Function calls, `tojson`, `strftime_now`, "
+      (new String'("Function calls, `strftime_now`, "
                    & "`raise_exception`, arithmetic, indexing by anything "
                    & "but a number"),
        new String'("{{ raise_exception('no') }}"),

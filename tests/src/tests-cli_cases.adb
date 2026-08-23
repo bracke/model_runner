@@ -63,6 +63,7 @@ package body Tests.CLI_Cases is
    use type Model_Runner.CLI.Options.Color_Mode;
    use type Model_Runner.CLI.Options.Command_Kind;
    use type Model_Runner.CLI.Options.Prompt_Source;
+   use type Model_Runner.CLI.Options.Turn_Kind;
    use type Model_Runner.CLI.Options.Verbosity;
    use type Model_Runner.Errors.Error_Code;
    use type Model_Runner.Generation.Completion_Reason;
@@ -174,6 +175,86 @@ package body Tests.CLI_Cases is
    ---------------------------------------------------------------------------
    --  Parser
    ---------------------------------------------------------------------------
+
+   --  The turns that close a tool loop parse in the order they were written.
+   --
+   --  Which reply a tool's answer follows is the whole shape of a tool loop.
+   --  A parser that kept the replies in one list and the answers in another
+   --  would parse every option here and lose the only thing they say.
+   procedure Turns_Parse_In_Order
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Source : Fixed_Arguments;
+      Item   : Opt.Command;
+      Status : E.Error_Info;
+   begin
+      Add (Source, "run");
+      Add (Source, "model.gguf");
+      Add (Source, "--prompt");
+      Add (Source, "weather?");
+      Add (Source, "--assistant");
+      Add (Source, "<tool_call>{}</tool_call>");
+      Add (Source, "--tool-result");
+      Add (Source, "18");
+      Add (Source, "--assistant-file");
+      Add (Source, "second.txt");
+      Add (Source, "--tool-result-file");
+      Add (Source, "answer.txt");
+
+      Opt.Parse (Source, Item, Status);
+      Assert (E.Is_Ok (Status),
+              "a command carrying turns was rejected: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Item.Turn_Count = 4,
+              "the turns were not all kept:" & Natural'Image (Item.Turn_Count));
+      Assert (Item.Turn_Kinds (1) = Opt.Turn_Assistant
+              and then Item.Turn_Kinds (2) = Opt.Turn_Tool
+              and then Item.Turn_Kinds (3) = Opt.Turn_Assistant
+              and then Item.Turn_Kinds (4) = Opt.Turn_Tool,
+              "the turns came back in another order than they were written");
+      Assert (Item.Turn_Texts (1) /= null
+              and then Item.Turn_Texts (1).all = "<tool_call>{}</tool_call>",
+              "a reply's text was not kept");
+      Assert (Item.Turn_Texts (2) /= null
+              and then Item.Turn_Texts (2).all = "18",
+              "a tool's answer was not kept");
+      Assert (Item.Turn_Texts (3) = null
+              and then T.To_String (Item.Turn_Paths (3)) = "second.txt",
+              "a reply named by file was kept as text");
+      Assert (T.To_String (Item.Turn_Paths (4)) = "answer.txt",
+              "an answer named by file was not kept as a path");
+      Opt.Release (Item);
+
+      --  Raw mode has no conversation for a turn to be part of, and an
+      --  interactive session holds its own. Both are refused rather than
+      --  accepted and dropped.
+      Source.Used := 0;
+      Add (Source, "run");
+      Add (Source, "model.gguf");
+      Add (Source, "--raw");
+      Add (Source, "--prompt");
+      Add (Source, "hi");
+      Add (Source, "--tool-result");
+      Add (Source, "18");
+      Opt.Parse (Source, Item, Status);
+      Assert (Status.Code = E.CLI_Raw_Mode_Conflict,
+              "a turn in raw mode was accepted: "
+              & E.Error_Code'Image (Status.Code));
+      Opt.Release (Item);
+
+      Source.Used := 0;
+      Add (Source, "run");
+      Add (Source, "model.gguf");
+      Add (Source, "--interactive");
+      Add (Source, "--assistant");
+      Add (Source, "yo");
+      Opt.Parse (Source, Item, Status);
+      Assert (Status.Code = E.CLI_Option_Combination,
+              "a turn beside --interactive was accepted: "
+              & E.Error_Code'Image (Status.Code));
+      Opt.Release (Item);
+   end Turns_Parse_In_Order;
 
    --  A well-formed run command parses into the values it named.
    procedure Run_Command_Parses (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -1227,6 +1308,93 @@ package body Tests.CLI_Cases is
       Assert (Devices.Is_Supported or else not Found,
               "the interface answered while reporting itself unsupported");
    end Devices_Are_Reported_Either_Way;
+
+   --  Tools reach the template or the run says they would not, and the
+   --  turns that close a tool loop reach the conversation.
+   --
+   --  A model told about no tools answers as though there were none, which
+   --  looks from the outside like a model that chose not to call one. That
+   --  is the failure worth refusing at the command rather than reporting as
+   --  an answer -- and the turns handed back are read where the prompt is
+   --  read, so a file that is not there fails the run rather than leaving a
+   --  turn out of it.
+   procedure Tools_Reach_The_Template_Or_The_Run_Says_So
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Model : constant String := "obj/tools-model.gguf";
+      Offer : constant String := "[{""name"": ""weather""}]";
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+
+      --  The fixture's template says nothing about tools, which is what
+      --  makes it the model to ask this of.
+      declare
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--tools");
+         Add (Source, Offer);
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+
+         Ran (Source, Status);
+         Assert (Status = E.Exit_Status (E.Make (E.Tools_Not_In_Template)),
+                 "tools offered to a template with nowhere to put them ended "
+                 & "with status" & Natural'Image (Status));
+      end;
+
+      --  A conversation with turns in it runs. They are appended after the
+      --  prompt in the order they were written, which is what makes the
+      --  reply the model gave and the answer a tool gave one conversation
+      --  rather than two.
+      declare
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--assistant");
+         Add (Source, "ba");
+         Add (Source, "--tool-result");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+
+         Ran (Source, Status);
+         Assert (Status = 0,
+                 "a run carrying earlier turns failed with status"
+                 & Natural'Image (Status));
+      end;
+
+      --  And a turn named by a file that is not there fails the run.
+      declare
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--tool-result-file");
+         Add (Source, "obj/no-such-answer.txt");
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+
+         Ran (Source, Status);
+         Assert (Status /= 0,
+                 "a run told to read an answer that is not there reported "
+                 & "success");
+      end;
+   end Tools_Reach_The_Template_Or_The_Run_Says_So;
 
    --  A saved context is the context, and a run that reuses one answers
    --  as it would have.
@@ -5435,7 +5603,7 @@ package body Tests.CLI_Cases is
             Captured_Output.Open ("obj/commands-out.txt");
             begin
                Model_Runner.CLI.Interactive.Run
-                 (Options, Screen, Rig.Ready, Session, null, Status);
+                 (Options, Screen, Rig.Ready, Session, null, Status => Status);
             exception
                when others =>
                   declare
@@ -5777,7 +5945,7 @@ package body Tests.CLI_Cases is
             Captured_Output.Open ("obj/clamp-answers.txt");
             begin
                Model_Runner.CLI.Interactive.Run
-                 (Options, Screen, Rig.Ready, Session, null, Status);
+                 (Options, Screen, Rig.Ready, Session, null, Status => Status);
             exception
                when others =>
                   declare
@@ -7070,7 +7238,7 @@ package body Tests.CLI_Cases is
 
             Captured_Output.Open ("obj/loop-answers.txt");
             begin
-               I.Run (Options, Screen, Rig.Ready, Session, null, Status);
+               I.Run (Options, Screen, Rig.Ready, Session, null, Status => Status);
             exception
                when others =>
                   declare
@@ -8531,7 +8699,7 @@ package body Tests.CLI_Cases is
             Captured_Output.Open ("obj/privacy-answers.txt");
             begin
                Model_Runner.CLI.Interactive.Run
-                 (Options, Screen, Rig.Ready, Session, null, Status);
+                 (Options, Screen, Rig.Ready, Session, null, Status => Status);
             exception
                when others =>
                   declare
@@ -10556,6 +10724,14 @@ package body Tests.CLI_Cases is
         (T, Beginning_Marker_Follows_The_Vocabulary'Access,
          "a vocabulary that declares it wants no beginning marker is not "
          & "given one");
+      Register_Routine
+        (T, Tools_Reach_The_Template_Or_The_Run_Says_So'Access,
+         "tools reach the template or the run says they would not, and the "
+         & "turns that close a tool loop reach the conversation");
+      Register_Routine
+        (T, Turns_Parse_In_Order'Access,
+         "the turns that close a tool loop parse in the order they were "
+         & "written");
    end Register_Tests;
 
 end Tests.CLI_Cases;

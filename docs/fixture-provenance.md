@@ -160,6 +160,52 @@ which no vocabulary-only fixture can. It is not committed and its licence is
 not one that would allow it to be. Its recording is
 `tests/fixtures/llama32-1b.expect`.
 
+### jina-embeddings-v2-base-en, F16 and Q8_0
+
+| | |
+|---|---|
+| Files | `jina-v2-base-en.f16.gguf`, `jina-v2-base-en.Q8_0.gguf` |
+| Size | 274 367 136 and 146 218 656 bytes |
+| Source | `gpustack/jina-embeddings-v2-base-en-GGUF` on Hugging Face |
+| Upstream model | `jinaai/jina-embeddings-v2-base-en` |
+| Licence | Apache-2.0 |
+
+Obtained before `jina-bert-v2` was written, which is the order the last two
+architectures taught. Twelve heads, which is not a power of two, and that is
+why this variant rather than the small one: the per-head slope ladder has a
+second branch that only a head count off a power of two reaches, and a wrong
+one there is a plausible embedding rather than a refusal.
+
+It earned its keep before a line of the architecture was written. It states
+`cls_token_id` and `seperator_token_id` and neither `bos_token_id` nor
+`eos_token_id`, and the tokenizer read only the latter two.
+
+### The vocabularies `llama.cpp` ships for its own tokenizer tests
+
+| | |
+|---|---|
+| Files | `models/ggml-vocab-*.gguf` in the `llama.cpp` tree |
+| Size | 600 KB to 16 MB each, nineteen of them |
+| Source | the `llama.cpp` repository itself |
+| Licence | MIT, as the repository is |
+
+Carrying a vocabulary and no weights, so they can be read by `tests tokenize`
+and by `llama-tokenize` and by nothing else. Fifteen of the nineteen name a
+tokenizer this build reads -- including the one `t5` vocabulary among them,
+which is where the unigram road and the normalization table it carries are
+settled -- and the other four name rules this build refuses by name, which
+is itself worth checking.
+
+They are what the cutting rules are settled against, and the reason is in
+[reference-runtime.md](reference-runtime.md): a rule tells two vocabularies
+apart only where one of them holds a piece that spans the difference, so a
+rule checked against the one file that names it is a rule mostly unchecked.
+Four of the faults found this way were invisible on the file naming the rule
+they belonged to.
+
+They are not committed and are not needed unless the comparison is being run
+again.
+
 ## Reference runtime
 
 Recordings under `tests/fixtures/*.expect` state which runtime produced them in
@@ -171,8 +217,12 @@ a recording — that is the entire point of writing the values down. See
 | | |
 |---|---|
 | Runtime | `llama.cpp` |
-| Commit | `717dad5` |
+| Commit | `717dad5` for the recordings that name it, `e85caa8` for the two embedding vectors and the tokenizer comparisons |
 | Built | from source, CPU backend only |
+
+A recording names the commit it came from, so two commits in this table is
+not a contradiction: the older recordings were not re-taken, and re-taking
+them is a change to the recordings and not to this table.
 
 ## Rules this file exists to enforce
 

@@ -6,6 +6,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Errors;
 with Model_Runner.Sampling;
+with Model_Runner.Templates;
 with Model_Runner.Text;
 
 --  Argument tokenization, parsing and typed command construction.
@@ -202,6 +203,18 @@ package Model_Runner.CLI.Options is
 
    type Prompt_List is array (1 .. Max_Prompts) of Text_Access;
 
+   --  How many turns of a conversation one command may carry beside its
+   --  prompt. A tool loop is a handful of them, and a conversation longer
+   --  than this is what --interactive is for.
+   Max_Turns : constant := 32;
+
+   --  What a turn beside the prompt is: the model's own previous reply, or
+   --  what a tool answered when the reply asked for one.
+   type Turn_Kind is (Turn_Assistant, Turn_Tool);
+
+   type Turn_Kind_List is array (1 .. Max_Turns) of Turn_Kind;
+   type Turn_List is array (1 .. Max_Turns) of Text_Access;
+
    --  How many adapters one command may stack.
    Max_Adapters : constant := 8;
 
@@ -237,8 +250,33 @@ package Model_Runner.CLI.Options is
       System_Path : Model_Runner.Text.Bounded;
       Has_System  : Boolean := False;
 
+      --  The turns that follow the prompt, in the order they were written.
+      --  This is how a single run closes the loop a tool call opens: the
+      --  model asks for a tool, the caller runs it and hands the answer
+      --  back on the next run, and what it hands back is the conversation
+      --  the model saw -- its own reply included, because a reply left out
+      --  is a call the model never made.
+      --
+      --  A turn holds its text or the path to read it from, decided one
+      --  turn at a time. The reply's calls are read out of the reply
+      --  itself, so a caller pastes back what the model printed rather than
+      --  taking it apart first.
+      Turn_Kinds : Turn_Kind_List := [others => Turn_Assistant];
+      Turn_Texts : Turn_List := [others => null];
+      Turn_Paths : Model_Runner.Text.Bounded_List (1 .. Max_Turns) :=
+        [others => Model_Runner.Text.Empty];
+      Turn_Count : Natural := 0;
+
       --  Bypass the chat template and tokenize the prompt directly.
       Raw : Boolean := False;
+
+      --  Whether a model that reasons before it answers was asked to. Its
+      --  template reads a name for this and asks first whether the name was
+      --  given a value at all, so saying nothing is a third answer and not
+      --  the same as saying yes: a caller who says nothing leaves the model
+      --  to do what it was trained to do.
+      Thinking : Model_Runner.Templates.Thinking_Choice :=
+        Model_Runner.Templates.Thinking_Unstated;
 
       --  A chat format named on the command line, replacing the model's own.
       --  Empty means the model's template is used.
@@ -402,6 +440,12 @@ package Model_Runner.CLI.Options is
 
       Grammar_Text : Text_Access := null;
       Grammar_Path : Model_Runner.Text.Bounded;
+
+      --  The tools offered to the model, as JSON, and the file they may be
+      --  read from instead. A caller naming both has written the offer
+      --  twice and is refused rather than given one of them.
+      Tools_Text : Text_Access := null;
+      Tools_Path : Model_Runner.Text.Bounded;
 
       Pooling    : Pooling_Kind := Pool_Mean;
 

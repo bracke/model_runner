@@ -69,7 +69,7 @@ package Tiny_Model is
    --  projection to a distribution at all.
    type Fixture_Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2, Bert, Nomic_Bert);
+      Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
 
    --  Write the tiny model to a file.
    --
@@ -199,6 +199,11 @@ package Tiny_Model is
    --  something to it, and its feed-forward is gated, so a router has
    --  experts to route to.
    --
+   --  Jina_Bert_V2 cannot hold the windowed one for the same reason as both
+   --  of them, nor the stretched one: it rotates nothing at all, and is told
+   --  where a token is by a fall-off in the scores instead. Its
+   --  feed-forward is gated, so a mixture has experts to route to.
+   --
    --  @param Kind  Architecture to ask about.
    --  @param Shape Shape to ask about.
    --  @return True when that architecture cannot be built in that shape.
@@ -206,8 +211,8 @@ package Tiny_Model is
      (Kind : Fixture_Architecture; Shape : Fixture_Shape) return Boolean
    is (case Shape is
          when Mixed => Kind in Falcon | Phi2 | GPT2 | Bert,
-         when Stretched => Kind in GPT2 | Bert,
-         when Windowed => Kind in Bert | Nomic_Bert,
+         when Stretched => Kind in GPT2 | Bert | Jina_Bert_V2,
+         when Windowed => Kind in Bert | Nomic_Bert | Jina_Bert_V2,
          when others => False);
 
    --  Write a fixture in one of those shapes.

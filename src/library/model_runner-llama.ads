@@ -183,7 +183,7 @@ package Model_Runner.Llama is
    --  than taken if present.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2, Bert, Nomic_Bert);
+      Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
 
    --  Whether an architecture normalizes after adding a sublayer to the
    --  residual rather than before handing the block its input.
@@ -197,7 +197,7 @@ package Model_Runner.Llama is
    --  @param Item Architecture to ask about.
    --  @return True where the normalization follows the residual add.
    function Normalizes_After (Item : Architecture) return Boolean
-   is (Item in Bert | Nomic_Bert);
+   is (Item in Bert | Nomic_Bert | Jina_Bert_V2);
 
    --  The identifier a file carries for an architecture.
    --
@@ -217,7 +217,8 @@ package Model_Runner.Llama is
          when Phi2      => "phi2",
          when GPT2      => "gpt2",
          when Bert      => "bert",
-         when Nomic_Bert => "nomic-bert");
+         when Nomic_Bert => "nomic-bert",
+         when Jina_Bert_V2 => "jina-bert-v2");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -316,6 +317,24 @@ package Model_Runner.Llama is
       --  states none, which is every one here but Gemma2.
       Attention_Cap   : Model_Runner.Numerics.Real := 0.0;
       Logit_Cap       : Model_Runner.Numerics.Real := 0.0;
+
+      --  How steeply a head's attention falls off with distance, for a model
+      --  that learned no positions at all and is told where a token is by
+      --  the scores instead. A score between positions i and j has
+      --  slope * |i - j| taken off it, after the scale by one over the root
+      --  of the head width and before the softmax, where slope is per head
+      --  and follows from this number and the head count.
+      --
+      --  Zero for every architecture that rotates or learns a row for the
+      --  position, which is every one here but Jina_Bert_V2. That one states
+      --  no such key and the other runtime carries eight for it, so it is
+      --  written here rather than read.
+      --
+      --  Bidirectional, because the model is: the distance is unsigned, so a
+      --  position falls off as steeply forwards as backwards. That is what
+      --  makes it different from the one causal models use, where every
+      --  visible position is behind and the sign never comes up.
+      Max_Bias        : Model_Runner.Numerics.Real := 0.0;
 
       --  Whether the sliding window applies to every other layer rather
       --  than to all of them. Gemma2 alternates, starting with the window

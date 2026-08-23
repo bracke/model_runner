@@ -28,7 +28,9 @@ package body Model_Runner.CLI.Interactive is
          when Settings   => "/settings",
          when Statistics => "/stats",
          when Context    => "/context",
-         when Set_System => "/system");
+         when Set_System => "/system",
+         when Show_Tools => "/tools",
+         when Tool_Result => "/tool");
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
@@ -189,8 +191,8 @@ package body Model_Runner.CLI.Interactive is
          for Kind in Command_Kind loop
             if Command_Word (Kind) /= "" and then Word = Command_Word (Kind)
             then
-               if Kind = Set_System then
-                  return (Set_System, First, Last);
+               if Kind in Set_System | Tool_Result then
+                  return (Kind, First, Last);
                else
                   return (Kind, 0, 0);
                end if;
@@ -211,6 +213,7 @@ package body Model_Runner.CLI.Interactive is
       Prepared : in out L.Model;
       Session  : in out L.Session;
       Rules    : Model_Runner.Generation.Grammar_Reference := null;
+      Tools    : access constant Model_Runner.Tools.Definitions := null;
       Status   : out Natural)
    is
       Bounds : constant Model_Runner.Limits.Session_Limits :=
@@ -245,7 +248,8 @@ package body Model_Runner.CLI.Interactive is
            (L.Template (Prepared).all, Messages,
             Vocab.Token_Text (Words.all, Vocab.Beginning_Token (Words.all)),
             Vocab.Token_Text (Words.all, Vocab.End_Token (Words.all)),
-            True, Buffer.all, Last, Outcome);
+            True, Buffer.all, Last, Outcome,
+            Thinking => Item.Thinking, Tools => Tools);
          if E.Is_Ok (Outcome) then
             Rendered := new String'(Buffer.all (1 .. Last));
          end if;
@@ -283,6 +287,12 @@ package body Model_Runner.CLI.Interactive is
                T.Image (Item.Seed), Pres.Diagnostic);
          end if;
       end Show_Settings;
+
+      --  Declared here because a command runs one: an answer handed back
+      --  with /tool is a turn like any other, and the model is asked to go
+      --  on the moment it arrives.
+      procedure Take_Turn
+        (Prompt : String; Sender : Conv.Role := Conv.User_Role);
 
       --  Handle one slash command. Returns True when the input was a command.
       function Handle_Command (Line : String) return Boolean is
@@ -359,6 +369,44 @@ package body Model_Runner.CLI.Interactive is
                end if;
             end;
 
+         elsif Asked.Kind = Show_Tools then
+            if Tools = null or else Model_Runner.Tools.Count (Tools.all) = 0
+            then
+               Pres.Put_Note (Screen, "cli.interactive.no_tools");
+            else
+               for Index in 1 .. Model_Runner.Tools.Count (Tools.all) loop
+                  Pres.Put_Note
+                    (Screen, "cli.interactive.tool_offered",
+                     [Loc.Named
+                        ("name",
+                         Model_Runner.Tools.Tool_Name (Tools.all, Index)),
+                      Loc.Named
+                        ("definition",
+                         Model_Runner.Tools.Definition (Tools.all, Index))]);
+               end loop;
+            end if;
+
+         elsif Asked.Kind = Tool_Result then
+            --  The other half of a call. It is a turn of its own: the
+            --  template writes a tool's answer differently from a person's,
+            --  and handing it back as the person would make it a different
+            --  conversation.
+            if Tools = null or else Model_Runner.Tools.Count (Tools.all) = 0
+            then
+               Pres.Put_Note (Screen, "cli.interactive.no_tools");
+            elsif Asked.First = 0 then
+               Pres.Put_Note (Screen, "cli.interactive.tool_needs_text");
+            elsif Conv.Length (Messages) = 0
+              or else Conv.Sender_At (Messages, Conv.Length (Messages))
+                      not in Conv.Assistant_Role | Conv.Tool_Role
+            then
+               --  Nothing asked for it. A tool answer before the model has
+               --  said anything is an answer to a question nobody put.
+               Pres.Put_Note (Screen, "cli.interactive.tool_unasked");
+            else
+               Take_Turn (Line (Asked.First .. Asked.Last), Conv.Tool_Role);
+            end if;
+
          else
             Pres.Put_Note
               (Screen, "cli.interactive.unknown_command",
@@ -369,12 +417,14 @@ package body Model_Runner.CLI.Interactive is
       end Handle_Command;
 
       --  Run one turn against the model.
-      procedure Take_Turn (Prompt : String) is
+      procedure Take_Turn
+        (Prompt : String; Sender : Conv.Role := Conv.User_Role)
+      is
          Rendered : Text_Access := null;
          Outcome  : E.Error_Info;
          Request  : Gen.Request;
       begin
-         Conv.Append (Messages, Conv.User_Role, Prompt, Outcome);
+         Conv.Append (Messages, Sender, Prompt, Outcome);
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
             return;
@@ -449,15 +499,64 @@ package body Model_Runner.CLI.Interactive is
             return;
          end if;
 
-         --  Commit the assistant turn only after a valid completion.
-         Conv.Append
-           (Messages, Conv.Assistant_Role,
-            Gen.Generated_Text (Last_Result), Outcome);
+         --  Commit the assistant turn only after a valid completion. Where
+         --  tools were offered the reply is taken apart into what the model
+         --  said and what it asked for, so that the calls reach the next
+         --  turn as the model's own template writes them rather than as the
+         --  model happened to spell them.
+         if Tools /= null and then Model_Runner.Tools.Count (Tools.all) > 0
+         then
+            declare
+               Reading : E.Error_Info;
+            begin
+               Conv.Append_Reply
+                 (Messages, Gen.Generated_Text (Last_Result), Outcome,
+                  Reading);
+               if E.Is_Error (Reading) then
+                  Pres.Report (Screen, Reading);
+               end if;
+            end;
+         else
+            Conv.Append
+              (Messages, Conv.Assistant_Role,
+               Gen.Generated_Text (Last_Result), Outcome);
+         end if;
+
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
             Conv.Drop_Last (Messages, 1);
             L.Reset (Session);
             return;
+         end if;
+
+         --  What the reply asks for, shown. The reply itself has already
+         --  been streamed; this is the part of it that needs an answer, and
+         --  a caller who has to find it by eye in a page of text will find
+         --  it wrong. Read back out of the turn rather than out of the
+         --  reply a second time: what the model asked for is what the
+         --  conversation now holds.
+         if Tools /= null then
+            for Index in 1 .. Conv.Call_Count (Messages, Conv.Length (Messages))
+            loop
+               declare
+                  Named : constant String :=
+                    Conv.Call_Name (Messages, Conv.Length (Messages), Index);
+               begin
+                  Pres.Put_Note
+                    (Screen, "cli.interactive.tool_call",
+                     [Loc.Named ("name", Named),
+                      Loc.Named
+                        ("arguments",
+                         Conv.Call_Arguments
+                           (Messages, Conv.Length (Messages), Index))]);
+
+                  if not Model_Runner.Tools.Offers (Tools.all, Named) then
+                     Pres.Put_Note
+                       (Screen, "cli.interactive.tool_unknown",
+                        [Loc.Named ("name", Named)]);
+                  end if;
+               end;
+            end loop;
          end if;
 
          Have_Stats := True;

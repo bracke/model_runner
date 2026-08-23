@@ -213,18 +213,55 @@ byte-pair implementation was checked, and it is how the next one should be.
     $ llama-tokenize -m ggml-vocab-gpt-2.gguf -p "hello world" --ids
     [31373, 995]
 
-What was compared: forty-five strings against the five vocabularies
-`llama.cpp` ships for its own tokenizer tests -- gpt-2, falcon, starcoder,
-llama-bpe and qwen2 -- covering Latin, Cyrillic, Greek, CJK, emoji, runs of
-spaces, tabs, newlines, contractions, punctuation, an address and dates. All
-forty-five agree. A vocabulary that adds a beginning-of-text marker differs by
-that marker, which `tests tokenize` does not add.
+What was compared, the first time: forty-five strings against the five
+vocabularies `llama.cpp` ships for its own tokenizer tests -- gpt-2, falcon,
+starcoder, llama-bpe and qwen2 -- covering Latin, Cyrillic, Greek, CJK, emoji,
+runs of spaces, tabs, newlines, contractions, punctuation, an address and
+dates. All forty-five agree. A vocabulary that adds a beginning-of-text marker
+differs by that marker, which `tests tokenize` does not add.
 
-Two differences were found this way and neither would have been found by
+Two differences were found that way and neither would have been found by
 reading the patterns. A tab joins the word after it under some rules and
 stands alone under others, which no string without a tab can show. Digits
 group in threes under `falcon`, which no run shorter than four digits can
 show, and `falcon` had been cut by the wrong rule until one was tried.
+
+What was compared the second time: sixty-two strings against twenty-eight
+vocabularies -- the fifteen `llama.cpp` ships that this build can read, and
+the thirteen models in the collection this repository is developed against. Five more
+differences came out of it, and again none of them was visible from the
+patterns alone:
+
+- `starcoder` was on the original rule and belongs on smollm's.
+- An absent `tokenizer.ggml.pre` is a rule of its own and was read as the
+  original one. Aquila and GPT-NeoX name no rule; each disagreed on seven or
+  eight of the sixty-two.
+- `falcon` cuts punctuation out of the text before anything else looks at it,
+  which takes its contractions apart and leaves a space standing before a
+  full stop, and it keeps a space on a run of one or two digits and not on a
+  longer one. Its own vocabulary holds no piece that shows any of this; the
+  aquila one does.
+- `tokenizer.ggml.add_space_prefix` was not read, and gemma2 and gemma3 state
+  it false.
+- A marker was looked for only where the text opened a bracket. GPT-NeoX
+  files its runs of spaces as its author's own pieces and they were not seen.
+- A published jina-bert-v2 states `cls_token_id` and `seperator_token_id` and
+  neither `bos_token_id` nor `eos_token_id`, which were the only two read, so
+  its text came back wrapped in nothing. `tests tokenize --special` was added
+  for this: without it the two runtimes differ by exactly the markers the
+  tool declines to add, which hides the case where the engine adds none.
+
+The thirty-second is the one `t5` vocabulary in that set -- 250,048 pieces
+and a quarter-megabyte normalization table, which is the whole of what a
+published unigram file adds to what a fixture can carry. All sixty-two
+agree, the table included, which is what settles that the trie is walked the
+way the format writes it rather than the way it was guessed.
+
+The pattern in all eight is the same and is worth stating plainly: a rule
+tells two vocabularies apart only if one of them holds a piece that spans the
+difference. Four of these are invisible on the very file that names the rule
+they belong to, and were found only because thirty other files were read as
+well.
 
 Those files are not committed here and are not needed unless the comparison is
 being run again.
@@ -246,6 +283,57 @@ prefix. It is one only when decoding a sequence from its beginning; continuing
 after a prompt it is text the model produced. `Reset` now distinguishes the two
 cases. No amount of self-consistency checking would have surfaced this, because
 both sides of every internal check shared the same decoder.
+
+## The chat template, against the implementation it was written for
+
+`tests render --model PATH --system TEXT --prompt TEXT [--assistant TEXT]
+[--calls JSON] [--tool TEXT] [--tools JSON] [--template PATH]
+[--generation-prompt]` prints what a model's own template makes of a
+conversation. The turns are taken in the order they are written, so the
+conversation being compared is one the caller chose rather than one this
+command arranges; `--calls` attaches the calls a reply asked for to it, and
+`--template` reads a template from a file instead of from the model, which
+is how a divergence is narrowed to one branch of a four-kilobyte template
+without editing a model file. The templates models ship are written for one implementation --
+Python's `jinja2` -- and the way to know this engine agrees with it is to set
+the two answers beside each other, because a rendering worked out from this
+engine's own reading of a template agrees with this engine by construction.
+
+    $ tests render --model qwen3.gguf --system 'S.' --prompt 'P.' \
+        --generation-prompt
+    <|im_start|>system
+    S.<|im_end|>
+    <|im_start|>user
+    P.<|im_end|>
+    <|im_start|>assistant
+
+What was compared: seventy-eight conversations against the template published
+with Qwen3 -- with and without a system message, with and without an
+assistant turn, with and without the generation prompt, and with replies that
+carry a reasoning block and replies that do not. Seventy-six agree byte for
+byte. The two that do not are the empty conversation, which `jinja2` raises
+on -- the template asks for `messages[0]` before it asks whether there is one
+-- and which this engine answers instead.
+
+And what a tool conversation makes of it: forty-eight more, twenty-four
+conversations rendered with and without a generation prompt, every byte
+agreeing. A call with text before it and one without, two calls in one turn,
+a run of tool answers folded into one turn, arguments carrying quotes and
+backslashes, a reasoning block in an earlier reply, and a user turn that
+itself contains the words the template looks for. Three faults came out of
+it, and none of them was visible in a conversation of plain messages: a turn's
+calls were kept as the model's own text and re-sent in the model's own
+spelling rather than the template's; `{% set a = b %}` copied where a value
+was rather than what it said, so a name written down inside a loop followed
+the loop afterwards; and `+` between two numbers ran them together, which is
+how that template asks whether the next turn is another tool answer.
+
+It found what the token counts could not. The whitespace control was right,
+the loops were right, and a counting loop advanced its position twice: once
+where the instruction said to and once more from a line that belonged to the
+instruction beside it. Every iteration after the first began one instruction
+late, and everything after the loop was skipped. A comparison of token counts
+called that a difference of eight; the rendered text said which eight.
 
 ## Where the chat template parts company
 

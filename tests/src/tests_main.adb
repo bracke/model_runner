@@ -9,6 +9,7 @@ pragma Unreserve_All_Interrupts;
 with Ada.Command_Line;
 with Interfaces;
 with Ada.Text_IO;
+with Ada.Text_IO.Text_Streams;
 
 with AUnit;
 with AUnit.Reporter.Text;
@@ -29,6 +30,8 @@ with Benchmarks;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Tokenizer;
+with Model_Runner.Templates;
+with Model_Runner.Conversation;
 with Model_Runner.Limits;
 with Model_Runner.Text;
 with Model_Runner.Errors;
@@ -36,6 +39,7 @@ with Model_Runner.Backend;
 with Model_Runner.Numerics;
 with Model_Runner.Llama;
 with Model_Runner.Schema;
+with Model_Runner.Tools;
 with Model_Runner.Platform;
 with Project_Tools.Files;
 with Project_Tools.Text;
@@ -830,6 +834,224 @@ begin
          end;
       end;
 
+   elsif Command = "render" then
+      --  Render a conversation through a model's own chat template and print
+      --  what comes out, which is what makes a template comparable with
+      --  another implementation. The templates models ship are written for
+      --  one, and the way to know this engine agrees with it is to set the
+      --  two answers beside each other rather than to read the template
+      --  twice.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         function Given (Name : String) return Boolean is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Given;
+
+         Path   : constant String := Option ("--model", "");
+         System : constant String := Option ("--system", "");
+         Offer  : constant String := Option ("--tools", "");
+         Instead : constant String := Option ("--template", "");
+         Opened : constant Boolean := Given ("--generation-prompt");
+
+         Source   : Model_Runner.Byte_Sources.Files.File_Source;
+         Item     : Model_Runner.GGUF.Containers.Container;
+         Words    : Model_Runner.Tokenizer.Vocabulary;
+         Template : Model_Runner.Templates.Compiled;
+         Talk     : Model_Runner.Conversation.History;
+         Offered  : aliased Model_Runner.Tools.Definitions;
+         Status   : E.Error_Info;
+
+         Room : String (1 .. 65_536);
+         Used : Natural;
+
+         --  A template from a file rather than the model's own. The model
+         --  is still read, because the beginning and end tokens a template
+         --  writes are the model's; what changes is which template writes
+         --  them. Without this, telling a divergence between this engine
+         --  and another implementation from a divergence in one branch of
+         --  a four-kilobyte template means editing the model file.
+         function Template_Text return String is
+            Held : Ada.Text_IO.File_Type;
+            Room : String (1 .. 65_536);
+            Used : Natural := 0;
+         begin
+            if Instead = "" then
+               return Model_Runner.GGUF.Containers.String_Value
+                 (Item, "tokenizer.chat_template");
+            end if;
+
+            Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, Instead);
+            while not Ada.Text_IO.End_Of_File (Held) loop
+               declare
+                  Line : constant String := Ada.Text_IO.Get_Line (Held);
+               begin
+                  exit when Used + Line'Length + 1 > Room'Length;
+                  Room (Used + 1 .. Used + Line'Length) := Line;
+                  Used := Used + Line'Length + 1;
+                  Room (Used) := Character'Val (10);
+               end;
+            end loop;
+            Ada.Text_IO.Close (Held);
+
+            --  A file ends with a newline and a template that was written
+            --  as one line does not: the last one is dropped so that what
+            --  is compiled is what the file says.
+            return (if Used > 0 then Room (1 .. Used - 1) else "");
+         end Template_Text;
+      begin
+         if Path = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, "render: --model is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         else
+            Model_Runner.Byte_Sources.Files.Open
+              (Source, Path, Status => Status);
+            if E.Is_Error (Status) then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "render: " & E.Diagnostic_Code (Status.Code));
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               return;
+            end if;
+
+            Model_Runner.GGUF.Containers.Reader.Parse
+              (Item, Source, Status => Status);
+            if E.Is_Ok (Status) then
+               Model_Runner.Tokenizer.Load (Words, Item, Status => Status);
+            end if;
+
+            if E.Is_Ok (Status) then
+               Model_Runner.Templates.Compile
+                 (Template, Template_Text, Status => Status);
+            end if;
+
+            if E.Is_Ok (Status) then
+               Model_Runner.Conversation.Open (Talk, Status => Status);
+            end if;
+
+            if E.Is_Ok (Status) and then System /= "" then
+               Model_Runner.Conversation.Set_System (Talk, System, Status);
+            end if;
+
+            --  The turns, in the order they were written rather than in
+            --  an order this program decides: a conversation is a sequence
+            --  and a comparison against another implementation has to be
+            --  able to say which sequence. --prompt is a user turn,
+            --  --assistant a reply, --calls the calls that reply asked for,
+            --  and --tool an answer handed back -- which is a turn of its
+            --  own and not the person speaking, because a template that
+            --  reads tools writes it differently from both other roles.
+            declare
+               Index : Natural := 2;
+            begin
+               while E.Is_Ok (Status)
+                 and then Index < Ada.Command_Line.Argument_Count
+               loop
+                  declare
+                     Name  : constant String :=
+                       Ada.Command_Line.Argument (Index);
+                     Value : constant String :=
+                       Ada.Command_Line.Argument (Index + 1);
+                  begin
+                     if Name = "--prompt" then
+                        Model_Runner.Conversation.Append
+                          (Talk, Model_Runner.Conversation.User_Role, Value,
+                           Status);
+                        Index := Index + 2;
+                     elsif Name = "--assistant" then
+                        Model_Runner.Conversation.Append_Asking
+                          (Talk, Value, Status);
+                        Index := Index + 2;
+                     elsif Name = "--calls" then
+                        declare
+                           Asked : Model_Runner.Tools.Calls;
+                        begin
+                           --  Read the way a reply's calls are read, so
+                           --  that what the comparison renders is what a
+                           --  conversation would hold and not a second
+                           --  spelling written for the test.
+                           Model_Runner.Tools.Read_Calls
+                             (Asked, "<tool_call>" & Value & "</tool_call>",
+                              Status);
+                           for Which in 1 ..
+                             Model_Runner.Tools.Count (Asked)
+                           loop
+                              exit when E.Is_Error (Status);
+                              Model_Runner.Conversation.Append_Call
+                                (Talk,
+                                 Model_Runner.Tools.Called (Asked, Which),
+                                 Model_Runner.Tools.Arguments (Asked, Which),
+                                 Status);
+                           end loop;
+                           Model_Runner.Tools.Close (Asked);
+                        end;
+                        Index := Index + 2;
+                     elsif Name = "--tool" then
+                        Model_Runner.Conversation.Append
+                          (Talk, Model_Runner.Conversation.Tool_Role, Value,
+                           Status);
+                        Index := Index + 2;
+                     else
+                        Index := Index + 1;
+                     end if;
+                  end;
+               end loop;
+            end;
+
+            if E.Is_Ok (Status) and then Offer /= "" then
+               Model_Runner.Tools.Read (Offered, Offer, Status);
+            end if;
+
+            if E.Is_Ok (Status) then
+               Model_Runner.Templates.Render
+                 (Template, Talk,
+                  Model_Runner.Tokenizer.Token_Text
+                    (Words, Model_Runner.Tokenizer.Beginning_Token (Words)),
+                  Model_Runner.Tokenizer.Token_Text
+                    (Words, Model_Runner.Tokenizer.End_Token (Words)),
+                  Opened, Room, Used, Status,
+                  Tools => Offered'Access);
+            end if;
+
+            if E.Is_Error (Status) then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "render: " & E.Diagnostic_Code (Status.Code));
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            else
+               --  Through the stream rather than through Put, because
+               --  Text_IO ends an unterminated line when it closes and a
+               --  rendered prompt is exactly what must not gain a newline
+               --  it did not have.
+               String'Write
+                 (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output),
+                  Room (1 .. Used));
+            end if;
+
+            Model_Runner.Tools.Close (Offered);
+            Model_Runner.Conversation.Close (Talk);
+            Model_Runner.Templates.Close (Template);
+            Model_Runner.Tokenizer.Close (Words);
+            Model_Runner.GGUF.Containers.Close (Item);
+            Model_Runner.Byte_Sources.Files.Close (Source);
+         end if;
+      end;
+
    elsif Command = "tokenize" then
       --  Encode a prompt with a model's own vocabulary and print the
       --  identifiers, which is what makes a tokenizer comparable with
@@ -846,8 +1068,21 @@ begin
             return Default;
          end Option;
 
-         Path   : constant String := Option ("--model", "");
-         Prompt : constant String := Option ("--prompt", "Hello");
+         --  A flag rather than a value, so it is looked for over the whole
+         --  argument list and not only where a value would follow.
+         function Given (Name : String) return Boolean is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Given;
+
+         Path    : constant String := Option ("--model", "");
+         Prompt  : constant String := Option ("--prompt", "Hello");
+         Special : constant Boolean := Given ("--special");
 
          Source : Model_Runner.Byte_Sources.Files.File_Source;
          Item   : Model_Runner.GGUF.Containers.Container;
@@ -887,8 +1122,22 @@ begin
                         "tokenize: " & E.Diagnostic_Code (Status.Code));
                      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
                   else
+                     --  --special asks for the markers the vocabulary's own
+                     --  policy adds, which is what the counterpart in
+                     --  llama.cpp does by default. Without it the two differ
+                     --  by those markers and the difference is the tool's
+                     --  rather than the engine's; with it, a vocabulary that
+                     --  wraps its text in two pieces and an engine that does
+                     --  not can be told apart. A published jina-bert-v2 was
+                     --  such a case.
                      Model_Runner.Tokenizer.Encode
-                       (Words, Prompt, False, False, Tokens, Used, Status);
+                       (Words, Prompt,
+                        Special
+                          and then Model_Runner.Tokenizer.Adds_Beginning
+                                     (Words),
+                        Special
+                          and then Model_Runner.Tokenizer.Adds_End (Words),
+                        Tokens, Used, Status);
 
                      if E.Is_Error (Status) then
                         Ada.Text_IO.Put_Line

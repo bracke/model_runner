@@ -9,6 +9,7 @@ package body Tool_Commands is
    Name_Benchmark      : aliased constant String := "benchmark";
    Name_External       : aliased constant String := "external-model";
    Name_Tokenize       : aliased constant String := "tokenize";
+   Name_Render         : aliased constant String := "render";
    Name_Docs           : aliased constant String := "docs";
    Name_Shader         : aliased constant String := "shader";
    Name_Fixtures       : aliased constant String := "fixtures";
@@ -32,7 +33,10 @@ package body Tool_Commands is
    Opts_External  : aliased constant String :=
      " --model --prompt --max-tokens --threads --expect --repack --backend"
      & " --draft-model --draft-tokens ";
-   Opts_Tokenize  : aliased constant String := " --model --prompt ";
+   Opts_Tokenize  : aliased constant String := " --model --prompt --special ";
+   Opts_Render    : aliased constant String :=
+     " --model --system --prompt --assistant --calls --tool --tools"
+     & " --template --generation-prompt ";
    Opts_Likeness  : aliased constant String := " --model --names ";
 
    Takes_Check     : aliased constant String := "[ROOT] [--repository] [--record-warnings]";
@@ -47,7 +51,12 @@ package body Tool_Commands is
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"
      & " [--expect TEXT] [--repack MODE] [--backend NAME]"
      & " [--draft-model PATH] [--draft-tokens N]";
-   Takes_Tokenize  : aliased constant String := "--model PATH --prompt TEXT";
+   Takes_Tokenize  : aliased constant String :=
+     "--model PATH --prompt TEXT [--special]";
+   Takes_Render    : aliased constant String :=
+     "--model PATH [--system TEXT] [--prompt TEXT] [--assistant TEXT]"
+     & " [--calls JSON] [--tool TEXT] [--tools JSON] [--template PATH]"
+     & " [--generation-prompt]";
    Takes_Docs      : aliased constant String := "[ROOT]";
    Takes_Shader    : aliased constant String :=
      "SOURCE.comp COMPILED.spv [ROOT]";
@@ -88,6 +97,8 @@ package body Tool_Commands is
      "validate a model you already have, and say what it produced";
    Says_Tokenize : aliased constant String :=
      "tokenize text with a model's own vocabulary";
+   Says_Render : aliased constant String :=
+     "render a conversation through a model's own chat template";
    Says_Docs : aliased constant String :=
      "regenerate the documentation derived from the Ada registries";
    Says_Shader : aliased constant String :=
@@ -101,7 +112,7 @@ package body Tool_Commands is
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
 
-   Held : constant array (1 .. 18) of Command :=
+   Held : constant array (1 .. 19) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -120,6 +131,8 @@ package body Tool_Commands is
        Opts_External'Access),
       (Name_Tokenize'Access, Takes_Tokenize'Access, Says_Tokenize'Access,
        Opts_Tokenize'Access),
+      (Name_Render'Access, Takes_Render'Access, Says_Render'Access,
+       Opts_Render'Access),
       (Name_Docs'Access, Takes_Docs'Access, Says_Docs'Access,
        Opts_None'Access),
       (Name_Shader'Access, Takes_Shader'Access, Says_Shader'Access,

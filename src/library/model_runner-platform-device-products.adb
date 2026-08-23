@@ -230,11 +230,20 @@ package body Model_Runner.Platform.Device.Products is
    --  writes. One number in two places is one number that can differ, so it
    --  is this one.
    --  The push constants a pipeline layout carries. Twenty-four bytes are
-   --  what the two matrix kernels want; attention wants fourteen words, and
+   --  what the two matrix kernels want; attention wants sixteen words, and
    --  a range is declared once for every pipeline that shares the layout. A
    --  shader may read fewer words than the range holds, so the larger number
    --  costs the smaller kernels nothing.
-   Shape_Bytes     : constant := 56;
+   --
+   --  It has to be the larger one. This said fifty-six while attention
+   --  pushed sixty, which is a write past the range the layout declares --
+   --  allowed by no device and refused by no device either, because every
+   --  one of them offers at least a hundred and twenty-eight bytes and no
+   --  validation layer was running to say so. Two numbers a word apart is
+   --  what let it drift; the range below is now taken from the largest of
+   --  them rather than written again.
+   Attention_Bytes : constant := 64;
+   Shape_Bytes     : constant := Attention_Bytes;
    Product_Bytes   : constant := 24;
 
    type Push_Range is record
@@ -357,10 +366,14 @@ package body Model_Runner.Platform.Device.Products is
       --  pushed the wrong one would attend to the wrong half of a text and
       --  return numbers of exactly the right shape.
       Causal     : C.unsigned := 1;
+
+      --  How steeply a head's attention falls off with distance, for the one
+      --  architecture that is told where a token is by the scores rather
+      --  than by a rotation or a learned row. Zero for every other, which is
+      --  no fall-off at all and the branch the shader skips.
+      Max_Bias   : C.C_float := 0.0;
    end record
      with Convention => C;
-
-   Attention_Bytes : constant := 60;
 
    type Shape_Constants is record
       Rows    : C.unsigned := 0;
@@ -2322,7 +2335,8 @@ package body Model_Runner.Platform.Device.Products is
       Ok         : out Boolean;
       Positions  : Natural := 1;
       Window     : Natural := 0;
-      Causal     : Boolean := True)
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0)
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
@@ -2443,7 +2457,8 @@ package body Model_Runner.Platform.Device.Products is
             Cap        => C.C_float (Cap),
             Positions  => C.unsigned (Slots),
             Window     => C.unsigned (Window),
-            Causal     => (if Causal then 1 else 0));
+            Causal     => (if Causal then 1 else 0),
+            Max_Bias   => C.C_float (Max_Bias));
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -2536,7 +2551,8 @@ package body Model_Runner.Platform.Device.Products is
       Ok         : out Boolean;
       Positions  : Natural := 1;
       Window     : Natural := 0;
-      Causal     : Boolean := True)
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0)
    is
       Good : Boolean;
    begin
@@ -2559,7 +2575,7 @@ package body Model_Runner.Platform.Device.Products is
       Attend_Resident
         (Item, Query, Heads, Head_Size, Value_Size, Group_Size,
          First, Last, K_Base, V_Base, KV_Width, V_Width, Scale, Cap,
-         Target, Ok, Positions, Window, Causal);
+         Target, Ok, Positions, Window, Causal, Max_Bias);
    end Attend;
 
    --------------
@@ -2722,7 +2738,8 @@ package body Model_Runner.Platform.Device.Products is
       Added      : out Boolean;
       Window     : Natural := 0;
       Chained    : Boolean := False;
-      Causal     : Boolean := True) is
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -2758,7 +2775,7 @@ package body Model_Runner.Platform.Device.Products is
          Group_Size => Group_Size, First => First, Last => Last,
          K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
          V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
-         Causal => Causal);
+         Causal => Causal, Max_Bias => Max_Bias);
       Added := True;
    end Add_Attention;
 
@@ -3202,7 +3219,8 @@ package body Model_Runner.Platform.Device.Products is
                         --  and a workgroup goes to each head of each.
                         Positions  => C.unsigned (Count),
                         Window     => C.unsigned (This.Window),
-                        Causal     => (if This.Causal then 1 else 0));
+                        Causal     => (if This.Causal then 1 else 0),
+                        Max_Bias   => C.C_float (This.Max_Bias));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);

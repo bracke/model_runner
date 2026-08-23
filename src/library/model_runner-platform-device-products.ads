@@ -385,6 +385,8 @@ package Model_Runner.Platform.Device.Products is
    --  @param V_Width How far apart one position's values are from the next.
    --  @param Scale What a score is multiplied by.
    --  @param Cap The bound on a score, or zero for none.
+   --  @param Max_Bias How steeply a head's attention falls off with
+   --    distance, or zero for a model told where a token is otherwise.
    --  @param Added False when the sequence is full or the shape is refused.
    --  @param Window This layer's sliding window, or zero where it does not
    --    slide one, which a batch needs because First can only speak for one
@@ -417,7 +419,8 @@ package Model_Runner.Platform.Device.Products is
       Added      : out Boolean;
       Window     : Natural := 0;
       Chained    : Boolean := False;
-      Causal     : Boolean := True);
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -479,6 +482,8 @@ package Model_Runner.Platform.Device.Products is
    --  @param V_Width How far apart one position's values are from the next.
    --  @param Scale What a score is multiplied by before the bound.
    --  @param Cap The bound on a score, or zero for none.
+   --  @param Max_Bias How steeply a head's attention falls off with
+   --    distance, or zero for a model told where a token is otherwise.
    --  @param Target Receives Positions * Heads * Value_Size values.
    --  @param Ok True when the device computed it.
    --  @param Positions How many positions attend in this call, whose
@@ -511,7 +516,8 @@ package Model_Runner.Platform.Device.Products is
       Ok         : out Boolean;
       Positions  : Natural := 1;
       Window     : Natural := 0;
-      Causal     : Boolean := True);
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
 
    --  Make room on the device for a cache and keep it between calls.
    --
@@ -559,6 +565,8 @@ package Model_Runner.Platform.Device.Products is
    --  @param V_Width How far apart one position's values are from the next.
    --  @param Scale What a score is multiplied by.
    --  @param Cap The bound on a score, or zero for none.
+   --  @param Max_Bias How steeply a head's attention falls off with
+   --    distance, or zero for a model told where a token is otherwise.
    --  @param Target Receives Positions * Heads * Value_Size values.
    --  @param Ok True when the device computed it.
    --  @param Positions How many positions attend in this call. One while
@@ -591,7 +599,8 @@ package Model_Runner.Platform.Device.Products is
       Ok         : out Boolean;
       Positions  : Natural := 1;
       Window     : Natural := 0;
-      Causal     : Boolean := True);
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
 
    --  The widest value head this kernel will take. One wider is refused, and
    --  the caller does it on the processor: a kernel that wrote past what it
@@ -882,6 +891,7 @@ private
       Window     : Natural := 0;
       Scale      : Model_Runner.Numerics.Real := 1.0;
       Cap        : Model_Runner.Numerics.Real := 0.0;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

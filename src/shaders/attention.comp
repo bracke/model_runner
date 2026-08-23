@@ -89,6 +89,15 @@ layout(push_constant) uniform Shape {
     //  ones after it as well as the ones before -- so none of them derives
     //  its last from where it sits.
     uint causal;
+
+    //  How steeply a head's attention falls off with distance, for a model
+    //  that learned no positions at all and is told where a token is by the
+    //  scores instead. Zero for every model that rotates or learns a row for
+    //  the position. The per-head slope follows from this and the head
+    //  count, and is worked out here rather than pushed, because a workgroup
+    //  is one head of one position and a push constant is the same for all
+    //  of them.
+    float max_bias;
 } shape;
 
 //  The largest value width this kernel will take. A head wider than this is
@@ -121,6 +130,32 @@ void main() {
     uint group = head / shape.group_size;
     uint q_at = slot * shape.heads * shape.head_size + head * shape.head_size;
 
+    //  Where this workgroup's own query sits, which is not last for a model
+    //  that reads both ways: there every slot shares last and only this
+    //  differs between them.
+    uint asking = shape.causal != 0u
+                  ? last
+                  : shape.last - (shape.positions - 1u) + slot;
+
+    //  This head's rung of the slope ladder. The heads below the largest
+    //  power of two not above the head count take one ladder and the rest
+    //  take another; a ladder written as the first alone is right for the
+    //  first eight heads of twelve and wrong for the other four.
+    float slope = 0.0;
+    if (shape.max_bias > 0.0) {
+        uint rungs = 1u;
+        while (rungs * 2u <= shape.heads) {
+            rungs *= 2u;
+        }
+
+        float m0 = exp2(-(shape.max_bias / float(rungs)));
+        float m1 = exp2(-(shape.max_bias / 2.0 / float(rungs)));
+
+        slope = head < rungs
+                ? pow(m0, float(head + 1u))
+                : pow(m1, float(2u * (head - rungs) + 1u));
+    }
+
     //  What this invocation carries out: every sixty-fourth component of
     //  this head's value, so the private store is four floats and not a
     //  head's width.
@@ -145,6 +180,15 @@ void main() {
                 dot += q[q_at + c] * kv[k_at + c];
             }
             score = dot * shape.scale;
+
+            //  The fall-off with distance, after the scale and before the
+            //  bound, which is the order the architecture's own runtime
+            //  takes them in. Unsigned: a position is as far from what
+            //  follows it as from what came before, which is what makes this
+            //  the bidirectional form and not the one causal models use.
+            if (slope > 0.0) {
+                score -= slope * float(abs(int(step) - int(asking)));
+            }
 
             if (shape.cap > 0.0) {
                 score = shape.cap * tanh(score / shape.cap);

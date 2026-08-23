@@ -1087,7 +1087,7 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # less than a figure taken badly and said to be bad.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-engine F5DD88C847A4AE45 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 751F1D7A76463112 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -1185,7 +1185,7 @@ engine F5DD88C847A4AE45 src/library/model_runner-llama.adb src/library/model_run
 #
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-reference 3DB336B3E0705827 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference CA8BA6C4CA9050B8 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -2284,8 +2284,78 @@ reference 3DB336B3E0705827 src/library/model_runner-backend-reference.adb src/li
 # is what enforces. The device runs are the ones whose load-after means
 # anything about the surroundings.
 
+# 2026-08-22, jina-bert-v2, the unigram road and the byte-pair cutting
+# rules. All five groups moved and none of them was measured on a quiet
+# machine, because the machine was not quiet at any point: somebody else's
+# virtual machine at about two thirds of a processor all day, and two of
+# their test suites beside it. `tests benchmark` and `tests speed` both
+# refuse above a load of 1.50 and both were run with --anyway, which is why
+# every reading below is quoted with its load.
+#
+# The device group is the one this change could really have moved, and it is
+# re-measured and not republished. Both cells, at a load of 3.1 against the
+# under-1.50 the published pair waited for:
+#
+#   device 6 prompt tokens, 12 generated:  1.017 s wall, 0.182 s prompt,
+#          0.796 s generating, 0.39 s of processor time, load 3.17 to 3.24
+#   device 110 prompt tokens, none:        2.625 s wall, 2.00 s of processor
+#          time, load 3.13 to 3.33
+#
+# Against 0.885 s and 2.174 s published: fifteen and twenty per cent above,
+# on a machine at twice the load. The device column is not immune to load
+# here and this table's own text says why -- an integrated device shares a
+# fifteen-watt budget with the processor it would otherwise be helping --
+# so a busier machine is a worse measurement rather than a newer one, and
+# the published pair stands.
+#
+# What does settle something is the digests: 5abff916f9d83ca6 and
+# cbf29ce484222325, the same two the published figures carry, from a run
+# through the changed kernel. The attention shader grew a fall-off with
+# distance and a sixteenth push-constant word; for a model that states no
+# bias it skips that branch, and an unchanged digest is the arithmetic
+# saying so rather than an argument that it should be.
+#
+# The other two shaders are not merely equivalent but identical: their words
+# in model_runner-shaders.ads are unchanged word for word from the committed
+# ones. That was checked rather than assumed, and it had to be: a first
+# regeneration passed --target-env vulkan1.1 and rewrote all three, moving
+# the SPIR-V version header and eleven other words in each of the two that
+# had not changed at all.
+#
+# The engine, reference and drafting groups are not re-measured, and this is
+# the reason. What they carry of this change is llama.adb, and what changed
+# there on a path a published figure's model takes is one call a head a
+# position a layer -- Head_Slope, which returns on its first statement when
+# the model states no bias, which every model in this file does. The rest is
+# an enumeration value, membership tests at load time, and tensor names for
+# an architecture none of these figures uses. The precedent for a per-score
+# test is in this file and is why the fall-off is a guarded loop of its own
+# rather than a test inside the score loop: folding the bound into that loop
+# once cost twelve tokens 1.83 s to 2.07 s. This is a test per head, which
+# is that cost divided by the span.
+#
+# Recorded rather than published, because a figure not taken is worth less
+# than a figure taken badly and said to be bad: the twelve-token figure read
+# 4.033 s here against the published 3.743, at a load of 2.73 rising to
+# 4.17. Same digest, 5abff916f9d83ca6. It is in the direction and roughly
+# the size a busy machine moves this figure, and the machine was busier than
+# on the sitting that published 3.734.
+#
+# The tokenizer group is re-measured under the same conditions and its
+# figures are not replaced. It read 0.0304 s for sixty thousand ordinary
+# characters and 0.0436 s for sixty thousand brackets, at a load of 4.32,
+# against 0.0139 s and 0.0156 s published at 1.11. What that pair is for is
+# the ratio between its two halves -- the bound on the marker scan is what
+# keeps hostile text from costing what it used to -- and the ratio is 1.44
+# here against 1.12 published, both of them a world away from the 1600 the
+# unbounded scan gave. The scan now looks at every position whose byte some
+# piece of the vocabulary begins with rather than only where the text opens
+# a bracket, which is a wider set of positions and a bounded one; that is
+# what the second reading is watching, and it did not blow up. The figures
+# stand from their own quiet run and are owed a quieter machine.
+
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device FA308079B7882282 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device CE2008F9464936C7 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -2411,7 +2481,7 @@ device FA308079B7882282 src/shaders/row_product.comp src/library/model_runner-sh
 #
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
-drafting 0449DD1729E4F8E4 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting 0EA554DF8E11D8B3 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -2439,4 +2509,4 @@ scaling 592E96BC24CA22DF src/library/model_runner-backend-cpu.adb src/library/mo
 #       why the bound exists is history and needs the commit before it; it
 #       is not reproducible and is quoted as a reason rather than a figure.
 # model: none. This figure times the tokenizer on text this tool builds itself.
-tokenizer A8E7692D084F4D4F src/library/model_runner-tokenizer.adb
+tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb

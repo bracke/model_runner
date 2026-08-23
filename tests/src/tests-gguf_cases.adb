@@ -2492,6 +2492,103 @@ package body Tests.GGUF_Cases is
       Vocab.Close (Words);
       Containers.Close (Item);
       B.Free (Image);
+
+      --  A vocabulary that names its two markers the way a published
+      --  jina-bert-v2 does, which is not the way all-MiniLM does.
+      --
+      --  That file states `cls_token_id` and `seperator_token_id` and states
+      --  neither `bos_token_id` nor `eos_token_id`. Read for the latter two
+      --  alone it wraps its text in nothing at all -- six tokens where the
+      --  model was trained on eight, which is the fault the flags were, in a
+      --  different key and on the same road. The road carries the other
+      --  runtime's own identifiers before any key is read, so a file naming
+      --  nothing still wraps its text; the guard is the vocabulary's size,
+      --  because an identifier outside it is worse than none.
+      declare
+         Builder : Fixtures.Builder;
+         Wide    : B.Byte_Array_Access;
+         Held    : Containers.Container;
+         Spelled : Vocab.Vocabulary;
+         Read    : E.Error_Info;
+         Told    : E.Error_Info;
+         Made    : Vocab.Token_Array (1 .. 32);
+         Count   : Natural;
+
+         Pieces  : constant := 110;
+
+         --  U+2581, which is what a converted WordPiece vocabulary puts in
+         --  front of a piece that starts a word.
+         Marked  : constant String :=
+           [Character'Val (16#E2#), Character'Val (16#96#),
+            Character'Val (16#81#)];
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "bert");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "bert");
+         Fixtures.Add_Bool
+           (Builder, "tokenizer.ggml.do_lower_case", True);
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, Pieces);
+         for Index in 0 .. Pieces - 1 loop
+            --  100, 101 and 102 are what the road calls unknown, beginning
+            --  and end; everything else is one letter of its own so that a
+            --  word spells to exactly one piece.
+            Fixtures.String_Element
+              (Builder,
+               (if Index = 100 then "[UNK]"
+                elsif Index = 101 then "[CLS]"
+                elsif Index = 102 then "[SEP]"
+                elsif Index = 3 then Marked & "abc"
+                else "p" & Model_Runner.Text.Trim (Natural'Image (Index))));
+         end loop;
+         Fixtures.End_Array (Builder);
+
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.token_type", G.Value_Int32, Pieces);
+         for Index in 0 .. Pieces - 1 loop
+            Fixtures.Int32_Element
+              (Builder, (if Index = 100 then 2
+                         elsif Index in 101 | 102 then 3
+                         else 1));
+         end loop;
+         Fixtures.End_Array (Builder);
+
+         --  The two keys the published file states, and neither of the two
+         --  it does not.
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.cls_token_id", 101);
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.seperator_token_id", 102);
+         Fixtures.Build (Builder, Wide);
+
+         Parse_Image (Wide.all, Held, Read);
+         Assert (E.Is_Ok (Read), "the jina-shaped fixture did not parse");
+
+         Vocab.Load (Spelled, Held, Status => Told);
+         Assert (E.Is_Ok (Told),
+                 "the jina-shaped vocabulary did not load: "
+                 & E.Error_Code'Image (Told.Code));
+
+         Assert (Vocab.Beginning_Token (Spelled) = 101,
+                 "a WordPiece vocabulary naming no beginning identifier did "
+                 & "not take the one the road carries");
+         Assert (Vocab.End_Token (Spelled) = 102,
+                 "a WordPiece vocabulary naming its end as a separator did "
+                 & "not take it");
+         Assert (Vocab.Unknown_Token (Spelled) = 100,
+                 "a WordPiece vocabulary naming no unknown identifier did "
+                 & "not take the one the road carries");
+
+         Vocab.Encode (Spelled, "abc", True, True, Made, Count, Told);
+         Assert (E.Is_Ok (Told), "encoding the jina-shaped fixture failed");
+         Assert (Count = 3,
+                 "expected the word between two markers, got"
+                 & Natural'Image (Count));
+         Assert (Made (1) = 101 and then Made (3) = 102,
+                 "the text was not wrapped in the two the file names");
+
+         Vocab.Close (Spelled);
+         Containers.Close (Held);
+         B.Free (Wide);
+      end;
    end Word_Piece_Wraps_A_Text_By_Construction;
 
    procedure Word_Piece_Folds_A_Text_Before_It_Spells
@@ -2719,31 +2816,76 @@ package body Tests.GGUF_Cases is
                  & ") where the rule says (" & Expected & ")");
       end Same;
 
-      --  "ab 1234": the space may lead digits under the first two rules and
+      --  "ab 1234": the space may lead digits under the original rule and
       --  under no other, and the digits run to the end, in threes, or one at
-      --  a time. Three answers, and no two rules that share one here share
-      --  the other below.
+      --  a time. Three answers, and the rules that share one here are told
+      --  apart by the cases below.
       Numbered : constant String := "ab 1234";
 
       --  "x<TAB>ab": a tab may lead the word after it under llama3 and qwen2
       --  and stands alone under the rest.
       Tabbed : constant String := "x" & Tab & "ab";
+
+      --  "x 12": a run of two digits, which the step that cuts digits into
+      --  threes does not reach. Falcon leaves the space on it and the
+      --  default does not, and nothing else tells those two apart.
+      Short : constant String := "x 12";
+
+      --  An apostrophe, a full stop and a grave accent: what the two rules
+      --  that cut punctuation out of the text first do differently from the
+      --  rest, and from each other.
+      Held  : constant String := "a's";
+      Stop  : constant String := "x .";
+      Grave : constant String := "x `";
    begin
-      --  An absent key is the original rule, as is naming it either way.
-      Same ("", Numbered, "11 22", "a run of digits");
+      --  An absent key is not the original rule. It is the default one,
+      --  which cuts punctuation out of the text and takes digits in threes;
+      --  naming it outright asks for the same.
+      Same ("", Numbered, "11 9 15 8", "a run of digits");
+      Same ("default", Numbered, "11 9 15 8", "a run of digits");
       Same ("gpt-2", Numbered, "11 22", "a run of digits");
-      Same ("starcoder", Numbered, "11 22", "a run of digits");
-      Same ("falcon", Numbered, "11 21 8", "a run of digits");
+      Same ("falcon", Numbered, "11 9 15 8", "a run of digits");
       Same ("llama3", Numbered, "11 9 15 8", "a run of digits");
       Same ("llama-bpe", Numbered, "11 9 15 8", "a run of digits");
       Same ("qwen2", Numbered, "11 9 5 6 7 8", "a run of digits");
       Same ("smollm", Numbered, "11 9 5 6 7 8", "a run of digits");
 
+      --  Starcoder is on smollm's rule and not the original one. The
+      --  vocabulary starcoder ships cannot tell the two apart, because no
+      --  piece of it spans a digit and anything else; this one can.
+      Same ("starcoder", Numbered, "11 9 5 6 7 8", "a run of digits");
+
+      Same ("default", Tabbed, "4 10 11", "a tab before a word");
       Same ("gpt-2", Tabbed, "4 10 11", "a tab before a word");
       Same ("falcon", Tabbed, "4 10 11", "a tab before a word");
       Same ("smollm", Tabbed, "4 10 11", "a tab before a word");
       Same ("llama3", Tabbed, "4 18", "a tab before a word");
       Same ("qwen2", Tabbed, "4 18", "a tab before a word");
+
+      Same ("gpt-2", Short, "4 20", "a short run of digits");
+      Same ("falcon", Short, "4 20", "a short run of digits");
+      Same ("default", Short, "4 9 14", "a short run of digits");
+      Same ("llama3", Short, "4 9 14", "a short run of digits");
+      Same ("qwen2", Short, "4 9 5 6", "a short run of digits");
+
+      --  A contraction is one piece where nothing has cut its apostrophe out
+      --  from under it, and two where something has.
+      Same ("gpt-2", Held, "1 29", "a contraction");
+      Same ("llama3", Held, "1 29", "a contraction");
+      Same ("falcon", Held, "1 27 28", "a contraction");
+      Same ("default", Held, "1 27 28", "a contraction");
+
+      --  A space leads a full stop under the rules that do not cut
+      --  punctuation out first, and stands alone under the two that do.
+      Same ("gpt-2", Stop, "4 31", "a space before a full stop");
+      Same ("falcon", Stop, "4 9 30", "a space before a full stop");
+      Same ("default", Stop, "4 9 30", "a space before a full stop");
+
+      --  And the grave accent is the whole difference between those two
+      --  rules' classes: falcon cuts it and the default does not.
+      Same ("gpt-2", Grave, "4 33", "a space before a grave accent");
+      Same ("default", Grave, "4 33", "a space before a grave accent");
+      Same ("falcon", Grave, "4 9 32", "a space before a grave accent");
 
       --  The merge table is read by rank and not by position in the file.
       --  " ab" can be cut into a space and "ab" or into the single piece the
@@ -2812,8 +2954,8 @@ package body Tests.GGUF_Cases is
       --  a file that was written properly -- and a file that was not is what
       --  this program exists to survive. It used to be dropped, which
       --  deleted part of the caller's own prompt without saying so. The
-      --  fixture carries no piece for an apostrophe, so a contraction is
-      --  exactly that case.
+      --  fixture carries no piece for a hash or for the letter z, so a word
+      --  built from them is exactly that case.
       declare
          Image  : B.Byte_Array_Access;
          Item   : Containers.Container;
@@ -2828,7 +2970,7 @@ package body Tests.GGUF_Cases is
          Vocab.Load (Words, Item, Status => Status);
          Assert (E.Is_Ok (Status), "the byte-pair vocabulary did not load");
 
-         Vocab.Encode (Words, "ab's", False, False, Tokens, Last, Status);
+         Vocab.Encode (Words, "ab#z", False, False, Tokens, Last, Status);
          Assert (E.Is_Ok (Status),
                  "text with no piece of its own was refused: "
                  & E.Error_Code'Image (Status.Code));

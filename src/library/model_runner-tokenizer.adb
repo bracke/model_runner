@@ -30,6 +30,18 @@ package body Model_Runner.Tokenizer is
    --  Largest token text accepted from a vocabulary entry.
    Max_Token_Bytes : constant := 1024;
 
+   --  How large a normalization table this will read. A published one is
+   --  about a quarter of a megabyte; four is room for one much larger and
+   --  a refusal for a file that states a hundred, which costs the reader
+   --  nothing to state and would cost this the memory to hold.
+   Max_Charsmap : constant := 4 * 1024 * 1024;
+
+   --  How long a normalized text this will find a best path through. The
+   --  path costs one record a byte of it, and the table the file carries
+   --  may make a byte into several, so the bound is on what comes out of
+   --  the normalization rather than on what went into it.
+   Max_Normalized : constant := 1024 * 1024;
+
    --  Largest number of code points a single Encode call will process. The
    --  merge loop is quadratic in the symbol count, so this bound is what keeps
    --  a hostile prompt from costing unbounded time.
@@ -46,6 +58,12 @@ package body Model_Runner.Tokenizer is
 
    procedure Deallocate is
      new Ada.Unchecked_Deallocation (String, Text_Pool);
+
+   procedure Free_Nodes is
+     new Ada.Unchecked_Deallocation (Trie_Nodes, Trie_Access);
+
+   procedure Free_Charsmap is
+     new Ada.Unchecked_Deallocation (Charsmap_Table, Charsmap_Access);
 
    -----------
    -- Close --
@@ -67,6 +85,21 @@ package body Model_Runner.Tokenizer is
       Item.Byte_Tokens := [others => No_Token];
       Item.Byte_Fallback := False;
       Item.Longest_Marker := 0;
+      Item.Marker_Starts := [others => False];
+      Item.Space_Prefix := True;
+      Item.Merge_Spaces := False;
+      Item.Longest_Piece := 0;
+      Item.Unknown_Cost := 0.0;
+
+      if Item.Charsmap /= null then
+         if Item.Charsmap.Nodes /= null then
+            Free_Nodes (Item.Charsmap.Nodes);
+         end if;
+         if Item.Charsmap.Replacements /= null then
+            Deallocate (Item.Charsmap.Replacements);
+         end if;
+         Free_Charsmap (Item.Charsmap);
+      end if;
    exception
       when others =>
          Item.Loaded := False;
@@ -279,6 +312,8 @@ package body Model_Runner.Tokenizer is
                   return;
                end if;
             end;
+         elsif Name = "t5" then
+            Item.Model := Kind_Unigram;
          elsif Name = "gpt2" then
             Item.Model := Kind_BPE;
 
@@ -299,23 +334,62 @@ package body Model_Runner.Tokenizer is
                Cutting : constant String :=
                  Containers.String_Value (Source, "tokenizer.ggml.pre");
             begin
-               if Cutting = "" or else Cutting = "gpt-2"
-                 or else Cutting = "starcoder"
+               if Cutting = "" or else Cutting = "default" then
+                  --  What a vocabulary that names no rule is cut by,
+                  --  and what the name "default" asks for outright. It is
+                  --  not the original rule: it cuts every run of
+                  --  punctuation out of the text first, which loses the
+                  --  contractions and the space before a full stop, and it
+                  --  takes digits in threes with nothing before them. The
+                  --  other runtime says as much when it reads such a file,
+                  --  in four lines of capitals about degraded quality.
+                  Item.Cutting := Rule_Default;
+               elsif Cutting = "gpt-2" or else Cutting = "mpt"
+                 or else Cutting = "olmo" or else Cutting = "jais"
+                 or else Cutting = "trillion"
+                 or else Cutting = "granite-docling" or else Cutting = "phi-2"
+                 or else Cutting = "gigachat" or else Cutting = "a.x-4.0"
+                 or else Cutting = "mellum" or else Cutting = "modern-bert"
+                 or else Cutting = "roberta-bpe" or else Cutting = "exaone4"
+                 or else Cutting = "jina-es" or else Cutting = "jina-de"
+                 or else Cutting = "jina-v1-en" or else Cutting = "jina-v2-es"
+                 or else Cutting = "jina-v2-de"
+                 or else Cutting = "jina-v2-code"
                then
                   Item.Cutting := Rule_GPT2;
                elsif Cutting = "falcon" then
-                  --  Leads a run as the original does, but groups digits in
-                  --  threes as the later rules do, which only shows on a run
-                  --  of four or more.
+                  --  Leads a run as the original does, but cuts
+                  --  punctuation out first and groups digits in threes,
+                  --  which only shows on a run of three or more.
                   Item.Cutting := Rule_Falcon;
-               elsif Cutting = "llama3" or else Cutting = "llama-bpe" then
+               elsif Cutting = "llama3" or else Cutting = "llama-v3"
+                 or else Cutting = "llama-bpe" or else Cutting = "falcon3"
+                 or else Cutting = "falcon-h1" or else Cutting = "pixtral"
+                 or else Cutting = "midm-2.0" or else Cutting = "lfm2"
+                 or else Cutting = "jina-v5-nano" or else Cutting = "dbrx"
+                 or else Cutting = "smaug-bpe" or else Cutting = "glm4"
+                 or else Cutting = "chatglm-bpe"
+               then
                   Item.Cutting := Rule_Llama3;
-               elsif Cutting = "qwen2" then
+               elsif Cutting = "qwen2" or else Cutting = "stablelm2"
+                 or else Cutting = "deepseek-r1-qwen"
+                 or else Cutting = "kormo" or else Cutting = "f2llmv2"
+                 or else Cutting = "megrez" or else Cutting = "hunyuan"
+                 or else Cutting = "grok-2" or else Cutting = "solar-open"
+               then
                   Item.Cutting := Rule_Qwen2;
-               elsif Cutting = "smollm" then
-                  --  Leads a run as the original does -- a space may, a tab
-                  --  may not -- and takes digits one at a time with nothing
-                  --  before them, as qwen2 does.
+               elsif Cutting = "smollm" or else Cutting = "starcoder"
+                 or else Cutting = "refact" or else Cutting = "command-r"
+                 or else Cutting = "codeshell" or else Cutting = "exaone"
+                 or else Cutting = "minerva-7b" or else Cutting = "mellum2"
+               then
+                  --  Leads a run as the original does -- a space may, a
+                  --  tab may not -- and takes digits one at a time with
+                  --  nothing before them, as qwen2 does. Starcoder is on
+                  --  this rule and not the original one: the two are one
+                  --  block in the other runtime, and the vocabulary
+                  --  starcoder ships cannot tell them apart because no
+                  --  piece of it spans a digit and anything else.
                   Item.Cutting := Rule_SmolLM;
                else
                   Item.Model := Kind_Unsupported;
@@ -374,6 +448,16 @@ package body Model_Runner.Tokenizer is
             Has_Scores := False;
          end if;
 
+         --  On the unigram road the scores are not an aid to the answer,
+         --  they are the answer: what is chosen is the cut whose scores sum
+         --  highest. A vocabulary without them merges left to right on
+         --  every other road and means nothing at all on this one, so it is
+         --  refused rather than read as a vocabulary of equals.
+         if Item.Model = Kind_Unigram and then not Has_Scores then
+            Status := E.Make (E.Tokenizer_Invalid_Scores);
+            return;
+         end if;
+
          Containers.Get_Array_Length
            (Source, "tokenizer.ggml.token_type",
             Model_Runner.GGUF.Value_Int32, Probe, Scratch);
@@ -415,6 +499,10 @@ package body Model_Runner.Tokenizer is
 
          Item.Pool := new String (1 .. Natural'Max (Total, 1));
       end;
+
+      --  The running lowest score, which becomes what an unseen character
+      --  costs once every piece has been read.
+      Item.Unknown_Cost := Float'Last;
 
       for Index in 1 .. Count loop
          declare
@@ -471,9 +559,25 @@ package body Model_Runner.Tokenizer is
 
             if Entry_Value.Class in Class_Control | Class_User_Defined
               and then Last > 0
-              and then Buffer (1) = '<'
             then
                Item.Longest_Marker := Natural'Max (Item.Longest_Marker, Last);
+               Item.Marker_Starts (Buffer (1)) := True;
+            end if;
+
+            --  What the best-path road needs about the vocabulary as a
+            --  whole: how far ahead a piece can reach, and the lowest score
+            --  an ordinary piece carries. The lowest is taken over the
+            --  ordinary pieces alone, because the special ones are written
+            --  with a score of zero or with a filler and neither says
+            --  anything about what a rare piece costs.
+            if Last > 0 then
+               Item.Longest_Piece := Natural'Max (Item.Longest_Piece, Last);
+            end if;
+
+            if Entry_Value.Class = Class_Normal
+              and then Entry_Value.Score < Item.Unknown_Cost
+            then
+               Item.Unknown_Cost := Entry_Value.Score;
             end if;
 
             declare
@@ -526,6 +630,27 @@ package body Model_Runner.Tokenizer is
 
          Refused : Boolean;
       begin
+         --  The WordPiece road carries its own identifiers before any key is
+         --  read, because the road is what decides them and not the file.
+         --  The other runtime sets 101, 102 and 100 for a `bert` vocabulary
+         --  and lets the file override; a published jina-bert-v2 states
+         --  `cls_token_id` and `seperator_token_id` and neither
+         --  `bos_token_id` nor `eos_token_id`, so read the two keys alone it
+         --  wraps its text in nothing at all -- six tokens where the model
+         --  was trained on eight, which is the same fault the all-MiniLM
+         --  flags were and in a different key.
+         --
+         --  Guarded by the vocabulary's own size, because a fixture may be
+         --  smaller than the identifiers a real one uses and an identifier
+         --  outside the vocabulary is worse than none.
+         if Item.Model = Kind_WordPiece then
+            if Count > 103 then
+               Item.Beginning := 101;
+               Item.Ending := 102;
+               Item.Unknown := 100;
+            end if;
+         end if;
+
          Special ("tokenizer.ggml.bos_token_id", Item.Beginning, Refused);
          if Refused then
             return;
@@ -536,8 +661,30 @@ package body Model_Runner.Tokenizer is
             return;
          end if;
 
+         --  And the name this road's own files use for the piece that ends
+         --  a text, which the other runtime reads with the format's own
+         --  spelling of "separator".
+         if Item.Model = Kind_WordPiece then
+            Special ("tokenizer.ggml.seperator_token_id", Item.Ending,
+                     Refused);
+            if Refused then
+               return;
+            end if;
+         end if;
+
          Special ("tokenizer.ggml.unknown_token_id", Item.Unknown, Refused);
          if Refused then
+            return;
+         end if;
+
+         --  The best-path road needs a piece to stand for what it cannot
+         --  spell: the edge across an unseen character is the only thing
+         --  keeping the lattice connected, so a vocabulary naming no
+         --  unknown identifier has no answer at all for one character it
+         --  has never seen. Refused here rather than at the first
+         --  surprising prompt.
+         if Item.Model = Kind_Unigram and then Item.Unknown = No_Token then
+            Status := E.Make (E.Tokenizer_Missing_Byte_Fallback);
             return;
          end if;
       end;
@@ -578,7 +725,45 @@ package body Model_Runner.Tokenizer is
             Status := Scratch;
             return;
          end if;
+
+         --  And whether the SentencePiece road writes a marker before the
+         --  first character. Absent means it does, which is what every such
+         --  vocabulary meant until gemma2 and gemma3 said otherwise; this
+         --  had not been read at all, so both were given every prompt with
+         --  a marker they were not trained to see and answered a question
+         --  spelled differently from the one asked.
+         Containers.Get_Boolean
+           (Source, "tokenizer.ggml.add_space_prefix", Flag, Scratch);
+         if E.Is_Ok (Scratch) then
+            Item.Space_Prefix := Flag;
+         elsif Scratch.Code /= E.GGUF_Missing_Metadata_Key then
+            Status := Scratch;
+            return;
+         end if;
+
+         --  And whether a run of whitespace becomes one marker or as many
+         --  markers as there were spaces, which a unigram file states and
+         --  the other roads do not ask.
+         Containers.Get_Boolean
+           (Source, "tokenizer.ggml.remove_extra_whitespaces", Flag, Scratch);
+         if E.Is_Ok (Scratch) then
+            Item.Merge_Spaces := Flag;
+         elsif Scratch.Code /= E.GGUF_Missing_Metadata_Key then
+            Status := Scratch;
+            return;
+         end if;
       end;
+
+      --  What an unseen character costs on the best-path road: the lowest
+      --  score any ordinary piece carries, less ten. The ten is what the
+      --  architecture's own implementations use; what matters about it is
+      --  that it is worse than any piece and by enough that a path through
+      --  an unknown is never taken where a path through pieces exists.
+      --  Zero where nothing set a lowest, which is a vocabulary of no
+      --  ordinary pieces and no road at all.
+      Item.Unknown_Cost :=
+        (if Item.Unknown_Cost = Float'Last then 0.0
+         else Item.Unknown_Cost - 10.0);
 
       --  Byte fallback is a property of the vocabulary, not a claim in the
       --  metadata: it holds only when every byte value has a token.
@@ -654,6 +839,104 @@ package body Model_Runner.Tokenizer is
          end;
       end if;
 
+      --  The normalization table, for the road that carries one.
+      --
+      --  A unigram file states the text it was trained on already changed:
+      --  a table from an input prefix to what replaces it, compiled into a
+      --  double array and carried in the file itself. It is the model's own
+      --  table and no two files need agree about it, which is why it is
+      --  read rather than worked out here -- and why a file that states one
+      --  and is tokenized as though it had not is a file answered in the
+      --  wrong pieces.
+      --
+      --  The layout, as the format writes it: four bytes of length, that
+      --  many bytes of trie, and the rest a pool of replacement strings the
+      --  trie points into, each ended by a zero byte.
+      if E.Is_Ok (Status) and then Item.Model = Kind_Unigram then
+         declare
+            Bytes : Natural := 0;
+            Value : Long_Long_Integer;
+            Span  : Natural;
+         begin
+            Containers.Get_Array_Length
+              (Source, "tokenizer.ggml.precompiled_charsmap",
+               Model_Runner.GGUF.Value_UInt8, Bytes, Scratch);
+
+            if E.Is_Error (Scratch)
+              and then Scratch.Code /= E.GGUF_Missing_Metadata_Key
+            then
+               Status := E.Make (E.Tokenizer_Invalid_Vocabulary);
+               return;
+            end if;
+
+            if E.Is_Ok (Scratch) and then Bytes > 0 then
+               if Bytes < 8 or else Bytes > Max_Charsmap then
+                  Status := E.Make (E.Tokenizer_Invalid_Vocabulary);
+                  E.Add_Integer (Status, "size", Long_Long_Integer (Bytes));
+                  E.Add_Integer
+                    (Status, "limit", Long_Long_Integer (Max_Charsmap));
+                  return;
+               end if;
+
+               declare
+                  Whole : String (1 .. Bytes);
+               begin
+                  for Index in 1 .. Bytes loop
+                     Containers.Get_Integer_Element
+                       (Source, "tokenizer.ggml.precompiled_charsmap",
+                        Index, Value, Scratch);
+                     if E.Is_Error (Scratch) then
+                        Status := E.Make (E.Tokenizer_Invalid_Vocabulary);
+                        return;
+                     end if;
+                     Whole (Index) :=
+                       Character'Val (Natural (Value) mod 256);
+                  end loop;
+
+                  --  The trie's length, little-endian as the format writes
+                  --  every number, and a whole number of four-byte nodes
+                  --  that leaves room for a replacement pool after it.
+                  Span :=
+                    Character'Pos (Whole (1))
+                    + Character'Pos (Whole (2)) * 256
+                    + Character'Pos (Whole (3)) * 65_536
+                    + Character'Pos (Whole (4)) * 16_777_216;
+
+                  if Span mod 4 /= 0 or else Span + 4 >= Bytes then
+                     Status := E.Make (E.Tokenizer_Invalid_Vocabulary);
+                     E.Add_Integer (Status, "size", Long_Long_Integer (Span));
+                     return;
+                  end if;
+
+                  Item.Charsmap := new Charsmap_Table;
+                  Item.Charsmap.Nodes := new Trie_Nodes (0 .. Span / 4 - 1);
+                  for Node in Item.Charsmap.Nodes'Range loop
+                     declare
+                        At_Byte : constant Natural := 5 + Node * 4;
+                        use type Interfaces.Unsigned_32;
+                     begin
+                        Item.Charsmap.Nodes (Node) :=
+                          Interfaces.Unsigned_32
+                            (Character'Pos (Whole (At_Byte)))
+                          + Interfaces.Shift_Left
+                              (Interfaces.Unsigned_32
+                                 (Character'Pos (Whole (At_Byte + 1))), 8)
+                          + Interfaces.Shift_Left
+                              (Interfaces.Unsigned_32
+                                 (Character'Pos (Whole (At_Byte + 2))), 16)
+                          + Interfaces.Shift_Left
+                              (Interfaces.Unsigned_32
+                                 (Character'Pos (Whole (At_Byte + 3))), 24);
+                     end;
+                  end loop;
+
+                  Item.Charsmap.Replacements :=
+                    new String'(Whole (Span + 5 .. Bytes));
+               end;
+            end if;
+         end;
+      end if;
+
       Item.Loaded := True;
       Status := E.Success;
    exception
@@ -704,6 +987,97 @@ package body Model_Runner.Tokenizer is
    --  description agrees; what they cannot settle is the description itself,
    --  which needs a second runtime and a real vocabulary -- see
    --  docs/reference-runtime.md.
+
+   --  Unicode's punctuation categories -- Pc, Pd, Pe, Pf, Pi, Po and Ps --
+   --  as ranges. Both roads need them, and both need punctuation and not
+   --  "everything that is neither letter nor digit": a currency sign, a
+   --  degree sign and a multiplication sign are symbols, and the difference
+   --  shows in the answer twice. Two of the byte-pair rules cut every run of
+   --  punctuation out of the text before anything else looks at it, so
+   --  " €5" keeps the space with the sign there and " —b" does not; and
+   --  WordPiece cuts a word at punctuation, so "±5" is one word and "a€b"
+   --  is two.
+   --
+   --  Ada.Wide_Wide_Characters.Handling answers for letters, digits and
+   --  spaces and has no general-category test, so the set is written out.
+   --  It is 191 ranges over 842 code points, and it was taken from a
+   --  Unicode database rather than from the other runtime: the two agree on
+   --  every one of those code points and on no code point outside them,
+   --  which is what makes the table evidence rather than a copy.
+   type Span is record
+      First : Natural;
+      Last  : Natural;
+   end record;
+
+   Punctuation : constant array (1 .. 191) of Span :=
+     [(33, 35), (37, 42), (44, 47), (58, 59), (63, 64), (91, 93),
+      (95, 95), (123, 123), (125, 125), (161, 161), (167, 167),
+      (171, 171), (182, 183), (187, 187), (191, 191), (894, 894),
+      (903, 903), (1370, 1375), (1417, 1418), (1470, 1470),
+      (1472, 1472), (1475, 1475), (1478, 1478), (1523, 1524),
+      (1545, 1546), (1548, 1549), (1563, 1563), (1565, 1567),
+      (1642, 1645), (1748, 1748), (1792, 1805), (2039, 2041),
+      (2096, 2110), (2142, 2142), (2404, 2405), (2416, 2416),
+      (2557, 2557), (2678, 2678), (2800, 2800), (3191, 3191),
+      (3204, 3204), (3572, 3572), (3663, 3663), (3674, 3675),
+      (3844, 3858), (3860, 3860), (3898, 3901), (3973, 3973),
+      (4048, 4052), (4057, 4058), (4170, 4175), (4347, 4347),
+      (4960, 4968), (5120, 5120), (5742, 5742), (5787, 5788),
+      (5867, 5869), (5941, 5942), (6100, 6102), (6104, 6106),
+      (6144, 6154), (6468, 6469), (6686, 6687), (6816, 6822),
+      (6824, 6829), (7002, 7008), (7037, 7038), (7164, 7167),
+      (7227, 7231), (7294, 7295), (7360, 7367), (7379, 7379),
+      (8208, 8231), (8240, 8259), (8261, 8273), (8275, 8286),
+      (8317, 8318), (8333, 8334), (8968, 8971), (9001, 9002),
+      (10088, 10101), (10181, 10182), (10214, 10223), (10627, 10648),
+      (10712, 10715), (10748, 10749), (11513, 11516), (11518, 11519),
+      (11632, 11632), (11776, 11822), (11824, 11855), (11858, 11869),
+      (12289, 12291), (12296, 12305), (12308, 12319), (12336, 12336),
+      (12349, 12349), (12448, 12448), (12539, 12539), (42238, 42239),
+      (42509, 42511), (42611, 42611), (42622, 42622), (42738, 42743),
+      (43124, 43127), (43214, 43215), (43256, 43258), (43260, 43260),
+      (43310, 43311), (43359, 43359), (43457, 43469), (43486, 43487),
+      (43612, 43615), (43742, 43743), (43760, 43761), (44011, 44011),
+      (64830, 64831), (65040, 65049), (65072, 65106), (65108, 65121),
+      (65123, 65123), (65128, 65128), (65130, 65131), (65281, 65283),
+      (65285, 65290), (65292, 65295), (65306, 65307), (65311, 65312),
+      (65339, 65341), (65343, 65343), (65371, 65371), (65373, 65373),
+      (65375, 65381), (65792, 65794), (66463, 66463), (66512, 66512),
+      (66927, 66927), (67671, 67671), (67871, 67871), (67903, 67903),
+      (68176, 68184), (68223, 68223), (68336, 68342), (68409, 68415),
+      (68505, 68508), (69293, 69293), (69461, 69465), (69510, 69513),
+      (69703, 69709), (69819, 69820), (69822, 69825), (69952, 69955),
+      (70004, 70005), (70085, 70088), (70093, 70093), (70107, 70107),
+      (70109, 70111), (70200, 70205), (70313, 70313), (70731, 70735),
+      (70746, 70747), (70749, 70749), (70854, 70854), (71105, 71127),
+      (71233, 71235), (71264, 71276), (71353, 71353), (71484, 71486),
+      (71739, 71739), (72004, 72006), (72162, 72162), (72255, 72262),
+      (72346, 72348), (72350, 72354), (72448, 72457), (72769, 72773),
+      (72816, 72817), (73463, 73464), (73539, 73551), (73727, 73727),
+      (74864, 74868), (77809, 77810), (92782, 92783), (92917, 92917),
+      (92983, 92987), (92996, 92996), (93847, 93850), (94178, 94178),
+      (113823, 113823), (121479, 121483), (125278, 125279)];
+
+   function Is_Punctuation (Code_Point : Natural) return Boolean is
+      Low  : Natural := Punctuation'First;
+      High : Natural := Punctuation'Last;
+   begin
+      while Low <= High loop
+         declare
+            Middle : constant Natural := Low + (High - Low) / 2;
+         begin
+            if Code_Point < Punctuation (Middle).First then
+               High := Middle - 1;
+            elsif Code_Point > Punctuation (Middle).Last then
+               Low := Middle + 1;
+            else
+               return True;
+            end if;
+         end;
+      end loop;
+      return False;
+   end Is_Punctuation;
+
    package BPE is
 
       --  Each byte as the printable character that stands for it, as the
@@ -781,6 +1155,18 @@ package body Model_Runner.Tokenizer is
           or else Handling.Is_Space (Wide (Code_Point))
           or else Handling.Is_Line_Terminator (Wide (Code_Point)));
 
+      --  What the two rules that pre-split cut whole: Unicode punctuation,
+      --  the eight symbols they name outright -- $ + < = > ^ ~ | -- and the
+      --  grave accent, which falcon names and the default does not. That one
+      --  character is the whole difference between their classes, and it
+      --  shows on " `b": the default leaves the space on the accent and
+      --  falcon does not.
+      function Cuts_Whole
+        (Code_Point : Natural; Rule : Cut_Rule) return Boolean
+      is (Code_Point in 36 | 43 | 60 | 61 | 62 | 94 | 124 | 126
+          or else (Rule = Rule_Falcon and then Code_Point = 96)
+          or else Is_Punctuation (Code_Point));
+
       function Cut_At
         (Text : String; From : Positive; Rule : Cut_Rule) return Natural
       is
@@ -804,6 +1190,15 @@ package body Model_Runner.Tokenizer is
          Here, Wide_Here : Natural;
          Next, Wide_Next : Natural;
 
+         --  Two rules cut every run of punctuation out of the text before
+         --  the rest of the rule looks at it. That one step decides three
+         --  things at once, and each of them is a different answer: a
+         --  contraction is cut at its apostrophe rather than kept whole, a
+         --  space before punctuation is left standing alone rather than
+         --  leading it, and a run of punctuation is told apart from the
+         --  symbols beside it.
+         Splits : constant Boolean := Rule in Rule_Falcon | Rule_Default;
+
          --  The contractions, cut off whole and before anything else looks.
          type Contraction is access constant String;
          Ones : constant array (1 .. 7) of Contraction :=
@@ -811,7 +1206,10 @@ package body Model_Runner.Tokenizer is
             new String'("'ve"), new String'("'m"), new String'("'ll"),
             new String'("'d")];
 
-         --  True while the code point after Index is of the kind wanted.
+         --  True while the code point after Index is of the kind wanted:
+         --  1 a letter, 2 a digit, 3 a space, 5 a character the rule cuts
+         --  whole, 6 one it does not and which is none of the first three,
+         --  and anything else none of the first three.
          function Runs_On (Kind : Natural) return Boolean is
             Value, Width : Natural;
          begin
@@ -826,11 +1224,32 @@ package body Model_Runner.Tokenizer is
                when 1 => return Is_Letter (Value);
                when 2 => return Is_Digit (Value);
                when 3 => return Is_Space (Value);
+               when 5 => return Cuts_Whole (Value, Rule);
+               when 6 =>
+                  return not Is_Letter (Value) and then not Is_Digit (Value)
+                    and then not Is_Space (Value)
+                    and then not Cuts_Whole (Value, Rule);
                when others =>
                   return not Is_Letter (Value) and then not Is_Digit (Value)
                     and then not Is_Space (Value);
             end case;
          end Runs_On;
+
+         --  How many digits run on from the code point after Index, up to
+         --  three, which is as far as any rule asks.
+         function Digits_Ahead return Natural is
+            At_Byte : Natural := Index + Wide_Here;
+            Value, Width : Natural;
+            Seen : Natural := 0;
+         begin
+            while Seen < 3 and then At_Byte <= Text'Last loop
+               Look (At_Byte, Value, Width);
+               exit when Width = 0 or else not Is_Digit (Value);
+               Seen := Seen + 1;
+               At_Byte := At_Byte + Width;
+            end loop;
+            return Seen;
+         end Digits_Ahead;
 
          --  Step over the code point at Index.
          procedure Step is
@@ -846,32 +1265,47 @@ package body Model_Runner.Tokenizer is
             return Text'Last;
          end if;
 
-         for One of Ones loop
-            if Index + One'Length - 1 <= Text'Last
-              and then Text (Index .. Index + One'Length - 1) = One.all
-            then
-               return Index + One'Length - 1;
-            end if;
-         end loop;
+         --  The contractions, but only where nothing has cut the apostrophe
+         --  out from under them first. An apostrophe is punctuation, so a
+         --  rule that pre-splits punctuation never sees "'s" as a piece at
+         --  all: it sees "'" and then "s". The seven names are still in the
+         --  expression the rule is written as, and they never match.
+         if not Splits then
+            for One of Ones loop
+               if Index + One'Length - 1 <= Text'Last
+                 and then Text (Index .. Index + One'Length - 1) = One.all
+               then
+                  return Index + One'Length - 1;
+               end if;
+            end loop;
+         end if;
 
          Look (Index, Here, Wide_Here);
          Look (Index + Wide_Here, Next, Wide_Next);
 
-         --  What may lead a word. Under the original rule only a space may,
-         --  and under the later ones any single character that is neither a
-         --  letter, a digit, nor a line ending -- which is why a tab joins
-         --  the word after it there and stands alone here.
-         --  What may lead a run depends on both rules and on what follows.
+         --  What may lead a run depends on the rule and on what follows.
          --
          --  Under the original rule a space may lead anything: letters,
-         --  digits, or symbols. Under the later ones any single character
+         --  digits, or symbols. Under llama3 and qwen2 any single character
          --  that is neither letter, digit nor line ending may lead letters --
          --  which is why a tab joins the word after it there -- a space may
          --  still lead symbols, and nothing at all may lead digits, which is
          --  what keeps their groups of three from starting with one.
+         --
+         --  The two that pre-split are the ones that need what follows.
+         --  Falcon lets a space lead a short run of digits and not a long
+         --  one, because the step that cuts digits into threes cuts them out
+         --  of the text and leaves the space behind, and it only reaches a
+         --  run of three or more: " 12" is one piece and " 123" is two. The
+         --  default cuts every run of digits out however short, so a space
+         --  never leads digits there at all. Both leave a space standing
+         --  when what follows is punctuation, and neither does when it is a
+         --  symbol they do not cut, which is why " €5" and " —b" answer
+         --  differently under the same rule.
          if Wide_Next > 0 and then not Is_Space (Next) then
             if Is_Letter (Next) then
-               if (if Rule in Rule_GPT2 | Rule_Falcon | Rule_SmolLM
+               if (if Rule in Rule_Default | Rule_GPT2 | Rule_Falcon
+                            | Rule_SmolLM
                    then Here = 32
                    else not Is_Letter (Here) and then not Is_Digit (Here)
                         and then Here /= 13 and then Here /= 10)
@@ -880,11 +1314,17 @@ package body Model_Runner.Tokenizer is
                end if;
 
             elsif Is_Digit (Next) then
-               if Rule in Rule_GPT2 | Rule_Falcon and then Here = 32 then
+               if Here = 32
+                 and then (Rule = Rule_GPT2
+                           or else (Rule = Rule_Falcon
+                                    and then Digits_Ahead < 3))
+               then
                   Step;
                end if;
 
-            elsif Here = 32 then
+            elsif Here = 32
+              and then not (Splits and then Cuts_Whole (Next, Rule))
+            then
                Step;
             end if;
          end if;
@@ -896,11 +1336,13 @@ package body Model_Runner.Tokenizer is
 
          elsif Is_Digit (Here) then
             --  Digits run to the end under the original rule, in threes
-            --  under llama3, and one at a time under qwen2.
+            --  under falcon, llama3 and the default, and one at a time under
+            --  smollm and qwen2.
             declare
                Room : Natural :=
                  (case Rule is
                      when Rule_GPT2 => Natural'Last,
+                     when Rule_Default => 3,
                      when Rule_Falcon => 3,
                      when Rule_Llama3 => 3,
                      when Rule_SmolLM | Rule_Qwen2 => 1);
@@ -921,6 +1363,20 @@ package body Model_Runner.Tokenizer is
                Index := Index - 1;
                return Index + Wide_Here - 1 - (Wide_Here - 1);
             end if;
+
+         elsif Splits and then Cuts_Whole (Here, Rule) then
+            --  A run of what the rule cuts whole, and nothing else: the
+            --  symbols it leaves alone end the run rather than joining it,
+            --  which is what tells "`+" under falcon from "`" and "+" under
+            --  the default.
+            while Runs_On (5) loop
+               Step;
+            end loop;
+
+         elsif Splits then
+            while Runs_On (6) loop
+               Step;
+            end loop;
 
          else
             while Runs_On (4) loop
@@ -1019,21 +1475,19 @@ package body Model_Runner.Tokenizer is
           or else Code_Point in 16#2F800# .. 16#2FA1F#);
 
       --  Punctuation as this preprocessing counts it, which is wider than
-      --  the category of that name: every ASCII character that is neither
-      --  letter nor digit counts, so "$" and "+" and "`" cut a word even
-      --  though Unicode files them under symbol rather than punctuation.
+      --  the category of that name in ASCII and exactly it outside: every
+      --  ASCII character that is neither letter nor digit counts, so "$"
+      --  and "+" and "`" cut a word even though Unicode files them under
+      --  symbol -- and no character above ASCII does unless the category
+      --  says so. Reading "graphic and not alphanumeric" for those instead
+      --  cut a word at every currency, degree and trademark sign, which the
+      --  published bge vocabulary settles: it spells "±5" as one word.
       function Punctuation (Code_Point : Natural) return Boolean
       is (Code_Point in 33 .. 47
           or else Code_Point in 58 .. 64
           or else Code_Point in 91 .. 96
           or else Code_Point in 123 .. 126
-          or else (Code_Point > 127
-                   and then Handling.Is_Punctuation_Connector (Wide (Code_Point)))
-          or else (Code_Point > 127
-                   and then not Handling.Is_Alphanumeric (Wide (Code_Point))
-                   and then Handling.Is_Graphic (Wide (Code_Point))
-                   and then not Handling.Is_Space (Wide (Code_Point))
-                   and then not Ideograph (Code_Point)));
+          or else (Code_Point > 127 and then Is_Punctuation (Code_Point)));
 
       function Stands_Alone (Code_Point : Natural) return Boolean
       is (Ideograph (Code_Point) or else Punctuation (Code_Point));
@@ -1078,9 +1532,9 @@ package body Model_Runner.Tokenizer is
    --  sees the letters answers in letters, ending its turn by spelling the
    --  marker out instead of stopping.
    --
-   --  Only positions opening a bracket are tried, so ordinary text that
-   --  merely starts with one is untouched, and the longest match wins, so a
-   --  marker that is a prefix of another cannot take its place.
+   --  Only positions whose byte some piece begins with are tried, so
+   --  ordinary text costs one array read a position, and the longest match
+   --  wins, so a marker that is a prefix of another cannot take its place.
    procedure Marker_At
      (Item   : Vocabulary;
       Text   : String;
@@ -1091,7 +1545,9 @@ package body Model_Runner.Tokenizer is
       Token := No_Token;
       Length := 0;
 
-      if Item.Longest_Marker = 0 or else Text (From) /= '<' then
+      if Item.Longest_Marker = 0
+        or else not Item.Marker_Starts (Text (From))
+      then
          return;
       end if;
 
@@ -1117,6 +1573,251 @@ package body Model_Runner.Tokenizer is
          end;
       end loop;
    end Marker_At;
+
+   --  What the unigram road tokenizes: the caller's text with the file's own
+   --  normalization table applied to it and its spaces written as the marker.
+   --
+   --  Three things happen here and each of them is the file's decision
+   --  rather than this program's. A prefix the table names is replaced by
+   --  what the table says; a piece the file's author wrote in by hand is
+   --  passed through untouched, so a marker survives a table that would
+   --  otherwise rewrite it; and a byte sequence that is no character at all
+   --  becomes the replacement character, one byte at a time, rather than
+   --  failing the encode.
+   --
+   --  Then the spaces. A run of them becomes one marker where the file says
+   --  to merge them and one marker each where it does not, and a marker goes
+   --  in front of the first run of non-spaces either way -- which is the
+   --  dummy prefix, and is written for every stretch between two markers
+   --  rather than only for the first, because that is where the other
+   --  runtime puts it.
+   procedure Normalize_For_Unigram
+     (Item  : Vocabulary;
+      Text  : String;
+      Store : out Text_Pool)
+   is
+      --  How far the table's replacement pool may be walked for one entry.
+      --  A replacement is a short string; the bound is what keeps a file
+      --  whose pool is missing its final zero from being walked off the end.
+      Max_Replacement : constant := 256;
+
+      --  Where the trie says the prefix starting at From is replaced, and
+      --  by how much of the input. Zero length means the table says nothing.
+      procedure Table_Match
+        (From : Positive; At_Pool : out Natural; Span : out Natural)
+      is
+         use type Interfaces.Unsigned_32;
+
+         function Node (Index : Interfaces.Unsigned_32)
+            return Interfaces.Unsigned_32
+         is (if Item.Charsmap = null
+               or else Item.Charsmap.Nodes = null
+               or else Natural (Index) > Item.Charsmap.Nodes'Last
+             then 0
+             else Item.Charsmap.Nodes (Natural (Index)));
+
+         --  The three fields packed into one word: where this node's
+         --  children begin, which byte reached it, and whether it ends a
+         --  prefix the table names.
+         function Base (Index : Interfaces.Unsigned_32)
+            return Interfaces.Unsigned_32
+         is (Interfaces.Shift_Left
+               (Interfaces.Shift_Right (Node (Index), 10),
+                Natural (Interfaces.Shift_Right
+                           (Node (Index) and 2 ** 9, 6))));
+
+         function Check (Index : Interfaces.Unsigned_32)
+            return Interfaces.Unsigned_32
+         is (Node (Index) and (2 ** 31 or 16#FF#));
+
+         function Leaf (Index : Interfaces.Unsigned_32) return Boolean
+         is ((Interfaces.Shift_Right (Node (Index), 8) and 1) = 1);
+
+         function Value (Index : Interfaces.Unsigned_32)
+            return Interfaces.Unsigned_32
+         is (Node (Index) and (2 ** 31 - 1));
+
+         Walk : Interfaces.Unsigned_32;
+      begin
+         At_Pool := 0;
+         Span := 0;
+
+         if Item.Charsmap = null
+           or else Item.Charsmap.Nodes = null
+           or else Item.Charsmap.Nodes'Length = 0
+         then
+            return;
+         end if;
+
+         Walk := Base (0);
+         for Index in From .. Text'Last loop
+            declare
+               Byte : constant Interfaces.Unsigned_32 :=
+                 Interfaces.Unsigned_32 (Character'Pos (Text (Index)));
+               Ends : Boolean;
+            begin
+               exit when Byte = 0;
+               Walk := Walk xor Byte;
+               exit when Check (Walk) /= Byte;
+               Ends := Leaf (Walk);
+               Walk := Walk xor Base (Walk);
+               if Ends then
+                  Span := Index - From + 1;
+                  At_Pool := Natural (Value (Walk));
+               end if;
+            end;
+         end loop;
+      end Table_Match;
+
+      --  The longest piece the file's author wrote in by hand that starts
+      --  here, which the table is not allowed to rewrite.
+      function Hand_Written (From : Positive) return Natural is
+         Reach : constant Natural :=
+           Natural'Min (Item.Longest_Marker, Text'Last - From + 1);
+      begin
+         if Item.Longest_Marker = 0
+           or else not Item.Marker_Starts (Text (From))
+         then
+            return 0;
+         end if;
+
+         for Span in reverse 1 .. Reach loop
+            declare
+               Piece : constant Token_Id :=
+                 Find (Item, Text (From .. From + Span - 1));
+            begin
+               if Piece /= No_Token
+                 and then Class_Of (Item, Piece) = Class_User_Defined
+               then
+                  return Span;
+               end if;
+            end;
+         end loop;
+
+         return 0;
+      end Hand_Written;
+
+      Needed : Natural := 0;
+      Filled : Natural := 0;
+
+      --  Both passes are this walk: the first counts what it would write
+      --  and the second writes it. One walk written twice would be one walk
+      --  that can disagree with itself about the size of its own answer.
+      procedure Walk_Text (Counting : Boolean) is
+         Prepended : Boolean := False;
+         In_Word   : Boolean := False;
+
+         procedure Put (Piece : String) is
+         begin
+            if Counting then
+               Needed := Needed + Piece'Length;
+            else
+               Store (Filled + 1 .. Filled + Piece'Length) := Piece;
+               Filled := Filled + Piece'Length;
+            end if;
+         end Put;
+
+         procedure Put_Byte (Item_Byte : Character) is
+         begin
+            if Item_Byte /= ' ' then
+               if not In_Word then
+                  In_Word := True;
+                  if (Item.Space_Prefix and then not Prepended)
+                    or else Item.Merge_Spaces
+                  then
+                     Put (Space_Marker);
+                     Prepended := True;
+                  end if;
+               end if;
+               Put ([1 => Item_Byte]);
+            else
+               In_Word := False;
+               if not Item.Merge_Spaces then
+                  Put (Space_Marker);
+               end if;
+            end if;
+         end Put_Byte;
+
+         At_Byte : Positive := Text'First;
+      begin
+         while At_Byte <= Text'Last loop
+            declare
+               Kept    : constant Natural := Hand_Written (At_Byte);
+               At_Pool : Natural;
+               Span    : Natural;
+               Eaten   : Natural;
+            begin
+               if Kept > 0 then
+                  --  Passed through as written, and past the space rules
+                  --  as well: a hand-written piece is the text the author
+                  --  meant and not a run of words and spaces.
+                  if Counting then
+                     Needed := Needed + Kept;
+                  else
+                     Store (Filled + 1 .. Filled + Kept) :=
+                       Text (At_Byte .. At_Byte + Kept - 1);
+                     Filled := Filled + Kept;
+                  end if;
+                  In_Word := True;
+                  Eaten := Kept;
+               else
+                  Table_Match (At_Byte, At_Pool, Span);
+
+                  if Span > 0 then
+                     declare
+                        Pool : String renames Item.Charsmap.Replacements.all;
+                        Stop : constant Natural := Pool'First + At_Pool;
+                        Room : constant Natural :=
+                          Natural'Min (Max_Replacement, Pool'Last - Stop + 1);
+                        Seen : Natural := 0;
+                     begin
+                        while Seen < Room
+                          and then Pool (Stop + Seen) /= Character'Val (0)
+                        loop
+                           Seen := Seen + 1;
+                        end loop;
+
+                        for Offset in 0 .. Seen - 1 loop
+                           Put_Byte (Pool (Stop + Offset));
+                        end loop;
+                        Eaten := Span;
+                     end;
+                  else
+                     declare
+                        Value, Width : Natural;
+                     begin
+                        Model_Runner.UTF8.Decode_First
+                          (Text (At_Byte .. Text'Last), Value, Width);
+                        if Width = 0 then
+                           Put_Byte (Character'Val (16#EF#));
+                           Put_Byte (Character'Val (16#BF#));
+                           Put_Byte (Character'Val (16#BD#));
+                           Eaten := 1;
+                        else
+                           for Offset in 0 .. Width - 1 loop
+                              Put_Byte (Text (At_Byte + Offset));
+                           end loop;
+                           Eaten := Width;
+                        end if;
+                     end;
+                  end if;
+               end if;
+
+               At_Byte := At_Byte + Natural'Max (Eaten, 1);
+            end;
+         end loop;
+      end Walk_Text;
+   begin
+      Store := null;
+      Walk_Text (Counting => True);
+
+      if Needed = 0 then
+         return;
+      end if;
+
+      Store := new String (1 .. Needed);
+      Walk_Text (Counting => False);
+   end Normalize_For_Unigram;
 
    --  Encode text that holds no marker, on whichever road the vocabulary
    --  names. Lead says whether this text begins the caller's text, which is
@@ -1144,10 +1845,11 @@ package body Model_Runner.Tokenizer is
       procedure Free is
         new Ada.Unchecked_Deallocation (Symbol_Array, Symbol_Access);
 
-      --  SentencePiece works on text in which every space is the marker and a
-      --  dummy marker precedes the first character. Substituting up front
-      --  keeps every symbol a slice of one string, which is what makes a merge
-      --  a constant-time splice of two adjacent slices.
+      --  SentencePiece works on text in which every space is the marker and,
+      --  where the file asks for it, a dummy marker precedes the first
+      --  character. Substituting up front keeps every symbol a slice of one
+      --  string, which is what makes a merge a constant-time splice of two
+      --  adjacent slices.
       --  The working text is built on the heap and in the statement part.
       --  It is up to three times the length of the input, and a prompt of a
       --  few megabytes -- well inside the documented limit -- would exhaust
@@ -1162,7 +1864,9 @@ package body Model_Runner.Tokenizer is
          end if;
 
          --  Measure first so the buffer is exact rather than a worst case.
-         Needed := (if Lead then Space_Marker'Length else 0);
+         Needed :=
+           (if Lead and then Item.Space_Prefix then Space_Marker'Length
+            else 0);
          for Character_Value of Text loop
             Needed := Needed
               + (if Character_Value = ' ' then Space_Marker'Length else 1);
@@ -1179,7 +1883,7 @@ package body Model_Runner.Tokenizer is
                Length := Length + Piece'Length;
             end Put;
          begin
-            if Lead then
+            if Lead and then Item.Space_Prefix then
                Put (Space_Marker);
             end if;
 
@@ -1614,6 +2318,221 @@ package body Model_Runner.Tokenizer is
 
             Last := (if Refused then 0 else Produced);
             return;
+         end;
+      end if;
+
+      --  The unigram road.
+      --
+      --  Two steps and neither is a merge. The text is normalized first --
+      --  through the table the file carries, then with its spaces written as
+      --  the marker -- and then cut into the pieces whose scores sum highest
+      --  over the whole of it.
+      --
+      --  That second step is why this is a road and not a setting on the
+      --  SentencePiece one. Merging the best-scoring adjacent pair is a
+      --  greedy walk: it never reconsiders, so a merge taken early can
+      --  foreclose a split that would have scored higher whole, and a piece
+      --  that lies on the best path but never appears as the join of two
+      --  survivors is unreachable by merging at all. The scores are log
+      --  probabilities, which is what makes summing them the right thing to
+      --  do with them and comparing them the wrong one.
+      if Item.Model = Kind_Unigram then
+         declare
+            --  What the text becomes once the file's table has been applied
+            --  to it and its spaces written as the marker. On the heap for
+            --  the reason the other working text is: a prompt of a few
+            --  megabytes would exhaust the stack in a declarative part.
+            Normal : Text_Pool := null;
+
+            --  The best sum reaching each byte boundary of that text, and
+            --  the edge that reached it: where the piece began and which
+            --  piece it was.
+            type Edge is record
+               From  : Natural := 0;
+               Token : Token_Id := No_Token;
+               Sum   : Float := Float'First;
+            end record;
+
+            type Edge_Array is array (Natural range <>) of Edge;
+            type Edge_Access is access Edge_Array;
+
+            procedure Free_Edges is
+              new Ada.Unchecked_Deallocation (Edge_Array, Edge_Access);
+
+            Best : Edge_Access := null;
+
+            --  Report a full target buffer and leave nothing behind.
+            procedure Put (Code : E.Error_Code) is
+            begin
+               Status := E.Make (Code);
+               Last := 0;
+            end Put;
+
+            procedure Release is
+            begin
+               if Normal /= null then
+                  Deallocate (Normal);
+               end if;
+               if Best /= null then
+                  Free_Edges (Best);
+               end if;
+            end Release;
+         begin
+            --  Lead is not asked for here. The other runtime writes
+            --  the dummy prefix once a stretch rather than once a text, so
+            --  a marker in the middle of a prompt begins a new one; asking
+            --  Lead would put it in front of the first stretch alone.
+            Normalize_For_Unigram (Item, Text, Normal);
+
+            if Normal = null or else Normal'Length = 0 then
+               Release;
+               return;
+            end if;
+
+            if Normal'Length > Max_Normalized then
+               Put (E.Tokenizer_Input_Too_Long);
+               E.Add_Integer
+                 (Status, "limit", Long_Long_Integer (Max_Normalized));
+               Release;
+               return;
+            end if;
+
+            Best := new Edge_Array (0 .. Normal'Length);
+            Best (0) := (From => 0, Token => Item.Unknown, Sum => 0.0);
+
+            --  One code point at a time, and from each boundary every piece
+            --  the vocabulary holds that starts there. A boundary the walk
+            --  never reached carries Float'First and cannot win anything,
+            --  which is what keeps a partial character from being an edge.
+            declare
+               At_Byte : Natural := 1;
+            begin
+               while At_Byte <= Normal'Length loop
+                  declare
+                     Value, Width : Natural;
+                     Covered : Boolean := False;
+                     Reach   : constant Natural :=
+                       Natural'Min (Item.Longest_Piece,
+                                    Normal'Length - At_Byte + 1);
+                  begin
+                     Model_Runner.UTF8.Decode_First
+                       (Normal (At_Byte .. Normal'Length), Value, Width);
+                     if Width = 0 then
+                        Width := 1;
+                     end if;
+
+                     if Best (At_Byte - 1).Sum > Float'First then
+                        for Span in 1 .. Reach loop
+                           declare
+                              Piece : constant Token_Id :=
+                                Find (Item,
+                                      Normal (At_Byte .. At_Byte + Span - 1));
+                           begin
+                              if Piece /= No_Token
+                                and then Class_Of (Item, Piece)
+                                         /= Class_Control
+                              then
+                                 if Span = Width then
+                                    Covered := True;
+                                 end if;
+
+                                 declare
+                                    --  A piece the file's author wrote in
+                                    --  by hand is scored zero rather than
+                                    --  by its own score, which is what
+                                    --  makes it beat the pieces it spells
+                                    --  out to.
+                                    Worth : constant Float :=
+                                      (if Class_Of (Item, Piece)
+                                          = Class_User_Defined
+                                       then 0.0
+                                       else Score_Of (Item, Piece));
+                                    Reached : constant Float :=
+                                      Best (At_Byte - 1).Sum + Worth;
+                                 begin
+                                    if Reached
+                                       > Best (At_Byte + Span - 1).Sum
+                                    then
+                                       Best (At_Byte + Span - 1) :=
+                                         (From  => At_Byte - 1,
+                                          Token => Piece,
+                                          Sum   => Reached);
+                                    end if;
+                                 end;
+                              end if;
+                           end;
+                        end loop;
+                     end if;
+
+                     --  Where no piece covers this code point on its own,
+                     --  an edge across it at the unknown's cost. Without it
+                     --  one unseen character would leave the lattice
+                     --  unconnected and fail the whole encode.
+                     if not Covered
+                       and then Best (At_Byte - 1).Sum > Float'First
+                     then
+                        declare
+                           Reached : constant Float :=
+                             Best (At_Byte - 1).Sum + Item.Unknown_Cost;
+                        begin
+                           if Reached > Best (At_Byte + Width - 1).Sum then
+                              Best (At_Byte + Width - 1) :=
+                                (From  => At_Byte - 1,
+                                 Token => Item.Unknown,
+                                 Sum   => Reached);
+                           end if;
+                        end;
+                     end if;
+
+                     At_Byte := At_Byte + Width;
+                  end;
+               end loop;
+            end;
+
+            --  Walk the edges back from the end, then reverse. A run of
+            --  unknowns becomes one unknown: the model was never trained to
+            --  see the same piece twice for one unreadable stretch.
+            declare
+               Room  : Token_Array (1 .. Target'Length);
+               Held  : Natural := 0;
+               Where : Natural := Normal'Length;
+               Prior_Unknown : Boolean := False;
+            begin
+               loop
+                  declare
+                     This : constant Edge := Best (Where);
+                     Is_Unknown : constant Boolean :=
+                       This.Token = Item.Unknown;
+                  begin
+                     if not (Prior_Unknown and then Is_Unknown) then
+                        if Held >= Room'Length then
+                           Put (E.Tokenizer_Buffer_Too_Small);
+                           Release;
+                           return;
+                        end if;
+                        Held := Held + 1;
+                        Room (Held) := This.Token;
+                     end if;
+
+                     exit when This.From = 0;
+                     Prior_Unknown := Is_Unknown;
+                     Where := This.From;
+                  end;
+               end loop;
+
+               for Index in 1 .. Held loop
+                  Target (Target'First + Index - 1) := Room (Held - Index + 1);
+               end loop;
+               Last := Held;
+            end;
+
+            Release;
+            return;
+         exception
+            when others =>
+               Last := 0;
+               Status := E.Make (E.Internal_Invariant_Violated);
+               raise;
          end;
       end if;
 

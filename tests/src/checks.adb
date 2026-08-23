@@ -4525,6 +4525,9 @@ package body Checks is
          Matrix : constant String := Contents ("docs/support-matrix.md");
          Source : constant String :=
            Contents ("src/library/model_runner-tokenizer.adb");
+         Reader : constant String :=
+           Contents ("tests/src/reference_tokenizer.adb");
+         Quote  : constant Character := '"';
 
          --  Report whether Text holds Token.
          function Holds (Text, Token : String) return Boolean is
@@ -4588,9 +4591,64 @@ package body Checks is
                      & "source it reads");
             end if;
          end Accepted_Names;
+         --  And every cutting rule the engine accepts by name is accepted
+         --  by the independent reader too.
+         --
+         --  The two carry their own tables from a name to a rule and nothing
+         --  compared them. A name mapped one way in the engine and another
+         --  way in the reader would agree with nothing and be caught by
+         --  nothing, because the agreement test drives a dozen names and not
+         --  one test per name; a name in the engine and absent from the
+         --  reader is worse still, because the reader answers zero tokens
+         --  for a vocabulary it cannot read.
+         procedure Same_Rules is
+            Needle : constant String := "Cutting = " & Quote;
+            Index  : Natural := Source'First;
+            Found  : Natural := 0;
+         begin
+            while Index <= Source'Last - Needle'Length loop
+               if Source (Index .. Index + Needle'Length - 1) = Needle then
+                  declare
+                     From : constant Natural := Index + Needle'Length;
+                     Stop : Natural := From;
+                  begin
+                     while Stop <= Source'Last
+                       and then Source (Stop) /= Quote
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+
+                     if Stop > From then
+                        Found := Found + 1;
+                        Result.Performed := Result.Performed + 1;
+                        if not Holds (Reader,
+                                      Needle & Source (From .. Stop - 1)
+                                      & Quote)
+                        then
+                           Fail ("the tokenizer accepts "
+                                 & Source (From .. Stop - 1)
+                                 & " but the independent reader in "
+                                 & "tests/src/reference_tokenizer.adb does "
+                                 & "not");
+                        end if;
+                     end if;
+                     Index := Stop + 1;
+                  end;
+               else
+                  Index := Index + 1;
+               end if;
+            end loop;
+
+            Result.Performed := Result.Performed + 1;
+            if Found = 0 then
+               Fail ("no cutting rules found in the tokenizer; the check no "
+                     & "longer matches the source it reads");
+            end if;
+         end Same_Rules;
       begin
          Accepted_Names ("Name");
          Accepted_Names ("Cutting");
+         Same_Rules;
       end;
 
       --  The generated error-code reference must be current: a stale committed

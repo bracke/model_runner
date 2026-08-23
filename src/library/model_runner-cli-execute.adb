@@ -34,6 +34,7 @@ with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
+with Model_Runner.Tools;
 with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
 
@@ -1257,6 +1258,13 @@ package body Model_Runner.CLI.Execute is
       Rules       : aliased Model_Runner.Grammar.Compiled;
       Rules_Ready : Boolean := False;
 
+      --  The tools offered to the model. Read before anything is generated,
+      --  for the same reason a grammar is: an offer that will not parse is
+      --  the caller's mistake and is worth finding before a model is asked
+      --  to answer under it.
+      Offered     : aliased Model_Runner.Tools.Definitions;
+      Tools_Ready : Boolean := False;
+
       Cancel    : aliased Model_Runner.Cancellation.Token;
       Attached  : Boolean := False;
       Condition : E.Error_Info;
@@ -1517,6 +1525,54 @@ package body Model_Runner.CLI.Execute is
             end;
          end if;
 
+         --  The tools, and the one question worth asking about them: does
+         --  this model's template have anywhere to put them. A model told
+         --  about no tools answers as though there were none, which looks
+         --  from the outside like a model that chose not to call one.
+         if Item.Tools_Text /= null
+           or else not T.Is_Empty (Item.Tools_Path)
+         then
+            declare
+               Text : Opt.Text_Access := null;
+            begin
+               if Item.Tools_Text /= null then
+                  Text := new String'(Item.Tools_Text.all);
+               else
+                  Read_File
+                    (T.To_String (Item.Tools_Path),
+                     Model_Runner.Tools.Max_Definition_Bytes, Text,
+                     Condition);
+                  if E.Is_Error (Condition) then
+                     Fail (Condition);
+                     return;
+                  end if;
+               end if;
+
+               Model_Runner.Tools.Read (Offered, Text.all, Condition);
+               Free_Text (Text);
+
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               if not L.Template_Ready (Prepared) then
+                  Fail (L.Template_Condition (Prepared));
+                  return;
+               end if;
+
+               if not Model_Runner.Templates.Reads_Tools
+                        (L.Template (Prepared).all)
+               then
+                  Condition := E.Make (E.Tools_Not_In_Template);
+                  Fail (Condition);
+                  return;
+               end if;
+
+               Tools_Ready := True;
+            end;
+         end if;
+
          --  A saved session, before the prompt is looked at. What it fills
          --  is the cache and the history, which is exactly what the prompt
          --  would otherwise have to be read to produce; the generation then
@@ -1571,7 +1627,9 @@ package body Model_Runner.CLI.Execute is
          if Item.Prompt_Kind = Opt.Prompt_Interactive then
             Model_Runner.CLI.Interactive.Run
               (Item, Screen, Prepared, Session,
-               (if Rules_Ready then Rules'Unchecked_Access else null), Status);
+               (if Rules_Ready then Rules'Unchecked_Access else null),
+               (if Tools_Ready then Offered'Unchecked_Access else null),
+               Status);
             Cleanup;
             return;
          end if;
@@ -1710,11 +1768,70 @@ package body Model_Runner.CLI.Execute is
                         return;
                      end if;
 
+                     --  And the turns that follow it, in the order they
+                     --  were given: this is how one run closes the loop
+                     --  another opened. A reply is taken apart into what
+                     --  the model said and what it asked for, so a caller
+                     --  hands back the reply it was printed and this reads
+                     --  the calls out of it -- rather than the caller
+                     --  taking the reply apart and this trusting the
+                     --  pieces.
+                     for Turn in 1 .. Item.Turn_Count loop
+                        declare
+                           Spoken  : Opt.Text_Access := null;
+                           Reading : E.Error_Info;
+                        begin
+                           if Item.Turn_Texts (Turn) /= null then
+                              Spoken :=
+                                new String'(Item.Turn_Texts (Turn).all);
+                           else
+                              Read_File
+                                (T.To_String (Item.Turn_Paths (Turn)),
+                                 Model_Runner.Limits.Default_Session_Limits
+                                   .Max_Prompt_Bytes,
+                                 Spoken, Condition);
+                           end if;
+
+                           if E.Is_Ok (Condition) then
+                              if Opt."=" (Item.Turn_Kinds (Turn),
+                                          Opt.Turn_Tool)
+                              then
+                                 Conv.Append
+                                   (Messages, Conv.Tool_Role, Spoken.all,
+                                    Condition);
+                              elsif Tools_Ready then
+                                 Conv.Append_Reply
+                                   (Messages, Spoken.all, Condition, Reading);
+                                 if E.Is_Error (Reading) then
+                                    Pres.Report (Screen, Reading);
+                                 end if;
+                              else
+                                 Conv.Append
+                                   (Messages, Conv.Assistant_Role, Spoken.all,
+                                    Condition);
+                              end if;
+                           end if;
+
+                           Free_Text (Spoken);
+
+                           if E.Is_Error (Condition) then
+                              Free_Text (Buffer);
+                              Conv.Close (Messages);
+                              Fail (Condition);
+                              return;
+                           end if;
+                        end;
+                     end loop;
+
                      Model_Runner.Templates.Render
                        (L.Template (Prepared).all, Messages,
                         Vocab.Token_Text (Words.all, Vocab.Beginning_Token (Words.all)),
                         Vocab.Token_Text (Words.all, Vocab.End_Token (Words.all)),
-                        True, Buffer.all, Last, Condition);
+                        True, Buffer.all, Last, Condition,
+                        Thinking => Item.Thinking,
+                        Tools =>
+                          (if Tools_Ready
+                           then Offered'Unchecked_Access else null));
                      Conv.Close (Messages);
 
                      if E.Is_Error (Condition) then
@@ -1805,7 +1922,11 @@ package body Model_Runner.CLI.Execute is
                             Model_Runner.Backend.Backend_Name
                               (L.Capability (Prepared).Kind))]);
                   end if;
-                  Request.Retain_Text := False;
+                  --  What was generated is kept only where something here
+                  --  reads it back: the calls a reply asks for are read out
+                  --  of the reply, and a run that offered no tools has
+                  --  nothing to read.
+                  Request.Retain_Text := Tools_Ready;
 
                   --  Who puts the beginning token in front.
                   --
@@ -1835,6 +1956,11 @@ package body Model_Runner.CLI.Execute is
                   Request.Reuse_Committed_Prefix :=
                     not T.Is_Empty (Item.Load_Session);
 
+                  --  What the last prompt retained goes before this one
+                  --  begins: Generate starts from an empty result and would
+                  --  otherwise leave the previous run's text behind, once
+                  --  per prompt, for as many prompts as were given.
+                  Gen.Release (Outcome);
                   Gen.Generate
                     (Source   => Prepared,
                      Session  => Session,
@@ -1882,6 +2008,46 @@ package body Model_Runner.CLI.Execute is
             if Outcome.Reason = Gen.Cancelled then
                Fail (E.Make (E.Generation_Cancelled));
                return;
+            end if;
+
+            --  What the reply asked for, read out of it and shown. The
+            --  reply itself has already gone to standard output; this goes
+            --  to standard error with the rest of the diagnostics, so a
+            --  redirected run still holds only what the model wrote -- and
+            --  the caller who has to hand an answer back is told what was
+            --  asked rather than left to find it in the text.
+            if Tools_Ready then
+               declare
+                  Asked   : Model_Runner.Tools.Calls;
+                  Reading : E.Error_Info;
+               begin
+                  Model_Runner.Tools.Read_Calls
+                    (Asked, Gen.Generated_Text (Outcome), Reading);
+                  if E.Is_Error (Reading) then
+                     Pres.Report (Screen, Reading);
+                  end if;
+
+                  for Index in 1 .. Model_Runner.Tools.Count (Asked) loop
+                     declare
+                        Named : constant String :=
+                          Model_Runner.Tools.Called (Asked, Index);
+                     begin
+                        Pres.Put_Note
+                          (Screen, "cli.run.tool_call",
+                           [Loc.Named ("name", Named),
+                            Loc.Named
+                              ("arguments",
+                               Model_Runner.Tools.Arguments (Asked, Index))]);
+
+                        if not Model_Runner.Tools.Offers (Offered, Named) then
+                           Pres.Put_Note
+                             (Screen, "cli.run.tool_unknown",
+                              [Loc.Named ("name", Named)]);
+                        end if;
+                     end;
+                  end loop;
+                  Model_Runner.Tools.Close (Asked);
+               end;
             end if;
 
             --  And the context out, when it was asked for. After the run

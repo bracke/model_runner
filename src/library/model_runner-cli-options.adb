@@ -1,8 +1,6 @@
 with Ada.Command_Line;
 with Ada.Unchecked_Deallocation;
 
-with Model_Runner.Templates;
-
 package body Model_Runner.CLI.Options is
 
    --  Every option, the commands that take it, and the help line that
@@ -28,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 68) of Registry_Row :=
+   Registry : constant array (1 .. 76) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -36,6 +34,10 @@ package body Model_Runner.CLI.Options is
        [Command_Run | Command_Embed => True, others => False], Text ("prompt_file")),
       (Text ("--interactive"), [Command_Run => True, others => False], Text ("interactive")),
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
+      (Text ("--think"), [Command_Run => True, others => False],
+       Text ("think")),
+      (Text ("--no-think"), [Command_Run => True, others => False],
+       Text ("no_think")),
       (Text ("--repack"),
        [Command_Run | Command_Embed => True, others => False],
        Text ("repack")),
@@ -61,6 +63,18 @@ package body Model_Runner.CLI.Options is
        Text ("grammar")),
       (Text ("--grammar-file"), [Command_Run => True, others => False],
        Text ("grammar_file")),
+      (Text ("--tools"), [Command_Run => True, others => False],
+       Text ("tools")),
+      (Text ("--tools-file"), [Command_Run => True, others => False],
+       Text ("tools_file")),
+      (Text ("--assistant"), [Command_Run => True, others => False],
+       Text ("assistant")),
+      (Text ("--assistant-file"), [Command_Run => True, others => False],
+       Text ("assistant_file")),
+      (Text ("--tool-result"), [Command_Run => True, others => False],
+       Text ("tool_result")),
+      (Text ("--tool-result-file"), [Command_Run => True, others => False],
+       Text ("tool_result_file")),
       (Text ("--no-normalize"), [Command_Embed => True, others => False],
        Text ("no_normalize")),
       (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
@@ -352,6 +366,11 @@ package body Model_Runner.CLI.Options is
          Free_Text (Item.Schema_Text);
       end if;
 
+      if Item.Tools_Text /= null then
+         Item.Tools_Text.all := [others => ' '];
+         Free_Text (Item.Tools_Text);
+      end if;
+
       for Index in 1 .. Item.Prompt_Count loop
          if Item.Prompts (Index) /= null then
             Item.Prompts (Index).all := [others => ' '];
@@ -359,6 +378,16 @@ package body Model_Runner.CLI.Options is
          end if;
       end loop;
       Item.Prompt_Count := 0;
+
+      --  A turn is conversation text and is cleared for the reason a prompt
+      --  is.
+      for Index in 1 .. Item.Turn_Count loop
+         if Item.Turn_Texts (Index) /= null then
+            Item.Turn_Texts (Index).all := [others => ' '];
+            Free_Text (Item.Turn_Texts (Index));
+         end if;
+      end loop;
+      Item.Turn_Count := 0;
 
       if Item.Prompt_Text /= null and then Item.Prompt_Kind /= Prompt_Inline
       then
@@ -744,6 +773,7 @@ package body Model_Runner.CLI.Options is
          Flag_Grammar,
          Flag_Grammar_File,
          Flag_Schema, Flag_Schema_File,
+         Flag_Tools, Flag_Tools_File,
          Flag_Context_Shift, Flag_Context_Keep,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
@@ -857,6 +887,40 @@ package body Model_Runner.CLI.Options is
                         Free_Text (Held);
                      end if;
                   end Bounded_Value;
+
+                  --  Take one turn of the conversation, in the order it was
+                  --  written. Written once because four options differ only
+                  --  in which role the turn carries and whether its text is
+                  --  the value or the path to read it from.
+                  procedure Turn_Value
+                    (Carried   : Turn_Kind;
+                     From_File : Boolean;
+                     Good      : out Boolean) is
+                  begin
+                     if Result.Turn_Count = Max_Turns then
+                        Fail (E.CLI_Option_Out_Of_Range, Name);
+                        Good := False;
+                        return;
+                     end if;
+
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                     Result.Turn_Count := Result.Turn_Count + 1;
+                     Result.Turn_Kinds (Result.Turn_Count) := Carried;
+
+                     if From_File then
+                        Result.Turn_Paths (Result.Turn_Count) :=
+                          T.To_Bounded (Held.all);
+                        Free_Text (Held);
+                     else
+                        Result.Turn_Texts (Result.Turn_Count) := Held;
+                        Held := null;
+                     end if;
+                  end Turn_Value;
 
                   --  Read a value and store it as a natural number in range.
                   procedure Natural_Value
@@ -1096,6 +1160,51 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
 
+                  elsif Name = "--tools" then
+                     Mark (Flag_Tools, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Result.Tools_Text, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--tools-file" then
+                     Bounded_Value (Flag_Tools_File, Result.Tools_Path, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  --  The turns that follow the prompt, kept in the order
+                  --  they were written: which reply a tool's answer follows
+                  --  is the whole shape of a tool loop, and an option list
+                  --  read out of order would lose it.
+                  elsif Name = "--assistant" then
+                     Turn_Value (Turn_Assistant, False, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--assistant-file" then
+                     Turn_Value (Turn_Assistant, True, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--tool-result" then
+                     Turn_Value (Turn_Tool, False, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--tool-result-file" then
+                     Turn_Value (Turn_Tool, True, Good);
+                     if not Good then
+                        return;
+                     end if;
+
                   elsif Name = "--grammar" then
                      Mark (Flag_Grammar, Name, Good);
                      if not Good then
@@ -1241,6 +1350,26 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Raw := True;
+
+                  --  What a model that reasons before it answers is told.
+                  --  Saying neither is a third answer: the model does what
+                  --  it was trained to do, which is what its template's own
+                  --  test for the name being given a value is there for.
+                  elsif Name = "--think" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Thinking := Model_Runner.Templates.Thinking_On;
+
+                  elsif Name = "--no-think" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Thinking := Model_Runner.Templates.Thinking_Off;
 
                   elsif Name = "--system" then
                      Mark (Flag_System, Name, Good);
@@ -2113,12 +2242,63 @@ package body Model_Runner.CLI.Options is
          end if;
       end if;
 
+      if Result.Tools_Text /= null
+        and then not T.Is_Empty (Result.Tools_Path)
+      then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--tools", E.Param_Identifier);
+         E.Add_Text (Status, "other", "--tools-file", E.Param_Identifier);
+         return;
+      end if;
+
       --  Raw mode has no conversation, so a system message has nowhere to go.
       --  Accepting it silently would change what the model sees without
       --  saying so.
       if Result.Raw and then Result.Has_System then
          Status := E.Make (E.CLI_Raw_Mode_Conflict);
          E.Add_Text (Status, "option", "--system", E.Param_Identifier);
+         return;
+      end if;
+
+      --  And no conversation for a turn to be part of. A reply and a tool's
+      --  answer are turns of a conversation; raw mode has none.
+      if Result.Raw and then Result.Turn_Count > 0 then
+         Status := E.Make (E.CLI_Raw_Mode_Conflict);
+         E.Add_Text
+           (Status, "option",
+            (if Result.Turn_Kinds (1) = Turn_Tool
+             then "--tool-result" else "--assistant"),
+            E.Param_Identifier);
+         return;
+      end if;
+
+      --  A conversation typed at the program is the one it holds. Turns
+      --  given on the command line would be dropped where the interactive
+      --  history begins, and a dropped turn is a call the model made and
+      --  never sees again.
+      if Result.Prompt_Kind = Prompt_Interactive
+        and then Result.Turn_Count > 0
+      then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text
+           (Status, "option",
+            (if Result.Turn_Kinds (1) = Turn_Tool
+             then "--tool-result" else "--assistant"),
+            E.Param_Identifier);
+         E.Add_Text (Status, "other", "--interactive", E.Param_Identifier);
+         return;
+      end if;
+
+      --  And no template either, which is where the tools would have been
+      --  written. A model given tools it was never told about answers as
+      --  though there were none, which is an answer and not an error, so
+      --  this is the point at which to say so.
+      if Result.Raw
+        and then (Result.Tools_Text /= null
+                  or else not T.Is_Empty (Result.Tools_Path))
+      then
+         Status := E.Make (E.CLI_Raw_Mode_Conflict);
+         E.Add_Text (Status, "option", "--tools", E.Param_Identifier);
          return;
       end if;
 

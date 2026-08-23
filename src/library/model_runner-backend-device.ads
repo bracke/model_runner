@@ -206,6 +206,8 @@ package Model_Runner.Backend.Device is
    --  @param V_Width How far apart one position's values are from the next.
    --  @param Scale What a score is multiplied by.
    --  @param Cap The bound on a score, or zero for none.
+   --  @param Max_Bias How steeply a head's attention falls off with
+   --    distance, or zero for a model told where a token is otherwise.
    --  @param Target Receives Positions blends, each one head after
    --    another.
    --  @param Ok True when the device computed it.
@@ -238,7 +240,8 @@ package Model_Runner.Backend.Device is
       Ok         : out Boolean;
       Positions  : Natural := 1;
       Window     : Natural := 0;
-      Causal     : Boolean := True);
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
 
    --  Attend, and project the blend, in one submission.
    --
@@ -268,6 +271,8 @@ package Model_Runner.Backend.Device is
    --  @param V_Width How far apart one position's values are from the next.
    --  @param Scale What a score is multiplied by.
    --  @param Cap The bound on a score, or zero for none.
+   --  @param Max_Bias How steeply a head's attention falls off with
+   --    distance, or zero for a model told where a token is otherwise.
    --  @param Weight The matrix the blend is projected through.
    --  @param Into Receives the projection, Positions * Weight.Rows values.
    --  @param Ok True when the device computed both.
@@ -297,7 +302,8 @@ package Model_Runner.Backend.Device is
       Ok         : out Boolean;
       Positions  : Natural := 1;
       Window     : Natural := 0;
-      Causal     : Boolean := True);
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
 
    --  Several products of the same activation, in one submission.
    --

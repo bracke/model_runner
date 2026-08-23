@@ -55,6 +55,7 @@ container validation and is rejected by `Model_Runner.Tensors.Make` with
 | `gpt2` | Implemented: the oldest shape here and the only one that does not rotate. It learns where a token is -- one row a position in `position_embd.weight`, added to the token's row before the first layer -- and states `rope.dimension_count` as zero, which this build refused until gpt2 arrived because the key was read with a minimum of one. Otherwise it is `phi2`'s detail with `phi2`'s biases on every projection and a centred normalization, and llama's arrangement: two normalizations a block rather than one, because its sublayers run one after the other. Its feed-forward has no gate. Crossed with every format and both evaluation paths, in every shape but the mixture -- a router in front of experts a gateless architecture has not got describes no model anyone publishes |
 | `bert` | Implemented, and read from a file somebody else published -- all-MiniLM-L6-v2, which is what found the two things the synthetic fixture had invented: a rotary width defaulted from the head size on a file that states none, and the vocabulary convention above. The first architecture here that does not generate. It reads a whole text at once and produces a state for every position of it, and three things follow. Its attention is bidirectional -- a position sees the positions after it as well as the ones before -- which is not a parameter of attention but a fact about what the model was trained to be: a bert read causally answers, and answers with an embedding that is quietly the wrong one. Which way it attends is read from `<arch>.attention.causal` where the file states it, as a published all-MiniLM does, and taken from the architecture where it does not. It normalizes after the residual add rather than before the sublayer, `LN(x + Attn(x))` where `gemma2` computes `x + LN(Attn(x))`, which is a third arrangement beside the two already here rather than a flag on one of them. And it learns three embeddings rather than one -- a row for the token, a row for where the token is, and a row for which segment it belongs to -- summed and normalized before the first layer; the position row is `gpt2`'s, which is why there is no rotation anywhere in the model. Its normalization centres and carries a shift, as `falcon`'s and `phi2`'s do, and its feed-forward has no gate. It carries no projection from a state to a token and ties none to its embedding table, so `run` is refused by name and `embed` is what it is for. Crossed with every format and compared against the independent implementation on every position's state rather than on a distribution it has not got. Not implemented: `nomic-bert`, which is this shape with a rotation, a gated feed-forward and its normalizations back on the way in |
 | `nomic-bert` | Implemented, and read from a file somebody else published -- nomic-embed-text-v1.5. `bert`'s arrangement with three of its parts replaced, each read off a real file rather than taken from a description: it rotates where `bert` learns a row for the position, so it carries no position table at all and states `rope.freq_base` instead; its queries, keys and values are written fused as `phi3` writes them; and its feed-forward is gated, by the sigmoid-weighted unit rather than the Gaussian one `bert` uses -- two architectures of one shape need not share that. It carries no bias on any projection: only the two normalizations a block and the one over the embedding have one, which is why every bias in this profile is asked for by architecture rather than taken if present. What it keeps is what makes `bert` what it is -- attention both ways, a normalization after each residual add, a segment row beside the token's, and no projection to a distribution. It splits its rotation as everything since `llama` does -- element *i* against element *i + rotary/2* -- which was written the other way round first, from a recollection rather than from anything, and cost a cosine of 0.947 against a second runtime until that runtime was asked. Crossed with every format against the independent implementation, in the shapes it can hold: it rotates, so a stretched rotation means something to it, and it has a gate, so a router has experts to route to; a window does not, for the reason no bidirectional model has one |
+| `jina-bert-v2` | Implemented, and read from a file somebody else published -- jina-embeddings-v2-base-en. `bert`'s arrangement again, with the positions taken away entirely: it neither rotates nor learns a row for where a token is, and is told instead by a fall-off in the attention scores. One slope a head, taken off after the scale by one over the root of the head width and before the softmax, and unsigned -- a position is as far from what follows it as from what came before, which is the bidirectional form and not the one a generating model uses. The ladder of slopes has two branches and the second is only reached where the head count is not a power of two: twelve heads take eight rungs of one and four of the other, and a ladder written as the first branch alone answers with a plausible embedding for the other four. The number the ladder is built from is eight, which no published file of this architecture states and the other runtime carries in its own source; a file stating another is refused rather than cut to eight. Its feed-forward is gated by the Gaussian unit -- `nomic-bert` gates by the sigmoid-weighted one, so the two differ there as well as in the positions -- and it shifts what it projects down and nothing else. It biases the three attention projections and the one out of attention. Not implemented and refused by name: the code variant's third normalization inside the attention sublayer and its query and key normalizations, which are three tensors this does not compute and would otherwise be read as a model with three normalizations missing. Crossed with every format against the independent implementation, in the shapes it can hold: it rotates nothing, so a stretched rotation is meaningless, and a window is meaningless for the reason no bidirectional model has one; its gate gives a router experts to route to |
 | Everything else | Rejected: `MR-ARCH-0002`, which names every architecture this build does read |
 
 `llama`, `qwen2` and `qwen3` are compared against an independent
@@ -79,22 +80,30 @@ express, and an architecture identifier this build does not carry.
 | `llama` (SentencePiece) | Implemented, with byte fallback |
 | `gpt2` (byte-pair encoding) | Implemented, for the cutting rules below |
 | `bert` (WordPiece) | Implemented. Neither merges nor ranks: it changes the text first -- lower-cased, accents off, punctuation and ideographs cut loose from the words around them -- and then spells each word from the front with the longest piece the vocabulary carries. A piece that starts a word carries a leading U+2581 and one that continues a word is written bare, which is the reverse of the two-hash convention the architecture's papers describe and is what a converted vocabulary holds: of the thirty thousand pieces in a published all-MiniLM not one begins with the hashes and twenty-four thousand begin with the marker. A word no run of pieces spells is one unknown token and not the pieces that did match, because half a word spelled is a different word. A file stating `tokenizer.ggml.do_lower_case` as false is refused rather than folded anyway: a vocabulary cut without folding carries pieces with capitals in them, and folding the text before looking those up would find none of them and answer in unknowns, which is an answer and not an error |
+| `t5` (unigram) | Implemented, and read from a vocabulary somebody else published. Neither merges nor spells: it chooses, out of every way the text could be cut into pieces the vocabulary holds, the one whose scores sum highest -- the scores being log probabilities, which is why they are summed rather than compared. That is a different answer from the `llama` road's and not a better-computed one: merging the best-scoring adjacent pair first can foreclose a split that would have scored higher whole, and a piece that lies on the best path but never appears as the join of two survivors is unreachable by merging at all. A character no piece spells is an edge of its own at the lowest score in the vocabulary less ten, which is the only thing keeping the lattice connected; a run of them is one unknown token and not one each. A file without scores, or without an unknown token, is refused rather than read as a vocabulary of equals. The text is normalized first, through the table the file itself carries in `tokenizer.ggml.precompiled_charsmap` -- a compressed trie from an input prefix to what replaces it, read rather than worked out here, because it is the model's own table and no two files need agree about it |
 | Everything else | Rejected: `MR-TOK-0002` |
 
 A `gpt2` vocabulary also names the rule that cuts text before any merging
 happens, in `tokenizer.ggml.pre`. The rules differ in ways that do not show
 in the decoded text -- under the original only a space may lead a word, under
-the later ones any character that is neither letter nor digit may -- so a
-vocabulary naming a rule this does not implement is refused by name rather
-than cut by the wrong one.
+some of the later ones any character that is neither letter nor digit may,
+and two of them cut every run of punctuation out of the text before anything
+else looks at it -- so a vocabulary naming a rule this does not implement is
+refused by name rather than cut by the wrong one.
+
+Six rules, and many names for them: the rule a name asks for is what decides,
+and a great many of these names ask for the same one. The grouping is the
+other runtime's own, which files these names under six blocks of expressions
+between them.
 
 | `tokenizer.ggml.pre` | State |
 | --- | --- |
-| absent, `gpt-2`, `starcoder` | Implemented |
-| `falcon` | Implemented; leads a run as the original does, groups digits in threes |
-| `llama3`, `llama-bpe` | Implemented |
-| `qwen2` | Implemented |
-| `smollm` | Implemented |
+| absent, `default` | Implemented. What a vocabulary naming no rule is cut by, and not the original rule: it cuts punctuation out of the text first, so a contraction is two pieces and a space before a full stop stands alone, and it groups digits in threes with nothing before them. Reading an absent key as the original rule spelled every prompt to a published GPT-NeoX and a published Aquila differently from the way those models were trained |
+| `gpt-2`, `mpt`, `olmo`, `jais`, `trillion`, `granite-docling`, `phi-2`, `gigachat`, `a.x-4.0`, `mellum`, `modern-bert`, `roberta-bpe`, `exaone4`, `jina-es`, `jina-de`, `jina-v1-en`, `jina-v2-es`, `jina-v2-de`, `jina-v2-code` | Implemented; the original rule |
+| `falcon` | Implemented; leads a run as the original does, cuts punctuation out of the text first, and groups digits in threes, which shows on a run of three or more. Its punctuation class holds the grave accent where the default's does not, and that one character is the whole difference between the two |
+| `smollm`, `starcoder`, `refact`, `command-r`, `codeshell`, `exaone`, `minerva-7b`, `mellum2` | Implemented; leads a run as the original does and takes digits one at a time with nothing before them. `starcoder` belongs here and was on the original rule until a published vocabulary was read: the two are one block in the other runtime, and starcoder's own vocabulary cannot tell them apart, because no piece of it spans a digit and anything else |
+| `llama3`, `llama-v3`, `llama-bpe`, `falcon3`, `falcon-h1`, `pixtral`, `midm-2.0`, `lfm2`, `jina-v5-nano`, `dbrx`, `smaug-bpe`, `glm4`, `chatglm-bpe` | Implemented; any character that is neither letter, digit nor line ending may lead a word, so a tab joins the word after it, and digits group in threes with nothing before them |
+| `qwen2`, `stablelm2`, `deepseek-r1-qwen`, `kormo`, `f2llmv2`, `megrez`, `hunyuan`, `grok-2`, `solar-open` | Implemented; leads a run as `llama3` does and takes digits one at a time |
 | Everything else | Rejected: `MR-TOK-0002` |
 
 ## Tokenizer capabilities
@@ -103,24 +112,30 @@ than cut by the wrong one.
 | --- | --- |
 | Vocabulary with scores and token types | Implemented |
 | Greedy highest-score adjacent merge | Implemented |
-| SentencePiece space substitution and dummy prefix | Implemented |
+| Best-path segmentation over log probabilities | Implemented for `t5`, and read by a second implementation written from this description rather than from the engine's code. Not driven by a model: no architecture this build reads ships a `t5` vocabulary, so this road is exercised by the vocabulary alone -- against a published one through `tests tokenize` and against the independent reader through a fixture -- and not through a session, a generated token or the conformance sweep. The engine bounds how far a piece may reach by the longest one the vocabulary holds and looks each candidate up in a hash; the reader asks every piece of the vocabulary at every boundary, which is the same question answered the slow obvious way. The fixture they are compared on is one where merging and the best path give different answers, because a fixture where they agree would let a reader that took the wrong road pass |
+| The normalization table a unigram file carries | Implemented: the four-byte length, the compressed trie, and the pool of replacements it points into. A piece the file's author wrote in by hand is passed through the table untouched, and a byte sequence that is no character at all becomes the replacement character one byte at a time rather than failing the encode. `tokenizer.ggml.remove_extra_whitespaces` decides whether a run of spaces becomes one marker or one each |
+| SentencePiece space substitution and dummy prefix | Implemented, and the prefix is written only where the file asks for it. `tokenizer.ggml.add_space_prefix` had not been read at all, and gemma2 and gemma3 state it false: both were given every prompt with a marker in front of it that they were never trained to see, so each answered a question spelled differently from the one asked |
 | Byte fallback through `<0xNN>` tokens | Implemented |
-| Special tokens: beginning, end, unknown | Implemented |
+| Special tokens: beginning, end, unknown | Implemented. On the WordPiece road the three are what the road carries -- 101, 102 and 100 -- before any key is read, because that road wraps its text by construction; a file overrides them by `bos_token_id`, `eos_token_id` or `seperator_token_id`, spelled as the format spells it. A published jina-bert-v2 states the separator and the classifier and neither of the first two, and read for the first two alone it wrapped its text in nothing |
 | `add_bos_token` / `add_eos_token` policy | Implemented |
 | UTF-8-boundary-safe incremental decoding | Implemented |
-| BPE merge tables | Implemented for five cutting rules, which the values `gpt-2`, `starcoder`, `falcon`, `llama3`, `llama-bpe`, `qwen2` and `smollm` and an absent key name between them, in any script -- a letter is told from a symbol by its Unicode category, not by whether it is ASCII; a vocabulary naming another rule is refused by name |
+| BPE merge tables | Implemented for six cutting rules, which the fifty names in the table above and an absent key name between them, in any script -- a letter is told from a symbol by its Unicode category, not by whether it is ASCII, and punctuation is told from symbol by it too, which is why a space stays on a currency sign and leaves a dash; a vocabulary naming another rule is refused by name |
 | BPE byte-to-character mapping, both ways | Implemented; encoding rewrites each byte as the character that stands for it and decoding undoes that, which the suite checks by round trip |
 | WordPiece folding and spelling | Implemented, and read by a second implementation written from this description rather than from the engine's code. The accents come off with the standard library's basic-character mapping and any combining mark left over is dropped, which is what a canonical decomposition followed by dropping the marks arrives at for Latin text; a syllable that decomposes into pieces which are not marks -- Hangul is the case -- stays whole here where a decomposing implementation would take it apart. What a round trip gives back is the folded text and not the caller's, which is a property of the vocabulary rather than of the decoder |
-| Markers such as `<|im_start|>` or `</s>` written into the text | Implemented on both roads; the longest piece the vocabulary calls a control or user-defined token wins, so a rendered chat template reaches the model as the tokens it meant. A template substitutes `bos_token` and `eos_token` as their spelling before anything is tokenized, which is why this matters on every templated turn. The rule used to be inside the byte-pair road alone, so a SentencePiece model read its own template's end marker as a run of bytes |
+| Markers such as `<|im_start|>` or `</s>` written into the text | Implemented on both roads, and at any character a marker may begin with rather than only where the text opens a bracket. The longest piece the vocabulary calls a control or user-defined token wins, so a rendered chat template reaches the model as the tokens it meant. A template substitutes `bos_token` and `eos_token` as their spelling before anything is tokenized, which is why this matters on every templated turn. The rule used to be inside the byte-pair road alone, so a SentencePiece model read its own template's end marker as a run of bytes |
 
 What the byte-pair cut carries is a rule per vocabulary rather than a general
 engine for the expressions those pre-tokenizers are written as. Two limits
 follow: the contractions are the seven the original names, matched as written
-and so in lower case only; and a run of line endings is a run of whitespace
-rather than a run of its own. The suite settles that the engine cuts as this
-says, and that a reader written independently from this description agrees.
-What it cannot settle is the description -- that needs a second runtime and a
-real vocabulary, which is what `docs/reference-runtime.md` is about.
+and so in lower case only, and on the two rules that cut punctuation out of
+the text first they never match at all; and a run of line endings is a run of
+whitespace rather than a run of its own. The suite settles that the engine
+cuts as this says, and that a reader written independently from this
+description agrees. What it cannot settle is the description -- that needs a
+second runtime and a real vocabulary, which is what
+`docs/reference-runtime.md` is about, and which is what corrected `starcoder`,
+the absent key, falcon's space before a long run of digits, the contractions
+on those two rules, and the space prefix on gemma2 and gemma3.
 
 ## Chat-template constructs
 
@@ -128,24 +143,36 @@ real vocabulary, which is what `docs/reference-runtime.md` is about.
 | --- | --- |
 | Literal text | Implemented |
 | `{{ terms }}` joined by `+` | Implemented |
-| `{% for message in LIST %}` | Implemented; the loop variable must be named `message` |
+| `{% for message in LIST %}` | Implemented; the loop variable must be named `message`, which is also the name an assignment binds, so a template that walks the conversation by number reads the same field the same way |
+| `{% for name in range(a, b, c) %}` | Implemented, counting rather than walking a list, with a step that may count down -- which is how a template finds the last question asked, and which no list of messages can express. The three are term expressions; one argument means from zero, two mean a step of one |
 | `{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}` | Implemented |
 | `==`, `!=`, `and`, `or`, `not` | Implemented |
+| `<`, `<=`, `>`, `>=` | Implemented, reading both sides as whole numbers. A side that is not one reads as zero rather than refusing: a template comparing a name it never assigned is asking about nothing |
+| A bare operand as a condition | Implemented; the empty string, `none`, `false` and a name never assigned are false. A name the template never assigned is nothing when a condition asks about it -- `{% if tools %}` is written to find out whether there are any -- and an error when the output asks for it |
 | `bos_token`, `eos_token`, `add_generation_prompt` | Implemented |
 | `message['role']`, `message['content']`, dotted forms | Implemented |
-| `messages[0]['role']` and its like | Implemented, relative to what `messages` names at that point |
+| `messages[0]['role']` and its like | Implemented, relative to what `messages` names at that point, with the position written or worked out -- `messages[loop.index0 - 1].role` -- and the field named either way round |
 | `{# comments #}` | Implemented |
-| `{% set %}` | Implemented for a term expression, `none`, another name, and a front slice such as `messages[1:]` |
+| `{% set %}` | Implemented for a term expression, `none`, another name, a front slice such as `messages[1:]`, one message of a list such as `messages[index]`, and `namespace(a=x, b=y)` |
+| `namespace()` and its fields | Implemented. A namespace exists in that language because a name assigned inside a loop does not outlive it; names here outlive everything already, so `ns.field` is a name like any other spelled with a dot -- and what tells it from `message.role`, which is spelled the same way and is not a name, is that `ns` was made a namespace |
+| `-` between terms | Implemented, reading both sides as whole numbers. `+` runs text together, unless every term of the operand is a number by construction -- a bare number, a loop counter, a length -- and then it adds, which is the rule the language it is written in has and what `messages[loop.index0 + 1]` means. Two pieces of text joined with a `+` are still run together |
 | `true`, `false`, `none`, decimal numbers | Implemented |
-| `is defined`, `is none`, `is not ...` | Implemented |
-| `'field' in message` | Implemented; true for `role` and `content`, false for anything a message here cannot hold |
+| `is defined`, `is none`, `is true`, `is false`, `is string`, `is not ...` | Implemented. Everything held here is text, so `is string` answers whether the name holds anything at all |
+| `'x' in TEXT`, `'x' not in TEXT` | Implemented; whether the left side occurs in the right. The same word as the test below and a different question, told apart by what follows it |
+| `.strip(S)`, `.lstrip(S)`, `.rstrip(S)`, `.split(S)[0]`, `.split(S)[-1]` | Implemented, and up to four of them may follow one another, each on what the one before it answered. That is how a template takes a reply apart at the marker its reasoning is in, and there is no reading such a reply back into a conversation without it |
+| `'field' in message` | Implemented; true for `role` and `content`, true for `tool_calls` on a turn that asked for one, and false for anything a message here cannot hold |
 | Parenthesised conditions | Implemented, to `Max_Depth` |
 | `\| trim`, `\| length` | Implemented |
 | `loop.first`, `loop.last`, `loop.index`, `loop.index0` | Implemented |
 | `{%- -%}` and `{{- -}}` whitespace control | Implemented |
+| `{% for name in tools %}` | Implemented, walking the tools a caller offered. What it binds has no text of its own: it is written with `\| tojson` and refused anywhere else, and a loop inside it is refused, because there is one place to keep where a loop over the tools has got to |
+| `{% for tool_call in message.tool_calls %}` | Implemented, walking the calls one turn asked for. The loop variable must be named `tool_call` for the reason the list loop's must be named `message`: what can be read from what it binds are a call's fields |
+| `message.tool_calls`, `tool_call.name`, `tool_call.arguments` | Implemented. The first is a question and not text -- a condition asks whether the turn called anything, and the output may not print a list of calls -- and the other two are read from whichever call the loop has bound. A turn's calls are held beside its text rather than in it, so what the template writes is what that model was trained to read rather than what it happened to spell |
+| `\| tojson` | Implemented for a tool, which is written as the definitions hold it, and for text, which becomes a JSON string. Anything else is a value this engine has no JSON for and is refused rather than given a spelling of this engine's choosing |
 | `macro`, `include`, `import` | Rejected at compile time: `MR-TMPL-0002` |
 | Other filters | Refused when evaluated: `MR-TMPL-0007` |
-| Function calls, `tojson`, `strftime_now`, `raise_exception`, arithmetic, indexing by anything but a number | Refused when evaluated: `MR-TMPL-0002` |
+| Date formatting | Refused when evaluated: `MR-TMPL-0002`. Templates describe it in branches a conversation of plain messages never enters, so the refusal happens where the construct is used rather than where the template is read -- refusing a whole template for a branch nobody takes refuses the model |
+| Function calls, `strftime_now`, `raise_exception`, arithmetic, indexing by anything but a number | Refused when evaluated: `MR-TMPL-0002` |
 | Reading a name the template never assigned | Refused when evaluated: `MR-TMPL-0006` |
 | More than 32 names, or more variable text than the pool holds | Refused when evaluated: `MR-TMPL-0002` and `MR-TMPL-0011`. A name reassigned in a loop takes its own room back, so building one message's text per turn costs one turn's room |
 

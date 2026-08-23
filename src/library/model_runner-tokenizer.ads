@@ -3,6 +3,8 @@ private with Ada.Containers.Vectors;
 private with Ada.Finalization;
 private with Ada.Strings.Hash;
 
+with Interfaces;
+
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers;
 with Model_Runner.Limits;
@@ -53,8 +55,19 @@ package Model_Runner.Tokenizer is
    --  leading U+2581 and one that continues it is written bare, which is
    --  the reverse of the two-hash convention the architecture's papers
    --  describe and is what a converted vocabulary actually holds.
+   --
+   --  Unigram neither merges nor spells: it chooses, out of every way the
+   --  text could be cut into pieces the vocabulary holds, the one whose
+   --  scores sum highest -- the scores being log probabilities, which is
+   --  why they are summed rather than compared. That is a different answer
+   --  from the SentencePiece road's, not a better-computed one: merging the
+   --  best-scoring adjacent pair first can foreclose a split that would
+   --  have scored higher whole, and a piece that lies on the best path but
+   --  never appears as the join of two survivors is unreachable by merging
+   --  at all. The two roads share their vocabulary's shape and nothing else.
    type Model_Kind is
-     (Kind_SentencePiece, Kind_BPE, Kind_WordPiece, Kind_Unsupported);
+     (Kind_SentencePiece, Kind_BPE, Kind_WordPiece, Kind_Unigram,
+      Kind_Unsupported);
 
    --  Per-token classification carried by the model.
    type Token_Class is
@@ -315,10 +328,20 @@ private
    --  the vocabulary never merges.
    --  Which rule cuts text into pieces before any merging.
    --
-   --  They differ in what may lead a word and in how digits are grouped, and
-   --  the differences are not cosmetic: a model is trained on one answer.
+   --  They differ in what may lead a word, in how digits are grouped, and in
+   --  whether a run of punctuation is cut out of the text before anything
+   --  else looks at it. The differences are not cosmetic: a model is trained
+   --  on one answer, and a wrong cut yields tokens that decode back to the
+   --  same text and mean something else to it.
+   --
+   --  Rule_Default is what a vocabulary that names no rule at all is cut by.
+   --  It is a rule of its own and not the original one: the file that names
+   --  nothing is not thereby the file the original was written for, and
+   --  reading it as though it were gets the digits, the contractions and a
+   --  space before a full stop each wrong.
    type Cut_Rule is
-     (Rule_GPT2, Rule_Falcon, Rule_SmolLM, Rule_Llama3, Rule_Qwen2);
+     (Rule_Default, Rule_GPT2, Rule_Falcon, Rule_SmolLM, Rule_Llama3,
+      Rule_Qwen2);
 
    package Merge_Maps is
      new Ada.Containers.Indefinite_Hashed_Maps
@@ -329,7 +352,23 @@ private
 
    type Text_Pool is access String;
 
+   --  A unigram file's normalization table, as it is written: a count of
+   --  trie entries, the entries themselves, and the pool of replacement
+   --  strings they point into.
+   type Trie_Nodes is array (Natural range <>) of Interfaces.Unsigned_32;
+   type Trie_Access is access Trie_Nodes;
+
+   type Charsmap_Table is record
+      Nodes        : Trie_Access := null;
+      Replacements : Text_Pool := null;
+   end record;
+
+   type Charsmap_Access is access Charsmap_Table;
+
    type Byte_Token_Array is array (0 .. 255) of Token_Id;
+
+   --  Which bytes a marker in the text may begin with.
+   type Byte_Set is array (Character) of Boolean;
 
    type Vocabulary is
      limited new Ada.Finalization.Limited_Controlled with record
@@ -348,12 +387,40 @@ private
       Byte_Tokens   : Byte_Token_Array := [others => No_Token];
       Byte_Fallback : Boolean := False;
       Merges        : Merge_Maps.Map;
-      Cutting       : Cut_Rule := Rule_GPT2;
+      Cutting       : Cut_Rule := Rule_Default;
+
+      --  What the unigram road needs beyond the pieces and their scores:
+      --  the longest piece in bytes, which bounds how far ahead the best
+      --  path has to look, and what an unseen character costs, which is the
+      --  lowest score in the vocabulary less ten. Without an unknown edge
+      --  the lattice is not connected and one unseen character fails the
+      --  whole encode.
+      Longest_Piece : Natural := 0;
+      Unknown_Cost  : Float := 0.0;
+
+      --  Whether runs of whitespace collapse to one, which a file states
+      --  and which is not the same question as the marker below.
+      Merge_Spaces  : Boolean := False;
+
+      --  The normalization table a unigram file carries: a compressed trie
+      --  from an input prefix to the text that replaces it, and the pool of
+      --  replacements the trie points into. Read from the file rather than
+      --  worked out here -- it is the model's own table and no two files
+      --  need agree about it.
+      Charsmap      : Charsmap_Access := null;
+
+      --  Whether the SentencePiece road puts a marker before the first
+      --  character of a text, which stands for the space a word would have
+      --  had if it had not been first. Every such vocabulary did until one
+      --  did not: gemma2 and gemma3 state tokenizer.ggml.add_space_prefix
+      --  as false, and reading it as though they had not said so spells
+      --  every prompt they are given as a word that begins a sentence.
+      Space_Prefix  : Boolean := True;
 
       --  The longest piece this vocabulary calls a control token or one of
-      --  its author's own and that opens a bracket, which is as far as the
-      --  scan for a marker in the text can ever have to look. Zero when
-      --  there is no such piece, and then the scan does not run at all.
+      --  its author's own, which is as far as the scan for a marker in the
+      --  text can ever have to look. Zero when there is no such piece, and
+      --  then the scan does not run at all.
       --
       --  It is here because the scan used to reach Max_Token_Bytes at every
       --  bracket in the text, and text is untrusted: sixty thousand brackets
@@ -361,6 +428,21 @@ private
       --  seconds where the same length of ordinary text took four
       --  hundredths.
       Longest_Marker : Natural := 0;
+
+      --  And the bytes such a piece may begin with. The scan used to look
+      --  only where the text opened a bracket, which is where the markers a
+      --  chat template writes begin -- but not where every marker begins. A
+      --  published GPT-NeoX vocabulary calls its runs of two to twenty-four
+      --  spaces its author's own pieces, and a bert vocabulary spells its
+      --  own with square brackets; neither was seen, and a run of spaces
+      --  came back as one space and a led word rather than as the piece the
+      --  file names for it.
+      --
+      --  A byte set rather than one character, because the bound this
+      --  replaces is what keeps the scan from costing the reader of a
+      --  hostile text: a position whose byte no piece begins with is
+      --  answered without a single lookup, as before.
+      Marker_Starts : Byte_Set := [others => False];
    end record;
 
    overriding procedure Finalize (Item : in out Vocabulary);

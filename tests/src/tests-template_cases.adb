@@ -7,6 +7,7 @@ with Model_Runner.Errors;
 with Model_Runner.Limits;
 with Model_Runner.Templates;
 with Model_Runner.Text;
+with Model_Runner.Tools;
 
 package body Tests.Template_Cases is
 
@@ -373,9 +374,11 @@ package body Tests.Template_Cases is
          return Room (1 .. Used);
       end Many_Names;
    begin
-      --  The table holds messages plus what the template names, so one short
-      --  of the bound compiles and renders.
-      Assert (Render_Status (Many_Names (Tmpl.Max_Variables - 1)) = E.No_Error,
+      --  The table holds two names before a template says anything --
+      --  messages, which is the conversation, and message, which is whatever
+      --  a loop or an assignment has bound -- so two short of the bound
+      --  compiles and renders.
+      Assert (Render_Status (Many_Names (Tmpl.Max_Variables - 2)) = E.No_Error,
               "a template naming as many as the table holds was refused");
 
       --  Past it, the assignment is refused rather than silently dropped.
@@ -501,13 +504,21 @@ package body Tests.Template_Cases is
       --  never asks for it has asked for nothing wrong -- and every template
       --  shipped with a current model describes tool calling in branches a
       --  conversation of plain messages never enters.
-      Assert (Render_Status ("{% for item in tools %}x{% endfor %}")
+      --  The four things there are to walk are the conversation, a count,
+      --  the tools and one turn's calls. Anything else is a loop over
+      --  something this engine does not hold.
+      Assert (Render_Status ("{% for item in whatever %}x{% endfor %}")
               = E.Template_Unsupported_Construct,
               "iteration over something other than messages was accepted");
+      Assert (Render_Status ("{% for other in message.tool_calls %}x"
+                             & "{% endfor %}")
+              = E.Template_Unsupported_Construct,
+              "a call loop binding a name that is not tool_call was "
+              & "accepted");
       Assert (Render_Status ("{{ raise_exception('no') }}")
               = E.Template_Unsupported_Construct,
               "raise_exception rendered");
-      Assert (Render_Status ("{{ tool_call.arguments | tojson }}")
+      Assert (Render_Status ("{{ message.content | upper }}")
               = E.Template_Unknown_Filter,
               "an unknown filter rendered");
       Assert (Render_Status ("{% set d = strftime_now('%d') %}{{ d }}")
@@ -912,12 +923,521 @@ package body Tests.Template_Cases is
    -- Register_Tests --
    --------------------
 
+   --  What the template a current model ships needs beyond what the subset
+   --  held, said as the answers rather than as the constructs.
+   --
+   --  Every string below was rendered by the implementation the template was
+   --  written for and copied here, which is the only way a comparison of
+   --  this kind means anything: an expected answer worked out from the
+   --  engine's own reading of the template agrees with the engine by
+   --  construction. What settles the whole template rather than these pieces
+   --  is `tests render` against that implementation, which is what
+   --  docs/reference-runtime.md is for.
+   procedure Modern_Constructs_Render
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      type Expectation is record
+         Source : access constant String;
+         Answer : access constant String;
+      end record;
+
+      --  A holder with named fields, and a field assigned inside a loop
+      --  outliving it -- which is the whole reason a template asks for one.
+      Space_Source : aliased constant String :=
+        "{%- set ns = namespace(seen=false, last=messages|length - 1) %}"
+        & "{%- for message in messages %}"
+        & "{%- if message.role == 'assistant' %}{%- set ns.seen = true %}"
+        & "{%- endif %}{%- endfor %}"
+        & "[{{ ns.last }}|{% if ns.seen %}yes{% else %}no{% endif %}]";
+      Space_Answer : aliased constant String := "[1|yes]";
+
+      --  Counting rather than walking a list, backwards, which no list can
+      --  express and which a template uses to find the last question asked.
+      Range_Source : aliased constant String :=
+        "{%- for index in range(messages|length - 1, -1, -1) %}"
+        & "{%- set message = messages[index] %}"
+        & "[{{ message.role }}]{%- endfor %}";
+      Range_Answer : aliased constant String := "[assistant][user]";
+
+      --  A position worked out rather than written, and the field named
+      --  either way round.
+      Indexed_Source : aliased constant String :=
+        "{%- for message in messages %}"
+        & "{%- if loop.index0 > 0 and messages[loop.index0 - 1].role != 'x' %}"
+        & "[{{ messages[0]['role'] }}/{{ messages[1].role }}]"
+        & "{%- endif %}{%- endfor %}";
+      Indexed_Answer : aliased constant String := "[user/assistant]";
+
+      --  Text inside text, which is the same word as the test that asks
+      --  whether a message carries a field and a different question.
+      Inside_Source : aliased constant String :=
+        "{%- for message in messages %}"
+        & "[{% if 'B' in message.content %}y{% else %}n{% endif %}"
+        & "{% if 'q' not in message.content %}!{% endif %}]"
+        & "{%- endfor %}";
+      Inside_Answer : aliased constant String := "[n!][y!]";
+
+      --  Order, and the two words a template writes to tell a flag set to
+      --  false from one never set at all.
+      Order_Source : aliased constant String :=
+        "{%- set n = messages|length %}"
+        & "[{% if n > 1 %}a{% endif %}{% if n >= 2 %}b{% endif %}"
+        & "{% if n < 2 %}c{% endif %}{% if n <= 2 %}d{% endif %}"
+        & "{% if missing is defined %}e{% endif %}"
+        & "{% if n is string %}f{% endif %}]";
+      Order_Answer : aliased constant String := "[abdf]";
+
+      --  A reply that carries its reasoning in a marked block, taken apart
+      --  the way the template that writes such replies takes it apart: four
+      --  methods in a row, each on what the one before it answered.
+      Methods_Source : aliased constant String :=
+        "{%- for message in messages %}{%- if message.role == 'assistant' %}"
+        & "{%- set body = message.content.split('</think>')[-1].lstrip('|') %}"
+        & "{%- set why = message.content.split('</think>')[0]"
+        & ".rstrip('|').split('<think>')[-1].lstrip('|') %}"
+        & "[{{ why }}][{{ body }}]{%- endif %}{%- endfor %}";
+      Methods_Answer : aliased constant String := "[r][Blue.]";
+
+      Wanted : constant array (1 .. 6) of Expectation :=
+        [(Space_Source'Access, Space_Answer'Access),
+         (Range_Source'Access, Range_Answer'Access),
+         (Indexed_Source'Access, Indexed_Answer'Access),
+         (Inside_Source'Access, Inside_Answer'Access),
+         (Order_Source'Access, Order_Answer'Access),
+         (Methods_Source'Access, Methods_Answer'Access)];
+
+      Item     : Tmpl.Compiled;
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Target   : String (1 .. 2048);
+      Last     : Natural;
+   begin
+      for Each of Wanted loop
+         Tmpl.Compile (Item, Each.Source.all, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a template the models ship did not compile: "
+                 & E.Error_Code'Image (Status.Code) & " -- "
+                 & Each.Source.all);
+
+         Conv.Open (Messages, Status => Status);
+         Conv.Append (Messages, Conv.User_Role, "hello", Status);
+         Conv.Append
+           (Messages, Conv.Assistant_Role,
+            "<think>|r|</think>|Blue.", Status);
+
+         Tmpl.Render
+           (Item, Messages, "<s>", "</s>", False, Target, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "it did not render: " & E.Error_Code'Image (Status.Code)
+                 & " -- " & Each.Source.all);
+         Assert (Target (1 .. Last) = Each.Answer.all,
+                 "rendered [" & Target (1 .. Last) & "] where the answer is ["
+                 & Each.Answer.all & "] -- " & Each.Source.all);
+
+         Conv.Close (Messages);
+         Tmpl.Close (Item);
+      end loop;
+
+      --  A name the template never assigned is nothing when a condition asks
+      --  about it and an error when the output does. Both matter: a template
+      --  writes "if tools" to find out whether it was given any, and a
+      --  template that prints a name it never wrote would put the empty
+      --  string where it meant text and say nothing about it.
+      Assert (Render_Status ("{% if never %}x{% endif %}") = E.No_Error,
+              "a condition asking about a name never assigned was refused");
+      Assert (Render_Status ("{% if message.tool_calls %}x{% endif %}")
+              = E.No_Error,
+              "a condition asking about a field a message has not got was "
+              & "refused");
+      Assert (Render_Status ("{{ never }}") = E.Template_Unknown_Variable,
+              "output reading a name never assigned was accepted");
+   end Modern_Constructs_Render;
+
+   --  What a turn asked for, written as the template writes it.
+   --
+   --  A model that calls a tool writes the call in the spelling its template
+   --  told it to. Kept as text, that spelling is what reaches the model on
+   --  the next turn; kept as a call, the template writes it again -- and the
+   --  two are not the same bytes, which is the whole reason a template has a
+   --  branch for it.
+   --
+   --  Everything below is what the Qwen3 file uses in that branch, written
+   --  here so the test owns what it tests: the question, the loop, the two
+   --  fields, the "is string" that tells a value it may print from one it
+   --  must encode, and the branch for a call shape this engine does not hold
+   --  -- which must not be entered rather than must not exist.
+   procedure Tool_Calls_Render_As_Calls
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF : constant Character := Character'Val (10);
+
+      Source : constant String :=
+        "{%- for message in messages %}"
+        & "{%- if message.role == 'user' %}"
+        & "<|user|>{{ message.content }}"
+        & "{%- elif message.role == 'assistant' %}"
+        & "<|assistant|>{{ message.content }}"
+        & "{%- if message.tool_calls %}"
+        & "{%- for tool_call in message.tool_calls %}"
+        & "{%- if (loop.first and message.content) or (not loop.first) %}"
+        & "{{- '|' }}"
+        & "{%- endif %}"
+        & "{%- if tool_call.function %}"
+        & "{%- set tool_call = tool_call.function %}"
+        & "{%- endif %}"
+        & "{{- '<call>{""name"": ""' }}{{- tool_call.name }}"
+        & "{{- '"", ""arguments"": ' }}"
+        & "{%- if tool_call.arguments is string %}"
+        & "{{- tool_call.arguments }}"
+        & "{%- else %}"
+        & "{{- tool_call.arguments | tojson }}"
+        & "{%- endif %}"
+        & "{{- '}</call>' }}"
+        & "{%- endfor %}"
+        & "{%- endif %}"
+        & "{%- elif message.role == 'tool' %}"
+        & "{%- if loop.first or (messages[loop.index0 - 1].role != 'tool') %}"
+        & "<|user|>"
+        & "{%- endif %}"
+        & "<answer>{{ message.content }}</answer>"
+        & "{%- if loop.last or (messages[loop.index0 + 1].role != 'tool') %}"
+        & "<|end|>"
+        & "{%- endif %}"
+        & "{%- endif %}"
+        & "{%- endfor %}";
+
+      --  What the model wrote, in the spelling its template asked for.
+      Reply : constant String :=
+        "Checking." & LF
+        & "<tool_call>" & LF
+        & "{""name"": ""get_weather"", ""arguments"": {""city"": ""Paris""}}"
+        & LF & "</tool_call>";
+
+      Item     : Tmpl.Compiled;
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Reading  : E.Error_Info;
+      Target   : String (1 .. 1024);
+      Last     : Natural;
+   begin
+      Tmpl.Compile (Item, Source, Status => Status);
+      Assert (E.Is_Ok (Status),
+              "the tool-call branch did not compile: "
+              & E.Error_Code'Image (Status.Code));
+
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.User_Role, "w?", Status);
+      Conv.Append_Reply (Messages, Reply, Status, Reading);
+      Assert (E.Is_Ok (Status) and then E.Is_Ok (Reading),
+              "a reply carrying a call was not taken into the conversation");
+
+      --  The reply came apart where the model stopped speaking: the text is
+      --  the turn's content, the call is beside it, and the newline between
+      --  them belongs to neither.
+      Assert (Conv.Content_At (Messages, 2) = "Checking.",
+              "the spoken part of a reply was kept wrong: "
+              & Conv.Content_At (Messages, 2));
+      Assert (Conv.Call_Count (Messages, 2) = 1,
+              "a reply with one call produced"
+              & Natural'Image (Conv.Call_Count (Messages, 2)));
+      Assert (Conv.Call_Name (Messages, 2, 1) = "get_weather",
+              "the call named " & Conv.Call_Name (Messages, 2, 1));
+      Assert (Conv.Call_Arguments (Messages, 2, 1) = "{""city"": ""Paris""}",
+              "the call's arguments were kept as "
+              & Conv.Call_Arguments (Messages, 2, 1));
+      Assert (Conv.Call_Count (Messages, 1) = 0,
+              "a turn nobody called from carries calls");
+
+      --  Two answers handed back, which the template folds into one turn.
+      --  That fold is written as messages[loop.index0 + 1], and a plus that
+      --  ran two numbers together rather than adding them would end the
+      --  first answer's turn and open none for the second.
+      Conv.Append (Messages, Conv.Tool_Role, "18", Status);
+      Conv.Append (Messages, Conv.Tool_Role, "22", Status);
+      Assert (E.Is_Ok (Status), "a tool answer was not appended");
+
+      Tmpl.Render (Item, Messages, "<s>", "</s>", False, Target, Last, Status);
+      Assert (E.Is_Ok (Status),
+              "rendering a conversation with calls failed: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Target (1 .. Last)
+              = "<|user|>w?<|assistant|>Checking.|"
+                & "<call>{""name"": ""get_weather"", ""arguments"": "
+                & "{""city"": ""Paris""}}</call>"
+                & "<|user|><answer>18</answer><answer>22</answer><|end|>",
+              "rendered the wrong text: " & Target (1 .. Last));
+
+      --  A dropped turn takes its calls with it, and the turn appended after
+      --  it must not inherit them.
+      Conv.Drop_Last (Messages, 3);
+      Conv.Append (Messages, Conv.Assistant_Role, "plain", Status);
+      Assert (Conv.Call_Count (Messages, 2) = 0,
+              "a turn appended after a dropped one inherited its calls");
+
+      Tmpl.Render (Item, Messages, "<s>", "</s>", False, Target, Last, Status);
+      Assert (Target (1 .. Last) = "<|user|>w?<|assistant|>plain",
+              "a dropped call still rendered: " & Target (1 .. Last));
+
+      Conv.Close (Messages);
+
+      --  A reply that called nothing is the turn it always was, and a reply
+      --  that is nothing but a call is a turn with nothing said in it.
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.User_Role, "w?", Status);
+      Conv.Append_Reply (Messages, "just talking", Status, Reading);
+      Assert (E.Is_Ok (Status) and then Conv.Call_Count (Messages, 2) = 0,
+              "a reply with no call in it was taken apart anyway");
+      Conv.Append (Messages, Conv.User_Role, "w again?", Status);
+      Conv.Append_Reply
+        (Messages,
+         "<tool_call>{""name"": ""get_weather"", ""arguments"": {}}"
+         & "</tool_call>",
+         Status, Reading);
+      Assert (E.Is_Ok (Status), "a reply of nothing but a call was refused");
+      Assert (Conv.Content_At (Messages, 4) = "",
+              "a reply of nothing but a call said something: "
+              & Conv.Content_At (Messages, 4));
+
+      Tmpl.Render (Item, Messages, "<s>", "</s>", False, Target, Last, Status);
+      Assert (Target (1 .. Last)
+              = "<|user|>w?<|assistant|>just talking"
+                & "<|user|>w again?<|assistant|>"
+                & "<call>{""name"": ""get_weather"", ""arguments"": {}}"
+                & "</call>",
+              "a reply that only called rendered wrong: " & Target (1 .. Last));
+
+      --  And a system message set afterwards, which rebuilds the whole
+      --  history: the calls have to survive being rebuilt, or a template
+      --  loses them the moment a caller changes the system message.
+      Conv.Set_System (Messages, "Be brief.", Status);
+      Assert (E.Is_Ok (Status), "setting the system message failed");
+      Assert (Conv.Call_Count (Messages, 5) = 1,
+              "rebuilding the history lost a turn's calls");
+      Assert (Conv.Call_Name (Messages, 5, 1) = "get_weather",
+              "rebuilding the history renamed a call");
+
+      Conv.Close (Messages);
+      Tmpl.Close (Item);
+   end Tool_Calls_Render_As_Calls;
+
+   --  A name given the value of another name keeps it.
+   --
+   --  The template a reasoning model ships walks its conversation backwards
+   --  to find the last question in it, and writes down the loop's counter
+   --  when it finds one. That counter is reassigned every time round the
+   --  loop; a name that held the counter's own storage rather than a copy of
+   --  what it said quietly became the current position -- so the last
+   --  question was found at position zero, every reply before it was resent
+   --  with its reasoning still in it, and nothing anywhere reported a fault.
+   procedure A_Copied_Name_Keeps_What_It_Copied
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Source : constant String :=
+        "{%- set ns = namespace(found=true, at=messages|length - 1) %}"
+        & "{%- for index in range(ns.at, -1, -1) %}"
+        & "{%- set message = messages[index] %}"
+        & "{%- if ns.found and message.role == 'user' %}"
+        & "{%- set ns.found = false %}"
+        & "{%- set ns.at = index %}"
+        & "{%- endif %}"
+        & "{%- endfor %}"
+        & "at={{ ns.at }}";
+
+      Item     : Tmpl.Compiled;
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Target   : String (1 .. 256);
+      Last     : Natural;
+   begin
+      Tmpl.Compile (Item, Source, Status => Status);
+      Assert (E.Is_Ok (Status),
+              "the backwards walk did not compile: "
+              & E.Error_Code'Image (Status.Code));
+
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.User_Role, "one", Status);
+      Conv.Append (Messages, Conv.Assistant_Role, "two", Status);
+      Conv.Append (Messages, Conv.User_Role, "three", Status);
+
+      Tmpl.Render (Item, Messages, "<s>", "</s>", False, Target, Last, Status);
+      Assert (E.Is_Ok (Status),
+              "the backwards walk failed: " & E.Error_Code'Image (Status.Code));
+      Assert (Target (1 .. Last) = "at=2",
+              "the last question was found at the wrong position: "
+              & Target (1 .. Last));
+
+      Conv.Close (Messages);
+      Tmpl.Close (Item);
+   end A_Copied_Name_Keeps_What_It_Copied;
+
+   --  What a caller offers and what the model writes back are read, or
+   --  refused by name.
+   --
+   --  A tool definition arrives as a caller's file and a call arrives as a
+   --  model's text, which is to say neither is trusted. Every refusal here
+   --  is a promise that a particular wrong input is turned away and said so;
+   --  a refusal nothing reaches is a promise nobody has checked.
+   procedure Tool_Definitions_Are_Read_Or_Refused
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Tools renames Model_Runner.Tools;
+
+      Offered : Tools.Definitions;
+      Asked   : Tools.Calls;
+      Status  : E.Error_Info;
+
+      --  A list of Count tools, each named and nothing else.
+      function Many (Count : Positive) return String is
+         Room : String (1 .. 64 * Count + 2);
+         Used : Natural := 0;
+
+         procedure Put (Value : String) is
+         begin
+            Room (Used + 1 .. Used + Value'Length) := Value;
+            Used := Used + Value'Length;
+         end Put;
+      begin
+         Put ("[");
+         for Index in 1 .. Count loop
+            if Index > 1 then
+               Put (",");
+            end if;
+            Put ("{""name"": ""t""}");
+         end loop;
+         Put ("]");
+         return Room (1 .. Used);
+      end Many;
+   begin
+      --  What is read.
+      Tools.Read
+        (Offered,
+         "[{""type"": ""function"", ""function"": {""name"": ""weather"","
+         & " ""parameters"": {""type"": ""object""}}}]",
+         Status);
+      Assert (E.Is_Ok (Status),
+              "a definition a caller would write was refused: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Tools.Count (Offered) = 1 and then Tools.Offers (Offered, "weather"),
+              "the definition was read under another name");
+
+      --  One object rather than a list of them, which is what a caller with
+      --  one tool writes and what refusing would make them wrap.
+      Tools.Read (Offered, "{""name"": ""weather""}", Status);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Offered) = 1,
+              "one tool written on its own was refused");
+
+      --  And what is not.
+      Tools.Read (Offered, "", Status);
+      Assert (Status.Code = E.Tools_Invalid_JSON,
+              "nothing at all was read as a tool: "
+              & E.Error_Code'Image (Status.Code));
+
+      Tools.Read (Offered, "[1]", Status);
+      Assert (Status.Code = E.Tools_Not_An_Object,
+              "a number was read as a tool: "
+              & E.Error_Code'Image (Status.Code));
+
+      Tools.Read (Offered, "[{""description"": ""nameless""}]", Status);
+      Assert (Status.Code = E.Tools_Missing_Name,
+              "a tool nobody can name was offered: "
+              & E.Error_Code'Image (Status.Code));
+
+      Tools.Read (Offered, Many (Tools.Max_Definitions + 1), Status);
+      Assert (Status.Code = E.Tools_Too_Many,
+              "more tools than this build carries were read: "
+              & E.Error_Code'Image (Status.Code));
+
+      declare
+         --  One definition larger than the room every definition has
+         --  together.
+         Wide : String (1 .. Tools.Max_Definition_Bytes + 64) :=
+           [others => 'x'];
+      begin
+         Wide (1 .. 20) := "{""name"": ""a"", ""d"": """;
+         Wide (Wide'Last - 1 .. Wide'Last) := """}";
+         Tools.Read (Offered, Wide, Status);
+         Assert (Status.Code = E.Tools_Too_Large,
+                 "a definition larger than the pool was read: "
+                 & E.Error_Code'Image (Status.Code));
+      end;
+
+      declare
+         --  Nested deeper than this build reads. A schema nests as deeply as
+         --  its author wrote it, and this is where a file that nests without
+         --  end stops being read.
+         Deep : String (1 .. 200) := [others => '['];
+         Used : constant Natural := 40;
+      begin
+         Deep (Used + 1 .. Used + Used) := [others => ']'];
+         Tools.Read
+           (Offered,
+            "[{""name"": ""a"", ""p"": " & Deep (1 .. 2 * Used) & "}]",
+            Status);
+         Assert (Status.Code = E.Tools_Nesting_Too_Deep,
+                 "a definition nesting without end was read: "
+                 & E.Error_Code'Image (Status.Code));
+      end;
+
+      Tools.Close (Offered);
+
+      --  The calls read back out of a reply. A reply with no block in it
+      --  carries no calls and is not an error: a model asked a question it
+      --  can answer itself answers it.
+      Tools.Read_Calls (Asked, "just talking", Status);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 0,
+              "a plain reply was read as a call");
+
+      Tools.Read_Calls
+        (Asked,
+         "<tool_call>{""name"": ""weather"", ""arguments"": "
+         & "{""city"": ""Paris""}}</tool_call>",
+         Status);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1
+              and then Tools.Called (Asked, 1) = "weather"
+              and then Tools.Arguments (Asked, 1) = "{""city"": ""Paris""}",
+              "a call the template asked the model to write was not read");
+
+      --  Arguments written as a string holding JSON, which is how some
+      --  models answer: read back out of the string and written the one way,
+      --  so that a caller sees the arguments and not the quoting.
+      Tools.Read_Calls
+        (Asked,
+         "<tool_call>{""name"": ""weather"", ""arguments"": "
+         & """{\""city\"": \""Paris\""}""}</tool_call>",
+         Status);
+      Assert (E.Is_Ok (Status)
+              and then Tools.Arguments (Asked, 1) = "{""city"": ""Paris""}",
+              "quoted arguments were handed on with their quoting: "
+              & Tools.Arguments (Asked, 1));
+
+      Tools.Read_Calls (Asked, "<tool_call>{}</tool_call>", Status);
+      Assert (Status.Code = E.Tools_Call_Malformed,
+              "a call naming no function was read: "
+              & E.Error_Code'Image (Status.Code));
+
+      Tools.Read_Calls (Asked, "<tool_call>{""name"": ""a""", Status);
+      Assert (Status.Code = E.Tools_Call_Malformed,
+              "a reply that stopped in the middle of a call was read as "
+              & "no call at all: " & E.Error_Code'Image (Status.Code));
+
+      Tools.Close (Asked);
+   end Tool_Definitions_Are_Read_Or_Refused;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
       Register_Routine
         (T, Built_In_Formats_Render_Their_Turns'Access,
          "each built-in chat format renders the turns its architecture reads");
+      Register_Routine
+        (T, Modern_Constructs_Render'Access,
+         "what a current model's template needs beyond the older subset "
+         & "renders what that model was trained to read");
       Register_Routine
         (T, Any_Template_Is_Answered'Access,
          "any template is answered and a failed render writes nothing");
@@ -939,6 +1459,18 @@ package body Tests.Template_Cases is
       Register_Routine
         (T, Rendering_Is_Bounded'Access,
          "rendering is bounded in output and in iterations");
+      Register_Routine
+        (T, Tool_Calls_Render_As_Calls'Access,
+         "a turn's tool calls are kept beside its text and written as the "
+         & "template writes them");
+      Register_Routine
+        (T, Tool_Definitions_Are_Read_Or_Refused'Access,
+         "the tools a caller offers and the calls a model writes back are "
+         & "read or refused by name");
+      Register_Routine
+        (T, A_Copied_Name_Keeps_What_It_Copied'Access,
+         "a name given another name's value keeps it after the other "
+         & "changes");
    end Register_Tests;
 
 end Tests.Template_Cases;

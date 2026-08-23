@@ -7,6 +7,191 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A turn's tool calls, kept as calls, and a batch run that closes the loop
+  they open.** Qwen3's template renders now, and until this it rendered a
+  tool conversation the model had not had. A call reached the next turn as
+  the model happened to spell it -- the `<tool_call>` block sitting in the
+  reply's text -- while the template's own branch for writing one was
+  guarded by `message.tool_calls`, a name that held nothing, and was never
+  entered. The two spellings are close enough to read and not the same
+  bytes, which is the only thing that matters to a model trained on one of
+  them.
+
+  So a conversation holds what the model asked for. `Append_Reply` takes a
+  reply apart where the model stopped speaking and started calling: the text
+  becomes the turn's content, each call is attached to the turn, and the
+  newline between them belongs to neither, because the template puts one
+  there itself when there is something to separate. A turn that called and
+  said nothing is a turn with empty content, which a plain message may not
+  be and which `Append_Asking` exists to allow.
+
+  What the template gained is the branch the file already had: the name
+  `message.tool_calls` and the question `'tool_calls' in message`, both
+  answered from the turn rather than answered "no"; a loop over the calls,
+  binding `tool_call` for the reason the list loop binds `message` -- the
+  fields readable from what it binds are a call's fields; `tool_call.name`
+  and `tool_call.arguments`; and `loop.first` inside such a loop, which is
+  what decides whether a newline goes before the call. The branch the same
+  template writes for a call shape this engine does not hold --
+  `{%- if tool_call.function %}` -- is not entered rather than not present:
+  it reads a name that means nothing here, and a name that means nothing is
+  false in a condition.
+
+  `--assistant`, `--assistant-file`, `--tool-result` and `--tool-result-file`
+  put the earlier turns back, in the order they were written. That is how one
+  run closes the loop another opened: the model asks for a tool, the caller
+  runs it, and the next run is handed the conversation the model saw -- its
+  own reply included, because a reply left out is a call the model never
+  made. The reply is handed back as it was printed and the calls are read out
+  of it here, so the caller pastes rather than parses. `run` also reports what
+  a reply asked for, on standard error and by name, as the interactive session
+  already did: a caller who has to find a call by eye in a page of text will
+  find it wrong.
+
+  Settled against Python's jinja2 on the published Qwen3 template, conversation
+  for conversation: twenty-four conversations rendered with and without a
+  generation prompt, forty-eight in all, every byte agreeing -- calls with text
+  before them and without, two calls in one turn, a run of answers folded into
+  one turn, arguments carrying quotes and backslashes, a reasoning block in an
+  earlier reply, and a user turn that itself contains the words the template
+  looks for.
+
+- **Qwen3's own chat template, and everything it needed.** The template a
+  current model ships was refused, so `run` on a Qwen3 of any size meant
+  spelling `<|im_start|>` by hand under `--raw`. It renders now, and it
+  renders the same bytes as the implementation it was written for: seventy-six
+  conversations compared against Python's jinja2 on the published
+  Qwen3 template, all agreeing, the two that differ being an empty
+  conversation, which that implementation raises on and this one answers.
+
+  What it needed, and each of these is what some template out there is
+  written in rather than a feature for its own sake:
+
+  * `namespace(a=x, b=y)` and its fields. A namespace exists in that
+    language because a name assigned inside a loop does not outlive it;
+    names here outlive everything already, so `ns.field` is a name like any
+    other spelled with a dot. What tells it from `message.role` -- spelled
+    the same way and not a name at all -- is that `ns` was made a namespace.
+  * `{% for i in range(a, b, c) %}`, with a step that may count down. That
+    is how a template finds the last question in a conversation, and no
+    loop over a list can express it.
+  * One message of a list bound to a name -- `{% set message = messages[i] %}`
+    -- and a position worked out rather than written, `messages[loop.index0 - 1].role`.
+    A loop binds the same name the same way, so `message.role` is one
+    question however the binding was made.
+  * `<`, `<=`, `>`, `>=`, reading both sides as whole numbers, and `-`
+    between terms, which is how `messages|length - 1` becomes a number.
+  * `'x' in TEXT` and `'x' not in TEXT`, which is the same word as the test
+    that asks whether a message carries a field and a different question.
+  * `is true`, `is false`, `is string`.
+  * `.strip`, `.lstrip`, `.rstrip`, `.split(S)[0]`, `.split(S)[-1]`, and up
+    to four of them in a row. That is how a template takes a reply apart at
+    the marker its reasoning is in, and there is no reading a thinking
+    model's reply back into a conversation without it.
+  * A bare operand as a condition, with the empty string, `none`, `false`
+    and a name never assigned all false. A name the template never assigned
+    is nothing when a condition asks about it -- `{% if tools %}` is written
+    to find out whether there are any -- and an error when the output asks
+    for it, because printing the empty string where the template meant text
+    says nothing about the mistake.
+
+  `tests render --model M --system S --prompt P` prints what a model's own
+  template makes of a conversation, which is what made the comparison above
+  possible: a rendering worked out from this engine's reading of a template
+  agrees with this engine by construction, and only a second implementation
+  settles anything. It is `tests tokenize` for templates and exists for the
+  same reason.
+
+- **The unigram road, which is a fourth road and not a setting on the
+  first.** A `t5` vocabulary neither merges nor spells. It chooses, out of
+  every way the text could be cut into pieces the vocabulary holds, the one
+  whose scores sum highest -- the scores being log probabilities, which is
+  what makes summing them the right thing to do with them and comparing them
+  the wrong one.
+
+  That is a different answer from the SentencePiece road's rather than a
+  better-computed one, and the fixture the two implementations are compared
+  on is one where they differ: merging takes the marker and "a" together,
+  then that and "b", and is left with two pieces summing to -7, where the
+  best path takes the marked "a" and "bc" and sums to -6. No order of merges
+  reaches the second. A fixture where the two agree would have let a reader
+  that took the wrong road pass, which is what every fixture written for the
+  other roads is.
+
+  A character no piece spells is an edge of its own at the lowest score in
+  the vocabulary less ten -- the only thing keeping the lattice connected,
+  without which one unseen character fails the whole encode -- and a run of
+  them is one unknown token and not one each. A file with no scores, or with
+  no unknown token, is refused rather than read as a vocabulary of equals.
+
+  The text is normalized first, through the table the file itself carries in
+  `tokenizer.ggml.precompiled_charsmap`: a four-byte length, a compressed
+  trie from an input prefix to what replaces it, and the pool of
+  replacements it points into. Read rather than worked out here, because it
+  is the model's own table and no two files need agree about it -- and a
+  file that states one and is tokenized as though it had not is a file
+  answered in the wrong pieces. A piece the file's author wrote in by hand
+  passes through the table untouched; a byte sequence that is no character
+  at all becomes the replacement character, one byte at a time, rather than
+  failing the encode.
+
+  Settled against the vocabulary llama.cpp ships for its own tests --
+  250,048 pieces, a quarter-megabyte normalization table -- on the same
+  sixty-two strings the cutting rules were settled on. All sixty-two agree,
+  the charsmap included.
+
+- **jina-bert-v2, and the engine's first positional bias.** `bert`'s
+  arrangement with the positions taken away entirely. It neither rotates nor
+  learns a row for where a token is; it is told by a fall-off in the
+  attention scores, one slope a head, taken off after the scale by one over
+  the root of the head width and before the softmax.
+
+  Unsigned, because the model reads a whole text: a position is as far from
+  what follows it as from what came before. That is the difference between
+  this and the form a generating model would use, where every visible
+  position is behind and the sign never comes up -- and it is why the three
+  blend procedures needed a second number rather than one. They took the
+  last position a query may read, which for a bidirectional batch is the
+  same for every slot; the query's own position never reached them at all.
+  It has no default, so every call site had to say which position it was
+  asking about, which is the only part of this the compiler could check.
+
+  The ladder of slopes has two branches and the second is only reached where
+  the head count is not a power of two. Twelve heads take eight rungs of one
+  and four of the other; a ladder written as the first branch alone is right
+  for two thirds of the heads and wrong for the rest, which is a plausible
+  embedding and not a refusal. That is why the file this was checked against
+  is the twelve-head one and not the eight-head one, which would have agreed
+  with the wrong ladder. The number the ladder is built from is eight, which
+  no published file states and the other runtime carries in its own source;
+  a file stating another is refused rather than cut to eight.
+
+  Its feed-forward is gated by the Gaussian unit where `nomic-bert` gates by
+  the sigmoid-weighted one, and it shifts what it projects down and nothing
+  else. Not implemented and refused by name: the code variant's third
+  normalization inside the attention sublayer and its query and key
+  normalizations, which would otherwise be read as a model with three
+  normalizations missing.
+
+  Read off jina-embeddings-v2-base-en before anything was written, which is
+  the order the last two architectures taught, and it agreed with the second
+  runtime on the first run: 768 components, worst 4.4e-05, cosine
+  0.99999942. `tests/fixtures/jina-v2-embedding.expect` records it whole.
+
+  The shader learnt the same fall-off, which needed a sixteenth push-constant
+  word -- and that turned up a bug: the pipeline layout declared a range of
+  fifty-six bytes while attention pushed sixty, which is a write past the
+  declared range that no device refuses because every device offers at least
+  a hundred and twenty-eight and no validation layer was running. Two numbers
+  a word apart is what let it drift; the range is taken from the largest of
+  them now.
+
+  `tests fixture-likeness` also learnt `bert`, `nomic-bert` and
+  `jina-bert-v2`, which it had never had: the check written to catch a
+  fixture describing a model nobody ships had never once been run against an
+  embedding architecture. All three fixtures name exactly the tensors their
+  published files carry.
+
 - **nomic-bert, written from the file.** `bert`'s arrangement with three of
   its parts replaced: it rotates where `bert` learns a row for the position,
   its queries, keys and values are written fused, and its feed-forward is
@@ -112,7 +297,116 @@ Keep a Changelog and the project uses semantic versioning.
   binding last named. A test compares the recorded form against attention
   submitted on its own, on the same cache with the same queries.
 
+### Fixed
+
+- **A name given another name's value followed it afterwards.** `{% set a = b %}`
+  copied where the value was rather than what it said, and the room a name
+  holds is taken back when that name is reassigned. Inside a loop -- which is
+  the only place a template writes this -- the loop's own variable is
+  reassigned every time round, so the name that was supposed to remember
+  where the loop had got to quietly became where the loop was now.
+
+  Qwen3's template opens by walking the conversation backwards to find the
+  last question in it and writing down the counter when it finds one. With
+  the counter following the loop, that answer was always zero: every earlier
+  reply then counted as later than the last question, and each was re-sent
+  with its reasoning block still in it -- the block that template is written
+  to strip. The prompt was well-formed and plausible and had text in it the
+  model was never meant to see again. Text is copied now; a list, a message,
+  a tool and a call are positions and have no room to take back.
+
+- **`+` between two numbers ran them together.** The language this subset is
+  written in adds numbers with it and runs text together with it, and only
+  the second was implemented. `messages[loop.index0 + 1]` therefore asked for
+  message "31" rather than message 4 -- and that expression is how Qwen3's
+  template asks whether the next turn is another tool answer, which is what
+  decides whether a run of answers is folded into one turn or broken into
+  one turn each. It reads right at position zero, which is why a single tool
+  answer looked correct.
+
+  An operand whose every term is a number by construction -- a bare number,
+  a loop counter, a length -- is now a sum. Two pieces of text joined with a
+  plus are still run together, because that is the same language's other
+  rule, and it is what every template that builds a prompt out of pieces
+  relies on.
+
 ### Changed
+
+- **Five faults in how text is cut, found by reading twenty-eight published
+  vocabularies against a second runtime.** Every one of them decoded back to
+  the caller's own text, so nothing downstream could have noticed; each of
+  them handed the model a spelling it was not trained on.
+
+  `starcoder` was on the original rule. It belongs on smollm's: the two are
+  one block of expressions in the other runtime. This is invisible on the
+  vocabulary starcoder itself ships -- no piece of it spans a digit and
+  anything else -- so it is settled by the description and by a fixture built
+  to tell the two apart, not by that file.
+
+  An absent `tokenizer.ggml.pre` was read as the original rule. It is a rule
+  of its own, and the other runtime says so in four lines of capitals when it
+  meets one. It cuts every run of punctuation out of the text first and takes
+  digits in threes with nothing before them, so of sixty-two texts a
+  published Aquila and a published GPT-NeoX each answered seven and eight
+  differently from the way they were trained. `Rule_Default` implements it,
+  and the name `default` asks for it outright.
+
+  Falcon cuts punctuation out first too, which had not been implemented at
+  all: its contractions were kept whole where that step takes them apart, and
+  a space stood before a full stop where that step leaves it behind. And it
+  leaves a space on a run of one or two digits and not on a longer one,
+  because what cuts digits into threes only reaches a run of three -- `" 12"`
+  is one piece and `" 123"` is two. Falcon's own vocabulary happens to hold
+  no piece that shows any of this.
+
+  Punctuation here is Unicode's categories and not "everything that is
+  neither letter nor digit", which is the difference between `" €5"` and
+  `" —b"`: the sign keeps the space and the dash does not. The standard
+  library has no general-category test, so the 191 ranges are written out;
+  they were taken from a Unicode database and agree with the other runtime's
+  own table on all 842 code points and on nothing outside them. WordPiece was
+  reading the wider set and cut a word at every currency, degree and
+  trademark sign, which the published bge vocabulary settles: it spells
+  `"±5"` as one word.
+
+  `tokenizer.ggml.add_space_prefix` was not read at all. gemma2 and gemma3
+  state it false, so both had been given every prompt with a marker in front
+  of it that they were never trained to see.
+
+  A marker in the text was looked for only where the text opened a bracket.
+  A published GPT-NeoX calls its runs of two to twenty-four spaces its
+  author's own pieces and a bert vocabulary spells its own with square
+  brackets, and neither was seen. The scan now looks wherever the byte is one
+  some piece begins with, which is a byte set rather than one character and
+  keeps the bound that makes a hostile text cheap.
+
+- **A WordPiece vocabulary that names its markers the other way round.** The
+  published jina-bert-v2 states `cls_token_id` and `seperator_token_id` and
+  states neither `bos_token_id` nor `eos_token_id`, which were the only two
+  keys read. Its text came back wrapped in nothing: six tokens where the
+  model was trained on eight -- the same fault the missing flags were, in a
+  different key and on the same road, and found the same way. The road now
+  carries the identifiers the other runtime carries for a `bert` vocabulary
+  before any key is read, guarded by the vocabulary's own size, and reads
+  the separator key the format spells with an e.
+
+  `tests tokenize --special` asks for the markers the vocabulary's own policy
+  adds, which is what the counterpart in llama.cpp does by default. Without
+  it the two differ by exactly those markers and the difference is the
+  tool's; this is the flag that makes the fault above visible to the
+  comparison rather than only to an embedding.
+
+- **Forty-three more names for the cutting rules, and a check that both
+  readers agree about them.** The other runtime files some ninety `pre`
+  names under six blocks of expressions; the six this build implements
+  account for fifty of them, so `mpt`, `olmo`, `phi-2`, `command-r`,
+  `refact`, `dbrx`, `glm4`, `stablelm2`, `grok-2` and the rest are now
+  accepted rather than refused by name, with no new cutting logic behind
+  them. The engine and the independent reader each carry their own table from
+  a name to a rule and nothing compared them; a repository check now reads
+  the engine's names out of its source and requires each one in the reader's.
+  That is fifty checks where there were none, and it fails on a name mapped
+  in one and not the other.
 
 - **Two faults a second runtime found and 857,184 comparisons could not.**
   The engine, the fixture and the independent implementation were written
@@ -4249,7 +4543,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 164 diagnostic
+- Localization through `messages`, with a catalog entry for all 172 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

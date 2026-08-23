@@ -841,7 +841,19 @@ package body Reference_Transformer is
          when Phi2      => "phi2.",
          when GPT2      => "gpt2.",
          when Bert      => "bert.",
-         when Nomic_Bert => "nomic-bert.");
+         when Nomic_Bert => "nomic-bert.",
+         when Jina_Bert_V2 => "jina-bert-v2.");
+
+   --  The largest power of two not above a head count, which is where the
+   --  slope ladder changes step.
+   function Ladder (Heads : Natural) return Natural is
+      Power : Natural := 1;
+   begin
+      while Power * 2 <= Heads loop
+         Power := Power * 2;
+      end loop;
+      return Power;
+   end Ladder;
 
    procedure Load
      (Item   : in out Model;
@@ -1222,6 +1234,12 @@ package body Reference_Transformer is
             Item.Kind := Bert;
          elsif Named = "nomic-bert" then
             Item.Kind := Nomic_Bert;
+         elsif Named = "jina-bert-v2" then
+            Item.Kind := Jina_Bert_V2;
+
+            --  Not read from the file. No published jina-bert-v2 states a
+            --  bias, and the architecture carries eight.
+            Item.Max_Bias := 8.0;
          else
             return;
          end if;
@@ -1306,8 +1324,18 @@ package body Reference_Transformer is
       if Item.Window >= Item.Context then
          Item.Window := 0;
       end if;
+      --  How wide the rotation is. An absent key means the head's whole
+      --  width for the architectures that rotate -- and nothing at all for
+      --  the one that does not, which states no such key because it is told
+      --  where a token is by a fall-off in its attention scores. Read the
+      --  other way it rotates a model that never rotates, which is the same
+      --  trap bert's absent key was and is why the fixture states nothing
+      --  here either.
       Item.Rotary :=
-        Metadata (Source, Prefix (Item) & "rope.dimension_count", Item.Head_Size);
+        (if Item.Kind = Jina_Bert_V2 then 0
+         else Metadata
+                (Source, Prefix (Item) & "rope.dimension_count",
+                 Item.Head_Size));
 
       declare
          Value  : Model_Runner.Numerics.Wide_Real;
@@ -1322,7 +1350,7 @@ package body Reference_Transformer is
          Containers.Get_Float
            (Source,
             Prefix (Item)
-            & (if Item.Kind in Bert | Nomic_Bert
+            & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2
                then "attention.layer_norm_epsilon"
                else "attention.layer_norm_rms_epsilon"),
             0.0, 1.0, Value, Status);
@@ -1410,7 +1438,7 @@ package body Reference_Transformer is
 
       --  Bert's segment table and the normalization over the sum of the
       --  three embeddings.
-      if Item.Kind in Bert | Nomic_Bert then
+      if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 then
          Item.Segments := Read_Matrix ("token_types.weight", Present);
          if not Present then
             return;
@@ -1430,7 +1458,7 @@ package body Reference_Transformer is
 
       --  Every architecture but Bert normalizes between the last layer and
       --  whatever reads it. Bert's last layer normalized what it produced.
-      if Item.Kind not in Bert | Nomic_Bert then
+      if Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
          if Present and then Item.Kind in Falcon | Phi2 | GPT2 then
             Item.Output_Norm_Bias :=
@@ -1450,7 +1478,7 @@ package body Reference_Transformer is
       end;
 
       Item.Output := Read_Matrix ("output.weight", Present);
-      if not Present and then Item.Kind in Bert | Nomic_Bert then
+      if not Present and then Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 then
          --  No projection and nothing to tie one to. What this model
          --  produces is states, and the comparison against the engine is of
          --  those rather than of logits.
@@ -1474,7 +1502,7 @@ package body Reference_Transformer is
             --  Every architecture but Bert normalizes on the way into the
             --  block; Bert's two normalizations are on the way out of its
             --  two sublayers and are read below.
-            if Item.Kind not in Bert | Nomic_Bert then
+            if Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
                Current.Attention_Norm :=
                  Read_Vector (Layer_Name (Index, "attn_norm.weight"), Present);
                if not Present then
@@ -1482,7 +1510,7 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            if Item.Kind in Bert | Nomic_Bert then
+            if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 then
                Current.Post_Attention_Norm :=
                  Read_Vector
                    (Layer_Name (Index, "attn_output_norm.weight"), Present);
@@ -1613,7 +1641,7 @@ package body Reference_Transformer is
 
             --  Bert biases the same three and writes them apart, as
             --  Qwen2 does.
-            if Item.Kind in Qwen2 | Bert then
+            if Item.Kind in Qwen2 | Bert | Jina_Bert_V2 then
                Current.Query_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_q.bias"), Present);
                if not Present then
@@ -1660,7 +1688,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi2 | GPT2 | Bert then
+            if Item.Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 then
                Current.Out_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_output.bias"), Present);
                if not Present then
@@ -1672,7 +1700,9 @@ package body Reference_Transformer is
             --  feed-forward reads what attention read.
             --  Bert has none either, for the other reason: it normalizes
             --  on the way out of each sublayer rather than into it.
-            if Item.Kind not in Falcon | Phi2 | Bert | Nomic_Bert then
+            if Item.Kind
+                 not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2
+            then
                Current.Feed_Norm :=
                  Read_Vector (Layer_Name (Index, "ffn_norm.weight"), Present);
                if not Present then
@@ -1752,6 +1782,16 @@ package body Reference_Transformer is
                  Read_Matrix (Layer_Name (Index, "ffn_down.weight"), Present);
                if not Present then
                   return;
+               end if;
+
+               --  The one gated architecture here that shifts what it
+               --  projects down, and shifts nothing else.
+               if Item.Kind = Jina_Bert_V2 then
+                  Current.Down_Bias :=
+                    Read_Vector (Layer_Name (Index, "ffn_down.bias"), Present);
+                  if not Present then
+                     return;
+                  end if;
                end if;
 
                --  A bias on each side of the block, which Phi2 has and
@@ -1925,6 +1965,7 @@ package body Reference_Transformer is
       begin
          if Item.Kind
             in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
+               | Jina_Bert_V2
          then
             declare
                Inner : constant Long_Float :=
@@ -2464,6 +2505,36 @@ package body Reference_Transformer is
                      for Head in 0 .. Item.Heads - 1 loop
                         declare
                            Source_Head : constant Natural := Head / Group;
+
+                           --  How steeply this head's attention falls off
+                           --  with distance, for the one architecture told
+                           --  where a token is by the scores.
+                           --
+                           --  Written as one exponent rather than as a base
+                           --  raised to a rung: the heads below the largest
+                           --  power of two not above the head count step
+                           --  down by max_bias over that power a head, and
+                           --  the heads above it step down by the same
+                           --  amount offset half a step, which is what
+                           --  interleaving the odd rungs of twice the
+                           --  ladder comes to. Twelve heads and a bias of
+                           --  eight give exponents 1 through 8 and then
+                           --  0.5, 1.5, 2.5, 3.5.
+                           Rungs : constant Natural := Ladder (Item.Heads);
+                           Falls : constant Long_Float :=
+                             (if Item.Max_Bias <= 0.0 then 0.0
+                              else Item.Max_Bias / Long_Float (Rungs));
+                           Slope : constant Long_Float :=
+                             (if Falls = 0.0 then 0.0
+                              elsif Head < Rungs
+                              then Functions."**"
+                                     (2.0,
+                                      -(Falls * Long_Float (Head + 1)))
+                              else Functions."**"
+                                     (2.0,
+                                      -(Falls
+                                        * (Long_Float (Head - Rungs)
+                                           + 0.5))));
                            --  The earliest position this one may look at. With
                            --  a window of four, a query at position ten reads
                            --  seven through ten.
@@ -2485,7 +2556,7 @@ package body Reference_Transformer is
                            --  own where the model generates, and the end of
                            --  the text where it attends both ways.
                            Ends : constant Natural :=
-                             (if Item.Kind in Bert | Nomic_Bert
+                             (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2
                               then Steps - 1 else Step);
 
                            First : constant Natural :=
@@ -2509,17 +2580,29 @@ package body Reference_Transformer is
                                                 Source_Head * Item.Head_Size
                                                 + Component);
                                  end loop;
+                                 --  Scaled, then the fall-off with
+                                 --  distance, then the bound: that is the
+                                 --  order, and it is not free -- a bias
+                                 --  taken off before the scale would be
+                                 --  scaled with the score.
+                                 --
                                  --  Held under the bound the architecture
                                  --  states, before the softmax reads it: a
                                  --  bound applied afterwards would be a bound
                                  --  on a probability and mean something else.
-                                 Scores (Past) :=
-                                   (if Item.Attention_Cap > 0.0
-                                    then Item.Attention_Cap
-                                         * Hyperbolic
-                                             (Total_Score * Scale
-                                              / Item.Attention_Cap)
-                                    else Total_Score * Scale);
+                                 declare
+                                    Sized : constant Long_Float :=
+                                      Total_Score * Scale
+                                      - Slope
+                                        * Long_Float (abs (Step - Past));
+                                 begin
+                                    Scores (Past) :=
+                                      (if Item.Attention_Cap > 0.0
+                                       then Item.Attention_Cap
+                                            * Hyperbolic
+                                                (Sized / Item.Attention_Cap)
+                                       else Sized);
+                                 end;
                               end;
                            end loop;
 
@@ -2567,7 +2650,7 @@ package body Reference_Transformer is
                   --  normalizes the sum. The same tensor on either side of
                   --  the same addition, and two different models.
                   if Current.Post_Attention_Norm /= null
-                    and then Item.Kind not in Bert | Nomic_Bert
+                    and then Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2
                   then
                      declare
                         Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
@@ -2582,7 +2665,7 @@ package body Reference_Transformer is
                   end loop;
 
                   if Current.Post_Attention_Norm /= null
-                    and then Item.Kind in Bert | Nomic_Bert
+                    and then Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2
                   then
                      declare
                         Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
@@ -2774,7 +2857,7 @@ package body Reference_Transformer is
                   end if;
 
                   if Current.Post_Feed_Norm /= null
-                    and then Item.Kind not in Bert | Nomic_Bert
+                    and then Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2
                   then
                      declare
                         Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
@@ -2789,7 +2872,7 @@ package body Reference_Transformer is
                   end loop;
 
                   if Current.Post_Feed_Norm /= null
-                    and then Item.Kind in Bert | Nomic_Bert
+                    and then Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2
                   then
                      declare
                         Room : Real_Vector (0 .. Width - 1) := [others => 0.0];

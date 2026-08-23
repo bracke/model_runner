@@ -136,6 +136,19 @@ package body Fixture_Likeness is
          Kind := Tiny_Model.Falcon;
       elsif Declared = "gpt2" then
          Kind := Tiny_Model.GPT2;
+
+      --  The three that produce states rather than a distribution. They were
+      --  missing here for as long as they have existed, so the check written
+      --  to catch a fixture describing a model nobody ships had never once
+      --  been run against an embedding model -- which is the half of the
+      --  architectures where a fixture written from a description and a
+      --  reader written from the same description agreed about two faults.
+      elsif Declared = "bert" then
+         Kind := Tiny_Model.Bert;
+      elsif Declared = "nomic-bert" then
+         Kind := Tiny_Model.Nomic_Bert;
+      elsif Declared = "jina-bert-v2" then
+         Kind := Tiny_Model.Jina_Bert_V2;
       else
          Kind := Tiny_Model.Llama;
          Known := False;

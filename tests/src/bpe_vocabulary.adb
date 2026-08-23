@@ -18,7 +18,7 @@ package body BPE_Vocabulary is
    type Text_Access is access constant String;
 
    --  The pieces, in identifier order.
-   Pieces : constant array (1 .. 27) of Text_Access :=
+   Pieces : constant array (1 .. 34) of Text_Access :=
      [new String'("<unk>"),
       new String'("a"),
       new String'("b"),
@@ -56,13 +56,27 @@ package body BPE_Vocabulary is
       --  rule that the longest match wins cannot be told from the rule that
       --  the first match does, and a vocabulary is untrusted input: a file
       --  may carry such a pair whether or not a trained model would.
-      new String'("<|im_start")];
+      new String'("<|im_start"),
+
+      --  Punctuation, and the pieces that show what the two rules which cut
+      --  it out of the text first do differently. A contraction is one piece
+      --  under the original rule and two under those; a space leads a full
+      --  stop under the original and stands alone under those; and a grave
+      --  accent, which falcon cuts and the default does not, goes the other
+      --  way round.
+      new String'("'"),
+      new String'("s"),
+      new String'("'s"),
+      new String'("."),
+      new String'(Space_Mark & "."),
+      new String'("`"),
+      new String'(Space_Mark & "`")];
 
    --  The merge table, in rank order, which is deliberately not the order the
    --  pieces are written above. "a b" is last and "b c" is next to last, so
    --  in "abc" the leftmost pair the table holds is not the one it ranks
    --  first: by rank that is "a" and "bc", and by position "ab" and "c".
-   Merges : constant array (1 .. 13) of Text_Access :=
+   Merges : constant array (1 .. 16) of Text_Access :=
      [new String'(Space_Mark & " a"),
       new String'(Space_Mark & "a b"),
       new String'(Tab_Mark & " a"),
@@ -75,7 +89,10 @@ package body BPE_Vocabulary is
       new String'("12 3"),
       new String'("123 4"),
       new String'("b c"),
-      new String'("a b")];
+      new String'("a b"),
+      new String'("' s"),
+      new String'(Space_Mark & " ."),
+      new String'(Space_Mark & " `")];
 
    -----------
    -- Build --
@@ -122,13 +139,15 @@ package body BPE_Vocabulary is
 
       Fixtures.Begin_Array
         (Builder, "tokenizer.ggml.token_type", G.Value_Int32, Pieces'Length);
+      --  The three markers are control tokens and everything else is
+      --  ordinary. They are named by index rather than counted from the end,
+      --  because pieces were once added after them and the count did not
+      --  follow.
       Fixtures.Int32_Element (Builder, 2);   --  <unk>
-      for Index in 2 .. Pieces'Length - 3 loop
-         Fixtures.Int32_Element (Builder, 1);
+      for Index in 2 .. Pieces'Length loop
+         Fixtures.Int32_Element
+           (Builder, (if Index in 25 .. 27 then 3 else 1));
       end loop;
-      Fixtures.Int32_Element (Builder, 3);   --  <|im_start|>, a control token
-      Fixtures.Int32_Element (Builder, 3);   --  <|im_end|>
-      Fixtures.Int32_Element (Builder, 3);   --  <|im_start
       Fixtures.End_Array (Builder);
 
       --  The markers double as the beginning and end tokens, so that asking

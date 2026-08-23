@@ -2,6 +2,7 @@ with Model_Runner.CLI.Options;
 with Model_Runner.Generation;
 with Model_Runner.Llama;
 with Model_Runner.Presentation;
+with Model_Runner.Tools;
 
 --  Interactive conversation.
 --
@@ -18,11 +19,19 @@ with Model_Runner.Presentation;
 --  diagnostic and the session continues.
 --
 --    /exit   /reset   /help   /settings   /stats   /context   /system [TEXT]
+--    /tools  /tool TEXT
 --
 --  /system with no text removes the system message, which is otherwise the
 --  one thing a session cannot undo: --system sets one before the first turn
 --  and /system TEXT replaces it, and without this there is no way back to a
 --  conversation that has none.
+--
+--  /tool is the other half of a tool call. The model writes a call into its
+--  reply; whoever is at the terminal runs it -- this program runs nothing --
+--  and hands the answer back with /tool, which is a turn of its own and not
+--  the person speaking. The calls a reply carries are read out and shown
+--  after it, so that what has to be answered is on the screen rather than
+--  buried in the reply.
 --
 --  Input policy. Non-empty lines accumulate; a blank line submits. An empty
 --  submission is ignored. At end of file a pending non-empty prompt is
@@ -48,6 +57,8 @@ package Model_Runner.CLI.Interactive is
       Statistics,
       Context,
       Set_System,
+      Show_Tools,
+      Tool_Result,
       Unknown);
 
    --  The word a caller types for an interactive command.
@@ -149,12 +160,16 @@ package Model_Runner.CLI.Interactive is
    --  @param Rules Grammar every reply must obey, or null. A conversation
    --    starts the grammar again for each reply, because what the grammar
    --    describes is an answer rather than a whole conversation.
+   --  @param Tools The tools offered to the model, or null. They are
+   --    rendered into every turn by the template, and they are what /tool
+   --    answers.
    procedure Run
      (Item     : Model_Runner.CLI.Options.Command;
       Screen   : in out Model_Runner.Presentation.Console;
       Prepared : in out Model_Runner.Llama.Model;
       Session  : in out Model_Runner.Llama.Session;
       Rules    : Model_Runner.Generation.Grammar_Reference := null;
+      Tools    : access constant Model_Runner.Tools.Definitions := null;
       Status   : out Natural);
 
 private

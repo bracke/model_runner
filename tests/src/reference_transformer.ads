@@ -128,7 +128,7 @@ private
    --  implementation.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2, Bert, Nomic_Bert);
+      Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -235,6 +235,10 @@ private
       --  applies to a score and to a logit. Zero for an architecture that
       --  states none.
       Attention_Cap : Long_Float := 0.0;
+
+      --  How steeply a head's attention falls off with distance, for a model
+      --  that learned no positions and rotates nothing. Zero for every other.
+      Max_Bias      : Long_Float := 0.0;
       Logit_Cap     : Long_Float := 0.0;
 
       --  How many layers in a row slide a window before one sees

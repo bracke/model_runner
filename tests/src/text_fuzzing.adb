@@ -7,6 +7,7 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Tokenizer;
 
 with BPE_Vocabulary;
+with Unigram_Vocabulary;
 with Tiny_Model;
 
 package body Text_Fuzzing is
@@ -291,6 +292,8 @@ package body Text_Fuzzing is
 
       Marked : B.Byte_Array_Access;
       Ranked : B.Byte_Array_Access;
+      Split  : B.Byte_Array_Access;
+      Pathed : B.Byte_Array_Access;
    begin
       Result := (others => <>);
 
@@ -301,6 +304,24 @@ package body Text_Fuzzing is
       BPE_Vocabulary.Build ("gpt-2", Ranked);
       Campaign (Ranked, Cases);
       B.Free (Ranked);
+
+      --  And the rule that cuts a run of punctuation out of the text before
+      --  anything else looks at it, which is a walk over the text the other
+      --  rules do not take. Hostile text is mostly punctuation, so a rule
+      --  whose extra work is per punctuation character is exactly the one
+      --  the clock in here exists for.
+      BPE_Vocabulary.Build ("default", Split);
+      Campaign (Split, Cases * 2);
+      B.Free (Split);
+
+      --  And the road that looks for the best path rather than merging.
+      --  Its cost grows with the text and with the longest piece the
+      --  vocabulary holds, which is a different shape of cost from the
+      --  merge loop's, and the clock in here is the only thing in this
+      --  repository that watches a cost grow.
+      Unigram_Vocabulary.Build (Pathed);
+      Campaign (Pathed, Cases * 3);
+      B.Free (Pathed);
    end Run;
 
 end Text_Fuzzing;

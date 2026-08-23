@@ -642,6 +642,7 @@ package body Fixture_Mutation is
                      --  batching is a way to read one. Asking anyway
                      --  produced a refusal a reader would take for a fault.
                      if Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert
+                              | Tiny_Model.Jina_Bert_V2
                        and then not Read.Batched
                      then
                         Result.Unasked := Result.Unasked + 1;
@@ -674,7 +675,8 @@ package body Fixture_Mutation is
                   Examine (Kind, Plain, Format,
                            Model_Runner.Backend.Backend_Device,
                            Batched =>
-                             Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert);
+                             Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert
+                              | Tiny_Model.Jina_Bert_V2);
                end loop;
             end loop;
          elsif Say /= null then

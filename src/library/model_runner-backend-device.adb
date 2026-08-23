@@ -501,7 +501,8 @@ package body Model_Runner.Backend.Device is
       Ok         : out Boolean;
       Positions  : Natural := 1;
       Window     : Natural := 0;
-      Causal     : Boolean := True) is
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0) is
    begin
       if not Ready_Now then
          Ok := False;
@@ -511,7 +512,7 @@ package body Model_Runner.Backend.Device is
       Products.Attend_Resident
         (Engine, Query, Heads, Head_Size, Value_Size, Group_Size,
          First, Last, K_Base, V_Base, KV_Width, V_Width, Scale, Cap,
-         Target, Ok, Positions, Window, Causal);
+         Target, Ok, Positions, Window, Causal, Max_Bias);
    end Attend;
 
    ------------------------
@@ -537,7 +538,8 @@ package body Model_Runner.Backend.Device is
       Ok         : out Boolean;
       Positions  : Natural := 1;
       Window     : Natural := 0;
-      Causal     : Boolean := True)
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0)
    is
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -578,7 +580,7 @@ package body Model_Runner.Backend.Device is
       Products.Add_Attention
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
-         Window => Window, Causal => Causal);
+         Window => Window, Causal => Causal, Max_Bias => Max_Bias);
       if not Added then
          return;
       end if;

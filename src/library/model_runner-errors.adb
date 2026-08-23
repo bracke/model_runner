@@ -62,6 +62,8 @@ package body Model_Runner.Errors is
          return Domain_Conversation;
       elsif Prefix = "GRAMMAR" then
          return Domain_Grammar;
+      elsif Prefix = "TOOLS" then
+         return Domain_Tools;
       else
          return Domain_Internal;
       end if;
@@ -89,6 +91,7 @@ package body Model_Runner.Errors is
          when Domain_Sampling     => return "SAMPLE";
          when Domain_Conversation => return "CONV";
          when Domain_Grammar      => return "GRAM";
+         when Domain_Tools        => return "TOOLS";
          when Domain_Internal     => return "INTERNAL";
       end case;
    end Domain_Token;
@@ -113,6 +116,7 @@ package body Model_Runner.Errors is
          when Domain_Sampling     => return "sampling";
          when Domain_Conversation => return "conversation";
          when Domain_Grammar      => return "grammar";
+         when Domain_Tools        => return "tools";
          when Domain_Internal     => return "internal";
       end case;
    end Key_Segment;
@@ -215,6 +219,7 @@ package body Model_Runner.Errors is
             | Backend_Unsupported_Format
             | Backend_Capability_Missing
             | Conversation_System_Unsupported
+            | Tools_Not_In_Template
             | Internal_Not_Implemented =>
             return Recovery_Unsupported;
 
@@ -228,6 +233,8 @@ package body Model_Runner.Errors is
             | Conversation_Too_Long
             | Template_Output_Too_Large
             | Template_Variables_Too_Large
+            | Tools_Too_Many
+            | Tools_Too_Large
             | IO_File_Too_Large =>
             return Recovery_Resource_Limited;
 
@@ -453,8 +460,17 @@ package body Model_Runner.Errors is
          --  A grammar comes from the command line, as a conversation's
          --  shape does: a grammar that will not compile is something the
          --  caller wrote, not something the model did.
+         --  Tools come from the command line too, and a call this cannot
+         --  read is the one exception: that is what the model wrote, not
+         --  what the caller typed.
          when Domain_CLI | Domain_Conversation | Domain_Grammar =>
             return Exit_Usage;
+
+         when Domain_Tools =>
+            return
+              (if Item.Code = Tools_Call_Malformed
+               then Exit_Model_Format
+               else Exit_Usage);
 
          when Domain_IO =>
             return Exit_Input_Output;

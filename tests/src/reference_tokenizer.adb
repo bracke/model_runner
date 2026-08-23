@@ -113,6 +113,8 @@ package body Reference_Tokenizer is
             Item.Model := Byte_Pair;
          elsif Name = "bert" then
             Item.Model := Word_Piece;
+         elsif Name = "t5" then
+            Item.Model := Unigram;
          else
             Item.Model := Unreadable;
          end if;
@@ -124,17 +126,43 @@ package body Reference_Tokenizer is
               Containers.String_Value (Source, "tokenizer.ggml.pre");
             Ranks   : Natural := 0;
          begin
-            if Cutting = "" or else Cutting = "gpt-2"
-              or else Cutting = "starcoder"
+            if Cutting = "" or else Cutting = "default" then
+               Item.Cutting := Default;
+            elsif Cutting = "gpt-2" or else Cutting = "mpt"
+              or else Cutting = "olmo" or else Cutting = "jais"
+              or else Cutting = "trillion" or else Cutting = "granite-docling"
+              or else Cutting = "phi-2" or else Cutting = "gigachat"
+              or else Cutting = "a.x-4.0" or else Cutting = "mellum"
+              or else Cutting = "modern-bert" or else Cutting = "roberta-bpe"
+              or else Cutting = "exaone4" or else Cutting = "jina-es"
+              or else Cutting = "jina-de" or else Cutting = "jina-v1-en"
+              or else Cutting = "jina-v2-es" or else Cutting = "jina-v2-de"
+              or else Cutting = "jina-v2-code"
             then
                Item.Cutting := GPT2;
             elsif Cutting = "falcon" then
                Item.Cutting := Falcon;
-            elsif Cutting = "smollm" then
+            elsif Cutting = "smollm" or else Cutting = "starcoder"
+              or else Cutting = "refact" or else Cutting = "command-r"
+              or else Cutting = "codeshell" or else Cutting = "exaone"
+              or else Cutting = "minerva-7b" or else Cutting = "mellum2"
+            then
                Item.Cutting := SmolLM;
-            elsif Cutting = "llama3" or else Cutting = "llama-bpe" then
+            elsif Cutting = "llama3" or else Cutting = "llama-v3"
+              or else Cutting = "llama-bpe" or else Cutting = "falcon3"
+              or else Cutting = "falcon-h1" or else Cutting = "pixtral"
+              or else Cutting = "midm-2.0" or else Cutting = "lfm2"
+              or else Cutting = "jina-v5-nano" or else Cutting = "dbrx"
+              or else Cutting = "smaug-bpe" or else Cutting = "glm4"
+              or else Cutting = "chatglm-bpe"
+            then
                Item.Cutting := Llama3;
-            elsif Cutting = "qwen2" then
+            elsif Cutting = "qwen2" or else Cutting = "stablelm2"
+              or else Cutting = "deepseek-r1-qwen" or else Cutting = "kormo"
+              or else Cutting = "f2llmv2" or else Cutting = "megrez"
+              or else Cutting = "hunyuan" or else Cutting = "grok-2"
+              or else Cutting = "solar-open"
+            then
                Item.Cutting := Qwen2;
             else
                Item.Model := Unreadable;
@@ -737,21 +765,53 @@ package body Reference_Tokenizer is
              else Character'Val (0));
 
          function Has_More return Boolean is (At_Index < Text'Last);
+
+         --  Falcon and the default cut every run of punctuation out of the
+         --  text before the rest of the rule looks at it. This reader is
+         --  ASCII, and in ASCII that class is every printing character which
+         --  is neither letter nor digit nor space -- except the grave
+         --  accent, which falcon counts and the default does not, and which
+         --  is the whole difference between the two classes.
+         Splits : constant Boolean := Item.Cutting in Falcon | Default;
+
+         function Cut_Whole (Value : Character) return Boolean
+         is (Value in '!' .. '~'
+             and then not Is_Letter (Value) and then not Is_Digit (Value)
+             and then (Value /= '`' or else Item.Cutting = Falcon));
+
+         --  How many digits follow the character at At_Index, up to three.
+         function Digits_After return Natural is
+            Seen : Natural := 0;
+            Look : Natural := At_Index + 1;
+         begin
+            while Seen < 3 and then Look <= Text'Last
+              and then Is_Digit (Text (Look))
+            loop
+               Seen := Seen + 1;
+               Look := Look + 1;
+            end loop;
+            return Seen;
+         end Digits_After;
       begin
-         for One of Ones loop
-            if From + One'Length - 1 <= Text'Last
-              and then Text (From .. From + One'Length - 1) = One.all
-            then
-               return From + One'Length - 1;
-            end if;
-         end loop;
+         --  A contraction is one piece only where nothing has cut its
+         --  apostrophe out from under it first.
+         if not Splits then
+            for One of Ones loop
+               if From + One'Length - 1 <= Text'Last
+                 and then Text (From .. From + One'Length - 1) = One.all
+               then
+                  return From + One'Length - 1;
+               end if;
+            end loop;
+         end if;
 
          --  What may lead a run, which depends on the rule and on what the
          --  run is made of.
          if Has_More and then not Is_Space (Follows) then
             if Is_Letter (Follows) then
                if (case Item.Cutting is
-                      when GPT2 | Falcon | SmolLM => Text (At_Index) = ' ',
+                      when Default | GPT2 | Falcon | SmolLM =>
+                        Text (At_Index) = ' ',
                       when Llama3 | Qwen2 =>
                         not Is_Letter (Text (At_Index))
                         and then not Is_Digit (Text (At_Index))
@@ -762,13 +822,20 @@ package body Reference_Tokenizer is
                end if;
 
             elsif Is_Digit (Follows) then
-               if Item.Cutting in GPT2 | Falcon
-                 and then Text (At_Index) = ' '
+               --  Falcon leaves a space on a run of one or two digits and
+               --  not on a longer one, because what cuts digits out of the
+               --  text there only reaches a run of three.
+               if Text (At_Index) = ' '
+                 and then (Item.Cutting = GPT2
+                           or else (Item.Cutting = Falcon
+                                    and then Digits_After < 3))
                then
                   At_Index := At_Index + 1;
                end if;
 
-            elsif Text (At_Index) = ' ' then
+            elsif Text (At_Index) = ' '
+              and then not (Splits and then Cut_Whole (Follows))
+            then
                At_Index := At_Index + 1;
             end if;
          end if;
@@ -783,7 +850,7 @@ package body Reference_Tokenizer is
                Room : Natural :=
                  (case Item.Cutting is
                      when GPT2 => Natural'Last,
-                     when Falcon | Llama3 => 3,
+                     when Default | Falcon | Llama3 => 3,
                      when SmolLM | Qwen2 => 1) - 1;
             begin
                while Room > 0 and then Has_More and then Is_Digit (Follows)
@@ -807,6 +874,19 @@ package body Reference_Tokenizer is
                   At_Index := At_Index - 1;
                end if;
             end;
+
+         elsif Splits and then Cut_Whole (Text (At_Index)) then
+            while Has_More and then Cut_Whole (Follows) loop
+               At_Index := At_Index + 1;
+            end loop;
+
+         elsif Splits then
+            while Has_More and then not Is_Letter (Follows)
+              and then not Is_Digit (Follows) and then not Is_Space (Follows)
+              and then not Cut_Whole (Follows)
+            loop
+               At_Index := At_Index + 1;
+            end loop;
 
          else
             while Has_More and then not Is_Letter (Follows)
@@ -935,6 +1015,177 @@ package body Reference_Tokenizer is
       end loop;
    end Encode_By_Rank;
 
+   --  Unigram: replace, then choose the cut whose scores sum highest.
+   --
+   --  Written as the description gives it and not as the engine does it.
+   --  The engine bounds how far a piece may reach by the longest one its
+   --  vocabulary holds and looks each candidate up in a hash; this asks
+   --  every piece of the vocabulary at every boundary and takes the ones
+   --  that match, which is the same question answered the slow obvious way.
+   --  Where the two agree, they agree about the algorithm rather than about
+   --  a shared shortcut.
+   --
+   --  No normalization table is applied. This reader is ASCII, the fixture
+   --  it is driven with carries no table, and a file that carries one is
+   --  settled against the other runtime instead -- which is the split the
+   --  rest of this file already makes.
+   procedure Encode_By_Path
+     (Item   : Vocabulary;
+      Tokens : out Token_Vector;
+      Last   : out Natural;
+      Text   : String)
+   is
+      --  The text with every space written as the marker and one in front,
+      --  which is what this road's files ask for.
+      Room : String (1 .. (Text'Length + 1) * 3);
+      Used : Natural := 0;
+
+      procedure Add (Value : String) is
+      begin
+         Room (Used + 1 .. Used + Value'Length) := Value;
+         Used := Used + Value'Length;
+      end Add;
+
+      --  The best sum reaching each boundary, and how it got there.
+      Best  : array (0 .. Room'Length) of Long_Float := [others => Long_Float'First];
+      Came  : array (0 .. Room'Length) of Natural := [others => 0];
+      Which : array (0 .. Room'Length) of Integer := [others => -1];
+
+      --  What a character no piece spells costs: worse than any piece, by
+      --  enough that a path through one is never taken where a path through
+      --  pieces exists.
+      Lowest  : Long_Float := 0.0;
+      Unknown : Long_Float;
+      Seen    : Boolean := False;
+   begin
+      Last := 0;
+
+      Add (Marker);
+      for Index in Text'Range loop
+         if Text (Index) = ' ' then
+            Add (Marker);
+         else
+            Add (Text (Index .. Index));
+         end if;
+      end loop;
+
+      for Index in 1 .. Item.Count loop
+         if Item.Pieces (Index).Sort = 1 then
+            if not Seen
+              or else Long_Float (Item.Pieces (Index).Score) < Lowest
+            then
+               Lowest := Long_Float (Item.Pieces (Index).Score);
+               Seen := True;
+            end if;
+         end if;
+      end loop;
+      Unknown := Lowest - 10.0;
+
+      Best (0) := 0.0;
+
+      for At_Byte in 1 .. Used loop
+         if Best (At_Byte - 1) > Long_Float'First then
+            declare
+               --  How many bytes the character starting here takes, which
+               --  is how far an unknown edge reaches.
+               Head : constant Natural := Character'Pos (Room (At_Byte));
+               Span : constant Natural :=
+                 Natural'Min
+                   ((if Head < 16#80# then 1
+                     elsif Head < 16#E0# then 2
+                     elsif Head < 16#F0# then 3
+                     else 4),
+                    Used - At_Byte + 1);
+               Spelled : Boolean := False;
+            begin
+               --  Every piece the vocabulary holds, asked at this boundary.
+               for Index in 1 .. Item.Count loop
+                  declare
+                     Piece : constant String :=
+                       Item.Pieces (Index).Text
+                         (1 .. Item.Pieces (Index).Last);
+                  begin
+                     if Item.Pieces (Index).Sort in 1 | 4 | 5
+                       and then Piece'Length > 0
+                       and then At_Byte + Piece'Length - 1 <= Used
+                       and then Room (At_Byte .. At_Byte + Piece'Length - 1)
+                                = Piece
+                     then
+                        if Piece'Length = Span then
+                           Spelled := True;
+                        end if;
+
+                        declare
+                           --  A piece the author wrote in by hand counts as
+                           --  costing nothing, which is what makes it beat
+                           --  the pieces it spells out to.
+                           Worth : constant Long_Float :=
+                             (if Item.Pieces (Index).Sort = 4 then 0.0
+                              else Long_Float (Item.Pieces (Index).Score));
+                           Reach : constant Long_Float :=
+                             Best (At_Byte - 1) + Worth;
+                           Ends  : constant Natural :=
+                             At_Byte + Piece'Length - 1;
+                        begin
+                           if Reach > Best (Ends) then
+                              Best (Ends) := Reach;
+                              Came (Ends) := At_Byte - 1;
+                              Which (Ends) := Index - 1;
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end loop;
+
+               if not Spelled then
+                  declare
+                     Reach : constant Long_Float :=
+                       Best (At_Byte - 1) + Unknown;
+                     Ends  : constant Natural := At_Byte + Span - 1;
+                  begin
+                     if Reach > Best (Ends) then
+                        Best (Ends) := Reach;
+                        Came (Ends) := At_Byte - 1;
+                        Which (Ends) := Item.Unknown;
+                     end if;
+                  end;
+               end if;
+            end;
+         end if;
+      end loop;
+
+      --  Back from the end, then reversed. A run of unknowns is one.
+      declare
+         Held  : Token_Vector (1 .. Max_Tokens);
+         Count : Natural := 0;
+         Where : Natural := Used;
+         Prior : Boolean := False;
+      begin
+         if Used = 0 then
+            return;
+         end if;
+
+         loop
+            declare
+               Is_Unknown : constant Boolean := Which (Where) = Item.Unknown;
+            begin
+               if not (Prior and then Is_Unknown) then
+                  Count := Count + 1;
+                  Held (Count) := Which (Where);
+               end if;
+               exit when Came (Where) = 0;
+               Prior := Is_Unknown;
+               Where := Came (Where);
+            end;
+         end loop;
+
+         for Index in 1 .. Count loop
+            Tokens (Index) := Held (Count - Index + 1);
+         end loop;
+         Last := Count;
+      end;
+   end Encode_By_Path;
+
    ------------
    -- Encode --
    ------------
@@ -961,6 +1212,8 @@ package body Reference_Tokenizer is
                Encode_By_Rank (Item, Piece, Made, Count);
             when Word_Piece =>
                Encode_By_Piece (Item, Piece, Made, Count);
+            when Unigram =>
+               Encode_By_Path (Item, Made, Count, Piece);
             when Unreadable =>
                Count := 0;
          end case;
