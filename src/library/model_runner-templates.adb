@@ -109,6 +109,11 @@ package body Model_Runner.Templates is
       --  And a loop over the calls one turn asked for, which is the third
       --  thing there is to walk and ends with the third instruction.
       Walks_Calls : Boolean := False;
+
+      --  Whether a list loop binds the name a message goes by, which the
+      --  name the loop gives its variable decides where the block begins
+      --  and both of its instructions have to agree about.
+      Binds       : Boolean := True;
    end record;
 
    type Frame_Array is array (1 .. Max_Depth) of Frame;
@@ -149,12 +154,17 @@ package body Model_Runner.Templates is
          --  Gemma's turns are "user" and "model", so the role a caller gives
          --  is mapped rather than written through -- which is why this needs
          --  a comparison where the other three need none.
+         --  The line break that ends the role is written inside each branch
+         --  rather than after the endif, because a line break standing
+         --  straight after a block tag belongs to the template's own shape
+         --  and is taken off. Written here it is text, which is what it is:
+         --  the break between a turn's role and its content.
          return
            "{{ bos_token }}"
            & "{% for message in messages %}"
            & "<start_of_turn>"
-           & "{% if message['role'] == 'assistant' %}model"
-           & "{% else %}{{ message['role'] }}{% endif %}" & LF
+           & "{% if message['role'] == 'assistant' %}model" & LF
+           & "{% else %}{{ message['role'] }}" & LF & "{% endif %}"
            & "{{ message['content'] }}<end_of_turn>" & LF
            & "{% endfor %}"
            & "{% if add_generation_prompt %}"
@@ -184,6 +194,12 @@ package body Model_Runner.Templates is
    is
       Frames : Frame_Array := [others => <>];
       Depth  : Natural := 0;
+
+      --  How deep the brackets are around what is being read. A template is
+      --  untrusted text and a group is read by recursion, so the same bound
+      --  the blocks are held to holds the brackets: reading stops rather
+      --  than the stack running out.
+      Group_Depth : Natural := 0;
 
       --  Jump instructions that must be patched to the end of the enclosing
       --  if. Chained through the Target field so that no extra storage grows
@@ -468,6 +484,72 @@ package body Model_Runner.Templates is
 
       --  Declared here because a term may hold one: the index of an indexed
       --  message is an expression, and an expression is an operand.
+      --  Where the bracket opened at First is closed, or zero when nothing
+      --  closes it. Quotes are honoured, because a bracket inside a literal
+      --  closes nothing.
+      function Closes_At (Text : String; First : Natural) return Natural is
+         Depth_Here : Natural := 0;
+         Quote      : Character := ' ';
+      begin
+         for Index in First .. Text'Last loop
+            if Quote /= ' ' then
+               if Text (Index) = Quote then
+                  Quote := ' ';
+               end if;
+            elsif Text (Index) = ''' or else Text (Index) = '"' then
+               Quote := Text (Index);
+            elsif Text (Index) = '(' then
+               Depth_Here := Depth_Here + 1;
+            elsif Text (Index) = ')' then
+               Depth_Here := Depth_Here - 1;
+               if Depth_Here = 0 then
+                  return Index;
+               end if;
+            end if;
+         end loop;
+         return 0;
+      end Closes_At;
+
+      --  Where Word stands in Held as a word of its own -- spaces or the
+      --  ends of the text on either side of it -- outside quotes and outside
+      --  brackets, at or after After. Zero when it does not stand there at
+      --  all. What it is for is telling the parts of a one-line choice
+      --  apart: the if and the else of "A if C else B" are the template's,
+      --  and the ones inside a quoted marker or inside brackets are not.
+      function Word_At
+        (Held : String; Word : String; After : Natural := 0) return Natural
+      is
+         Level : Natural := 0;
+         Quote : Character := ' ';
+         From  : constant Natural :=
+           (if After = 0 then Held'First else After);
+      begin
+         for Index in From .. Held'Last - Word'Length + 1 loop
+            if Quote /= ' ' then
+               if Held (Index) = Quote then
+                  Quote := ' ';
+               end if;
+            elsif Held (Index) = ''' or else Held (Index) = '"' then
+               Quote := Held (Index);
+            elsif Held (Index) = '(' or else Held (Index) = '[' then
+               Level := Level + 1;
+            elsif Held (Index) = ')' or else Held (Index) = ']' then
+               if Level > 0 then
+                  Level := Level - 1;
+               end if;
+            elsif Level = 0
+              and then Held (Index .. Index + Word'Length - 1) = Word
+              and then (Index = Held'First
+                        or else Held (Index - 1) = ' ')
+              and then (Index + Word'Length > Held'Last
+                        or else Held (Index + Word'Length) = ' ')
+            then
+               return Index;
+            end if;
+         end loop;
+         return 0;
+      end Word_At;
+
       procedure Read_Operand
         (Text   : String;
          From   : in out Natural;
@@ -543,7 +625,10 @@ package body Model_Runner.Templates is
          --  A cut answers with a list, and a template takes one side of it.
          --  Only the two ends are read, because only the two ends are what a
          --  template asks for: what came before the marker, or what came
-         --  after the last one.
+         --  after the last one. Which end is said either by a position
+         --  written after the cut or by a filter written after it, and a
+         --  cut that says neither is left unresolved rather than guessed:
+         --  it refuses if it is ever read.
          if Doing = Method_Split_First then
             if Scan + 2 <= Text'Last and then Text (Scan .. Scan + 2) = "[0]"
             then
@@ -554,7 +639,7 @@ package body Model_Runner.Templates is
                Doing_Now := Method_Split_Last;
                Scan := Scan + 4;
             else
-               return;
+               Doing_Now := Method_Split_Whole;
             end if;
          end if;
 
@@ -587,6 +672,46 @@ package body Model_Runner.Templates is
 
          if Index > Text'Last then
             return;
+         end if;
+
+         --  A bracketed group holding one value, which is a term with
+         --  brackets round it and reads as that term: what follows the
+         --  closing bracket is written after the group and applies to what
+         --  is in it, which is how a template writes
+         --  (text.split(marker)|last).lstrip('\n'). A group holding a sum
+         --  is not a term and is read where an operand is.
+         if Text (Index) = '(' then
+            declare
+               Shut  : constant Natural := Closes_At (Text, Index);
+               Inner : Operand;
+               Read  : Boolean;
+            begin
+               if Shut = 0 or else Group_Depth >= Max_Depth then
+                  return;
+               end if;
+
+               declare
+                  Held : constant String := Text (Index + 1 .. Shut - 1);
+                  Scan : Natural := Held'First;
+               begin
+                  Group_Depth := Group_Depth + 1;
+                  Read_Operand (Held, Scan, Inner, Read);
+                  Group_Depth := Group_Depth - 1;
+
+                  if not Read
+                    or else Inner.Count /= 1
+                    or else Skip_Spaces (Held, Scan) <= Held'Last
+                  then
+                     return;
+                  end if;
+               end;
+
+               Result := Inner.Terms (1);
+               Result.Join := Join_Plus;
+               From := Shut + 1;
+               Ok := True;
+               return;
+            end;
          end if;
 
          if Text (Index) = ''' or else Text (Index) = '"' then
@@ -804,12 +929,16 @@ package body Model_Runner.Templates is
                         After  : Natural := Shut + 1;
                         Field  : Natural := 0;
                      begin
-                        --  A slice means something else and is read where a
-                        --  set is compiled, not here.
+                        --  A slice is written the same way as far as the
+                        --  opening bracket and is not an index at all: it
+                        --  is a cut, read as a method of the name in front
+                        --  of it. Leaving here rather than refusing is what
+                        --  lets the name be read as a name and the cut as
+                        --  what follows it.
                         if Inside'Length = 0
                           or else (for some Letter of Inside => Letter = ':')
                         then
-                           return;
+                           goto Not_A_Position;
                         end if;
 
                         Read_Operand (Inside, Where, Index, Taken);
@@ -891,6 +1020,8 @@ package body Model_Runner.Templates is
                      end;
                   end;
                end if;
+
+               <<Not_A_Position>>
 
                if Word = "message.role" then
                   Result.Kind := Term_Message_Role;
@@ -988,8 +1119,93 @@ package body Model_Runner.Templates is
                Doing : Method_Kind := Method_None;
                Ends  : Natural := 0;
                Taken : Boolean;
+
+               --  Add a cut at a position, the position being an operand of
+               --  its own: a template writes one worked out rather than
+               --  written down.
+               procedure Add_Cut
+                 (Source : String; Kind : Method_Kind; Added : out Boolean)
+               is
+                  Where : Operand;
+                  Read  : Boolean;
+                  Scan_At : Natural := Source'First;
+                  Kept  : Natural;
+               begin
+                  Added := False;
+                  Read_Operand (Source, Scan_At, Where, Read);
+                  if not Read
+                    or else Skip_Spaces (Source, Scan_At) <= Source'Last
+                    or else Result.Chained >= Max_Methods
+                  then
+                     return;
+                  end if;
+
+                  Keep (Where, Kept);
+                  if Kept = 0 then
+                     return;
+                  end if;
+
+                  Result.Chained := Result.Chained + 1;
+                  Result.Methods (Result.Chained) :=
+                    (Kind => Kind, At_Operand => Kept);
+                  Added := True;
+               end Add_Cut;
             begin
-               exit when Scan > Text'Last or else Text (Scan) /= '.';
+               exit when Scan > Text'Last;
+
+               --  A cut at a position: text[n:], text[:n] and text[a:b].
+               --  Both ends are cut where both are written, and the far end
+               --  first, because the near one moves what is left of the
+               --  text and a position was counted in the text as it was.
+               if Text (Scan) = '[' then
+                  declare
+                     Shut  : Natural := Scan + 1;
+                     Level : Natural := 0;
+                     Colon : Natural := 0;
+                  begin
+                     while Shut <= Text'Last loop
+                        if Text (Shut) = '[' then
+                           Level := Level + 1;
+                        elsif Text (Shut) = ']' then
+                           exit when Level = 0;
+                           Level := Level - 1;
+                        elsif Text (Shut) = ':' and then Level = 0
+                          and then Colon = 0
+                        then
+                           Colon := Shut;
+                        end if;
+                        Shut := Shut + 1;
+                     end loop;
+
+                     exit when Shut > Text'Last or else Colon = 0;
+
+                     declare
+                        Front : constant String :=
+                          Model_Runner.Text.Trim (Text (Scan + 1 .. Colon - 1));
+                        Back  : constant String :=
+                          Model_Runner.Text.Trim (Text (Colon + 1 .. Shut - 1));
+                        Added : Boolean := True;
+                     begin
+                        if Back'Length > 0 then
+                           Add_Cut (Back, Method_Cut_To, Added);
+                        end if;
+
+                        if Added and then Front'Length > 0 then
+                           Add_Cut (Front, Method_Cut_From, Added);
+                        end if;
+
+                        if not Added then
+                           Result := Refused (Text (Scan .. Shut));
+                        end if;
+                     end;
+
+                     From := Shut + 1;
+                  end;
+
+                  goto Read_On;
+               end if;
+
+               exit when Text (Scan) /= '.';
 
                for Named of Method_Names loop
                   if Doing = Method_None
@@ -1009,6 +1225,9 @@ package body Model_Runner.Templates is
                From := Ends;
                Add_Method (Text, Doing, From, Result, Taken);
                exit when not Taken;
+
+               <<Read_On>>
+               null;
             end;
          end loop;
 
@@ -1024,6 +1243,29 @@ package body Model_Runner.Templates is
 
                if Last < First or else Result.Filter /= Filter_None then
                   Result := Refused ("filter", E.Template_Unknown_Filter);
+
+               --  Which piece of a cut text is wanted. A template writes
+               --  either text.split(marker)[0] or text.split(marker)|first,
+               --  and the two are the same thing: the filter says which end
+               --  the cut in front of it keeps, so it is answered by the
+               --  cut rather than after it. Written after anything else it
+               --  is a list this engine has not got.
+               elsif Text (First .. Last) = "first"
+                 or else Text (First .. Last) = "last"
+               then
+                  if Result.Chained = 0
+                    or else Result.Methods (Result.Chained).Kind
+                            not in Method_Split_First | Method_Split_Last
+                                   | Method_Split_Whole
+                  then
+                     Result :=
+                       Refused (Text (First .. Last), E.Template_Unknown_Filter);
+                  else
+                     Result.Methods (Result.Chained).Kind :=
+                       (if Text (First .. Last) = "first"
+                        then Method_Split_First else Method_Split_Last);
+                  end if;
+
                elsif Text (First .. Last) = "trim" then
                   Result.Filter := Filter_Trim;
                elsif Text (First .. Last) = "length" then
@@ -1049,20 +1291,95 @@ package body Model_Runner.Templates is
          Value  : Term;
          Taken  : Boolean;
          Joined : Join_Kind := Join_Plus;
+
+         --  Add one term to what has been read, under the join in force.
+         --  Answers False where there is no room, which refuses the operand
+         --  rather than dropping a term out of the middle of a sum.
+         function Push (Held : Term; Under : Join_Kind) return Boolean is
+         begin
+            if Result.Count >= Max_Terms then
+               return False;
+            end if;
+            Result.Count := Result.Count + 1;
+            Result.Terms (Result.Count) := Held;
+            Result.Terms (Result.Count).Join := Under;
+            return True;
+         end Push;
       begin
          Result := (others => <>);
          Ok := False;
 
          loop
-            Read_Term (Text, From, Value, Taken);
-            exit when not Taken;
+            declare
+               Restart : constant Natural := From;
+            begin
+               Read_Term (Text, From, Value, Taken);
 
-            if Result.Count >= Max_Terms then
-               return;
-            end if;
-            Value.Join := Joined;
-            Result.Count := Result.Count + 1;
-            Result.Terms (Result.Count) := Value;
+               if Taken then
+                  if not Push (Value, Joined) then
+                     return;
+                  end if;
+               else
+                  --  A bracketed group holding a sum. One holding a single
+                  --  value is a term and was read as one above, methods and
+                  --  all; this is the other kind, and an operand is a flat
+                  --  run of terms evaluated left to right, so it is spliced
+                  --  in rather than held apart -- exactly what the brackets
+                  --  meant, because the only joins there are are plus and
+                  --  minus: a group joined by plus keeps its own joins, and
+                  --  one joined by minus has each of them turned round,
+                  --  which is what taking a sum away comes to.
+                  From := Restart;
+
+                  declare
+                     Opens : constant Natural := Skip_Spaces (Text, From);
+                     Shut  : Natural := 0;
+                  begin
+                     exit when Opens > Text'Last or else Text (Opens) /= '(';
+
+                     Shut := Closes_At (Text, Opens);
+                     if Shut = 0 or else Group_Depth >= Max_Depth then
+                        return;
+                     end if;
+
+                     declare
+                        Held  : constant String :=
+                          Text (Opens + 1 .. Shut - 1);
+                        Inner : Operand;
+                        Scan  : Natural := Held'First;
+                        Read  : Boolean;
+                     begin
+                        Group_Depth := Group_Depth + 1;
+                        Read_Operand (Held, Scan, Inner, Read);
+                        Group_Depth := Group_Depth - 1;
+
+                        --  All of it, or none: a group with anything left
+                        --  unread in it is not the sum it looks like.
+                        if not Read
+                          or else Skip_Spaces (Held, Scan) <= Held'Last
+                        then
+                           return;
+                        end if;
+
+                        for Index in 1 .. Inner.Count loop
+                           if not Push
+                             (Inner.Terms (Index),
+                              (if Index = 1 then Joined
+                               elsif Joined /= Join_Minus
+                               then Inner.Terms (Index).Join
+                               elsif Inner.Terms (Index).Join = Join_Minus
+                               then Join_Plus
+                               else Join_Minus))
+                           then
+                              return;
+                           end if;
+                        end loop;
+
+                        From := Shut + 1;
+                     end;
+                  end;
+               end if;
+            end;
 
             declare
                Next : constant Natural := Skip_Spaces (Text, From);
@@ -1696,6 +2013,104 @@ package body Model_Runner.Templates is
                   end;
                end if;
 
+               --  A choice written on one line: A if C else B. Templates
+               --  write it where a turn may not carry the field they are
+               --  after -- message.content if message.content is defined
+               --  else '' -- and what it compiles to is what the block form
+               --  compiles to, because it is the block form said in one
+               --  line: the condition, a jump over the first assignment,
+               --  and a jump over the second.
+               declare
+                  At_If   : constant Natural := Word_At (Rest, "if");
+                  At_Else : constant Natural :=
+                    (if At_If = 0 then 0 else Word_At (Rest, "else", At_If + 2));
+               begin
+                  if At_If > Rest'First and then At_Else /= 0
+                    and then Word_At (Rest, "if", At_Else + 4) = 0
+                  then
+                     declare
+                        Whether : constant String :=
+                          Model_Runner.Text.Trim
+                            (Rest (At_If + 2 .. At_Else - 1));
+                        Chosen  : constant String :=
+                          Model_Runner.Text.Trim
+                            (Rest (Rest'First .. At_If - 1));
+                        Otherwise : constant String :=
+                          Model_Runner.Text.Trim
+                            (Rest (At_Else + 4 .. Rest'Last));
+
+                        Test  : Condition;
+                        Valid : Boolean;
+                        Held  : Natural;
+                        Over_First, Over_Second : Natural := 0;
+
+                        --  Assign one side, answering where the
+                        --  instruction landed or zero when it could not
+                        --  be read or could not be kept.
+                        procedure Assign (Source : String; At_Step : out Natural)
+                        is
+                           Value : Operand;
+                           Read  : Boolean;
+                           Scan  : Natural := Source'First;
+                           Kept  : Natural;
+                        begin
+                           At_Step := 0;
+                           Read_Operand (Source, Scan, Value, Read);
+                           if not Read
+                             or else Skip_Spaces (Source, Scan) <= Source'Last
+                           then
+                              return;
+                           end if;
+
+                           Keep (Value, Kept);
+                           if Kept = 0 then
+                              return;
+                           end if;
+                           Emit ((Op => Op_Set_Text, Offset => Target,
+                                  Value_At => Kept, others => <>), At_Step);
+                        end Assign;
+                     begin
+                        Read_Condition (Whether, Test, Valid);
+                        if not Valid then
+                           Refuse (Text, Where);
+                           return;
+                        end if;
+
+                        Keep (Test, Held);
+                        if Held = 0 then
+                           return;
+                        end if;
+
+                        Emit ((Op => Op_Jump_If_False, Test_At => Held,
+                               others => <>), Over_First);
+                        if Over_First = 0 then
+                           return;
+                        end if;
+
+                        Assign (Chosen, Where);
+                        if Where = 0 then
+                           Refuse (Text, Where);
+                           return;
+                        end if;
+
+                        Emit ((Op => Op_Jump, others => <>), Over_Second);
+                        if Over_Second = 0 then
+                           return;
+                        end if;
+                        Item.Program.all (Over_First).Target := Over_Second + 1;
+
+                        Assign (Otherwise, Where);
+                        if Where = 0 then
+                           Refuse (Text, Where);
+                           return;
+                        end if;
+                        Item.Program.all (Over_Second).Target :=
+                          Item.Program_Used + 1;
+                        return;
+                     end;
+                  end if;
+               end;
+
                declare
                   Value : Operand;
                   Valid : Boolean;
@@ -1745,6 +2160,11 @@ package body Model_Runner.Templates is
                Counted   : Boolean := False;
                Bounds_At : Natural := 0;
 
+               --  Whether this loop binds the name a message goes by,
+               --  which only a loop over a list naming its variable
+               --  message does.
+               Binding   : Boolean := False;
+
                --  Whether it walks the tools instead, or the calls one
                --  turn asked for, and whether it stands inside a loop that
                --  already walks one of those.
@@ -1756,15 +2176,26 @@ package body Model_Runner.Templates is
                     or else Frames (Level).Walks_Calls);
             begin
                --  Four loops, told apart by what is looped over. Over a
-               --  list the variable is always named message, because the
-               --  fields this engine can read from an iterate are a
-               --  message's fields; over a range of whole numbers the
+               --  list the variable may be named anything, and what the
+               --  name decides is whether the loop binds: the fields this
+               --  engine reads from an iterate are a message's fields and
+               --  the name it reads them through is message, so a loop
+               --  calling its variable message binds each element to that
+               --  name and a loop calling it something else walks the same
+               --  list and binds nothing. The name it does give its
+               --  variable is not one anything can be read from -- a field
+               --  of it is refused where it is read, as any unknown name is
+               --  -- and message goes on meaning what it meant outside,
+               --  which is what the template that walks a conversation
+               --  backwards to find its last question relies on: it names
+               --  its variable to be unused and says which message it means
+               --  with a set of its own. Over a range of whole numbers the
                --  variable holds a number and may be named anything; over
                --  the tools a caller offered it holds one tool, which has no
                --  text and is written with tojson; over the calls one turn
-               --  asked for it is always named tool_call, for the reason
-               --  the list loop's variable is always named message. Any
-               --  other loop is compiled but refuses if reached.
+               --  asked for it is always named tool_call, because what can
+               --  be read through that name is a call's fields. Any other
+               --  loop is compiled but refuses if reached.
                Counting := False;
                Read_Word (Rest, Scan, First, Last);
                if Last >= First and then Is_Plain_Name (Rest (First .. Last))
@@ -1805,10 +2236,9 @@ package body Model_Runner.Templates is
                               --  here.
                               Calling := True;
                               Over := Slot_Of (Named);
-                           elsif Named = "message"
-                             and then Is_Plain_Name (Tail)
-                           then
+                           elsif Is_Plain_Name (Tail) then
                               Over := Slot_Of (Tail);
+                              Binding := Named = "message";
                            end if;
 
                            --  A loop inside a loop over tools cannot say
@@ -1842,7 +2272,8 @@ package body Model_Runner.Templates is
                   Emit ((Op => Op_Call_Begin, Offset => Over, others => <>),
                         Where);
                else
-                  Emit ((Op => Op_For_Begin, Offset => Over, others => <>),
+                  Emit ((Op => Op_For_Begin, Offset => Over,
+                         Binds => Binding, others => <>),
                         Where);
                end if;
                if Where = 0 then
@@ -1854,7 +2285,8 @@ package body Model_Runner.Templates is
                  (Kind => Block_For, Start => Where, Dead => Over = 0,
                   Numeric => Counting and then Over /= 0,
                   Walks_Tools => Walking and then Over /= 0,
-                  Walks_Calls => Calling and then Over /= 0, others => <>);
+                  Walks_Calls => Calling and then Over /= 0,
+                  Binds => Binding, others => <>);
                Exit_Chain (Depth) := 0;
             end;
 
@@ -1869,7 +2301,8 @@ package body Model_Runner.Templates is
                              elsif Frames (Depth).Walks_Tools then Op_Tool_Next
                              elsif Frames (Depth).Walks_Calls then Op_Call_Next
                              else Op_For_Next),
-                      Target => Frames (Depth).Start, others => <>), Where);
+                      Target => Frames (Depth).Start,
+                      Binds => Frames (Depth).Binds, others => <>), Where);
                if Where = 0 then
                   return;
                end if;
@@ -2043,8 +2476,43 @@ package body Model_Runner.Templates is
       Trim_Next     : Boolean := False;
       Named         : Boolean := False;
 
+      --  Where the text after a tag begins.
+      --
+      --  A tag that stands alone on a line was written on a line of its own
+      --  to be read, and the line break that ends it belongs to the
+      --  template's own shape rather than to what the model is handed: it
+      --  is taken off a block tag and left on an expression, which is the
+      --  rule the implementation these templates are written for follows.
+      --  A tag that asked for the whitespace after it to go has already
+      --  said more than this, and is left alone.
+      function Line_After (From : Natural; Block : Boolean) return Natural is
+      begin
+         if not Block or else From > Source'Last then
+            return From;
+         elsif Source (From) = ASCII.LF then
+            return From + 1;
+         elsif Source (From) = ASCII.CR and then From < Source'Last
+           and then Source (From + 1) = ASCII.LF
+         then
+            return From + 2;
+         else
+            return From;
+         end if;
+      end Line_After;
+
       --  Emit the literal text accumulated since the last tag.
-      procedure Flush_Literal (Upto : Natural; Trim_Right : Boolean) is
+      --
+      --  Trim_Right takes off every kind of whitespace, which is what a tag
+      --  written {%- asks for. Line_Left takes off the spaces and tabs that
+      --  stand between a tag and the start of its own line, and only those:
+      --  a template indents its tags to be read, and the indentation is not
+      --  part of what the model is handed. Where something other than
+      --  whitespace stands on that line, nothing is taken off, because then
+      --  the tag is in the middle of a line the template meant to write.
+      procedure Flush_Literal
+        (Upto       : Natural;
+         Trim_Right : Boolean;
+         Line_Left  : Boolean := False) is
          First : Natural := Literal_Start;
          Last  : Natural := Upto;
          Where : Natural;
@@ -2070,6 +2538,26 @@ package body Model_Runner.Templates is
             loop
                Last := Last - 1;
             end loop;
+
+         elsif Line_Left then
+            declare
+               Scan : Natural := Last;
+            begin
+               while Scan >= First
+                 and then (Source (Scan) = ' '
+                           or else Source (Scan) = ASCII.HT)
+               loop
+                  Scan := Scan - 1;
+               end loop;
+
+               --  The newline itself stays: what is taken off is the
+               --  indentation after it, not the line break before it.
+               if (Scan >= First and then Source (Scan) = ASCII.LF)
+                 or else (Scan < First and then First = Source'First)
+               then
+                  Last := Scan;
+               end if;
+            end;
          end if;
 
          if Last < First then
@@ -2157,12 +2645,13 @@ package body Model_Runner.Templates is
                Trim_Next := Scan > Cursor + 2
                  and then Source (Scan - 1) = '-';
 
-               Flush_Literal (Cursor - 1, Trim_Left);
+               Flush_Literal
+                 (Cursor - 1, Trim_Left, Line_Left => not Trim_Left);
                if E.Is_Error (Status) then
                   return;
                end if;
 
-               Cursor := Scan + 2;
+               Cursor := Line_After (Scan + 2, not Trim_Next);
                Literal_Start := Cursor;
             end;
 
@@ -2177,10 +2666,20 @@ package body Model_Runner.Templates is
                Body_First : Natural := Cursor + 2;
                Scan       : Natural := Body_First;
                Trim_Left  : Boolean := False;
+
+               --  A tag written {%+ keeps the line it stands on: it is how
+               --  a template says that this one indentation is text it
+               --  meant to write.
+               Kept_Left  : Boolean := False;
             begin
                if Body_First <= Source'Last and then Source (Body_First) = '-'
                then
                   Trim_Left := True;
+                  Body_First := Body_First + 1;
+               elsif Statement and then Body_First <= Source'Last
+                 and then Source (Body_First) = '+'
+               then
+                  Kept_Left := True;
                   Body_First := Body_First + 1;
                end if;
 
@@ -2207,7 +2706,10 @@ package body Model_Runner.Templates is
                      Trim_Next := False;
                   end if;
 
-                  Flush_Literal (Cursor - 1, Trim_Left);
+                  Flush_Literal
+                    (Cursor - 1, Trim_Left,
+                     Line_Left =>
+                       Statement and then not Trim_Left and then not Kept_Left);
                   if E.Is_Error (Status) then
                      return;
                   end if;
@@ -2263,7 +2765,8 @@ package body Model_Runner.Templates is
                   end if;
                end;
 
-               Cursor := Scan + 2;
+               Cursor :=
+                 Line_After (Scan + 2, Statement and then not Trim_Next);
                Literal_Start := Cursor;
             end;
          else
@@ -2756,6 +3259,32 @@ package body Model_Runner.Templates is
                end if;
                return Held (First .. Last);
 
+            when Method_Cut_From | Method_Cut_To =>
+               declare
+                  Length : constant Long_Long_Integer :=
+                    Long_Long_Integer (Held'Length);
+                  Cut    : Long_Long_Integer := Number_Of (Argument);
+               begin
+                  if Cut < 0 then
+                     Cut := Length + Cut;
+                  end if;
+                  Cut := Long_Long_Integer'Max
+                    (0, Long_Long_Integer'Min (Cut, Length));
+
+                  if Step.Kind = Method_Cut_From then
+                     return Held (Held'First + Natural (Cut) .. Held'Last);
+                  else
+                     return Held (Held'First .. Held'First + Natural (Cut) - 1);
+                  end if;
+               end;
+
+            when Method_Split_Whole =>
+               --  A cut nothing said the side of. The list it answers with
+               --  has no spelling here, and printing one end of it because
+               --  that is the end this engine could give would be a guess.
+               Refuse (0, 0, E.Template_Unsupported_Construct);
+               return "";
+
             when Method_Split_First | Method_Split_Last =>
                --  The text before the first marker, or after the last one.
                --  A text with no marker in it is one piece, and both ends of
@@ -2964,8 +3493,48 @@ package body Model_Runner.Templates is
       --  Write an operand straight to the output. Emitting term by term
       --  avoids a temporary the size of the whole target, which message
       --  content can legitimately approach.
+      --  Whether an operand written into it prints as one number or as one
+      --  run of text.
+      --
+      --  Both readers of an operand ask this and they have to agree: a
+      --  template that works a position out in a set and prints the same
+      --  expression elsewhere means the same thing in both places.
+      --
+      --  A subtraction is a sum outright: nothing else is written with a
+      --  minus. A plus is one when every term of it is a number by
+      --  construction -- a bare number, a loop counter, a length -- which
+      --  is the language's own rule read off what the terms are rather than
+      --  off what they happen to hold. Two pieces of text joined with a
+      --  plus are still run together, and two numbers added: a template
+      --  asking for messages[loop.index0 + 1] means the message after this
+      --  one and not the one at position "01".
+      function Is_Sum (Value : Operand) return Boolean is
+      begin
+         if Value.Count <= 1 then
+            return False;
+         end if;
+
+         for Index in 2 .. Value.Count loop
+            if Value.Terms (Index).Join = Join_Minus then
+               return True;
+            end if;
+         end loop;
+
+         return (for all Index in 1 .. Value.Count =>
+                   Value.Terms (Index).Numeric);
+      end Is_Sum;
+
       procedure Emit_Operand (Value : Operand) is
       begin
+         --  A sum is printed as the number it comes to, and anything else
+         --  one term at a time: a run of text is written out as it is
+         --  reached rather than gathered up first, because what a template
+         --  prints has no bound worth holding in one place.
+         if Is_Sum (Value) then
+            Put (Value_Of (Value));
+            return;
+         end if;
+
          for Index in 1 .. Value.Count loop
             Put (Value_Of (Value.Terms (Index)));
          end loop;
@@ -3017,28 +3586,8 @@ package body Model_Runner.Templates is
          Result : String (1 .. Max_Comparison) := [others => ' '];
          Filled : Natural := 0;
 
-         --  Whether this operand is a sum rather than a run of text. A
-         --  subtraction is one outright: nothing else is written with a
-         --  minus. A plus is one when every term of it is a number by
-         --  construction -- a bare number, a loop counter, a length -- which
-         --  is the language's own rule read off what the terms are rather
-         --  than off what they happen to hold. Two pieces of text joined
-         --  with a plus are still run together, and two numbers added: a
-         --  template asking for messages[loop.index0 + 1] means the message
-         --  after this one and not the one at position "01".
-         Arithmetic : Boolean := False;
+         Arithmetic : constant Boolean := Is_Sum (Value);
       begin
-         for Index in 2 .. Value.Count loop
-            Arithmetic :=
-              Arithmetic or else Value.Terms (Index).Join = Join_Minus;
-         end loop;
-
-         if not Arithmetic and then Value.Count > 1 then
-            Arithmetic :=
-              (for all Index in 1 .. Value.Count =>
-                 Value.Terms (Index).Numeric);
-         end if;
-
          --  A sum is evaluated rather than run together, and its answer is
          --  the number's own text: everything downstream of an operand takes
          --  text, and a number written down is still a number.
@@ -3349,7 +3898,9 @@ package body Model_Runner.Templates is
                      else
                         Loop_Start := Holder.Start;
                         Current := Holder.Start;
-                        Bind_Message (Current);
+                        if Step.Binds then
+                           Bind_Message (Current);
+                        end if;
                         Position := Position + 1;
                      end if;
                   end;
@@ -3357,11 +3908,15 @@ package body Model_Runner.Templates is
                when Op_For_Next =>
                   if Current < Count then
                      Current := Current + 1;
-                     Bind_Message (Current);
+                     if Step.Binds then
+                        Bind_Message (Current);
+                     end if;
                      Position := Step.Target + 1;
                   else
                      Current := 0;
-                     Bind_Message (0);
+                     if Step.Binds then
+                        Bind_Message (0);
+                     end if;
                      Position := Position + 1;
                   end if;
 

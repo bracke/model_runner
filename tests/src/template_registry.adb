@@ -34,7 +34,7 @@ package body Template_Registry is
       return Room (1 .. Used);
    end Too_Many_Names;
 
-   Held : constant array (1 .. 34) of Example :=
+   Held : constant array (1 .. 38) of Example :=
      [(new String'("Literal text"),
        new String'("hello"),
        Works),
@@ -73,6 +73,26 @@ package body Template_Registry is
 
       (new String'("`'x' in TEXT`, `'x' not in TEXT`"),
        new String'("{% if 'b' in 'abc' and 'z' not in 'abc' %}y{% endif %}"),
+       Works),
+
+      (new String'("The line a block tag stands on"),
+       new String'("a" & Character'Val (10) & "  {% if true %}b{% endif %}"
+                   & Character'Val (10) & "c"),
+       Works),
+
+      (new String'("Brackets round part of a sum"),
+       new String'("{% set n = (messages|length - 1) - 0 %}{{ n }}"
+                   & "{{ 10 - (3 - 1) }}"),
+       Works),
+
+      (new String'("`TEXT[a:b]`, `TEXT[a:]`, `TEXT[:b]`"),
+       new String'("{{ messages[1].content[:1] }}"
+                   & "{{ messages[1].content[1:] }}"
+                   & "{{ messages[1].content[-1:] }}"),
+       Works),
+
+      (new String'("`\| first`, `\| last`"),
+       new String'("{{ 'a-b'.split('-')|first }}{{ 'a-b'.split('-')|last }}"),
        Works),
 
       (new String'("`.strip(S)`, `.lstrip(S)`, `.rstrip(S)`, "

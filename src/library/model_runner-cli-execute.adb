@@ -1047,8 +1047,18 @@ package body Model_Runner.CLI.Execute is
             end;
 
             --  Chat template: present and supported, present and outside the
-            --  subset, or absent. Compiled here so the answer is evidence
-            --  rather than a guess.
+            --  subset, or absent. Compiled and then rendered here, so the
+            --  answer is evidence rather than a guess.
+            --
+            --  Compiling alone is not the evidence it looks like. A value
+            --  this engine cannot compute is refused where it is read
+            --  rather than where it is compiled -- which is what lets a
+            --  template describing tool calling in a branch nobody enters
+            --  be used for the conversations that do not enter it -- so a
+            --  template that refuses on every conversation there is
+            --  compiles without complaint. What is asked here is the
+            --  question `run` asks: a turn, and a place for the model to
+            --  answer.
             declare
                Text_Value : constant String :=
                  Containers.String_Value (Container, "tokenizer.chat_template");
@@ -1062,6 +1072,33 @@ package body Model_Runner.CLI.Execute is
                else
                   Model_Runner.Templates.Compile
                     (Compiled, Text_Value, Model_Bounds (Item), Outcome);
+
+                  if E.Is_Ok (Outcome) then
+                     declare
+                        Talk : Model_Runner.Conversation.History;
+                        Room : String (1 .. 8192);
+                        Used : Natural;
+                     begin
+                        Model_Runner.Conversation.Open (Talk, Status => Outcome);
+                        if E.Is_Ok (Outcome) then
+                           Model_Runner.Conversation.Append
+                             (Talk, Model_Runner.Conversation.User_Role,
+                              "Hello", Outcome);
+                        end if;
+
+                        if E.Is_Ok (Outcome) then
+                           Model_Runner.Templates.Render
+                             (Compiled, Talk,
+                              Beginning_Token => "",
+                              End_Token => "",
+                              Add_Generation_Prompt => True,
+                              Target => Room, Last => Used, Status => Outcome);
+                        end if;
+
+                        Model_Runner.Conversation.Close (Talk);
+                     end;
+                  end if;
+
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.template",
                      Screen.Message_Value

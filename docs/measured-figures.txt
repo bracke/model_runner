@@ -191,16 +191,38 @@
 #   phi3    Phi-3-mini-4k-instruct q4       195 tensors, deterministic
 #   falcon  falcon-7b-instruct Q4_K_M       196 tensors, deterministic
 #
-# The eleventh architecture, qwen3moe, has no published file behind it. It is
-# not crossed by the sweep either -- it is qwen3 with its metadata under
-# another prefix, compared against the reference on its own -- so what stands
-# behind it is a fixture written here and one comparison. The smallest
-# published qwen3moe is a thirty-billion-parameter mixture, which is why.
-# Saying so is the point of this list.
-# That distinction is worth keeping visible: a fixture and an engine can agree
-# about a model nobody ships, which is what gpt2's output bias was, and no
-# amount of agreement between two implementations reading the same fixture
-# will say so.
+# The eleventh architecture, qwen3moe, had no published file behind it for as
+# long as this list said so: the smallest published one is a thirty-billion
+# parameter mixture. It has one now.
+#
+# 2026-08-23, qwen3moe read from a published file.
+#
+#   qwen3moe  Qwen3-30B-A3B (Q2_K/Q3_K/Q4_K/Q6_K mixed, 10.5 GiB)
+#             579 tensors, 30 532 122 624 parameters, deterministic,
+#             thread-stable, twelve tokens generated on the processor
+#
+# `fixture-likeness` agrees with it name for name -- fifteen tensors a layer
+# published, fifteen written by the fixture here, none unwritten and none
+# invented -- which is the check that found gpt2's missing normalization
+# shift on a file nobody here had written. It found nothing to report here:
+# the mixture keys, the router and the three stacked expert tensors are
+# spelled as this engine reads them.
+#
+# It is still not crossed by the sweep -- it is qwen3 with its metadata under
+# another prefix, compared against the reference on its own -- but what
+# stands behind it is no longer a fixture alone. That distinction is worth
+# keeping visible for the architectures that still have only a fixture: a
+# fixture and an engine can agree about a model nobody ships, which is what
+# gpt2's output bias was, and no amount of agreement between two
+# implementations reading the same fixture will say so.
+#
+# What the file did find was in the template rather than in the arithmetic.
+# The engine loaded it, generated from it and agreed with itself; `run`
+# refused it, because the template a current mixture ships is written in a
+# larger subset than the one a current dense model ships. Five things were
+# missing and are there now, and the figures for them are in the changelog
+# rather than here, because a template renders or it does not and there is
+# nothing to time.
 #
 # One refusal along the way was not a defect. A gemma-2 file reported
 # MR-GGUF-0022, a tensor running past the end of the file, which is exactly

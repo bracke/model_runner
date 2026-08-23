@@ -1000,13 +1000,73 @@ package body Tests.Template_Cases is
         & "[{{ why }}][{{ body }}]{%- endif %}{%- endfor %}";
       Methods_Answer : aliased constant String := "[r][Blue.]";
 
-      Wanted : constant array (1 .. 6) of Expectation :=
+      --  A loop over the conversation whose variable is not called
+      --  message, which is how the template a current mixture ships walks
+      --  it backwards: the name it binds is unused and it says which
+      --  message it means with a set of its own.
+      Walk_Source : aliased constant String :=
+        "{%- for forward in messages %}"
+        & "{%- set message = messages[loop.index0] %}"
+        & "[{{ message.role }}]{%- endfor %}";
+      Walk_Answer : aliased constant String := "[user][assistant]";
+
+      --  And what such a loop does to the name it does not bind: nothing.
+      --  A message bound before it is the message bound after it, which is
+      --  what the language says and what a loop binding as it went would
+      --  quietly undo.
+      Unbound_Source : aliased constant String :=
+        "{%- set message = messages[1] %}"
+        & "{%- for forward in messages %}{%- endfor %}"
+        & "[{{ message.role }}]";
+      Unbound_Answer : aliased constant String := "[assistant]";
+
+      --  A sum with brackets round part of it, which is how a template
+      --  counts back from the end of a conversation. Brackets after a minus
+      --  turn the joins inside them round, because that is what taking a
+      --  sum away comes to.
+      Group_Source : aliased constant String :=
+        "{%- set last = (messages|length - 1) - 0 %}"
+        & "[{{ last }}][{{ 10 - (3 - 1) }}]";
+      Group_Answer : aliased constant String := "[1][8]";
+
+      --  A choice written on one line, which a template writes where a turn
+      --  may not carry the field it is after.
+      Choice_Source : aliased constant String :=
+        "{%- for message in messages %}"
+        & "{%- set who = 'asked' if message.role == 'user' else 'answered' %}"
+        & "[{{ who }}]{%- endfor %}";
+      Choice_Answer : aliased constant String := "[asked][answered]";
+
+      --  Cuts at a position rather than at a marker, counted from either
+      --  end, which is how a template asks whether a turn begins and ends
+      --  with the markers a tool's answer is wrapped in.
+      Cut_Source : aliased constant String :=
+        "[{{ messages[0].content[:2] }}][{{ messages[0].content[2:] }}]"
+        & "[{{ messages[0].content[1:3] }}][{{ messages[0].content[-2:] }}]";
+      Cut_Answer : aliased constant String := "[he][llo][el][lo]";
+
+      --  Which side of a cut is wanted, said by a filter rather than by a
+      --  position. The same question either way round.
+      Side_Source : aliased constant String :=
+        "{%- for message in messages %}{%- if message.role == 'assistant' %}"
+        & "[{{ message.content.split('</think>')|last }}]"
+        & "[{{ message.content.split('<think>')|first }}]"
+        & "{%- endif %}{%- endfor %}";
+      Side_Answer : aliased constant String := "[|Blue.][]";
+
+      Wanted : constant array (1 .. 12) of Expectation :=
         [(Space_Source'Access, Space_Answer'Access),
          (Range_Source'Access, Range_Answer'Access),
          (Indexed_Source'Access, Indexed_Answer'Access),
          (Inside_Source'Access, Inside_Answer'Access),
          (Order_Source'Access, Order_Answer'Access),
-         (Methods_Source'Access, Methods_Answer'Access)];
+         (Methods_Source'Access, Methods_Answer'Access),
+         (Walk_Source'Access, Walk_Answer'Access),
+         (Unbound_Source'Access, Unbound_Answer'Access),
+         (Group_Source'Access, Group_Answer'Access),
+         (Choice_Source'Access, Choice_Answer'Access),
+         (Cut_Source'Access, Cut_Answer'Access),
+         (Side_Source'Access, Side_Answer'Access)];
 
       Item     : Tmpl.Compiled;
       Messages : Conv.History;
@@ -1053,6 +1113,27 @@ package body Tests.Template_Cases is
               & "refused");
       Assert (Render_Status ("{{ never }}") = E.Template_Unknown_Variable,
               "output reading a name never assigned was accepted");
+
+      --  A loop over the conversation may call its variable what it likes,
+      --  and what it may not do is read a field off it: the fields this
+      --  engine reads from a turn are read through the one name, and a name
+      --  that is not that one is a name nothing can be read from. Refused
+      --  where it is read rather than answered with the turn the loop
+      --  happens to be on, which would be right by accident.
+      Assert (Render_Status
+                ("{% for other in messages %}{{ other.role }}{% endfor %}")
+              = E.Template_Unknown_Variable,
+              "a field read off a loop's own name was answered");
+
+      --  A cut nothing said the side of answers with a list, and a list has
+      --  no spelling here. Said by either the position or the filter, and
+      --  refused where it is said by neither.
+      Assert (Render_Status ("{{ 'a</think>b'.split('</think>') }}")
+              = E.Template_Unsupported_Construct,
+              "a cut with neither end asked for was printed anyway");
+      Assert (Render_Status ("{{ 'a</think>b'.split('</think>')|last }}")
+              = E.No_Error,
+              "a cut whose side a filter names was refused");
    end Modern_Constructs_Render;
 
    --  What a turn asked for, written as the template writes it.

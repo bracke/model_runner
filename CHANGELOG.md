@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The eleventh architecture, read from a file somebody else wrote.**
+  qwen3moe was the one architecture with no published file behind it -- the
+  smallest published mixture is thirty billion parameters -- so what stood
+  behind it was a fixture written here and one comparison against the
+  independent implementation. Qwen3-30B-A3B now stands behind it: 579
+  tensors, 30 532 122 624 parameters, loaded, generated from, deterministic
+  and thread-stable under `tests external-model`, and its tensor names
+  agreeing with the fixture written here name for name under
+  `fixture-likeness` -- fifteen a layer published, fifteen written, none
+  unwritten and none invented. That is the check that found gpt2's missing
+  normalization shift on a file nobody here had written; it found nothing to
+  report about the mixture keys, the router or the three stacked expert
+  tensors.
+
+  The arithmetic was right on it the first time and the figures file says so.
+  What the file found was in the template.
+
 - **A turn's tool calls, kept as calls, and a batch run that closes the loop
   they open.** Qwen3's template renders now, and until this it rendered a
   tool conversation the model had not had. A call reached the next turn as
@@ -298,6 +315,105 @@ Keep a Changelog and the project uses semantic versioning.
   submitted on its own, on the same cache with the same queries.
 
 ### Fixed
+
+- **A published mixture's own chat template was refused, so `run` on it
+  meant spelling the markers by hand.** The template Qwen3-30B-A3B ships is
+  not the template Qwen3-0.6B ships. It asks the same question -- where is
+  the last thing the user asked -- and asks it in a larger subset, and the
+  engine had been settled against the smaller one. `run` refused it by name
+  on every conversation there is, empty or not.
+
+  Five things were missing, each of them what some template out there is
+  written in rather than a feature for its own sake:
+
+  * A loop over the conversation whose variable is not called `message`.
+    The name was required because the fields this engine reads from a turn
+    are read through that name; what the name actually decides is whether
+    the loop binds. A loop calling its variable `message` binds each turn to
+    it, and a loop calling it something else walks the same list and leaves
+    the name alone -- which is what this template relies on, because it
+    names its variable to be unused and says which turn it means with a
+    `set` of its own. A field read off a name that is not `message` is
+    refused where it is read rather than answered with the turn the loop
+    happens to be on, which would be right by accident.
+  * Brackets round part of a sum: `(messages|length - 1) - loop.index0`,
+    which is how it counts back from the end. A group is spliced into the
+    sum around it, and one joined by `-` has each of its own joins turned
+    round, which is what taking a sum away comes to. Brackets round a single
+    value are that value, so what is written after them applies to it --
+    `(reply.split('</think>')|last).lstrip('\n')` is one term with two
+    methods on it.
+  * A choice written on one line: `A if C else B`. It compiles to what the
+    block form compiles to, because it is the block form said in one line.
+  * Cuts at a position rather than at a marker: `content[:n]`, `content[n:]`
+    and `content[a:b]`, either end counted from the end where it is
+    negative and neither reaching further than the text goes. The template
+    writes the pair of them to ask whether a turn begins and ends with the
+    markers a tool's answer is wrapped in.
+  * `|first` and `|last` on a cut, which say which end of it is wanted --
+    the same question `.split(S)[0]` and `.split(S)[-1]` ask. A cut that
+    says neither end refuses where it is read rather than being handed the
+    end this engine could most easily answer with.
+
+  Settled against Python's jinja2 on the published Qwen3-30B-A3B template,
+  conversation for conversation: forty-eight conversations, twenty-four
+  rendered with and without a generation prompt, every byte agreeing. Calls
+  with text before them and without, two calls in one turn, a run of tool
+  answers folded into one turn, a reasoning block in an earlier reply and in
+  the last one, a reasoning block with nothing in it, a user turn that
+  itself contains the markers the template looks for, and a conversation of
+  nine turns. The same forty-eight against the templates Qwen3-0.6B, Qwen3-8B
+  and Qwen2-0.5B ship, all agreeing, because a subset grown for one file has
+  to leave the files that already rendered where they were.
+
+- **`inspect` called a template supported that refuses on every conversation
+  there is.** It compiled the template and reported what compiling said. But
+  a value this engine cannot compute is refused where it is read rather than
+  where it is compiled -- which is the whole reason a template describing
+  tool calling in a branch nobody enters can be used for the conversations
+  that do not enter it -- so a template that refuses on everything compiles
+  without complaint and was reported as supported. Qwen3-30B-A3B was
+  reported that way while `run` refused it by name.
+
+  It renders now before it answers: a turn, and a place for the model to
+  answer, which is the question `run` asks. `--verbose` says which construct
+  refused.
+
+- **A template's own indentation reached the model.** The line a block tag
+  stands on is the template's shape rather than text: a tag written on a
+  line of its own is written that way to be read. The implementation these
+  templates are written for takes the spaces before such a tag off, and the
+  line break after it with them -- `trim_blocks` and `lstrip_blocks`, both
+  turned on wherever a chat template is rendered -- and this engine kept
+  them, so every template that indents its tags or writes them on their own
+  lines handed the model blank lines and leading spaces it was never trained
+  on. Neither is taken off where something other than whitespace shares the
+  line, and neither for `{{ an expression }}`, which stands where its text
+  is wanted; `{%+` keeps the line its tag stands on, for a template that
+  means the indentation.
+
+  Found by comparing against `jinja2` on the template TinyLlama-1.1B-Chat
+  ships, which is written that way throughout: forty-eight conversations,
+  not one of them agreeing, every divergence a line break. Forty-eight agree
+  now. The templates Qwen3-0.6B, Qwen3-8B, Qwen3-30B-A3B, Qwen2-0.5B and
+  Phi-3-mini ship agree as they did, none of them being written that way.
+
+  The four formats this build carries are ordinary templates in the same
+  subset and are read by the same rule, so the one that wrote a line break
+  straight after `{% endif %}` -- gemma's, where a turn's role ends -- says
+  it as text now, inside the branches, which is what it is. All four were
+  set beside `jinja2` reading their own source afterwards: forty-eight
+  conversations apiece, every byte agreeing.
+
+- **A sum printed as a run of text where the same sum assigned was a
+  number.** `{{ 10 - 3 }}` wrote `103`. The rule that reads an operand as
+  arithmetic -- a subtraction outright, a plus where every term is a number
+  by construction -- was in the reader that a `set` and a condition use and
+  not in the one that prints, so a template that works a position out in a
+  `set` and prints the same expression elsewhere meant two different things.
+  Both readers ask one question now. A run of text still goes out a term at
+  a time as it is reached, because what a template prints has no bound worth
+  holding in one place.
 
 - **An inspection described a mixture as the dense model it is not.** A
   mixture-of-experts file states a feed-forward width and does not have a

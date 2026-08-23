@@ -315,6 +315,31 @@ byte. The two that do not are the empty conversation, which `jinja2` raises
 on -- the template asks for `messages[0]` before it asks whether there is one
 -- and which this engine answers instead.
 
+And the template a published mixture ships, which is not the same template:
+forty-eight conversations against the one Qwen3-30B-A3B carries -- twenty-four
+rendered with and without a generation prompt -- every byte agreeing. It is
+written in a larger subset than the dense model's, and until this it was
+refused rather than rendered: a loop over the conversation that calls its
+variable something other than `message`, brackets round part of a sum, a
+choice written on one line, cuts at a position rather than at a marker, and a
+filter saying which end of a cut is wanted. The same forty-eight were run
+against the templates Qwen3-0.6B, Qwen3-8B and Qwen2-0.5B ship, all agreeing,
+because a subset grown for one file has to leave the files that already
+rendered where they were.
+
+And the four chat formats this build carries, each against `jinja2` reading
+its own source: forty-eight conversations apiece, every byte agreeing. They
+are ordinary templates written in the subset rather than a second mechanism,
+so setting them beside the implementation they are written for is the same
+check as for a template that arrives in a model file -- and the format for
+Gemma, whose turns are called something else, is the one that could be wrong
+without the output showing it.
+
+The template TinyLlama-1.1B-Chat ships was the file that said the whitespace
+rule was missing: forty-eight conversations, none of them agreeing, every
+divergence a line break this engine kept and `jinja2` did not. Forty-eight
+agree now.
+
 And what a tool conversation makes of it: forty-eight more, twenty-four
 conversations rendered with and without a generation prompt, every byte
 agreeing. A call with text before it and one without, two calls in one turn,

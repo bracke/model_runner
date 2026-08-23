@@ -18,11 +18,22 @@ with Model_Runner.Tools;
 --    literal text
 --    {{ terms }}             terms joined by '+', see below
 --    {# comment #}
---    {% for message in LIST %} ... {% endfor %}
+--    {% for message in LIST %} ... {% endfor %}   the variable may be
+--                            named anything, and what the name decides is
+--                            whether it binds: message is the name a turn's
+--                            fields are read through, so a loop calling its
+--                            variable that binds each turn to it and a loop
+--                            calling it something else walks the same list
+--                            and leaves the name alone. A template that
+--                            walks the conversation backwards writes the
+--                            second and says which turn it means itself
 --    {% if cond %} ... {% elif cond %} ... {% else %} ... {% endif %}
 --    {% set name = value %}  value being a term expression, none, another
 --                            name, a list with a leading slice removed, one
---                            message of a list, or a namespace
+--                            message of a list, a namespace, or a choice
+--                            written on one line: A if C else B, which a
+--                            template writes where a turn may not carry the
+--                            field it is after
 --    {% for name in range(a, b, c) %} ... {% endfor %}   counting rather
 --                            than walking a list; a, b and c are term
 --                            expressions and c may count down
@@ -35,7 +46,20 @@ with Model_Runner.Tools;
 --                            named tool_call for the reason the list loop's
 --                            is named message: the fields this engine can
 --                            read from one are a call's fields
---    {%- ... -%} and {{- ... -}}   whitespace control on either side
+--    {%- ... -%} and {{- ... -}}   whitespace control on either side, and
+--                            {%+ ... %} to keep the line a tag stands on
+--
+--  Whitespace around a block. A tag is written on a line of its own to be
+--  read, and the line it stands on is the template's own shape rather than
+--  text the model was trained to see. So the spaces and tabs between the
+--  start of a line and a block tag are taken off, and the line break that
+--  ends a block tag is taken off with it -- neither where something other
+--  than whitespace shares that line, and neither for {{ an expression }},
+--  which stands where its text is wanted. That is what the implementation
+--  these templates are written for does with trim_blocks and lstrip_blocks,
+--  which is how every template shipped in a model file was authored; a
+--  template that means to keep its indentation says so with {%+, and one
+--  that means to take more says so with {%- and -%} as before.
 --
 --  Terms usable in output and in comparisons
 --
@@ -62,7 +86,25 @@ with Model_Runner.Tools;
 --    .strip(S)  .lstrip(S)  .rstrip(S), the argument optional
 --    .split(S)[0]  and  .split(S)[-1], which is how a template takes a
 --                            reply apart at the marker its reasoning is in;
---                            up to four of these may follow one another
+--                            up to four of these may follow one another.
+--                            Which end is wanted may be said by a filter
+--                            instead -- .split(S)|first and .split(S)|last
+--                            are the same two questions -- and a cut that
+--                            says neither refuses where it is read, because
+--                            what it answers with is a list
+--    TEXT[a:b]  TEXT[a:]  TEXT[:b]   a cut at a position rather than at a
+--                            marker, either end optional and either counted
+--                            from the end where it is negative, as the
+--                            language counts one. A template writes the
+--                            pair of them to ask whether a turn begins and
+--                            ends with the markers a tool's answer is
+--                            wrapped in
+--    ( ... )                 brackets round part of a sum, which is how a
+--                            template counts back from the end of a
+--                            conversation: (messages|length - 1) -
+--                            loop.index0. Brackets round a single value are
+--                            that value, and what is written after them
+--                            applies to it
 --
 --  Conditions are an or-list of and-lists of clauses, each clause optionally
 --  negated by 'not', optionally parenthesised, and optionally comparing two
@@ -82,7 +124,12 @@ with Model_Runner.Tools;
 --
 --  Terms in an operand join with '+', which runs their text together, or
 --  with '-', which reads both sides as whole numbers and subtracts. An
---  operand holding one subtraction is a number and answers as one.
+--  operand holding a subtraction is a number and answers as one, and so
+--  does one whose every term is a number by construction -- a bare number,
+--  a loop counter, a length. It answers the same whether it is assigned,
+--  compared or printed: a template that works a position out in a set and
+--  prints the same expression elsewhere means the same thing in both
+--  places.
 --
 --  Structural constructs outside the subset -- macro, include, import,
 --  extends, filter blocks -- are rejected at compile time with
@@ -340,7 +387,25 @@ private
       Method_Left_Strip,
       Method_Right_Strip,
       Method_Split_First,
-      Method_Split_Last);
+      Method_Split_Last,
+
+      --  A cut whose side has not been said yet: text.split(marker) with
+      --  neither [0] nor [-1] after it. The language answers a list there,
+      --  and the only thing a template does with that list is take one end
+      --  of it with a filter -- which is what turns this into one of the
+      --  two above. Left as it is, it refuses where it is read, because a
+      --  list is not something this engine has a spelling for.
+      Method_Split_Whole,
+
+      --  A cut at a position rather than at a marker: text[n:] keeps what
+      --  is from there on and text[:n] what is before it. A template writes
+      --  the pair of them to ask whether a turn begins and ends with the
+      --  markers a tool's answer is wrapped in, which is a question about
+      --  the two ends of a text and not about anything in it. The position
+      --  is counted as the language counts one: from the end where it is
+      --  negative, and no further than the text goes either way.
+      Method_Cut_From,
+      Method_Cut_To);
 
    --  One method and where its one argument was kept: the characters to
    --  take off, or the marker to cut at.
@@ -538,6 +603,13 @@ private
       --  or zero when this instruction has none.
       Value_At : Natural := 0;
       Test_At  : Natural := 0;
+
+      --  Whether a list loop binds the name a message goes by. A loop
+      --  written for message in messages does; one that calls its variable
+      --  something else walks the same list and binds nothing, because the
+      --  name it binds is not one this engine reads fields from and the
+      --  name message goes on meaning whatever it meant outside the loop.
+      Binds    : Boolean := True;
    end record;
 
    type Instruction_Array is array (1 .. Max_Instructions) of Instruction;
