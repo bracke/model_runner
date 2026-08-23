@@ -1309,6 +1309,104 @@ package body Tests.CLI_Cases is
               "the interface answered while reporting itself unsupported");
    end Devices_Are_Reported_Either_Way;
 
+   --  A mixture is reported as one, and a dense model is not.
+   --
+   --  An inspection that named a feed-forward width and nothing else
+   --  described a block a mixture-of-experts model does not have: the file
+   --  states that width, the engine computes with an expert's, and the
+   --  reader was shown the one the model never uses. All three numbers were
+   --  read into the configuration already and none of them was printed.
+   procedure Inspection_Reports_A_Mixture
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Mixed : constant String := "obj/mixture-model.gguf";
+      Dense : constant String := "obj/dense-model.gguf";
+
+      --  Inspect a file and hand back what reached standard output.
+      function Inspected (Path : String) return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "inspect");
+         Add (Source, Path);
+         Ran (Source, Status);
+         Assert (Status = 0,
+                 "inspecting " & Path & " failed with status"
+                 & Natural'Image (Status));
+         return Last_Output;
+      end Inspected;
+
+      --  The number a field line carries, or -1 where the line is not
+      --  there. A label with no number after it is as much a failure as a
+      --  label that is missing.
+      function Number_After (Said, Label : String) return Integer is
+         At_Label : constant Natural :=
+           Ada.Strings.Fixed.Index (Said, Label);
+         Stop     : Natural;
+      begin
+         if At_Label = 0 then
+            return -1;
+         end if;
+
+         Stop := At_Label + Label'Length;
+         while Stop <= Said'Last and then Said (Stop) = ' ' loop
+            Stop := Stop + 1;
+         end loop;
+
+         declare
+            From : constant Natural := Stop;
+         begin
+            while Stop <= Said'Last and then Said (Stop) in '0' .. '9' loop
+               Stop := Stop + 1;
+            end loop;
+            if Stop = From then
+               return -1;
+            end if;
+            return Integer'Value (Said (From .. Stop - 1));
+         end;
+      end Number_After;
+   begin
+      Tiny_Model.Write
+        (Mixed, Kind => Tiny_Model.Qwen3_MoE, Shape => Tiny_Model.Mixed);
+      Tiny_Model.Write (Dense, Kind => Tiny_Model.Qwen3);
+
+      declare
+         Said : constant String := Inspected (Mixed);
+      begin
+         Assert (Project_Tools.Text.Contains (Said, "experts"),
+                 "a mixture was inspected and its experts were not "
+                 & "reported: " & Said);
+         Assert (Project_Tools.Text.Contains (Said, "experts used"),
+                 "the inspection did not say how many experts run");
+         Assert (Project_Tools.Text.Contains (Said, "expert width"),
+                 "the inspection did not say how wide an expert is");
+
+         --  And the numbers are the file's own, not the dense width beside
+         --  them: one expert is narrower than the block the model would
+         --  have had, which is the whole point of having several.
+         Assert (Number_After (Said, "experts ") = 4,
+                 "the expert count was reported as"
+                 & Integer'Image (Number_After (Said, "experts ")));
+         Assert (Number_After (Said, "experts used") = 2,
+                 "the used count was reported as"
+                 & Integer'Image (Number_After (Said, "experts used")));
+         Assert (Number_After (Said, "expert width") = 8,
+                 "the expert width was reported as"
+                 & Integer'Image (Number_After (Said, "expert width")));
+      end;
+
+      --  A dense model has no mixture to report, and reporting one would be
+      --  worse than reporting none.
+      declare
+         Said : constant String := Inspected (Dense);
+      begin
+         Assert (not Project_Tools.Text.Contains (Said, "experts"),
+                 "a dense model was inspected and reported experts: "
+                 & Said);
+      end;
+   end Inspection_Reports_A_Mixture;
+
    --  Tools reach the template or the run says they would not, and the
    --  turns that close a tool loop reach the conversation.
    --
@@ -10724,6 +10822,10 @@ package body Tests.CLI_Cases is
         (T, Beginning_Marker_Follows_The_Vocabulary'Access,
          "a vocabulary that declares it wants no beginning marker is not "
          & "given one");
+      Register_Routine
+        (T, Inspection_Reports_A_Mixture'Access,
+         "an inspection reports a mixture as one, and a dense model as "
+         & "none");
       Register_Routine
         (T, Tools_Reach_The_Template_Or_The_Run_Says_So'Access,
          "tools reach the template or the run says they would not, and the "

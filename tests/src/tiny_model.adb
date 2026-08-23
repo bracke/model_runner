@@ -1161,13 +1161,26 @@ package body Tiny_Model is
       Adds_Beginning : Boolean := True;
       Room : Positive := Context;
       Format : Weight_Format := F32;
-      Kind : Fixture_Architecture := Llama) is
+      Kind : Fixture_Architecture := Llama;
+      Shape : Fixture_Shape := Plain) is
       use Ada.Streams;
       Image  : Model_Runner.Bytes.Byte_Array_Access;
       Handle : Stream_IO.File_Type;
    begin
+      --  The shape decides the window, the experts and the stretch, and it
+      --  decided them only for a fixture built in memory: a file written to
+      --  disk was always the plain one, whatever architecture it declared.
+      --  A mixture-of-experts file with no expert keys in it is a dense
+      --  model under another name, which is not what a caller asking for
+      --  one wants to inspect.
       Build (Image, Format => Format,
-             Adds_Beginning => Adds_Beginning, Room => Room, Kind => Kind);
+             Adds_Beginning => Adds_Beginning, Room => Room, Kind => Kind,
+             Window => (if Shape = Windowed then 3 else 0),
+             Experts => (if Shape = Mixed then 4 else 0),
+             Experts_Used => (if Shape = Mixed then 2 else 0),
+             Stretch => (if Shape = Stretched then Yarn else Plain),
+             Rope_Table => Shape = Stretched,
+             Apart_Widths => Shape = Apart);
 
       Stream_IO.Create (Handle, Stream_IO.Out_File, Path);
 

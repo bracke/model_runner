@@ -939,6 +939,27 @@ package body Model_Runner.CLI.Execute is
             Pres.Put_Field
               (Screen, "cli.inspect.label.feed_forward",
                T.Image (Long_Long_Integer (Settings.Feed_Forward)), Pres.Answer);
+            --  The mixture, for a file that has one. Without these the
+            --  report names a feed-forward width and nothing else, and for
+            --  a model whose feed-forward block sits behind a router that
+            --  width belongs to a block the model does not have: the file
+            --  states it, the engine computes with the expert's, and a
+            --  reader shown only the first is reading about another model.
+            if Settings.Experts > 0 then
+               Pres.Put_Field
+                 (Screen, "cli.inspect.label.experts",
+                  T.Image (Long_Long_Integer (Settings.Experts)),
+                  Pres.Answer);
+               Pres.Put_Field
+                 (Screen, "cli.inspect.label.experts_used",
+                  T.Image (Long_Long_Integer (Settings.Experts_Used)),
+                  Pres.Answer);
+               Pres.Put_Field
+                 (Screen, "cli.inspect.label.expert_feed_forward",
+                  T.Image (Long_Long_Integer (Settings.Expert_Feed)),
+                  Pres.Answer);
+            end if;
+
             Pres.Put_Field
               (Screen, "cli.inspect.label.layers",
                T.Image (Long_Long_Integer (Settings.Layers)), Pres.Answer);

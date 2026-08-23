@@ -299,6 +299,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **An inspection described a mixture as the dense model it is not.** A
+  mixture-of-experts file states a feed-forward width and does not have a
+  feed-forward block: the width belongs to the dense model it would
+  otherwise have been, and what it computes with is one expert's, which is
+  narrower. `inspect` printed the first and never mentioned the mixture at
+  all -- so a reader of the report for Qwen3-30B-A3B was told the block is
+  6144 wide, where the model holds 128 experts of 768 and runs 8 of them
+  for each position.
+
+  All three numbers were already read into the configuration and none of
+  them was printed. They are printed now, under the feed-forward width and
+  only for a file that has a mixture, because reporting a mixture for a
+  dense model would be the same fault the other way round.
+
+  `Tiny_Model.Write` also learnt the shape parameter its in-memory
+  counterpart already had. A fixture written to disk was always the plain
+  one whatever architecture it declared, so a `qwen3moe` file written by a
+  test had no expert keys in it -- a dense model under another name, which
+  is not what a caller asking for a mixture gets to inspect.
+
 - **A name given another name's value followed it afterwards.** `{% set a = b %}`
   copied where the value was rather than what it said, and the room a name
   holds is taken back when that name is reassigned. Inside a loop -- which is

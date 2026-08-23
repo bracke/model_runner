@@ -71,35 +71,6 @@ package Tiny_Model is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
       Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
 
-   --  Write the tiny model to a file.
-   --
-   --  @param Path Destination path; overwritten if it exists.
-   --  @param Adds_Beginning Whether the vocabulary declares that it wants a
-   --    beginning-of-text marker. False is not a curiosity: real models
-   --    declare it, and putting a marker in front of one that does not want
-   --    it feeds a sequence no other implementation would.
-   --  @param Room Context length the model declares. The default is small
-   --    on purpose, so that tests reach the context bound without a large
-   --    conversation; a test that needs a turn to complete asks for more.
-   --  @param Format Which format the weight matrices take, which also
-   --    decides how large the file is: the k-quant formats are written at
-   --    the deep widths, so one of those is the fixture to ask for when a
-   --    test needs weights spanning more than a page or two. F32 at the
-   --    narrow widths is seven kilobytes, which is under two pages, and a
-   --    device reading weights where they lie can say almost nothing about
-   --    a file that small.
-   --  @param Kind Architecture to write. The default is the one the suite's
-   --    own fixture is, and naming another is how a caller gets a file of
-   --    that shape to run the program against by hand -- which is the only
-   --    way to see a whole command work on an architecture the suite
-   --    exercises through the library alone.
-   procedure Write
-     (Path           : String;
-      Adds_Beginning : Boolean := True;
-      Room           : Positive := Context;
-      Format         : Weight_Format := F32;
-      Kind           : Fixture_Architecture := Llama);
-
    --  A quantized row is a whole number of thirty-two element blocks, so a
    --  model whose widths are eight and twelve cannot be quantized at all.
    --  These are the widths the quantized fixture uses instead; everything
@@ -228,6 +199,38 @@ package Tiny_Model is
       Format : Weight_Format := F32;
       Kind   : Fixture_Architecture := Llama;
       Shape  : Fixture_Shape := Plain);
+
+   --  Write the tiny model to a file.
+   --
+   --  @param Path Destination path; overwritten if it exists.
+   --  @param Adds_Beginning Whether the vocabulary declares that it wants a
+   --    beginning-of-text marker. False is not a curiosity: real models
+   --    declare it, and putting a marker in front of one that does not want
+   --    it feeds a sequence no other implementation would.
+   --  @param Room Context length the model declares. The default is small
+   --    on purpose, so that tests reach the context bound without a large
+   --    conversation; a test that needs a turn to complete asks for more.
+   --  @param Format Which format the weight matrices take, which also
+   --    decides how large the file is: the k-quant formats are written at
+   --    the deep widths, so one of those is the fixture to ask for when a
+   --    test needs weights spanning more than a page or two. F32 at the
+   --    narrow widths is seven kilobytes, which is under two pages, and a
+   --    device reading weights where they lie can say almost nothing about
+   --    a file that small.
+   --  @param Kind Architecture to write. The default is the one the suite's
+   --    own fixture is, and naming another is how a caller gets a file of
+   --    that shape to run the program against by hand -- which is the only
+   --    way to see a whole command work on an architecture the suite
+   --    exercises through the library alone.
+   --  @param Shape Which shape, which decides the window, the experts and
+   --    the stretch, exactly as it does for a fixture built in memory.
+   procedure Write
+     (Path           : String;
+      Adds_Beginning : Boolean := True;
+      Room           : Positive := Context;
+      Format         : Weight_Format := F32;
+      Kind           : Fixture_Architecture := Llama;
+      Shape          : Fixture_Shape := Plain);
 
    --  Build the fixture in memory.
    --
