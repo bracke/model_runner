@@ -339,6 +339,24 @@
 # wall. That is the first time the calls a model asks for and the answers
 # handed back to it have been through a published mixture rather than a
 # fixture or a template comparison.
+#
+# Then two tools at once -- the weather function beside one that converts a
+# currency -- which is where a single call stops proving much. Asked for both
+# in one question, the model asked for both in one turn: get_weather {"city":
+# "Aarhus"} and convert_currency {"amount": 100, "from": "EUR", "to": "DKK"},
+# two calls in one reply, both read out of it and both reported by name.
+# Handed that reply back with two answers as two turns, in the order the calls
+# were made, it used both and kept them apart -- seventeen degrees and light
+# rain for the first, 746.5 kroner for the second, in one sentence each.
+# Asked something only one of the two tools can answer, it called that one and
+# left the other alone, with the arguments read off the question rather than
+# copied from the example: {"amount": 250, "from": "EUR", "to": "DKK"}.
+#
+# That is the branch of the template with the most in it -- the loop over a
+# turn's calls, loop.first deciding where a newline goes, and the two answers
+# folded into one user turn -- exercised by the model it was written for
+# rather than by a conversation assembled here. 146 s, 202 s and 141 s wall.
+# Nothing needed changing for any of it.
 # The engine loaded it, generated from it and agreed with itself; `run`
 # refused it, because the template a current mixture ships is written in a
 # larger subset than the one a current dense model ships. Five things were
