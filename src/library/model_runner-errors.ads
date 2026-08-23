@@ -247,6 +247,17 @@ package Model_Runner.Errors is
       --  are willing to wait longer.
       Backend_Device_Stalled,
 
+      --  A product the device would not run, and the one reason for that
+      --  this program can name by itself: a buffer larger than the device
+      --  says it will read. Their own codes rather than the capability one
+      --  they used to borrow, because a capability is a thing the backend
+      --  either has or has not and neither of these is that -- the backend
+      --  has the operation, and what failed is this request. Reported as
+      --  the missing capability, the reader was sent to look for a device
+      --  feature that was there all along.
+      Backend_Device_Refused,
+      Backend_Product_Too_Large,
+
       --  Memory planning and allocation.
       Memory_Limit_Exceeded,
       Memory_Allocation_Failed,

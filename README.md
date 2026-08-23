@@ -385,7 +385,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback, and the tool calls a turn asked for held beside its text rather than inside it -- so the next prompt carries the call as that model's own template writes one, not as the model happened to spell it |
 | CLI | `run`, `embed`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection. `--prompt` is repeatable: several prompts are several sequences from one loaded model, each with its own context and its own statistics, and standard error says which is which so that standard output stays nothing but generated text. It is refused together with a saved or restored context, which names one conversation. `--tools` offers the model tools and the calls it writes back are read out of the reply and reported; `--assistant` and `--tool-result` put the earlier turns back, in the order they are written, which is how one run closes the loop another opened |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]` `/tools` `/tool TEXT`, `/system` removing the system message when no text follows it and `/tool` handing back what a tool answered as a turn of its own, blank-line submission, no history written to disk. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 172 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 174 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
@@ -1434,26 +1434,36 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 1.315 s | **1.321 s** |
-| -- evaluating the prompt | 0.282 s | 0.192 s |
-| -- generating | 1.033 s | 0.947 s |
-| -- processor time | 8.51 s | **0.32 s** |
-| 110-token prompt, nothing generated | 5.376 s | **1.212 s** |
-| -- processor time | 32.00 s | **0.26 s** |
+| 6-token prompt, 12 generated | 1.351 s | **1.165 s** |
+| -- evaluating the prompt | 0.271 s | 0.200 s |
+| -- generating | 1.087 s | 0.903 s |
+| -- processor time | 8.71 s | **0.30 s** |
+| 110-token prompt, nothing generated | 5.405 s | **2.057 s** |
+| -- processor time | 32.46 s | **1.17 s** |
 
 All six cells were taken in one sitting on 2026-08-23, back to back, each
 waiting for the machine to fall below 1.50 before it started, on a host that
 is its own again -- so the two columns are comparable, which they were not in
 the version of this table before last.
 
-The short run is now a dead heat and the long one is not, and the processor
+The short run is nearly a dead heat and the long one is not, and the processor
 row is what tells the two apart. Generating is a position at a time: one
 narrow product after another, on a device that must be told about each of
 them, and there is not enough arithmetic in a single position to hide the
-telling -- so the two backends finish together and one of them spent 8.51 s
-of processor to do it against 0.32 s. Evaluating a prompt is 110 positions in
-batches, where there is arithmetic enough, and the device finishes four times
-sooner for a hundred and twenty-third of the processor time.
+telling -- so the two backends finish within a sixth of each other and one of
+them spent 8.71 s of processor to do it against 0.30 s. Evaluating a prompt is
+110 positions in batches, where there is arithmetic enough, and the device
+finishes two and a half times sooner for a twenty-eighth of the processor
+time.
+
+These four cells were taken twice today, six hours apart, on the same code:
+the processor column repeated to within a per cent and the device column did
+not -- the long run read 1.212 s in the morning and 2.057 s in the afternoon,
+three readings each, the machine quiet both times. What moved is the device's
+own state after a day of being measured, which is a fifteen-watt part's
+business and not this program's. The afternoon pair is published because both
+columns of it were taken in one sitting; the morning device figure is written
+down here so that a reader who takes a third one has two to put it beside.
 
 That is the shape to take away, and it is not the shape this table had when
 the device column was four times faster on both rows: what moved is the

@@ -317,6 +317,35 @@ package body Model_Runner.Backend.Device is
    --  One matrix against however many vectors, which is what both of the
    --  public operations are. Written once because the checks are the same
    --  and a second copy of them is a second place for one to be missing.
+
+   --  Why a product that did not run did not run.
+   --
+   --  This backend has one operation and the device has it, so a product
+   --  that comes back unrun is a fact about the request rather than about
+   --  what the backend can do. Where the request is larger than the device
+   --  said it would read, that is nameable and is named. This used to
+   --  report the capability matrix_vector as missing, which sent a reader
+   --  looking for a device feature that was there all along -- and every
+   --  model whose output projection is wider than an invented bound came
+   --  here to be told it.
+   procedure Declined
+     (Status : out E.Error_Info;
+      Needed : Interfaces.Unsigned_64 := 0)
+   is
+      Limit : constant Interfaces.Unsigned_64 := Products.Byte_Limit (Engine);
+   begin
+      if Limit > 0 and then Needed > Limit then
+         Status := E.Make (E.Backend_Product_Too_Large);
+         E.Add_Integer (Status, "requested", Long_Long_Integer (Needed));
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Limit));
+      else
+         Status := E.Make (E.Backend_Device_Refused);
+      end if;
+
+      E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                  E.Param_Identifier);
+   end Declined;
+
    procedure Compute
      (Weight  : T.View;
       Vectors : T.Real_Array_Access;
@@ -329,6 +358,10 @@ package body Model_Runner.Backend.Device is
       Known     : Boolean;
       Ok        : Boolean;
       Cancelled : Boolean := False;
+
+      --  The largest buffer this product asks the device for, which is what
+      --  a refusal has to be able to name.
+      Asked     : Interfaces.Unsigned_64 := 0;
    begin
       Status := E.Success;
 
@@ -387,6 +420,8 @@ package body Model_Runner.Backend.Device is
             return;
          end if;
 
+         Asked := Interfaces.Unsigned_64 (Bytes);
+
          --  The whole storage, and where in it this matrix begins. Not the
          --  matrix alone: a device reading the weights where they lie is
          --  handed a page-aligned range, and a range described by the matrix
@@ -424,11 +459,7 @@ package body Model_Runner.Backend.Device is
          E.Add_Integer
            (Status, "limit", Long_Long_Integer (Opened_Patience));
       elsif not Ok then
-         Status := E.Make (E.Backend_Capability_Missing);
-         E.Add_Text (Status, "capability", "matrix_vector",
-                     E.Param_Identifier);
-         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
-                     E.Param_Identifier);
+         Declined (Status, Asked);
       end if;
    end Compute;
 
@@ -635,6 +666,10 @@ package body Model_Runner.Backend.Device is
       Added  : Boolean;
       Ok     : Boolean;
       Cancelled : Boolean := False;
+
+      --  The largest of the matrices, which is the one a refusal is about:
+      --  they reach the device one buffer each.
+      Asked  : Interfaces.Unsigned_64 := 0;
    begin
       Status := E.Success;
 
@@ -693,6 +728,11 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
 
+            Asked := Interfaces.Unsigned_64'Max
+              (Asked,
+               Interfaces.Unsigned_64 (This.Rows)
+               * Products.Row_Bytes (Packing, Natural (This.Columns)));
+
             Wanted := Wanted + This.Rows;
          end;
       end loop;
@@ -723,11 +763,7 @@ package body Model_Runner.Backend.Device is
          E.Add_Integer (Status, "limit", Long_Long_Integer (Opened_Patience));
          return;
       elsif not Ok then
-         Status := E.Make (E.Backend_Capability_Missing);
-         E.Add_Text (Status, "capability", "matrix_vector",
-                     E.Param_Identifier);
-         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
-                     E.Param_Identifier);
+         Declined (Status, Asked);
          return;
       end if;
 
@@ -773,6 +809,9 @@ package body Model_Runner.Backend.Device is
       Added  : Boolean;
       Ok     : Boolean;
       Cancelled : Boolean := False;
+
+      --  The largest of the three, for the same reason.
+      Asked  : Interfaces.Unsigned_64 := 0;
    begin
       Status := E.Success;
 
@@ -846,6 +885,11 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
 
+            Asked := Interfaces.Unsigned_64'Max
+              (Asked,
+               Interfaces.Unsigned_64 (This.Rows)
+               * Products.Row_Bytes (Packing, Natural (This.Columns)));
+
             Wanted := Wanted + This.Rows * Spread;
          end;
       end loop;
@@ -874,11 +918,7 @@ package body Model_Runner.Backend.Device is
          E.Add_Integer (Status, "limit", Long_Long_Integer (Opened_Patience));
          return;
       elsif not Ok then
-         Status := E.Make (E.Backend_Capability_Missing);
-         E.Add_Text (Status, "capability", "matrix_vector",
-                     E.Param_Identifier);
-         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
-                     E.Param_Identifier);
+         Declined (Status, Asked);
          return;
       end if;
 

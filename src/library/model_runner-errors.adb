@@ -218,6 +218,7 @@ package body Model_Runner.Errors is
             | Tensor_Format_Unsupported
             | Backend_Unsupported_Format
             | Backend_Capability_Missing
+            | Backend_Product_Too_Large
             | Conversation_System_Unsupported
             | Tools_Not_In_Template
             | Internal_Not_Implemented =>

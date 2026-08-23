@@ -133,6 +133,18 @@ package body Model_Runner.Platform.Device is
    Offset_Device_Kind : constant := 16;
    Offset_Device_Name : constant := 20;
 
+   --  And where the limits begin, and the one limit this reads within them.
+   --  The structure ahead of them is four unsigned numbers, the kind, the
+   --  name and a sixteen-byte identifier, which comes to 292 -- and the
+   --  limits hold sixty-four bit numbers further in, so they are aligned to
+   --  eight and begin at 296 rather than at 292. The four bytes of padding
+   --  are the whole difference between reading what a storage buffer may
+   --  hold and reading what a uniform buffer may, which is 65536 on every
+   --  device and would refuse every model. Within the limits, seven
+   --  unsigned numbers stand before the one wanted here.
+   Offset_Limits             : constant := 296;
+   Offset_Storage_Range      : constant := Offset_Limits + 28;
+
    Device_Kind_Discrete : constant := 2;
 
    --  Queue families and devices, which is the rest of what opening one
@@ -539,6 +551,8 @@ package body Model_Runner.Platform.Device is
         new Ada.Unchecked_Conversion (System.Address, Create_Device_Call);
       function To_Queue is
         new Ada.Unchecked_Conversion (System.Address, Get_Queue_Call);
+      function To_Properties is
+        new Ada.Unchecked_Conversion (System.Address, Properties_Call);
 
       Physical : System.Address;
    begin
@@ -681,6 +695,27 @@ package body Model_Runner.Platform.Device is
                Item.Heap := Room.Heaps (Which).Size;
             end if;
          end loop;
+      end;
+
+      --  What one storage buffer may hold, which is what bounds one
+      --  product's matrix. Read from the same structure the name came from.
+      declare
+         Properties : constant Properties_Call :=
+           To_Properties
+             (Entry_Point (From.Handle, "vkGetPhysicalDeviceProperties"));
+         Room : Properties_Buffer := [others => 0];
+      begin
+         if Properties /= null then
+            Properties (Physical, Room'Address);
+
+            declare
+               Stated : C.unsigned;
+               for Stated'Address use Room (Offset_Storage_Range + 1)'Address;
+               pragma Import (Ada, Stated);
+            begin
+               Item.Storage := Interfaces.Unsigned_64 (Stated);
+            end;
+         end if;
       end;
 
       --  And the device itself, with the one queue.
@@ -847,6 +882,7 @@ package body Model_Runner.Platform.Device is
       Item.Fast := 0;
       Item.Shared := False;
       Item.Heap := 0;
+      Item.Storage := 0;
    end Close;
 
    function Is_Open (Item : Context) return Boolean
@@ -884,5 +920,12 @@ package body Model_Runner.Platform.Device is
 
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
    is (Item.Heap);
+
+   -------------------
+   -- Storage_Limit --
+   -------------------
+
+   function Storage_Limit (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Storage);
 
 end Model_Runner.Platform.Device;

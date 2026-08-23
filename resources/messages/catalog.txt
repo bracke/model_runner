@@ -456,6 +456,8 @@ en.error.backend.no_device = no compute device answered on this machine
 # rule about a name. `tests check` finds the line that breaks a catalog now,
 # which is what the next one should cost instead of an afternoon.
 en.error.backend.device_stalled = the {backend} device did not finish a product within {limit} seconds and was given up on
+en.error.backend.device_refused = the {backend} device would not run this product
+en.error.backend.product_too_large = this product needs a buffer of {requested} bytes and the device reads at most {limit}
 en.error.memory.limit_exceeded = {category} needs {requested} bytes, above the limit of {limit}
 en.error.memory.allocation_failed = cannot allocate memory for {category}
 en.error.memory.plan_overflow = the memory plan overflows
@@ -1196,6 +1198,8 @@ qps.error.backend.queue_full = ⟦ŧhé báçkéñð wóŕk qúéúé íß fúĺ
 qps.error.backend.closed = ⟦ŧhé báçkéñð íß çĺóßéð⟧
 qps.error.backend.no_device = ⟦ñó çóɱpúŧé ðévíçé áñßwéréð óñ ŧhíß ɱáçhíñé⟧
 qps.error.backend.device_stalled = ⟦ŧhé {backend} ðévíçé ðíð ñóŧ fíñíßh á próðúçŧ wíŧhíñ {limit} ßéçóñðß áñð wáß gívéñ úp óñ⟧
+qps.error.backend.device_refused = ⟦ŧhé {backend} ðévíçé wóúĺð ñóŧ ŕúñ ŧhíß próðúçŧ⟧
+qps.error.backend.product_too_large = ⟦ŧhíß próðúçŧ ñééðß á búfféŕ óf {requested} býŧéß áñð ŧhé ðévíçé ŕéáðß áŧ ɱóßŧ {limit}⟧
 qps.error.backend.invalid_worker_count = ⟦ŧhé ŕéqúéßŧéð wóŕkéŕ çóúñŧ íß úñúßábĺé⟧
 qps.error.memory.limit_exceeded = ⟦{category} ñééðß {requested} býŧéß, ábóvé ŧhé ĺímíŧ óf {limit}⟧
 qps.error.memory.allocation_failed = ⟦çáññóŧ áĺĺóçáŧé mémóŕý fóŕ {category}⟧

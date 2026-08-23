@@ -30,11 +30,24 @@ with Model_Runner.Numerics;
 --  want two engines.
 package Model_Runner.Platform.Device.Products is
 
-   --  Largest product this will attempt, in elements. A device states its
-   --  own limits and they are larger than this; the bound is here so that a
-   --  request the caller got wrong is refused rather than handed to a
-   --  driver.
-   Max_Elements : constant := 2 ** 28;
+   --  Largest product this will attempt, in elements.
+   --
+   --  A bound so that a request the caller got wrong is refused rather than
+   --  handed to a driver, and nothing more than that: what a device will
+   --  actually take is the device's own answer and is asked for, matrix by
+   --  matrix, against Byte_Limit below.
+   --
+   --  This was two hundred and sixty-eight million and was described as
+   --  smaller than any device's own limit. It was not. A model's widest
+   --  matrix is its output projection, which is the vocabulary by the
+   --  embedding: 151936 by 4096 is six hundred and twenty-two million, so
+   --  every Qwen3 above the smallest, every Falcon-7B and every published
+   --  mixture was refused by this line -- and refused as though the device
+   --  lacked a capability, because that is the only answer the layer above
+   --  had for a product that would not run. Four thousand million is past
+   --  what any file this reads can hold and short of what a thirty-two bit
+   --  index in a shader can address.
+   Max_Elements : constant Interfaces.Unsigned_64 := 4_294_967_296;
 
    --  Vectors one dispatch carries, which is what the shader declares an
    --  invocation to hold. A longer batch is several dispatches in the one
@@ -642,6 +655,17 @@ package Model_Runner.Platform.Device.Products is
    --  @return Byte budget for resident matrices.
    function Capacity (Item : Engine) return Interfaces.Unsigned_64;
 
+   --  The largest buffer this device will read, in bytes.
+   --
+   --  The device's own answer, and the bound a single matrix has to fit:
+   --  one product's weights reach a shader as one buffer. A caller that
+   --  wants to say why a product cannot run -- rather than that it did not
+   --  -- asks this and compares.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Bytes, or zero when no device is open.
+   function Byte_Limit (Item : Engine) return Interfaces.Unsigned_64;
+
    --  How many matrices the device is reading where they already are.
    --
    --  A device that shares the host's memory can be handed a pointer to the
@@ -781,6 +805,10 @@ private
       --  matrices may take.
       Heap       : Interfaces.Unsigned_64 := 0;
       Budget     : Interfaces.Unsigned_64 := 0;
+
+      --  And what it says one buffer may hold, which is the bound on a
+      --  single matrix rather than on all of them.
+      Storage    : Interfaces.Unsigned_64 := 0;
 
       --  Whether this device will take the host's own memory as a buffer,
       --  and what a pointer to it has to be aligned to.

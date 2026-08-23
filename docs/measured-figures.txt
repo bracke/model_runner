@@ -175,6 +175,44 @@
 # load and generate -- but it is a gap: no fixture here ties, so the fallback
 # is exercised only by files a caller supplies.
 
+# 2026-08-23, the device table taken again, after the device path changed.
+#
+# The two-row table under "The device backend", all four cells adjacent, each
+# waiting for the machine to fall below 1.50 before it started, medians of
+# three:
+#
+#   cpu, six-token prompt, twelve generated   1.351 s wall, 0.271 s
+#                                             evaluating and 1.087 s
+#                                             generating, 8.71 s processor,
+#                                             load 0.38 to 0.70
+#   device, the same                          1.165 s wall, 0.200 s and
+#                                             0.903 s, 0.30 s processor,
+#                                             load 0.70 to 0.72
+#   cpu, 110-token prompt, nothing generated  5.405 s evaluating, 32.46 s
+#                                             processor, load 0.72 to 2.40
+#   device, the same                          2.057 s evaluating, 1.17 s
+#                                             processor, load 1.47 to 1.43
+#
+# Both backends print the same digests, 5abff916 and cbf29ce4.
+#
+# Why it was taken again: the sources behind these figures changed. The bound
+# on a product's size stopped being a number chosen here and became the
+# device's own answer, which is the change the checklist noticed and asked
+# for these to be re-measured -- and it was right to, because the device
+# column moved. It did not move because of the change. The same four cells
+# were taken this morning on the code before it and again this afternoon on
+# the code after it, and then the change was stashed and the afternoon pair
+# taken a third time on the code before it: the long device run reads 1.212 s
+# in the morning and 2.05 to 2.09 s in the afternoon whichever code is
+# running, while the processor column repeats to within a per cent all day.
+# What moved is the device's own state after a day of being measured, on a
+# fifteen-watt part that shares its power with the processor beside it.
+#
+# The afternoon pair is published because both its columns were taken in one
+# sitting. The morning device figures -- 1.321 s short and 1.212 s long -- are
+# recorded here rather than dropped, because a reader taking a third reading
+# should have two to put it beside rather than one.
+
 # 2026-08-23, the whole Speed section taken again in one sitting. Every figure
 # the README publishes there was retaken on a host that is its own again --
 # the virtual machine that took two thirds of a processor through the last two
@@ -320,7 +358,28 @@
 # implementations reading the same fixture will say so.
 #
 # What it costs is below. What the file did find was in the template rather
-# than in the arithmetic.
+# than in the arithmetic, and then in the device path.
+#
+# 2026-08-23, the mixture on a device, which had never been tried. It was
+# refused, and the refusal named a capability the device had: an invented
+# bound of 268 million elements stood where the device's own answer should
+# have been, and every model whose output projection is wider than that --
+# 151936 by 2048 is 311 million -- came to it. With the bound taken from the
+# device instead, the mixture runs there:
+#
+#   weights read where they lie   12 tokens, prompt 85.495 s, generating
+#                                 450.396 s, 0.03 tokens a second, 4094 of
+#                                 4096 matrices read where they lie, 255 MB
+#                                 on the device, context 512
+#
+# The same text the processor gives, which is the point of running it at all.
+# It is a slow figure and it is a figure: what it says is that the device path
+# survives 128 experts and a 30-billion-parameter file, and what it costs to
+# read every weight across the bus for every token. Copied instead of read
+# where they lie, the same run is refused before it starts -- 11251795968
+# bytes wanted against a limit of 8472029184 -- which is the honest refusal
+# the memory plan was always able to give and which the invented bound was
+# standing in front of.
 #
 # 2026-08-23, and the tool-calling loop closed on it. The template rendering
 # a tool conversation byte for byte against jinja2 says the prompt is right;
@@ -2517,7 +2576,7 @@ reference CA8BA6C4CA9050B8 src/library/model_runner-backend-reference.adb src/li
 # stand from their own quiet run and are owed a quieter machine.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device CE2008F9464936C7 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device F154B33D2038664D src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived

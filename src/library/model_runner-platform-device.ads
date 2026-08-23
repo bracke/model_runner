@@ -179,6 +179,20 @@ package Model_Runner.Platform.Device is
    --  @return Bytes, or zero when the context is not open.
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64;
 
+   --  The largest storage buffer a shader on this device may read.
+   --
+   --  A matrix reaches a shader as one buffer, so this is the bound on what
+   --  one product's weights may be, and it is the device's own answer rather
+   --  than a number chosen here. Asked for because the bound that used to
+   --  stand in its place was chosen here, was two hundred and sixty-eight
+   --  million elements, and refused every model whose output projection is
+   --  wider than that -- which is every model above about four billion
+   --  parameters, on a device whose real answer is four gigabytes.
+   --
+   --  @param Item Open context.
+   --  @return Bytes, or zero when the context is not open.
+   function Storage_Limit (Item : Context) return Interfaces.Unsigned_64;
+
 private
 
    type Name_Text is record
@@ -212,6 +226,10 @@ private
       Fast     : Natural := 0;
       Shared   : Boolean := False;
       Heap     : Interfaces.Unsigned_64 := 0;
+
+      --  What the device says one storage buffer may hold. Read where the
+      --  name and the kind are read, from the same structure.
+      Storage  : Interfaces.Unsigned_64 := 0;
 
       --  Whether this device will take a pointer to the host's own memory
       --  as a buffer, instead of being given a copy of what is in it, and

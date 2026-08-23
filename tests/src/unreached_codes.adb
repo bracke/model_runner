@@ -62,6 +62,28 @@ package body Unreached_Codes is
          --  it decodes the shader now decodes as well.
             | E.Backend_Capability_Missing
 
+         --  A product the device declined for a reason this program cannot
+         --  name. Every reason it can name has its own answer -- a format
+         --  the shader has not got, a buffer past what the device says it
+         --  reads, a device that stopped answering -- so what is left here
+         --  is a driver refusing work that is within everything it stated,
+         --  and there is no way to ask one to do that.
+            | E.Backend_Device_Refused
+
+         --  A matrix larger than the device says one buffer may hold. The
+         --  device this suite runs against says four gigabytes, and a test
+         --  that allocated four gigabytes to be refused would be a test
+         --  about the machine's memory rather than about the refusal.
+         --
+         --  It has been reached by hand, which is how the message was
+         --  checked: the software renderer this host also lists reads at
+         --  most 134217728 bytes, and Qwen3-0.6B's output projection is
+         --  165306368, so `run --backend device --device 2` on it answers
+         --  MR-BACKEND-0011 naming both numbers. That is the shape of a
+         --  reason on this list -- unreachable from inside the suite, and
+         --  said clearly enough that somebody can reach it outside one.
+            | E.Backend_Product_Too_Large
+
          --  A distribution that is not one. Sampling refuses non-finite
          --  logits before it normalizes, so the state this names is one the
          --  arithmetic would have to produce on its own.

@@ -924,6 +924,7 @@ package body Model_Runner.Platform.Device.Products is
       Item.Heap := Memory_Bytes (On);
       Item.Imports := Takes_Host_Memory (On);
       Item.Import_To := Host_Alignment (On);
+      Item.Storage := Storage_Limit (On);
       Item.Plain := Plain_Memory_Kinds (On);
       Item.Share := Share_Host;
       Item.Budget :=
@@ -1537,7 +1538,22 @@ package body Model_Runner.Platform.Device.Products is
 
    function Given_Back (Item : Engine) return Natural is (Item.Released);
 
+   --  Whether a buffer of this many bytes is past what the device said it
+   --  will read. A device that stated nothing bounds nothing here: the
+   --  request goes to the driver, which is where it went before anything
+   --  asked.
+   function Over_Limit
+     (Item : Engine; Bytes : Interfaces.Unsigned_64) return Boolean
+   is (Item.Storage > 0 and then Bytes > Item.Storage);
+
    function Imported (Item : Engine) return Natural is (Item.Taken);
+
+   ----------------
+   -- Byte_Limit --
+   ----------------
+
+   function Byte_Limit (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.Storage);
 
    --------------
    -- Multiply --
@@ -1945,7 +1961,8 @@ package body Model_Runner.Platform.Device.Products is
       Key     : System.Address := System.Null_Address;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null)
    is
-      Elements : constant Natural := Rows * Columns;
+      Elements : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Rows) * Interfaces.Unsigned_64 (Columns);
 
       --  Whichever engine is being asked, because an entry point belongs to
       --  the instance behind it.
@@ -1997,7 +2014,11 @@ package body Model_Runner.Platform.Device.Products is
         or else Columns = 0
         or else Wide = 0
         or else Elements > Max_Elements
-        or else Columns * Count > Max_Elements
+        or else Interfaces.Unsigned_64 (Columns)
+                  * Interfaces.Unsigned_64 (Count) > Max_Elements
+        or else Over_Limit (Item, Weight_Bytes)
+        or else Over_Limit (Item, Vector_Bytes)
+        or else Over_Limit (Item, Result_Bytes)
         or else Interfaces.Unsigned_64 (Weights'Length)
                   < Interfaces.Unsigned_64 (At_Byte) + Weight_Bytes
         or else Vectors'Length
@@ -2900,8 +2921,10 @@ package body Model_Runner.Platform.Device.Products is
               or else (This.Chained
                        and then This.Columns /= Steps.Items (Index - 1).Rows)
               or else Wide = 0
-              or else This.Rows * This.Columns > Max_Elements
-              or else This.Columns * Count > Max_Elements
+              or else Interfaces.Unsigned_64 (This.Rows)
+                        * Interfaces.Unsigned_64 (This.Columns) > Max_Elements
+              or else Interfaces.Unsigned_64 (This.Columns)
+                        * Interfaces.Unsigned_64 (Count) > Max_Elements
               or else This.Weights = null
               or else Interfaces.Unsigned_64 (This.Weights.all'Length)
                         < Interfaces.Unsigned_64 (This.At_Byte)
@@ -3360,7 +3383,8 @@ package body Model_Runner.Platform.Device.Products is
       Ok      : out Boolean;
       Key     : System.Address := System.Null_Address)
    is
-      Elements : constant Natural := Rows * Columns;
+      Elements : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Rows) * Interfaces.Unsigned_64 (Columns);
 
       --  This form has no caller that can be asked to stop -- it is the
       --  decoded-values one, used where a caller already holds binary32 --

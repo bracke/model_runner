@@ -109,4 +109,7 @@ package body Model_Runner.Platform.Device is
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
    is (Item.Heap);
 
+   function Storage_Limit (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Storage);
+
 end Model_Runner.Platform.Device;

@@ -316,6 +316,42 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The device refused every model above about four billion parameters, and
+  said the backend lacked a capability it has.** A bound of 268 million
+  elements stood in the device path, described in the line above it as
+  smaller than any device's own limit. It is not: a model's widest matrix is
+  its output projection, which is the vocabulary by the embedding, and
+  151936 by 4096 is 622 million. Falcon-7B, every Qwen3 above the smallest
+  and every published mixture came to that line -- and came away told that
+  this model needs `matrix_vector`, which the backend does not have, sending
+  a reader to look for a device feature that was there all along and had
+  been all along.
+
+  What bounds a product is what the device says one storage buffer may hold,
+  so that is what is asked now, matrix by matrix: 4 GiB on the part measured
+  here, 128 MiB on the software renderer the same host lists. Reading it
+  needed four bytes of care -- the limits sit at 296 in the properties
+  structure rather than at 292, because they hold sixty-four bit numbers and
+  are aligned to eight, and the four bytes between the two readings are the
+  difference between what a storage buffer may hold and what a uniform
+  buffer may, which is 65536 on every device and would have refused
+  everything. That was caught by taking the second device's answer and
+  finding it did not match what the driver reports.
+
+  Two codes rather than the borrowed one. `MR-BACKEND-0011` says a product
+  needs a buffer of so many bytes and the device reads at most so many,
+  which is the whole diagnosis in one line; `MR-BACKEND-0010` says the
+  device would not run this product, for the case nothing here can name.
+  Neither claims a missing capability, because the capability is not
+  missing.
+
+  So Falcon-7B, Qwen3-8B and Qwen3-30B-A3B run on a device now, and the
+  mixture does it reading its weights where they lie: twelve tokens, the
+  same text the processor gives, 4094 of 4096 matrices never copied. Asked
+  to copy them instead it is refused before it starts, by the memory plan,
+  naming the bytes it wanted and the limit it had -- which is the refusal
+  that should have been reached all along.
+
 - **A published mixture's own chat template was refused, so `run` on it
   meant spelling the markers by hand.** The template Qwen3-30B-A3B ships is
   not the template Qwen3-0.6B ships. It asks the same question -- where is
@@ -4679,7 +4715,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 172 diagnostic
+- Localization through `messages`, with a catalog entry for all 174 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.
