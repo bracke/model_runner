@@ -316,6 +316,45 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A chat format for Qwen3-Coder, whose own template this engine will not
+  compile.** It opens with `{% macro render_extra_keys(json_dict,
+  handled_keys) %}`, and a macro is rejected where it is read rather than
+  approximated -- so that model was usable only in raw mode. The format is
+  now carried here, as llama3, chatml, gemma and phi3 are, written in the
+  same subset and settled the same way: thirty-two conversations against
+  Python's jinja2 reading the template Qwen3-Coder-30B-A3B-Instruct ships,
+  every byte agreeing. Its turns are ChatML's with one difference, and the
+  difference is where a run of tool answers goes -- folded into one user
+  turn, opened before the first and closed after the last, including the
+  quirk that a tool answer standing first is not opened at all, because that
+  template asks `loop.previtem` and a first item has none.
+
+  What it does not carry is that template's tool half, and the reason is a
+  shape rather than an effort: it writes a tool's parameters and a call's
+  arguments one element per pair of a mapping, and nothing in this subset
+  walks a mapping. Both halves of that are refused rather than approximated.
+  Offering tools to this format is refused before a prompt is built, because
+  the format never names them. A turn carrying calls is refused where the
+  call would have been written, by a name that says so, rather than rendered
+  as a turn that said nothing -- which is the fault the tool-call work fixed
+  for Qwen3 and would have reintroduced here.
+
+- **A template compiled into a Compiled that held another inherited its
+  answers.** `Close` released the program, the operands, the conditions and
+  the text, and left the name table and the slots that point into it, none
+  of which is storage. So a format named on the command line -- which is
+  compiled into the model's own -- reported that it reads tools when the
+  model's template did, and a caller offering tools to a format with nowhere
+  to put them was told nothing and had them dropped. The question exists to
+  prevent exactly that: a model told about no tools answers as though there
+  were none, which looks from the outside like a model that chose not to
+  call one.
+
+  Found while checking that the new format refuses tools, on a model whose
+  own template reads them; on a model whose does not, the same combination
+  had always refused, which is why nothing had noticed. Thirty-two names
+  were being shared between two templates as well.
+
 - **The device refused every model above about four billion parameters, and
   said the backend lacked a capability it has.** A bound of 268 million
   elements stood in the device path, described in the line above it as

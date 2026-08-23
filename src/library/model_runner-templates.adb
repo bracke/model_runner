@@ -48,6 +48,22 @@ package body Model_Runner.Templates is
       Item.Operand_Used := 0;
       Item.Condition_Used := 0;
       Item.Source_Used := 0;
+
+      --  And everything the last compile learnt about the template it read,
+      --  which is not storage and was therefore not being released. A
+      --  Compiled is compiled into more than once -- a chat format named on
+      --  the command line replaces a model's own that way -- and what was
+      --  left behind was the name table and the slots that point into it.
+      --  The visible cost was a template that never mentions tools
+      --  answering that it reads them, because the template before it did:
+      --  a caller offering tools to such a format was told nothing and had
+      --  them dropped, which is the fault the question exists to prevent.
+      --  The unseen cost was thirty-two names shared between two templates.
+      Item.Name_Used := 0;
+      Item.Thinking_Slot := 0;
+      Item.Tools_Slot := 0;
+      Item.Call_Slot := 0;
+      Item.Message_Slot := 0;
       Item.Ready := False;
    exception
       when others =>
@@ -179,6 +195,62 @@ package body Model_Runner.Templates is
            & "{% endfor %}"
            & "{% if add_generation_prompt %}"
            & "<|assistant|>" & LF
+           & "{% endif %}";
+
+      elsif Name = Format_Name (Format_Qwen3_Coder) then
+         --  The one format here carried because the model's own template
+         --  will not compile rather than because the model ships none:
+         --  Qwen3-Coder's opens with a macro, which is a construct this
+         --  engine rejects where it is read. What is written here is the
+         --  rest of that template said in the subset, and it is the same
+         --  bytes for every conversation that has no tools in it.
+         --
+         --  What it is not is the tool half, and the reason is a shape
+         --  rather than an effort: that template walks the pairs of a
+         --  mapping -- a tool's parameters, a call's arguments -- and
+         --  writes each pair as its own element. Nothing here can walk a
+         --  mapping. A caller offering tools is refused before a prompt is
+         --  built, because this format never names them and the command
+         --  refuses tools that would reach nothing; a turn carrying calls
+         --  is refused where the call would have been written, by a name
+         --  that says so, rather than rendered as though the turn had said
+         --  nothing.
+         --
+         --  Its turns are ChatML's with one difference, and the difference
+         --  is the tool answers: a run of them is folded into one user
+         --  turn, opened before the first and closed after the last, where
+         --  ChatML would open and close one for each.
+         return
+           "{% if messages[0]['role'] == 'system' %}"
+           & "<|im_start|>system" & LF
+           & "{{ messages[0]['content'] }}<|im_end|>" & LF
+           & "{% set turns = messages[1:] %}"
+           & "{% else %}"
+           & "{% set turns = messages %}"
+           & "{% endif %}"
+           & "{% for message in turns %}"
+           & "{% if message.tool_calls %}"
+           & "{{ this_format_cannot_write_a_tool_call }}"
+           & "{% endif %}"
+           & "{% if message.role == 'tool' %}"
+           & "{% if not loop.first"
+           & " and turns[loop.index0 - 1].role != 'tool' %}"
+           & "<|im_start|>user" & LF
+           & "{% endif %}"
+           & "<tool_response>" & LF
+           & "{{ message.content }}" & LF
+           & "</tool_response>" & LF
+           & "{% if loop.last"
+           & " or turns[loop.index0 + 1].role != 'tool' %}"
+           & "<|im_end|>" & LF
+           & "{% endif %}"
+           & "{% else %}"
+           & "<|im_start|>{{ message.role }}" & LF
+           & "{{ message.content }}<|im_end|>" & LF
+           & "{% endif %}"
+           & "{% endfor %}"
+           & "{% if add_generation_prompt %}"
+           & "<|im_start|>assistant" & LF
            & "{% endif %}";
       else
          return "";

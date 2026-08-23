@@ -135,11 +135,20 @@ package body Tests.Template_Cases is
         & "<|assistant|>" & LF & "yo<|end|>" & LF
         & "<|assistant|>" & LF;
 
-      Wanted : constant array (1 .. 4) of Expectation :=
+      --  ChatML's turns exactly, for a conversation of plain messages.
+      --  Where this format differs from ChatML is the tool answers, which
+      --  this conversation has none of and the case below has.
+      Coder_Text : aliased constant String :=
+        "<|im_start|>user" & LF & "hi<|im_end|>" & LF
+        & "<|im_start|>assistant" & LF & "yo<|im_end|>" & LF
+        & "<|im_start|>assistant" & LF;
+
+      Wanted : constant array (1 .. 5) of Expectation :=
         [(Tmpl.Format_Llama3, Llama3_Text'Access),
          (Tmpl.Format_ChatML, ChatML_Text'Access),
          (Tmpl.Format_Gemma, Gemma_Text'Access),
-         (Tmpl.Format_Phi3, Phi3_Text'Access)];
+         (Tmpl.Format_Phi3, Phi3_Text'Access),
+         (Tmpl.Format_Qwen3_Coder, Coder_Text'Access)];
 
       Item     : Tmpl.Compiled;
       Messages : Conv.History;
@@ -179,6 +188,102 @@ package body Tests.Template_Cases is
             Tmpl.Close (Item);
          end;
       end loop;
+
+      --  Where the Qwen3-Coder format is not ChatML: a run of tool answers
+      --  is folded into one user turn, opened before the first and closed
+      --  after the last, where ChatML would wrap each of them on its own.
+      --  Taken from the template that model ships, which this format exists
+      --  because this engine will not compile -- it opens with a macro.
+      declare
+         Wanted : constant String :=
+           "<|im_start|>user" & LF & "P.<|im_end|>" & LF
+           & "<|im_start|>user" & LF
+           & "<tool_response>" & LF & "a" & LF & "</tool_response>" & LF
+           & "<tool_response>" & LF & "b" & LF & "</tool_response>" & LF
+           & "<|im_end|>" & LF
+           & "<|im_start|>assistant" & LF;
+      begin
+         Tmpl.Compile
+           (Item, Tmpl.Built_In (Tmpl.Format_Name (Tmpl.Format_Qwen3_Coder)),
+            Status => Status);
+         Assert (E.Is_Ok (Status), "the qwen3-coder format did not compile");
+
+         Conv.Open (Messages, Status => Status);
+         Conv.Append (Messages, Conv.User_Role, "P.", Status);
+         Conv.Append (Messages, Conv.Tool_Role, "a", Status);
+         Conv.Append (Messages, Conv.Tool_Role, "b", Status);
+
+         Tmpl.Render
+           (Item, Messages, "<s>", "</s>", True, Target, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "the qwen3-coder format did not render tool answers: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Target (1 .. Last) = Wanted,
+                 "a run of tool answers rendered [" & Target (1 .. Last)
+                 & "] where [" & Wanted & "] is what that model reads");
+
+         Conv.Close (Messages);
+         Tmpl.Close (Item);
+      end;
+
+      --  And what it will not do rather than do wrongly. That template
+      --  writes a call as one element per argument, walking the pairs of a
+      --  mapping, and nothing here walks a mapping -- so a turn carrying
+      --  calls is refused where the call would have been written, by a name
+      --  that says why, rather than rendered as a turn that said nothing.
+      declare
+         Asked : Model_Runner.Tools.Calls;
+      begin
+         Tmpl.Compile
+           (Item, Tmpl.Built_In (Tmpl.Format_Name (Tmpl.Format_Qwen3_Coder)),
+            Status => Status);
+         Conv.Open (Messages, Status => Status);
+         Conv.Append (Messages, Conv.User_Role, "P.", Status);
+         Conv.Append_Asking (Messages, "", Status);
+
+         Model_Runner.Tools.Read_Calls
+           (Asked,
+            "<tool_call>{""name"": ""f"", ""arguments"": {""a"": 1}}"
+            & "</tool_call>", Status);
+         Conv.Append_Call
+           (Messages, Model_Runner.Tools.Called (Asked, 1),
+            Model_Runner.Tools.Arguments (Asked, 1), Status);
+         Model_Runner.Tools.Close (Asked);
+
+         Tmpl.Render
+           (Item, Messages, "<s>", "</s>", True, Target, Last, Status);
+         Assert (Status.Code = E.Template_Unknown_Variable,
+                 "a turn carrying calls rendered as "
+                 & E.Error_Code'Image (Status.Code)
+                 & " where this format cannot write one");
+         Assert (Last = 0, "a refused render wrote something");
+
+         Conv.Close (Messages);
+         Tmpl.Close (Item);
+      end;
+
+      --  A template compiled into a Compiled that held another answers for
+      --  itself. The name table and the slots that point into it are not
+      --  storage and were not being released with the storage, so a format
+      --  that never mentions tools reported that it reads them when the
+      --  template before it did -- and a caller offering tools to such a
+      --  format had them dropped rather than being told.
+      Tmpl.Compile
+        (Item,
+         "{% for message in messages %}{% if tools %}x{% endif %}{% endfor %}",
+         Status => Status);
+      Assert (E.Is_Ok (Status), "the first template did not compile");
+      Assert (Tmpl.Reads_Tools (Item),
+              "a template naming tools was read as not naming them");
+
+      Tmpl.Compile
+        (Item, Tmpl.Built_In (Tmpl.Format_Name (Tmpl.Format_ChatML)),
+         Status => Status);
+      Assert (E.Is_Ok (Status), "the second template did not compile");
+      Assert (not Tmpl.Reads_Tools (Item),
+              "a template that never mentions tools reported that it reads "
+              & "them, which is the answer the template before it gave");
+      Tmpl.Close (Item);
    end Built_In_Formats_Render_Their_Turns;
 
    procedure Ordinary_Template_Renders
