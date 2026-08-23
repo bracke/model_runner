@@ -73,6 +73,18 @@ package Model_Runner.Platform is
    --  @return Core count, at least 1 and never above Processor_Count.
    function Core_Count return Positive;
 
+   --  Whether this processor offers the wider vector instructions -- the
+   --  per-lane variable shift and the gather -- that four of the fifteen
+   --  quantized formats decode faster with.
+   --
+   --  False where the host says no and where it cannot be asked, which are
+   --  the same answer to a caller: the baseline decoders run every format
+   --  either way, and the four are between a third and four fifths slower
+   --  without the instructions rather than wrong.
+   --
+   --  @return True only where the host says so plainly.
+   function Wide_Vectors return Boolean;
+
    --  The host this build targets, as hostkit reports it.
    --
    --  Asked rather than inferred. The engine has one behaviour that differs

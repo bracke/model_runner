@@ -11,6 +11,7 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Limits;
 with Model_Runner.Numerics;
+with Model_Runner.Platform;
 with Model_Runner.Quantization;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
@@ -943,6 +944,114 @@ package body Tests.GGUF_Cases is
    --  buffer is not a diagnostic but a read of whatever follows the array.
    --  Every condition of it is held here, for every format, because a format
    --  added later has the same guard and the same suppressions.
+   --  The two compilations of the decoders answer the same bits.
+   --
+   --  One source is instantiated twice -- Decode_One and Decode_Span, once
+   --  with the project's switches and once for a wider instruction set --
+   --  and four formats are sent to the second where the host has those
+   --  instructions. That is a second implementation of the same arithmetic
+   --  in every sense that matters to a reader of the output, so the thing
+   --  worth asserting is that it is not a second answer: same block, same
+   --  span, same bits, or the wider one is wrong however fast it is.
+   --
+   --  Bit for bit rather than within a tolerance. The wider unit is compiled
+   --  with contraction turned off exactly so that this can be an equality,
+   --  and if that switch is ever dropped this is the test that says so.
+   --
+   --  Use_Wide_Decoders is what the backend calls once at elaboration, and
+   --  what this drives directly. On a host without the instructions the
+   --  wide instance is never entered: turning it on there would run
+   --  instructions the processor has not got, so this asks the host the same
+   --  question the backend asks and does nothing where the answer is no.
+   procedure Both_Decoders_Answer_The_Same_Bits
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  The four sent to the wider compilation, and four that are not, so
+      --  that a dispatcher which sent everything there would be caught by
+      --  the same run.
+      Formats : constant array (1 .. 8) of Model_Runner.GGUF.Tensor_Type :=
+        [Model_Runner.GGUF.Type_Q5_0, Model_Runner.GGUF.Type_Q5_1,
+         Model_Runner.GGUF.Type_IQ4_NL, Model_Runner.GGUF.Type_IQ4_XS,
+         Model_Runner.GGUF.Type_Q8_0, Model_Runner.GGUF.Type_Q4_K,
+         Model_Runner.GGUF.Type_Q2_K, Model_Runner.GGUF.Type_Q6_K];
+
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+      Seen : Natural := 0;
+   begin
+      for Format of Formats loop
+         declare
+            Name : constant String := Model_Runner.GGUF.Type_Name (Format);
+            Per  : constant N.Element_Count :=
+              N.Element_Count (Model_Runner.GGUF.Block_Elements (Format));
+
+            Blocks : constant N.Element_Count := 3;
+            Room   : constant N.Element_Count := Per * Blocks;
+
+            --  Values that use the whole of a block's range rather than a
+            --  constant, so that a decoder reading the wrong bits answers
+            --  differently rather than accidentally the same.
+            Values : N.Real_Array (0 .. Room - 1);
+
+            Plain_Span, Wide_Span : N.Real_Array (0 .. Room - 1);
+            Ok : Boolean;
+         begin
+            for Index in Values'Range loop
+               Values (Index) :=
+                 N.Real (Integer (Index) mod 17) - 8.0
+                 + N.Real (Integer (Index) mod 3) * 0.25;
+            end loop;
+
+            declare
+               --  Named per format, because that is how the fixtures are
+               --  written: one encoder a layout, so that a wrong one cannot
+               --  be reached by a dispatch nobody reads.
+               function Packed return B.Byte_Array
+               is (case Format is
+                     when Model_Runner.GGUF.Type_Q5_0 =>
+                       Fixtures.Encode_Q5_0 (Values),
+                     when Model_Runner.GGUF.Type_Q5_1 =>
+                       Fixtures.Encode_Q5_1 (Values),
+                     when Model_Runner.GGUF.Type_IQ4_NL =>
+                       Fixtures.Encode_IQ4_NL (Values),
+                     when Model_Runner.GGUF.Type_IQ4_XS =>
+                       Fixtures.Encode_IQ4_XS (Values),
+                     when Model_Runner.GGUF.Type_Q8_0 =>
+                       Fixtures.Encode_Q8_0 (Values),
+                     when Model_Runner.GGUF.Type_Q4_K =>
+                       Fixtures.Encode_Q4_K (Values),
+                     when Model_Runner.GGUF.Type_Q2_K =>
+                       Fixtures.Encode_Q2_K (Values),
+                     when others => Fixtures.Encode_Q6_K (Values));
+
+               Data : constant B.Byte_Array := Packed;
+            begin
+               Q.Use_Wide_Decoders (False);
+               Q.Decode_Blocks (Format, Data, 0, Blocks, Plain_Span, Ok);
+               Assert (Ok, Name & ": the baseline decoders refused a span");
+
+               Q.Use_Wide_Decoders (Wide);
+               Q.Decode_Blocks (Format, Data, 0, Blocks, Wide_Span, Ok);
+               Assert (Ok, Name & ": the chosen decoders refused a span");
+
+               for Index in Plain_Span'Range loop
+                  Assert (Plain_Span (Index) = Wide_Span (Index),
+                          Name & ": the two compilations disagree at element"
+                          & N.Element_Count'Image (Index) & ":"
+                          & N.Real'Image (Plain_Span (Index)) & " against"
+                          & N.Real'Image (Wide_Span (Index)));
+               end loop;
+
+               Seen := Seen + 1;
+            end;
+         end;
+      end loop;
+
+      Q.Use_Wide_Decoders (Wide);
+      Assert (Seen = Formats'Length, "a format was not compared");
+   end Both_Decoders_Answer_The_Same_Bits;
+
    procedure Decoding_Refuses_What_It_Cannot_Fit
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -5786,6 +5895,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Decoders_Produce_The_Documented_Values'Access,
          "each decoder produces the values its layout documents");
+      Register_Routine
+        (T, Both_Decoders_Answer_The_Same_Bits'Access,
+         "the two compilations of the decoders answer the same bits");
       Register_Routine
         (T, Decoding_Refuses_What_It_Cannot_Fit'Access,
          "decoding refuses every call it cannot fit, for every format");

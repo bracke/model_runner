@@ -5,6 +5,7 @@ with System.Multiprocessors;
 with Hostkit.Fs;
 with Hostkit.Host;
 
+with Model_Runner.Platform.Instructions;
 with Model_Runner.Platform.Topology;
 with Model_Runner.Text;
 
@@ -210,6 +211,18 @@ package body Model_Runner.Platform is
       when others =>
          return 1;
    end Processor_Count;
+
+   -------------------
+   -- Wide_Vectors --
+   -------------------
+
+   function Wide_Vectors return Boolean is
+   begin
+      return Model_Runner.Platform.Instructions.Wide_Vectors;
+   exception
+      when others =>
+         return False;
+   end Wide_Vectors;
 
    ----------------
    -- Core_Count --

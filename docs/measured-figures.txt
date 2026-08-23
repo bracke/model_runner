@@ -175,6 +175,82 @@
 # load and generate -- but it is a gap: no fixture here ties, so the fallback
 # is exercised only by files a caller supplies.
 
+# 2026-08-24, one unit compiled twice, and four formats that wanted it.
+#
+# Q5_0 and Q5_1 keep the fifth bit of each element at a varying place in a
+# thirty-two bit word, so the shift amount varies with the element; IQ4_NL and
+# IQ4_XS index a table of sixteen levels, which is a gather. Neither
+# vectorizes on baseline x86-64. The README has said so for months beside a
+# note that building for a host with those instructions measured slower
+# everywhere else, and that note was right and was never quantified. It is
+# now, and then acted on.
+#
+# Three readings a build, alternating, the two binaries built before any of
+# them so that no compile ran between measurements, each started below a load
+# of 0.65. Whole build at -march=x86-64-v3 against the baseline, ns an
+# element:
+#
+#   iq4nl 1.36 -> 0.75    q2_k  0.70 -> 0.81    q4_k 0.37 -> 0.52
+#   q5_0  1.02 -> 0.64    q8_0  0.38 -> 0.47    q6_k 0.37 -> 0.55
+#   q5_1  1.06 -> 0.68    q5_k  0.40 -> 0.53    bf16 0.32 -> 0.47
+#   iq4xs 0.90 -> 0.68    q3_k  0.47 -> 0.63    q4_0 0.31 -> 0.48
+#                         q4_1  0.43 -> 0.59    f32  0.25 -> 0.43
+#                         f16   0.55 -> 0.59
+#
+# Four faster and eleven slower, by between seven and forty-two per cent. So
+# not a build switch: the decoders are a generic instantiated twice, once with
+# the project's switches and once with -march=x86-64-v3 -ffp-contract=off, and
+# the four are sent to the second where the host says it has the instructions.
+#
+# Compiling only the decode wide beats compiling everything wide, and by more
+# than the eleven-format loss explains. Accumulate_Dot decodes a span into a
+# buffer and then multiplies it by each vector, and the second half is shared
+# by every format: wide, it is slower, and it was dragging the four down with
+# it. Split, on the same quiet machine:
+#
+#   iq4nl 1.36 -> 0.63, 2.16x     q5_1  1.06 -> 0.57, 1.86x
+#   q5_0  1.02 -> 0.54, 1.89x     iq4xs 0.90 -> 0.50, 1.80x
+#
+# Eleven of the other formats sit within three per cent of where they were.
+# The twelfth is q4_1, which reads 0.43 before and 0.50 after, eleven per cent
+# slower, and nothing here explains it. The first guess was the call across
+# the new unit boundary, which q4_1 pays per thirty-two elements where a
+# k-quant pays it per two hundred and fifty-six; the block loop was moved
+# inside the instance to test that and the number did not move. What is left
+# is the thing the 2026-08-15 entry above describes -- these row products move
+# with the layout of the unit they are compiled in, by up to a factor of two,
+# in both directions, with no decoder changed -- and eleven per cent is well
+# inside that band. It is written down rather than smoothed over.
+#
+# Everything else this touched, re-measured on the same quiet machine because
+# quantization.adb is a source behind five groups of figures:
+#
+#   kernels, ns an element  f32 0.25, bf16 0.31, q4_0 0.32, q4_k 0.38,
+#                           q6_k 0.38, q8_0 0.39, q5_k 0.41, q4_1 0.50,
+#                           q3_k 0.50, iq4xs 0.50, q5_0 0.54, f16 0.55,
+#                           q5_1 0.57, iq4nl 0.63, q2_k 0.71
+#   twelve tokens           1.155 s wall, 0.265 evaluating and 0.899
+#                           generating, 8.27 s processor, load 0.64 to 1.23
+#   at fourteen threads     1.243 s wall, 16.21 s processor
+#   shares, pinned, q8_0    2673 Me/s at one, 13436 at seven, 14639 at eight;
+#                           thirty-two a pass 4933, 24954, 27539
+#   reference against cpu   9.170 s wall against 0.560 s, 5.506 and 3.673
+#                           against 0.260 and 0.300, same digest; at the
+#                           kernel 2.3x q8_0, 2.3x q4_k, 3.1x f32
+#   device, short           1.219 s cpu against 0.927 s, of which 0.281 s
+#                           and 0.160 s evaluating the prompt and 0.937 s
+#                           and 0.766 s generating; 8.41 s processor against
+#                           0.22 s
+#   device, 110 tokens      4.725 s cpu against 2.051 s, 30.36 s processor
+#                           against 1.18 s
+#   drafting                1.168 s, 1.447 s and 4.541 s, 24 proposed and 9
+#                           accepted
+#
+# The twelve-token figure is 1.155 s against yesterday's 1.315 on the same
+# model, which is Q8_0 and takes none of the wide decoders. That is the layout
+# again, in the direction that flatters, and it is quoted because it is what
+# the tool says rather than because anything here earned it.
+
 # 2026-08-23, the device table taken again, after the device path changed.
 #
 # The two-row table under "The device backend", all four cells adjacent, each
@@ -1053,7 +1129,7 @@
 # of that claim; the second half is a branch that a llama model does not
 # take.
 
-kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb
+kernels 298561D75AC63452 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr
 
 # covers: the twelve-token figure, the worker-count and share-count
 # comparisons, and the batch-size table under "Speed". Re-measure all four
@@ -1308,7 +1384,7 @@ kernels 80B8F4D5D50A74AE src/library/model_runner-quantization.adb src/library/m
 # less than a figure taken badly and said to be bad.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-engine 751F1D7A76463112 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+engine 4B4510047AA11B26 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -1406,7 +1482,7 @@ engine 751F1D7A76463112 src/library/model_runner-llama.adb src/library/model_run
 #
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-reference CA8BA6C4CA9050B8 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+reference 0E0CBBDF14FCC6BC src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -2576,7 +2652,7 @@ reference CA8BA6C4CA9050B8 src/library/model_runner-backend-reference.adb src/li
 # stand from their own quiet run and are owed a quieter machine.
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
-device F154B33D2038664D src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb
+device C43B917B4D2A7485 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -2702,12 +2778,12 @@ device F154B33D2038664D src/shaders/row_product.comp src/library/model_runner-sh
 #
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
-drafting 0EA554DF8E11D8B3 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb
+drafting CA973F5E94E30E71 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
 # model: none. These figures time the worker pool on tensors this tool builds itself.
-scaling 592E96BC24CA22DF src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb
+scaling 2941B5D6292CBC9F src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker

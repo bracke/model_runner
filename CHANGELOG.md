@@ -316,6 +316,54 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Four formats decode about twice as fast, from one source compiled
+  twice.** Q5_0 and Q5_1 keep the fifth bit of each element at a varying
+  place in a thirty-two bit word, so the shift amount varies with the
+  element; IQ4_NL and IQ4_XS index a table of sixteen levels, which is a
+  gather. Neither vectorizes on baseline x86-64, which this file has said
+  for months beside a note that building for a host with those instructions
+  measured slower everywhere else. That note was right and had never been
+  quantified. It is now: four formats gain and eleven lose, by between seven
+  and forty-two per cent.
+
+  So the decoders are a generic instantiated twice -- `.Plain` with the
+  project's switches, `.Wide` with `-march=x86-64-v3 -ffp-contract=off` --
+  and the four are sent to the second. One source rather than a second copy
+  of four decoders, because a format with two implementations has one nobody
+  tests, which this repository learnt once already from an error injected
+  into the unused copy of a decoder that went unnoticed.
+
+  Only the decode is compiled wide, and that is what makes it better than
+  the whole-program build it replaces. A row product decodes a span into a
+  buffer and then multiplies it by each vector; the second half is shared by
+  every format and is slower built wide, and it was dragging the four down
+  with it. Split: 1.36 ns an element to 0.63 for IQ4_NL, 1.02 to 0.54 for
+  Q5_0, 1.06 to 0.57 for Q5_1, 0.90 to 0.50 for IQ4_XS, where the wide build
+  of everything managed 0.75, 0.64, 0.68 and 0.68.
+
+  Contraction is off in the wide unit so that the arithmetic is the same
+  operations in the same order as the baseline's, and a test holds it to
+  that: eight formats decoded both ways, the four dispatched and four that
+  are not, required to answer the same bits rather than to agree within a
+  tolerance. If that switch is ever dropped, that test is what says so.
+
+  Whether the host has the instructions is read from the host rather than
+  assumed from whatever machine did the building. It is not read where it is
+  used: the decoders interpret what a model file holds, and a unit that does
+  that may not reach a file, an environment or a host -- that is what keeps
+  a container from making the program read something else. The backend that
+  runs the kernels asks once, at elaboration, and tells them. A host that
+  says no runs every format on the baseline, as every host did before this.
+
+  Eleven of the remaining formats sit within three per cent of where they
+  were. The twelfth, Q4_1, is eleven per cent slower and nothing here
+  explains it; the guess that it was the new call across a unit boundary was
+  tested by moving the block loop inside the instance, and the number did not
+  move. What is left is the code-layout sensitivity these row products have
+  always had, which this repository measured and wrote down in August when
+  the same four rows swung by up to a factor of two in the other direction
+  with no decoder changed.
+
 - **A chat format for Qwen3-Coder, whose own template this engine will not
   compile.** It opens with `{% macro render_extra_keys(json_dict,
   handled_keys) %}`, and a macro is rejected where it is read rather than

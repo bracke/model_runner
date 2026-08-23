@@ -1,3 +1,4 @@
+with Model_Runner.Platform;
 with Model_Runner.Quantization;
 
 package body Model_Runner.Backend.CPU is
@@ -474,4 +475,11 @@ package body Model_Runner.Backend.CPU is
       end if;
    end Dispatch_Batch;
 
+begin
+   --  Asked here and not where it is used. The decoders interpret what a
+   --  model file holds and may not reach a host; this backend runs them and
+   --  may, so the question is asked once, at elaboration, before any
+   --  container has been opened.
+   Model_Runner.Quantization.Use_Wide_Decoders
+     (Model_Runner.Platform.Wide_Vectors);
 end Model_Runner.Backend.CPU;

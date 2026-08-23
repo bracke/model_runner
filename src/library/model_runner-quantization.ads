@@ -172,4 +172,22 @@ package Model_Runner.Quantization is
    function Is_Decodable
      (Format : Model_Runner.GGUF.Tensor_Type) return Boolean;
 
+   --  Allow the decoders built for the wider instruction set.
+   --
+   --  Four formats decode between a third and four fifths faster there --
+   --  Q5_0, Q5_1, IQ4_NL and IQ4_XS -- and every other format is slower, so
+   --  the choice is per format and is made below. What this says is only
+   --  whether the processor has the instructions at all.
+   --
+   --  It is told rather than asked because this package interprets what a
+   --  model file holds, and such a package may not reach a file, an
+   --  environment or a host: that is what keeps a container from being able
+   --  to make the program read something else. The backend that runs the
+   --  kernels asks the host and says so here, once, before any model is
+   --  read. A caller that never says leaves every format on the baseline
+   --  decoders, which is where they all were before this existed.
+   --
+   --  @param Allowed True where the host has the wider instructions.
+   procedure Use_Wide_Decoders (Allowed : Boolean);
+
 end Model_Runner.Quantization;

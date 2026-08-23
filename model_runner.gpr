@@ -42,6 +42,30 @@ project Model_Runner is
            --  This project documents a 120 column limit; the
            --  generated profile would otherwise impose 79.
            "-gnatyM120");
+
+      --  One unit compiled twice. Model_Runner.Quantization.Wide is an
+      --  instantiation of the same generic as .Plain and differs from it
+      --  only here: it is built for the x86-64-v3 instruction set, whose
+      --  per-lane variable shift and gather are what Q5_0, Q5_1, IQ4_NL and
+      --  IQ4_XS decode faster with. Nothing else in the program is built
+      --  that way, because every other format is slower for it -- between
+      --  seven and forty-two per cent, measured alternating on a quiet
+      --  machine and written down in docs/measured-figures.txt.
+      --
+      --  Reached only where the host says it has the instructions, which
+      --  Model_Runner.Platform.Wide_Vectors answers by reading the host
+      --  rather than by assuming the machine that built this is the machine
+      --  running it.
+      --
+      --  -ffp-contract=off keeps the arithmetic identical to the baseline's.
+      --  The wider set permits a fused multiply-add, which would round once
+      --  where the baseline rounds twice and move a decoded block off the
+      --  bits every other path produces; what is wanted here is the shift
+      --  and the gather, and this says so.
+      for Switches ("model_runner-quantization-wide.ads") use
+        Model_Runner_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+           "-march=x86-64-v3", "-ffp-contract=off");
    end Compiler;
 
    --  Bytes out as bytes in. Alire's generated switches carry -gnatW8 and the
