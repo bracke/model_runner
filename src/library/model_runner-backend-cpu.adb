@@ -1,3 +1,5 @@
+with Ada.Unchecked_Deallocation;
+
 with Model_Runner.Platform;
 with Model_Runner.Quantization;
 
@@ -56,6 +58,26 @@ package body Model_Runner.Backend.CPU is
    ---------------
    -- Partition --
    ---------------
+
+   --  Whether products quantize their activations. Written by one task
+   --  before the workers exist and read by them after, which is the same
+   --  protocol Model_Runner.Quantization states for its own such flag.
+   Quantizing : Boolean := False;
+
+   -------------------------------
+   -- Use_Integer_Activations --
+   -------------------------------
+
+   procedure Use_Integer_Activations (Allowed : Boolean) is
+   begin
+      Quantizing := Allowed;
+   end Use_Integer_Activations;
+
+   ---------------------------
+   -- Integer_Activations --
+   ---------------------------
+
+   function Integer_Activations return Boolean is (Quantizing);
 
    procedure Partition
      (Rows    : Element_Count;
@@ -149,6 +171,272 @@ package body Model_Runner.Backend.CPU is
    -- Worker --
    ------------
 
+   --  Give back the pool's quantization buffers.
+   procedure Free_Packed (Item : in out Pool) is
+      procedure Release is new Ada.Unchecked_Deallocation
+        (Model_Runner.Quantization.Integers.Signed_Array,
+         Signed_Array_Access);
+      procedure Release is new Ada.Unchecked_Deallocation
+        (Model_Runner.Quantization.Integers.Sum_Array, Sum_Array_Access);
+   begin
+      Release (Item.Values);
+      Release (Item.Totals);
+      T.Free (Item.Scales);
+   end Free_Packed;
+
+   --  Quantize a job's activations into the pool's own buffers.
+   --
+   --  Once per matrix product, by the task that submits it, before the
+   --  workers are told there is one -- not once per share. Quantizing per
+   --  share would be a copy of the vector for every worker and the same
+   --  answer, since this is a pure function of its input; doing it here is
+   --  also what keeps a result independent of the worker count, of the batch
+   --  width and of whether a pool exists at all.
+   --
+   --  Answers False when the arithmetic was not asked for, when the format
+   --  has no integer kernel, when the width is not a whole number of blocks,
+   --  or when the vector holds a value that has no nearest byte. The job
+   --  then carries no quantized activations and every share runs the
+   --  floating-point path.
+   function Prepare_Packed
+     (Item   : in out Pool;
+      Weight : T.View;
+      Vector : T.Real_Array_Access;
+      Count  : Element_Count) return Boolean
+   is
+      package QI renames Model_Runner.Quantization.Integers;
+
+      Columns  : constant Element_Count := Weight.Columns;
+      Elements : constant Element_Count := Count * Columns;
+      Blocks   : constant Element_Count :=
+        (if Columns = 0 then 0 else Elements / QI.Activation_Block);
+      Ok       : Boolean;
+   begin
+      if not Quantizing
+        or else Vector = null
+        or else Count = 0
+        or else not QI.Has_Integer_Kernel (Weight.Format)
+        or else not QI.Is_Packable (Columns)
+        or else Vector.all'Length < Elements
+      then
+         return False;
+      end if;
+
+      if Item.Values = null or else Item.Values.all'Length < Elements then
+         Free_Packed (Item);
+         Item.Values := new QI.Signed_Array (0 .. Elements - 1);
+         Item.Totals := new QI.Sum_Array (0 .. Blocks - 1);
+         T.Allocate (Blocks, Item.Scales);
+      end if;
+
+      if Item.Values = null or else Item.Scales = null
+        or else Item.Totals = null
+      then
+         return False;
+      end if;
+
+      QI.Quantize_Vectors
+        (Vectors => Vector.all,
+         Count   => Count,
+         Columns => Columns,
+         Values  => Item.Values.all,
+         Scales  => Item.Scales.all,
+         Totals  => Item.Totals.all,
+         Ok      => Ok);
+
+      return Ok;
+   end Prepare_Packed;
+
+   --  One product on the calling task, by whichever arithmetic is in force.
+   --
+   --  The serial path has no pool to keep buffers on, so it quantizes into
+   --  buffers of its own and gives them back. That is one pass over the
+   --  activation and one allocation per product, against a pass over every
+   --  row of the weights -- and the alternative was worse than the cost:
+   --  this path used to run the floating-point arithmetic whatever the run
+   --  had asked for, silently, so a single-threaded run got none of what it
+   --  asked for and a sweep that compared through it compared nothing.
+   procedure Serially
+     (Weight : T.View;
+      Vector : T.Real_Array_Access;
+      Count  : Element_Count;
+      Target : T.Real_Array_Access)
+   is
+      package QI renames Model_Runner.Quantization.Integers;
+
+      procedure Release is new Ada.Unchecked_Deallocation
+        (QI.Signed_Array, Signed_Array_Access);
+      procedure Release is new Ada.Unchecked_Deallocation
+        (QI.Sum_Array, Sum_Array_Access);
+
+      Columns  : constant Element_Count := Weight.Columns;
+      Elements : constant Element_Count := Count * Columns;
+
+      Values  : Signed_Array_Access := null;
+      Scales  : T.Real_Array_Access := null;
+      Totals  : Sum_Array_Access := null;
+      Handled : Boolean := False;
+      Ok      : Boolean := False;
+   begin
+      if Vector = null or else Target = null
+        or else Weight.Rows = 0 or else Count = 0
+      then
+         return;
+      end if;
+
+      if Quantizing
+        and then QI.Has_Integer_Kernel (Weight.Format)
+        and then QI.Is_Packable (Columns)
+        and then Vector.all'Length >= Elements
+      then
+         declare
+            Blocks : constant Element_Count :=
+              Elements / QI.Activation_Block;
+         begin
+            Values := new QI.Signed_Array (0 .. Elements - 1);
+            Totals := new QI.Sum_Array (0 .. Blocks - 1);
+            T.Allocate (Blocks, Scales);
+
+            if Values /= null and then Totals /= null and then Scales /= null
+            then
+               QI.Quantize_Vectors
+                 (Vector.all, Count, Columns, Values.all, Scales.all,
+                  Totals.all, Ok);
+            end if;
+
+            if Ok then
+               T.Mat_Mul_Range_Packed
+                 (Weight, Values.all, Scales.all, Totals.all, Count,
+                  Target.all, 0, Weight.Rows - 1, Handled);
+            end if;
+         end;
+
+         Release (Values);
+         Release (Totals);
+         T.Free (Scales);
+      end if;
+
+      if not Handled then
+         T.Mat_Mul_Range
+           (Weight, Vector.all, Count, Target.all, 0, Weight.Rows - 1);
+      end if;
+   end Serially;
+
+   ------------------------
+   -- Dispatch_Shares --
+   ------------------------
+
+   procedure Dispatch_Shares
+     (Item   : Pool_Reference;
+      Items  : Element_Count;
+      Work   : Task_Item_Access;
+      Status : out E.Error_Info)
+   is
+      Job_Of : Job;
+      Taken  : Boolean;
+      Failed : Boolean;
+      Mine   : Boolean := False;
+   begin
+      Status := E.Success;
+
+      if Work = null or else Items = 0 then
+         return;
+      end if;
+
+      --  No pool, or one worker: the calling task does the whole of it,
+      --  which is what the serial matrix path does beside this.
+      if Item = null then
+         Work.all.Run (0, Items - 1);
+         return;
+      end if;
+
+      Open (Item.all);
+      if not Is_Open (Item.all) then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      Job_Of :=
+        (Weight => <>,
+         Count  => 1,
+         Vector => null,
+         Target => null,
+         Rows   => Items,
+         Team   => Item.Workers + 1,
+         Values => null,
+         Scales => null,
+         Totals => null,
+         Work   => Work);
+
+      Item.Control.Post (Job_Of, Taken);
+      if not Taken then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      --  The submitting task takes the last share rather than waiting, for
+      --  the reason written out above Mat_Vec.
+      declare
+         First, Last : Element_Count;
+      begin
+         Partition (Items, Job_Of.Team, Job_Of.Team, First, Last);
+         if First <= Last then
+            Work.all.Run (First, Last);
+         end if;
+      exception
+         when others =>
+            Mine := True;
+      end;
+
+      Item.Control.Await (Failed);
+
+      if Failed or else Mine then
+         Status := E.Make (E.Backend_Worker_Failed);
+      end if;
+   end Dispatch_Shares;
+
+   --  One share of a job, by whichever arithmetic the job carries.
+   --
+   --  The integer path is asked first and may refuse -- a format without an
+   --  integer kernel, a width that is not a whole number of blocks -- and a
+   --  refusal is a share nobody has computed, so the floating-point path
+   --  runs it instead. Refusing is all or nothing over the range, so no row
+   --  is computed twice and none is left at zero.
+   procedure Take_Share
+     (Work : Job; First : Element_Count; Last : Element_Count)
+   is
+      Handled : Boolean := False;
+   begin
+      if First > Last then
+         return;
+      end if;
+
+      --  Work that is not a matrix product, and nothing else if so.
+      if Work.Work /= null then
+         Work.Work.all.Run (First, Last);
+         return;
+      end if;
+
+      if Work.Vector = null or else Work.Target = null then
+         return;
+      end if;
+
+      if Work.Values /= null
+        and then Work.Scales /= null
+        and then Work.Totals /= null
+      then
+         T.Mat_Mul_Range_Packed
+           (Work.Weight, Work.Values.all, Work.Scales.all, Work.Totals.all,
+            Work.Count, Work.Target.all, First, Last, Handled);
+      end if;
+
+      if not Handled then
+         T.Mat_Mul_Range
+           (Work.Weight, Work.Vector.all, Work.Count,
+            Work.Target.all, First, Last);
+      end if;
+   end Take_Share;
+
    task body Worker is
       Position : Worker_Count := 1;
       Control  : Coordinator_Access := null;
@@ -181,14 +469,7 @@ package body Model_Runner.Backend.CPU is
             begin
                Partition (Current.Rows, Current.Team, Position, First, Last);
 
-               if First <= Last
-                 and then Current.Vector /= null
-                 and then Current.Target /= null
-               then
-                  T.Mat_Mul_Range
-                    (Current.Weight, Current.Vector.all, Current.Count,
-                     Current.Target.all, First, Last);
-               end if;
+               Take_Share (Current, First, Last);
             end;
          exception
             --  A worker failure is reported to the coordinator rather than
@@ -252,6 +533,7 @@ package body Model_Runner.Backend.CPU is
    procedure Close (Item : in out Pool) is
    begin
       Item.Control.Shut_Down;
+      Free_Packed (Item);
    exception
       when others =>
          null;
@@ -290,7 +572,17 @@ package body Model_Runner.Backend.CPU is
          Vector => Vector,
          Target => Target,
          Rows   => Weight.Rows,
-         Team   => Item.Workers + 1);
+         Team   => Item.Workers + 1,
+         Values => null,
+         Scales => null,
+         Totals => null,
+         Work   => null);
+
+      if Prepare_Packed (Item, Weight, Vector, 1) then
+         Work.Values := Item.Values;
+         Work.Scales := Item.Scales;
+         Work.Totals := Item.Totals;
+      end if;
 
       --  Exactly one job is outstanding at a time, so the queue is bounded by
       --  construction and there is nothing for a hostile input to grow.
@@ -316,9 +608,7 @@ package body Model_Runner.Backend.CPU is
            and then Work.Vector /= null
            and then Work.Target /= null
          then
-            T.Mat_Mul_Range
-              (Work.Weight, Work.Vector.all, Work.Count,
-               Work.Target.all, First, Last);
+            Take_Share (Work, First, Last);
          end if;
       exception
          --  Reported the way a worker's failure is, after the workers are
@@ -359,9 +649,7 @@ package body Model_Runner.Backend.CPU is
          --  Serial path, on the calling task. Identical results to the
          --  parallel path, because the partition never changes a row's value.
          Status := E.Success;
-         if Vector /= null and then Target /= null and then Weight.Rows > 0 then
-            T.Mat_Vec_Range (Weight, Vector.all, Target.all, 0, Weight.Rows - 1);
-         end if;
+         Serially (Weight, Vector, 1, Target);
       else
          Mat_Vec (Item.all, Weight, Vector, Target, Status);
       end if;
@@ -399,7 +687,17 @@ package body Model_Runner.Backend.CPU is
          Vector => Vectors,
          Target => Target,
          Rows   => Weight.Rows,
-         Team   => Item.Workers + 1);
+         Team   => Item.Workers + 1,
+         Values => null,
+         Scales => null,
+         Totals => null,
+         Work   => null);
+
+      if Prepare_Packed (Item, Weight, Vectors, Count) then
+         Work.Values := Item.Values;
+         Work.Scales := Item.Scales;
+         Work.Totals := Item.Totals;
+      end if;
 
       Item.Control.Post (Work, Accepted);
       if not Accepted then
@@ -423,9 +721,7 @@ package body Model_Runner.Backend.CPU is
            and then Work.Vector /= null
            and then Work.Target /= null
          then
-            T.Mat_Mul_Range
-              (Work.Weight, Work.Vector.all, Work.Count,
-               Work.Target.all, First, Last);
+            Take_Share (Work, First, Last);
          end if;
       exception
          --  Reported the way a worker's failure is, after the workers are
@@ -464,12 +760,7 @@ package body Model_Runner.Backend.CPU is
    begin
       if Item = null then
          Status := E.Success;
-         if Vectors /= null and then Target /= null
-           and then Weight.Rows > 0 and then Count > 0
-         then
-            T.Mat_Mul_Range
-              (Weight, Vectors.all, Count, Target.all, 0, Weight.Rows - 1);
-         end if;
+         Serially (Weight, Vectors, Count, Target);
       else
          Mat_Mul (Item.all, Weight, Vectors, Count, Target, Status);
       end if;
@@ -481,5 +772,7 @@ begin
    --  may, so the question is asked once, at elaboration, before any
    --  container has been opened.
    Model_Runner.Quantization.Use_Wide_Decoders
+     (Model_Runner.Platform.Wide_Vectors);
+   Model_Runner.Quantization.Integers.Use_Wide_Rows
      (Model_Runner.Platform.Wide_Vectors);
 end Model_Runner.Backend.CPU;

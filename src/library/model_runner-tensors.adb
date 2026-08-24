@@ -440,4 +440,105 @@ package body Model_Runner.Tensors is
       end;
    end Mat_Mul_Range;
 
+   ---------------------------
+   -- Mat_Mul_Range_Packed --
+   ---------------------------
+
+   procedure Mat_Mul_Range_Packed
+     (Item    : View;
+      Values  : Model_Runner.Quantization.Integers.Signed_Array;
+      Scales  : Real_Array;
+      Totals  : Model_Runner.Quantization.Integers.Sum_Array;
+      Count   : Element_Count;
+      Target  : in out Real_Array;
+      First   : Element_Count;
+      Last    : Element_Count;
+      Handled : out Boolean)
+   is
+      package QI renames Model_Runner.Quantization.Integers;
+
+      Per_Block : constant Element_Count :=
+        Element_Count (G.Block_Elements (Item.Format));
+      Blocks : Element_Count;
+      Ok     : Boolean;
+   begin
+      Handled := False;
+
+      if not Is_Present (Item)
+        or else First > Last
+        or else Last >= Item.Rows
+        or else Count = 0
+        or else Per_Block = 0
+        or else not QI.Has_Integer_Kernel (Item.Format)
+        or else not QI.Is_Packable (Item.Columns)
+        or else Values'Length < Count * Item.Columns
+        or else Target'Length < Count * Item.Rows
+      then
+         return;
+      end if;
+
+      Blocks := Item.Columns / Per_Block;
+
+      declare
+         Held : B.Byte_Array (1 .. Item.Span)
+           with Import, Address => Item.Base;
+
+         --  A tile's worth of accumulators, row major. Declared once around
+         --  the loop rather than once a tile: it is a fixed number of wide
+         --  reals and saying so once reads better.
+         Tiled : Model_Runner.Numerics.Wide_Real_Array
+           (0 .. QI.Row_Tile * Count - 1);
+
+         At_Row : Element_Count := First;
+      begin
+         while At_Row <= Last loop
+            declare
+               Here : constant Element_Count :=
+                 Element_Count'Min (QI.Row_Tile, Last - At_Row + 1);
+            begin
+               Tiled := [others => 0.0];
+
+               --  Four rows against one reading of the activation. The row
+               --  loop that was here read it once per row, which is the
+               --  same bytes out of the same cache line four times.
+               QI.Accumulate_Rows
+                 (Format    => Item.Format,
+                  Data      => Held,
+                  Offset    =>
+                    Item.Offset + B.Byte_Count (At_Row) * Row_Bytes (Item),
+                  Row_Bytes => Row_Bytes (Item),
+                  Rows      => Here,
+                  Blocks    => Blocks,
+                  Values    => Values,
+                  Scales    => Scales,
+                  Totals    => Totals,
+                  First     => 0,
+                  Stride    => Item.Columns,
+                  Count     => Count,
+                  Sums      => Tiled,
+                  Ok        => Ok);
+
+               --  A tile the integer path refuses is a tile nobody has
+               --  computed, and the range is all or nothing: reporting it
+               --  here sends the whole share back to the floating-point path
+               --  rather than leaving some rows right and some zero.
+               if not Ok then
+                  return;
+               end if;
+
+               for Row in 0 .. Here - 1 loop
+                  for Which in 0 .. Count - 1 loop
+                     Target (Target'First + Which * Item.Rows + At_Row + Row)
+                       := Real (Tiled (Row * Count + Which));
+                  end loop;
+               end loop;
+
+               At_Row := At_Row + Here;
+            end;
+         end loop;
+      end;
+
+      Handled := True;
+   end Mat_Mul_Range_Packed;
+
 end Model_Runner.Tensors;

@@ -142,13 +142,26 @@ package Model_Runner.Generation is
       --  Max_Retained_Bytes; text beyond that is streamed but not retained.
       Retain_Text : Boolean := False;
 
-      --  Number of prompt tokens evaluated between cancellation checks and
-      --  progress reports during prefill.
       --  Prompt tokens evaluated in one pass over the weights. Larger
       --  batches make prefill faster and hold more activations at once; the
       --  engine caps it at Llama.Max_Batch whatever is asked for. It also
       --  sets how often cancellation is observed and progress reported.
-      Batch_Size : Natural := 32;
+      --
+      --  The cap, because that is what measured fastest on both backends and
+      --  because on the device it is not close. A 110-token prompt there
+      --  reads 2.767 s at a batch of eight, 1.973 s at thirty-two and
+      --  1.054 s at a hundred and twenty-eight, on the same weights and the
+      --  same number of passes over them -- what changes is how many times
+      --  the host tells the device to do something, and telling it costs
+      --  more than this program had assumed. On the processor the same sweep
+      --  reads 1.899 s at thirty-two and 1.730 s at the cap.
+      --
+      --  What it costs is how often a run can be cancelled and how often it
+      --  reports progress while reading a prompt: a hundred and twenty-eight
+      --  tokens rather than thirty-two, which on this model is about a
+      --  second of wall. A caller who wants a finer grain than that asks for
+      --  a smaller batch and pays for it in prefill.
+      Batch_Size : Natural := 128;
 
       --  Reuse the session's committed context when the tokenized prompt is
       --  an exact prefix extension of it, and re-evaluate only the new

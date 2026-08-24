@@ -437,6 +437,31 @@ package Model_Runner.Llama is
          when Halved => "f16",
          when Eighth => "q8");
 
+   --  How a matrix product multiplies.
+   --
+   --  Float_Activations widens every weight to binary32 and accumulates in
+   --  binary64, which is what every figure published before this mode
+   --  existed was measured against and what the reference backend does.
+   --  Integer_Activations rounds the vector to one byte an element, with a
+   --  scale for every thirty-two of them, and multiplies two integers into
+   --  an exact block sum -- more accurate than the other within a block,
+   --  since nothing there rounds, and less accurate across the vector,
+   --  since the input was rounded once before it arrived.
+   --
+   --  Only the formats and widths that line up take the second: a weight
+   --  format without an integer kernel, or a width that is not a whole
+   --  number of blocks, is computed the first way whatever is asked for.
+   type Arithmetic_Mode is (Float_Activations, Integer_Activations);
+
+   --  The identifier a caller names an arithmetic by.
+   --
+   --  @param Item Arithmetic to name.
+   --  @return Lower-case identifier, "f32" or "int8".
+   function Arithmetic_Name (Item : Arithmetic_Mode) return String
+   is (case Item is
+         when Float_Activations   => "f32",
+         when Integer_Activations => "int8");
+
    --  The word a caller types for a repacking mode.
    --
    --  @param Item Mode to name.

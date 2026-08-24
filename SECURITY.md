@@ -45,8 +45,10 @@ read as numbers, in the same bounds every other backend's results are read in.
 
 ### Suppressed checks in the numeric kernels
 
-The innermost loops of `Model_Runner.Quantization` -- the ones that unpack a
-quantized block and the ones that multiply it -- run under
+The innermost loops of `Model_Runner.Quantization` and of its child
+`Model_Runner.Quantization.Integers` -- the ones that unpack a quantized
+block, the ones that multiply it, and the ones that round a vector to a byte
+an element and multiply that -- run under
 `pragma Suppress (Index_Check, Range_Check, Overflow_Check)`. This is stated
 here rather than buried, because it is the one place where a validation
 mistake would become memory unsafety instead of a clean `Constraint_Error`.
@@ -66,6 +68,16 @@ What makes it safe:
   output against `Target'Length`, and the input vectors against an explicit
   bound that `Accumulate_Dot` now checks itself rather than trusting its
   callers to have checked.
+- The quantized-activation loops are validated the same way and against more:
+  the weight bytes against `Has_Room`, the quantized activations against
+  `Values'Last`, and the two side tables -- one scale and one block sum for
+  every thirty-two elements -- against the number of blocks the call will
+  reach. The activation index is also required to begin and to stride on a
+  block boundary, because a scale is chosen by dividing that index and an
+  index that did not would select a scale belonging to another block. That
+  is a correctness requirement rather than a safety one, and it is refused
+  here rather than assumed because the loop below it indexes without
+  checking.
 - The parsing, validation and preparation layers are unaffected and keep every
   check. Nothing derived from a file reaches these loops without having been
   bounds-checked first.

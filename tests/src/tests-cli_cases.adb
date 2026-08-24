@@ -3995,7 +3995,17 @@ package body Tests.CLI_Cases is
             Session : L.Session;
             Room    : Logit_Row := [others => 0.0];
             Status  : E.Error_Info;
+            Held    : constant Boolean :=
+              Model_Runner.Backend.CPU.Integer_Activations;
          begin
+            --  Both sides in the floating-point arithmetic, because that is
+            --  what makes this an equality. Repacking to binary32 takes a
+            --  format with an integer kernel to one without, so at the
+            --  default arithmetic the two sides would multiply differently
+            --  and the claim being tested -- that repacking moves no logit
+            --  -- would be a claim about the arithmetic instead.
+            Model_Runner.Backend.CPU.Use_Integer_Activations (False);
+
             Start (Under, Repack => Repack);
 
             L.Open (Session, Under.Ready, Status => Status);
@@ -4005,6 +4015,7 @@ package body Tests.CLI_Cases is
             Assert (E.Is_Ok (Status), "evaluation failed");
 
             L.Close (Session);
+            Model_Runner.Backend.CPU.Use_Integer_Activations (Held);
             return Room;
          end Logits_With;
 

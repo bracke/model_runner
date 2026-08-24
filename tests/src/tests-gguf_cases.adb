@@ -13,6 +13,7 @@ with Model_Runner.Limits;
 with Model_Runner.Numerics;
 with Model_Runner.Platform;
 with Model_Runner.Quantization;
+with Model_Runner.Quantization.Integers;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
 with Model_Runner.UTF8;
@@ -1331,6 +1332,228 @@ package body Tests.GGUF_Cases is
 
       Assert (Checked_Rows = 15, "not every format was checked");
    end Fused_Dot_Matches_Decoder;
+
+   --  Both compilations of the integer product answer the same bits.
+   --
+   --  Bit for bit rather than within a tolerance, and for the reason the
+   --  decoders' twin gives: the wider instantiation is built with
+   --  contraction turned off exactly so that this can be an equality, and if
+   --  that switch is ever dropped this is the test that says so. A fused
+   --  multiply-add would round once where the baseline rounds twice, and a
+   --  product off by a rounding is a product nothing else here would notice.
+   --
+   --  Driven through Use_Wide_Rows, which is what the backend calls once at
+   --  elaboration. On a host without the instructions the wider instance is
+   --  never entered -- turning it on there would run instructions the
+   --  processor has not got -- so this asks the host the same question the
+   --  backend asks and does nothing where the answer is no.
+   procedure Both_Row_Kernels_Answer_The_Same_Bits
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package QI renames Model_Runner.Quantization.Integers;
+
+      Format  : constant Model_Runner.GGUF.Tensor_Type :=
+        Model_Runner.GGUF.Type_Q8_0;
+      Per     : constant N.Element_Count :=
+        N.Element_Count (Model_Runner.GGUF.Block_Elements (Format));
+      Width   : constant B.Byte_Count :=
+        B.Byte_Count (Model_Runner.GGUF.Block_Bytes (Format));
+      Blocks  : constant N.Element_Count := 8;
+      Columns : constant N.Element_Count := Per * Blocks;
+      Rows    : constant N.Element_Count := QI.Row_Tile;
+      Count   : constant N.Element_Count := 3;
+
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+
+      Data    : B.Byte_Array_Access;
+      Vectors : N.Real_Array (0 .. Columns * Count - 1);
+      Values  : QI.Signed_Array (0 .. Columns * Count - 1);
+      Scales  : N.Real_Array (0 .. Columns * Count / Per - 1);
+      Totals  : QI.Sum_Array (0 .. Columns * Count / Per - 1);
+
+      Plain_Sums : N.Wide_Real_Array (0 .. Rows * Count - 1) :=
+        [others => 0.0];
+      Wide_Sums  : N.Wide_Real_Array (0 .. Rows * Count - 1) :=
+        [others => 0.0];
+
+      Ok   : Boolean;
+      Seed : Interfaces.Unsigned_32 := 16#5EED_1234#;
+
+      function Next return Interfaces.Unsigned_32 is
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Seed;
+      end Next;
+   begin
+      B.Allocate (Width * B.Byte_Count (Blocks) * B.Byte_Count (Rows), Data);
+      Assert (Data /= null, "could not allocate block data");
+
+      for Index in Data.all'Range loop
+         Data.all (Index) :=
+           B.Byte (Interfaces.Shift_Right (Next, 24) and 16#FF#);
+      end loop;
+      Make_Finite (Data.all, Format, Blocks * Rows);
+
+      for Index in Vectors'Range loop
+         Vectors (Index) :=
+           N.Real (Integer (Interfaces.Shift_Right (Next, 26))) - 32.0;
+      end loop;
+
+      QI.Quantize_Vectors
+        (Vectors, Count, Columns, Values, Scales, Totals, Ok);
+      Assert (Ok, "the activations could not be quantized");
+
+      QI.Use_Wide_Rows (False);
+      QI.Accumulate_Rows
+        (Format, Data.all, 0, Width * B.Byte_Count (Blocks), Rows, Blocks,
+         Values, Scales, Totals, 0, Columns, Count, Plain_Sums, Ok);
+      Assert (Ok, "the baseline product refused the call");
+
+      QI.Use_Wide_Rows (Wide);
+      QI.Accumulate_Rows
+        (Format, Data.all, 0, Width * B.Byte_Count (Blocks), Rows, Blocks,
+         Values, Scales, Totals, 0, Columns, Count, Wide_Sums, Ok);
+      Assert (Ok, "the wider product refused the call");
+
+      for Index in Plain_Sums'Range loop
+         Assert (Plain_Sums (Index) = Wide_Sums (Index),
+                 "the two compilations of the integer product disagree at"
+                 & N.Element_Count'Image (Index) & ":"
+                 & N.Wide_Real'Image (Plain_Sums (Index)) & " against"
+                 & N.Wide_Real'Image (Wide_Sums (Index)));
+      end loop;
+
+      --  Left as the backend set it, so a test that ran does not decide
+      --  what every later one runs.
+      QI.Use_Wide_Rows (Wide);
+      B.Free (Data);
+   end Both_Row_Kernels_Answer_The_Same_Bits;
+
+   --  The product that quantizes its activations agrees with the one that
+   --  does not, within the bound stated for it.
+   --
+   --  Not an equality, and it cannot be: what this path rounds is the vector,
+   --  once, before the product. Within a block it is the more accurate of the
+   --  two -- thirty-two byte products summed into an integer round nothing at
+   --  all, where the floating-point path rounds every one of them -- and
+   --  across a row it is the less accurate, because the input arrived
+   --  rounded. The bound below is what that costs on a row of two hundred and
+   --  fifty-six weights whose values span the format's range, and it is
+   --  quoted rather than derived because the honest form of this test is a
+   --  measurement somebody can take again. Five per cent, from a worst
+   --  reading of 2.5 on data chosen to be hostile: random bytes across the
+   --  whole of the weight range against a vector spread evenly over sixty-
+   --  four, which is the case a per-block symmetric rounding is worst at and
+   --  is not what a layer's activations look like. It is the same number the
+   --  suite already holds the rounded caches and the brain-float repack to.
+   --
+   --  A format with no integer kernel is asked for as well, and the answer
+   --  wanted there is a refusal: the caller runs the other path, and a
+   --  quantized product that silently answered for a format it cannot
+   --  multiply would be wrong in a way no tolerance would catch.
+   procedure Quantized_Product_Matches_The_Float_One
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package QI renames Model_Runner.Quantization.Integers;
+
+      Format  : constant Model_Runner.GGUF.Tensor_Type :=
+        Model_Runner.GGUF.Type_Q8_0;
+      Per     : constant N.Element_Count :=
+        N.Element_Count (Model_Runner.GGUF.Block_Elements (Format));
+      Width   : constant B.Byte_Count :=
+        B.Byte_Count (Model_Runner.GGUF.Block_Bytes (Format));
+      Blocks  : constant N.Element_Count := 8;
+      Columns : constant N.Element_Count := Per * Blocks;
+      Rows    : constant N.Element_Count := 4;
+      Count   : constant N.Element_Count := 3;
+
+      Data    : B.Byte_Array_Access;
+      Item    : Model_Runner.Tensors.View;
+      Status  : Model_Runner.Errors.Error_Info;
+
+      Vectors : N.Real_Array (0 .. Columns * Count - 1);
+      Floated : N.Real_Array (0 .. Rows * Count - 1) := [others => 0.0];
+      Packed  : N.Real_Array (0 .. Rows * Count - 1) := [others => 0.0];
+
+      Values  : QI.Signed_Array (0 .. Columns * Count - 1);
+      Scales  : N.Real_Array (0 .. Columns * Count / Per - 1);
+      Totals  : QI.Sum_Array (0 .. Columns * Count / Per - 1);
+
+      Handled : Boolean;
+      Ok      : Boolean;
+      Seed    : Interfaces.Unsigned_32 := 16#0BAD_F00D#;
+
+      function Next return Interfaces.Unsigned_32 is
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Seed;
+      end Next;
+   begin
+      B.Allocate (Width * B.Byte_Count (Blocks) * B.Byte_Count (Rows), Data);
+      Assert (Data /= null, "could not allocate block data");
+
+      for Index in Data.all'Range loop
+         Data.all (Index) :=
+           B.Byte (Interfaces.Shift_Right (Next, 24) and 16#FF#);
+      end loop;
+      Make_Finite (Data.all, Format, Blocks * Rows);
+
+      for Index in Vectors'Range loop
+         Vectors (Index) :=
+           N.Real (Integer (Interfaces.Shift_Right (Next, 26))) - 32.0;
+      end loop;
+
+      Model_Runner.Tensors.Make
+        (Format, Rows, Columns, Data, 0, Item, Status);
+      Assert (not Model_Runner.Errors.Is_Error (Status),
+              "could not make the weight view");
+
+      QI.Quantize_Vectors
+        (Vectors, Count, Columns, Values, Scales, Totals, Ok);
+      Assert (Ok, "the activations could not be quantized");
+
+      Model_Runner.Tensors.Mat_Mul_Range
+        (Item, Vectors, Count, Floated, 0, Rows - 1);
+      Model_Runner.Tensors.Mat_Mul_Range_Packed
+        (Item, Values, Scales, Totals, Count, Packed, 0, Rows - 1, Handled);
+      Assert (Handled, "the quantized product refused a format it implements");
+
+      for Index in Floated'Range loop
+         declare
+            Size : constant N.Real :=
+              N.Real'Max (abs Floated (Index), 1.0);
+            Gap  : constant N.Real := abs (Floated (Index) - Packed (Index));
+         begin
+            Assert
+              (Gap / Size <= 5.0E-2,
+               "the quantized product disagrees with the floating-point one:"
+               & N.Real'Image (Floated (Index)) & " against"
+               & N.Real'Image (Packed (Index)));
+         end;
+      end loop;
+
+      --  A format with no integer kernel is refused rather than answered.
+      declare
+         Other  : Model_Runner.Tensors.View;
+         Refuse : Boolean := True;
+      begin
+         Model_Runner.Tensors.Make
+           (Model_Runner.GGUF.Type_F32, 1, Columns, Data, 0, Other, Status);
+         if not Model_Runner.Errors.Is_Error (Status) then
+            Model_Runner.Tensors.Mat_Mul_Range_Packed
+              (Other, Values, Scales, Totals, 1, Packed, 0, 0, Refuse);
+            Assert (not Refuse,
+                    "the quantized product answered for a format it has no "
+                    & "integer kernel for");
+         end if;
+      end;
+
+      B.Free (Data);
+   end Quantized_Product_Matches_The_Float_One;
 
    --  Decoded values, against expectations worked out from the layout.
    --
@@ -5904,6 +6127,13 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Both_Row_Kernels_Answer_The_Same_Bits'Access,
+         "the two compilations of the integer product answer the same bits");
+      Register_Routine
+        (T, Quantized_Product_Matches_The_Float_One'Access,
+         "the product that quantizes its activations agrees with the one "
+         & "that does not");
       Register_Routine
         (T, UTF8_Agrees_With_The_Table'Access,
          "the UTF-8 validator agrees with the standard's table on every "

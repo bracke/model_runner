@@ -66,6 +66,28 @@ project Model_Runner is
         Model_Runner_Config.Ada_Compiler_Switches
         & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
            "-march=x86-64-v3", "-ffp-contract=off");
+
+
+
+      --  The integer product, built a second time for the wider set.
+      --
+      --  The same shape as the decoder instantiation above and for the same
+      --  reason: one source, two compilations, and the host asked at run
+      --  time which it may enter. What it buys was measured rather than
+      --  assumed -- a 110-token prompt reads 1.476 s at the baseline and
+      --  1.297 s here, and sixty-four generated tokens 2.672 s against
+      --  2.402 s. Building for x86-64-v4 as well reads 1.308 s and 2.366 s,
+      --  level with this and excluding far more hardware, so this is what is
+      --  built.
+      --
+      --  -ffp-contract=off for the reason the decoder's clause gives: the
+      --  wider set permits a fused multiply-add, and the two compilations
+      --  have to answer bit for bit or the test that says so is a test of
+      --  nothing.
+      for Switches ("model_runner-quantization-integers-wide.ads") use
+        Model_Runner_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+           "-march=x86-64-v3", "-ffp-contract=off");
    end Compiler;
 
    --  Bytes out as bytes in. Alire's generated switches carry -gnatW8 and the

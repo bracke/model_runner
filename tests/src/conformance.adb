@@ -1,4 +1,5 @@
 with Ada.Calendar;
+with Ada.Command_Line;
 with Ada.Text_IO;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Platform;
@@ -38,8 +39,47 @@ package body Conformance is
    -- Run --
    ---------
 
+   --  Whether this run was asked for the quantized arithmetic, from the
+   --  command line and from nothing else.
+   function Wanted_Integers return Boolean is
+   begin
+      for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+         if Ada.Command_Line.Argument (Index) = "--arith" then
+            return Ada.Command_Line.Argument (Index + 1) = "int8";
+         end if;
+      end loop;
+      return False;
+   end Wanted_Integers;
+
    procedure Run (Result : out Report) is
       Image : B.Byte_Array_Access;
+
+      --  Whether the caller has already put the whole sweep into the
+      --  quantized arithmetic. When it has, the narrow pass below would be
+      --  a second copy of what is already running everywhere, and turning
+      --  the flag off after it would put the rest of the sweep back into an
+      --  arithmetic the caller did not ask for.
+      --
+      --  Read from the command line rather than from the backend, because
+      --  the backend's flag is whatever ran last. Inside the gate the suite
+      --  runs before this does, a command-line case runs the program in
+      --  process, and the program's default arithmetic is the quantized
+      --  one -- so the sweep was inheriting it and running a cross product
+      --  the gate never asked for. It showed as four logits of gemma3
+      --  outside tolerance in the gate and none at all when the same sweep
+      --  was run on its own, which is the worst way for a gate to be wrong:
+      --  differently from the thing it is meant to reproduce.
+      Asked_For_Integers : constant Boolean := Wanted_Integers;
+
+      --  Comparisons the quantized pass adds, counted as it makes them.
+      --
+      --  The arithmetic below predicts how many comparisons the cross
+      --  product asks for, and a run that made fewer without saying so is
+      --  what it exists to catch. A pass outside the cross product has to
+      --  add itself to that prediction or it reads as a shortfall -- and
+      --  this one did not, and passed anyway, because the flag it is
+      --  guarded by was being inherited and the pass never ran.
+      Also_Ran : Natural := 0;
 
       --  When the part now being timed began.
       Since : Ada.Calendar.Time := Ada.Calendar.Clock;
@@ -528,7 +568,14 @@ package body Conformance is
                        (if Scale > 0.0 then Gap / Scale else 0.0);
                   begin
 
-                     if L."=" (Cache, L.Eighth) then
+                     if Model_Runner.Backend.CPU.Integer_Activations then
+                        Result.Integer_Compared :=
+                          Result.Integer_Compared + 1;
+                        Result.Integer_Worst_Abs :=
+                          Long_Float'Max (Result.Integer_Worst_Abs, Gap);
+                        Result.Integer_Worst_Rel :=
+                          Long_Float'Max (Result.Integer_Worst_Rel, Relative);
+                     elsif L."=" (Cache, L.Eighth) then
                         Result.Eighth_Compared := Result.Eighth_Compared + 1;
                         Result.Eighth_Worst_Abs :=
                           Long_Float'Max (Result.Eighth_Worst_Abs, Gap);
@@ -564,22 +611,51 @@ package body Conformance is
                      --  what was asked of it: a halved cache and a halved
                      --  mantissa each have their own, measured, and the
                      --  exact modes answer to the strict one.
+                     --
+                     --  The widest of the pairs that apply, rather than the
+                     --  first of them. An if-chain answered to one mode
+                     --  when two were in force -- a run with a rounded
+                     --  cache and quantized activations was held to the
+                     --  cache's bound alone -- which is a gate that reports
+                     --  the mode it happened to test first.
                      declare
-                        Bad : Boolean := False;
+                        Bad          : Boolean := False;
+                        Allowed_Abs  : Long_Float := Absolute_Tolerance;
+                        Allowed_Rel  : Long_Float := Relative_Tolerance;
+
+                        procedure Widen (Absolutely, Relatively : Long_Float)
+                        is
+                        begin
+                           Allowed_Abs :=
+                             Long_Float'Max (Allowed_Abs, Absolutely);
+                           Allowed_Rel :=
+                             Long_Float'Max (Allowed_Rel, Relatively);
+                        end Widen;
                      begin
                         if L."=" (Cache, L.Eighth) then
-                           Bad := Gap > Eighth_Absolute_Tolerance
-                             and then Relative > Eighth_Relative_Tolerance;
+                           Widen (Eighth_Absolute_Tolerance,
+                                  Eighth_Relative_Tolerance);
                         elsif L."=" (Cache, L.Halved) then
-                           Bad := Gap > Cached_Absolute_Tolerance
-                             and then Relative > Cached_Relative_Tolerance;
-                        elsif Repack = L.To_BF16 then
-                           Bad := Gap > Lossy_Absolute_Tolerance
-                             and then Relative > Lossy_Relative_Tolerance;
-                        else
-                           Bad := Gap > Absolute_Tolerance
-                             and then Relative > Relative_Tolerance;
+                           Widen (Cached_Absolute_Tolerance,
+                                  Cached_Relative_Tolerance);
                         end if;
+
+                        if Repack = L.To_BF16 then
+                           Widen (Lossy_Absolute_Tolerance,
+                                  Lossy_Relative_Tolerance);
+                        end if;
+
+                        --  What the backend was told, read once here rather
+                        --  than swept as an axis of its own: the arithmetic
+                        --  is a property of the run, and a run computes
+                        --  every sequence of the sweep the same way.
+                        if Model_Runner.Backend.CPU.Integer_Activations then
+                           Widen (Integer_Absolute_Tolerance,
+                                  Integer_Relative_Tolerance);
+                        end if;
+
+                        Bad := Gap > Allowed_Abs
+                          and then Relative > Allowed_Rel;
 
                         if Bad then
                            Result.Failures := Result.Failures + 1;
@@ -629,6 +705,11 @@ package body Conformance is
       end Compare;
 
    begin
+      --  The arithmetic this sweep runs in, set here rather than inherited:
+      --  what ran before it in the same process is not what it was asked
+      --  for.
+      Model_Runner.Backend.CPU.Use_Integer_Activations (Asked_For_Integers);
+
       Result := (others => <>);
 
       --  Both weight formats. The quantized one matters more: until it was
@@ -879,6 +960,44 @@ package body Conformance is
                         --  of what a window means, and running the halved
                         --  one only where there is no window left half of
                         --  that claim resting on the other procedure's code.
+                        --  And the same sequences with the vector each
+                        --  product multiplies rounded to a byte an element.
+                        --  One shape and the formats that have an integer
+                        --  kernel, rather than the whole cross product: what
+                        --  differs is the arithmetic of a product, which is
+                        --  the same arithmetic whatever architecture is
+                        --  above it, and the sweep is already twenty-four
+                        --  minutes.
+                        --
+                        --  The quantized fixture is thirty-two wide and its
+                        --  feed-forward sixty-four, both whole numbers of
+                        --  blocks, so the path is entered rather than
+                        --  refused -- and the count in the report is what
+                        --  says so, since a refusal would fall back and
+                        --  compare the floating-point answer against the
+                        --  reference twice.
+                        if Shape = Plain
+                          and then Repack = L.No_Repack
+                          and then Format = Tiny_Model.Q8_0
+                          and then Model_Runner.Backend."="
+                                     (Backend,
+                                      Model_Runner.Backend.Backend_CPU)
+                          and then not Asked_For_Integers
+                        then
+                           Model_Runner.Backend.CPU.Use_Integer_Activations
+                             (True);
+                           Compare (3, L.Exact, Backend, Repack);
+                           Compare (4, L.Exact, Backend, Repack);
+                           Also_Ran := Also_Ran + 2;
+                           if Batches (Backend) then
+                              Compare (4, L.Exact, Backend, Repack,
+                                       Batched => True);
+                              Also_Ran := Also_Ran + 1;
+                           end if;
+                           Model_Runner.Backend.CPU.Use_Integer_Activations
+                             (False);
+                        end if;
+
                         if Shape in Plain | Windowed
                           and then Repack = L.No_Repack
                         then
@@ -1111,7 +1230,8 @@ package body Conformance is
             Expected :=
               Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached
               + On_Device
-              - Formats * Skipped * (Repacks - 1) * Per_Model;
+              - Formats * Skipped * (Repacks - 1) * Per_Model
+              + Also_Ran;
 
             Result.Formats := Formats;
             Result.Architectures := Arches;

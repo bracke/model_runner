@@ -2,6 +2,7 @@ private with Ada.Finalization;
 
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
+with Model_Runner.Quantization.Integers;
 with Model_Runner.Tensors;
 
 --  The mandatory CPU backend and its Ada worker pool.
@@ -192,11 +193,71 @@ package Model_Runner.Backend.CPU is
       First   : out Element_Count;
       Last    : out Element_Count);
 
+   --  Something a share of an indexed job can be asked to do.
+   --
+   --  The pool cuts a count of items into shares the way it cuts the rows of
+   --  a matrix, hands each worker its range, and knows nothing else about
+   --  the work. It exists because attention is the one part of a forward
+   --  pass that ran entirely on the calling task while the workers sat idle,
+   --  and because dragging a blend's twenty parameters into this package to
+   --  fix that would put the engine's arithmetic in the backend.
+   type Task_Item is limited interface;
+
+   --  Do the share from First to Last, inclusive.
+   --
+   --  @param Item The work.
+   --  @param First First index of the share, zero based.
+   --  @param Last Last index of the share; Last < First is an empty share
+   --    and must do nothing.
+   procedure Run
+     (Item : in out Task_Item; First : Element_Count; Last : Element_Count)
+   is abstract;
+
+   type Task_Item_Access is access all Task_Item'Class;
+
+   --  Cut Items into shares and run Work over each of them.
+   --
+   --  The submitting task takes the last share itself, exactly as the matrix
+   --  product does and for the same reason. Work is referenced rather than
+   --  copied and the caller blocks until every worker has finished, so it
+   --  stays alive for the whole job.
+   --
+   --  @param Item Pool to run on, or null to run the whole of it here.
+   --  @param Items How many items there are.
+   --  @param Work What to do with a share of them.
+   --  @param Status Success, or the pool refusing.
+   procedure Dispatch_Shares
+     (Item   : Pool_Reference;
+      Items  : Element_Count;
+      Work   : Task_Item_Access;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Allow the products that quantize their activations to a byte.
+   --
+   --  Told rather than asked, and told once before any product is dispatched,
+   --  for the same reason Use_Wide_Decoders is: what this selects is
+   --  arithmetic, and a run must not change its arithmetic part way through.
+   --  A format without an integer kernel, or a width that is not a whole
+   --  number of blocks, takes the floating-point path whatever this says.
+   --
+   --  @param Allowed True to quantize activations before a matrix product.
+   procedure Use_Integer_Activations (Allowed : Boolean);
+
+   --  Report what the last such telling said.
+   --
+   --  @return True when products quantize their activations.
+   function Integer_Activations return Boolean;
+
 private
 
    --  One unit of work. The vector and the target are referenced rather than
    --  copied; the caller blocks until every worker has finished, so both stay
    --  alive and unchanged for the whole job.
+   type Signed_Array_Access is
+     access Model_Runner.Quantization.Integers.Signed_Array;
+   type Sum_Array_Access is
+     access Model_Runner.Quantization.Integers.Sum_Array;
+
    type Job is record
       Count  : Element_Count := 1;
       Weight : Model_Runner.Tensors.View;
@@ -204,6 +265,18 @@ private
       Target : Model_Runner.Tensors.Real_Array_Access := null;
       Rows   : Element_Count := 0;
       Team   : Share_Count := 1;
+
+      --  The activations quantized, when they were. Null means the share
+      --  runs the floating-point path, so a job carries which arithmetic it
+      --  is rather than reading a flag a worker might see change.
+      Values : Signed_Array_Access := null;
+      Scales : Model_Runner.Tensors.Real_Array_Access := null;
+      Totals : Sum_Array_Access := null;
+
+      --  Indexed work that is not a matrix product. When it is there the
+      --  share runs it and nothing else, so a job that never carries one
+      --  leaves the product's own path exactly as it was.
+      Work   : Task_Item_Access := null;
    end record;
 
    type Generation_Array is array (Worker_Count) of Natural;
@@ -260,6 +333,15 @@ private
       Control : aliased Coordinator (Workers);
       Team    : Worker_Array (1 .. Workers);
       Started : Boolean := False;
+
+      --  Where the submitting task leaves the activations it quantized
+      --  before it posted the job. One set for the pool, because exactly one
+      --  job is outstanding at a time and it is filled before the workers
+      --  are told there is one. Grown when a wider batch arrives and never
+      --  shrunk.
+      Values : Signed_Array_Access := null;
+      Scales : Model_Runner.Tensors.Real_Array_Access := null;
+      Totals : Sum_Array_Access := null;
    end record;
 
    overriding procedure Finalize (Item : in out Pool);

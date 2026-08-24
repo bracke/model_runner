@@ -36,6 +36,7 @@ with Model_Runner.Limits;
 with Model_Runner.Text;
 with Model_Runner.Errors;
 with Model_Runner.Backend;
+with Model_Runner.Backend.CPU;
 with Model_Runner.Numerics;
 with Model_Runner.Llama;
 with Model_Runner.Schema;
@@ -148,6 +149,12 @@ procedure Tests_Main is
                     & Long_Float'Image (Item.Cached_Worst_Abs)),
         new String'("cached worst relative"
                     & Long_Float'Image (Item.Cached_Worst_Rel)),
+        new String'("quantized logits compared"
+                    & Natural'Image (Item.Integer_Compared)),
+        new String'("quantized worst absolute"
+                    & Long_Float'Image (Item.Integer_Worst_Abs)),
+        new String'("quantized worst relative"
+                    & Long_Float'Image (Item.Integer_Worst_Rel)),
         new String'("outside tolerance" & Natural'Image (Item.Failures))]);
 
    --  Refuse an option this command does not take.
@@ -764,7 +771,25 @@ begin
       --  on the synthetic model. Needs no external model and no network.
       declare
          Result : Conformance.Report;
+
+         --  The word after an option, or the default.
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
       begin
+         --  The arithmetic the sweep holds to its tolerance. Told here
+         --  rather than swept as a third axis, so that reading what
+         --  quantized activations cost is one command and the gate keeps
+         --  its own cross product at the tight bound.
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (Option ("--arith", "f32") = "int8");
+
          Conformance.Run (Result);
 
          Ada.Text_IO.Put_Line
@@ -785,6 +810,12 @@ begin
             & Long_Float'Image (Result.Cached_Worst_Abs)
             & ", cached worst relative"
             & Long_Float'Image (Result.Cached_Worst_Rel)
+            & ", quantized logits compared"
+            & Natural'Image (Result.Integer_Compared)
+            & ", quantized worst absolute"
+            & Long_Float'Image (Result.Integer_Worst_Abs)
+            & ", quantized worst relative"
+            & Long_Float'Image (Result.Integer_Worst_Rel)
             & ", byte logits compared"
             & Natural'Image (Result.Eighth_Compared)
             & ", byte worst absolute"
@@ -1557,6 +1588,14 @@ begin
             return;
          end if;
 
+         --  The arithmetic, told to the backend before anything is
+         --  dispatched. Not a parameter of the run, because what it selects
+         --  is how a product is computed rather than what the run does, and
+         --  the backend states that it must be told once and not part way
+         --  through.
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (Option ("--arith", "int8") = "int8");
+
          Speed_Run.Run
            (Path        => Option ("--model", ""),
             Prompt_Path =>
@@ -1565,7 +1604,7 @@ begin
             Tokens      => Number ("--max-tokens", 12),
             Threads     => Number ("--threads",
                                    Model_Runner.Platform.Core_Count - 1),
-            Batch       => Number ("--batch-size", 32),
+            Batch       => Number ("--batch-size", 128),
 
             --  Named with a value like every other option this command
             --  takes, so that a reader who saw --repack in the README does

@@ -600,6 +600,14 @@ package body Tests.Backend_Cases is
    is
       pragma Unreferenced (T2);
 
+      --  The processor side of every comparison here multiplies in binary32,
+      --  because the device does and has no other way: a processor that
+      --  quantized its activations would differ from the shader by the
+      --  arithmetic rather than by the layout, which is what this asks
+      --  about. Restored at the end, since the flag belongs to the program
+      --  and not to this test.
+      Held : constant Boolean := CPU.Integer_Activations;
+
       Ready : Boolean;
 
       --  A whole number of super-blocks, which the k-quants need and the
@@ -656,6 +664,7 @@ package body Tests.Backend_Cases is
              when Kind_Q6_K   => Fixtures.Encode_Q6_K (Values),
              when Kind_IQ4_XS => Fixtures.Encode_IQ4_XS (Values));
    begin
+      CPU.Use_Integer_Activations (False);
       Model_Runner.Backend.Device.Close;
       Model_Runner.Backend.Device.Open (Ready);
 
@@ -746,6 +755,14 @@ package body Tests.Backend_Cases is
                      --  in binary64, so the two are held to a tolerance
                      --  rather than to each other's bits. The gap this
                      --  catches is a misread layout, which is not small.
+                     --
+                     --  Both in the floating-point arithmetic: the device
+                     --  shader multiplies in binary32 and has no integer
+                     --  path, so comparing it against a processor that
+                     --  quantized its activations would compare two
+                     --  arithmetics and call the difference a misread
+                     --  layout. Set where the processor side is dispatched,
+                     --  above.
                      Assert (abs (There.all (Index) - Here.all (Index))
                              < 1.0E-3,
                              "the device decoded " & Name
@@ -767,6 +784,7 @@ package body Tests.Backend_Cases is
       end loop;
 
       Model_Runner.Backend.Device.Close;
+      CPU.Use_Integer_Activations (Held);
    end Device_Decodes_Every_Format_It_Claims;
 
    --------------------------------------------
@@ -1216,7 +1234,12 @@ package body Tests.Backend_Cases is
       Values : N.Real_Array (0 .. Wide * Tall - 1);
 
       Took : Natural := 0;
+
+      --  The processor side multiplies in binary32 here, because the device
+      --  it is compared against has no other arithmetic. Restored below.
+      Held : constant Boolean := CPU.Integer_Activations;
    begin
+      CPU.Use_Integer_Activations (False);
       Model_Runner.Backend.Device.Close;
       Model_Runner.Backend.Device.Open (Ready, Share_Host => True);
 
@@ -1346,6 +1369,7 @@ package body Tests.Backend_Cases is
       T.Free (There);
       B.Free (Storage);
       Model_Runner.Backend.Device.Close;
+      CPU.Use_Integer_Activations (Held);
    end Device_Reads_The_Host_Memory_When_Asked;
 
    ------------------------------------------
@@ -1945,6 +1969,100 @@ package body Tests.Backend_Cases is
    -- Shares_Cannot_Raise --
    -------------------------------
 
+   --  Shared work covers every item exactly once, whatever the pool.
+   --
+   --  The pool cuts a count of items into shares the way it cuts the rows of
+   --  a matrix, and what a caller needs of that is not speed but a promise:
+   --  every item is done, none is done twice, and the answer does not depend
+   --  on how many workers there were. Attention rests on it -- a head not
+   --  blended is a head of zeros in the middle of an answer, and a head
+   --  blended twice is one that has been added to its own output.
+   --
+   --  Marked per item rather than counted, so that an item done twice fails
+   --  as loudly as one not done at all.
+   procedure Shared_Work_Covers_Every_Item
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Items : constant N.Element_Count := 37;
+
+      type Marks is array (N.Element_Count range 0 .. Items - 1) of Natural;
+
+      type Counting is limited new CPU.Task_Item with record
+         Seen : Marks := [others => 0];
+      end record;
+
+      overriding procedure Run
+        (Item  : in out Counting;
+         First : N.Element_Count;
+         Last  : N.Element_Count);
+
+      overriding procedure Run
+        (Item  : in out Counting;
+         First : N.Element_Count;
+         Last  : N.Element_Count) is
+      begin
+         if First > Last then
+            return;
+         end if;
+
+         for Index in First .. Last loop
+            Item.Seen (Index) := Item.Seen (Index) + 1;
+         end loop;
+      end Run;
+
+      Status : E.Error_Info;
+   begin
+      --  Serially, which is what a caller with no pool gets.
+      declare
+         Work : aliased Counting;
+      begin
+         CPU.Dispatch_Shares (null, Items, Work'Unchecked_Access, Status);
+         Assert (E.Is_Ok (Status), "the serial path refused the work");
+
+         for Index in Work.Seen'Range loop
+            Assert (Work.Seen (Index) = 1,
+                    "the serial path did item"
+                    & N.Element_Count'Image (Index)
+                    & Natural'Image (Work.Seen (Index)) & " times");
+         end loop;
+      end;
+
+      --  And across every pool size this machine's bounds allow, since the
+      --  partition's edges are where a cover stops covering.
+      for Workers in CPU.Worker_Count range 1 .. 9 loop
+         declare
+            Team : aliased CPU.Pool (Workers);
+            Work : aliased Counting;
+         begin
+            CPU.Dispatch_Shares
+              (Team'Unchecked_Access, Items, Work'Unchecked_Access, Status);
+            Assert (E.Is_Ok (Status),
+                    "a pool of" & CPU.Worker_Count'Image (Workers)
+                    & " refused the work");
+
+            for Index in Work.Seen'Range loop
+               Assert (Work.Seen (Index) = 1,
+                       "a pool of" & CPU.Worker_Count'Image (Workers)
+                       & " did item" & N.Element_Count'Image (Index)
+                       & Natural'Image (Work.Seen (Index)) & " times");
+            end loop;
+
+            CPU.Close (Team);
+         end;
+      end loop;
+
+      --  Nothing to do is not a failure, and asks nothing of the pool.
+      declare
+         Work : aliased Counting;
+      begin
+         CPU.Dispatch_Shares (null, 0, Work'Unchecked_Access, Status);
+         Assert (E.Is_Ok (Status), "an empty job was refused");
+         Assert (Work.Seen (0) = 0, "an empty job did something");
+      end;
+   end Shared_Work_Covers_Every_Item;
+
    --  What keeps a share from raising, held so that it stays true.
    --
    --  Both the worker and the task that submits a job run their share inside
@@ -2162,6 +2280,10 @@ package body Tests.Backend_Cases is
          "attention recorded into a sequence says what attention submitted "
          & "on its own says, and a sequence attending against a cache that "
          & "is not there is refused");
+      Register_Routine
+        (T, Shared_Work_Covers_Every_Item'Access,
+         "work shared across the pool covers every item exactly once, "
+         & "whatever the worker count");
       Register_Routine
         (T, Joined_Pair_Says_What_Two_Steps_Say'Access,
          "attention and its projection named together say what the two "

@@ -58,6 +58,29 @@ package Conformance is
    Eighth_Relative_Tolerance : constant := 5.0E-2;
    Eighth_Absolute_Tolerance : constant := 4.0E-1;
 
+   --  And what quantizing the activations to one byte an element is allowed
+   --  to move a logit by.
+   --
+   --  What is rounded here is neither a weight nor a cached key but the
+   --  vector a weight is multiplied by, once per matrix product, with a
+   --  scale for every thirty-two of them. Inside a block this path is the
+   --  more accurate of the two -- thirty-two byte products summed into an
+   --  integer round nothing at all, where the floating-point path rounds
+   --  every one of them -- and across a row it is the less accurate,
+   --  because the input arrived rounded and every layer's output is the
+   --  next layer's input.
+   --
+   --  Measured over this sweep and rounded up, as the three above were:
+   --  0.426 worst absolute and 1.92 worst relative, on fixtures whose
+   --  dimensions are small enough that a logit near zero is common and a
+   --  ratio there says little -- which is what the absolute floor is for
+   --  and why it is the wider half of this pair. On a published model the
+   --  same change leaves greedy output character for character where it
+   --  was over the first two dozen tokens, which is an anecdote and is why
+   --  the bound is set from the sweep instead.
+   Integer_Relative_Tolerance : constant := 5.0E-2;
+   Integer_Absolute_Tolerance : constant := 5.0E-1;
+
    --  What a comparison found.
    --  What the reference cost on each of the four sequences.
    type Sequence_Cost is array (1 .. 4) of Duration;
@@ -84,6 +107,16 @@ package Conformance is
       Cached_Compared  : Natural := 0;
       Cached_Worst_Abs : Long_Float := 0.0;
       Cached_Worst_Rel : Long_Float := 0.0;
+
+      --  And again for the comparisons where the activations were quantized
+      --  to a byte an element. A bucket of its own for the same reason the
+      --  others have one: what is rounded here is neither a weight nor a
+      --  cached key but the vector a product multiplies, and a count of
+      --  zero says the sweep ran none of them -- which is what a pass that
+      --  silently fell back to the floating-point path would look like.
+      Integer_Compared  : Natural := 0;
+      Integer_Worst_Abs : Long_Float := 0.0;
+      Integer_Worst_Rel : Long_Float := 0.0;
 
       Failures   : Natural := 0;
 

@@ -24,6 +24,7 @@ with Model_Runner.Tokenizer;
 with Model_Runner.Platform;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization;
+with Model_Runner.Quantization.Integers;
 with Model_Runner.Tensors;
 
 with Fixtures;
@@ -723,6 +724,400 @@ package body Benchmarks is
             IO.Put_Line ("");
          end if;
       end Measure_Vector;
+
+      --  Where a token's time goes, on the shapes the published model has.
+      --
+      --  Every figure in the speed section is a whole run, and a whole run
+      --  is five things at once: seven matrix products a layer, two
+      --  normalizations, an activation, a rotation, and one projection over
+      --  the vocabulary at the end. A number that moves says nothing about
+      --  which of them moved it, and three attempts at making this engine
+      --  faster were aimed by reading rather than by measuring -- one of
+      --  them at the attention call, which turned out not to be what was
+      --  slow.
+      --
+      --  So this multiplies the shapes TinyLlama-1.1B has, at the batch
+      --  width asked for, and reports what each stage costs a token and
+      --  what share of the token it is. The weights are synthetic and the
+      --  arithmetic is the engine's own, which is the point: what is being
+      --  measured is this program's kernels on a real model's dimensions,
+      --  not a model file.
+      --
+      --  Attention over the cache is not here, and the omission is the
+      --  honest kind rather than the convenient one: Blend_Exact and its
+      --  two siblings are inside Model_Runner.Llama with no entry point
+      --  this tool can reach, and inventing a proxy for them would report a
+      --  number about the proxy. What attention costs is read from a run at
+      --  a long prompt instead.
+      procedure Measure_Token_Budget
+        (Name  : String;
+         Batch : N.Element_Count;
+         Whole : Boolean := True)
+      is
+         --  Measured in the arithmetic a run uses, not the one this tool
+         --  would otherwise default to. The budget exists to say where a
+         --  token's time goes, and a token has multiplied its activations as
+         --  bytes since the default changed; measuring the other path would
+         --  describe a run nobody makes.
+         Held : constant Boolean :=
+           Model_Runner.Backend.CPU.Integer_Activations;
+         Layers     : constant N.Element_Count := 22;
+         Embedding  : constant N.Element_Count := 2048;
+         Inner      : constant N.Element_Count := 5632;
+         Grouped    : constant N.Element_Count := 256;
+         Vocabulary : constant N.Element_Count := 32000;
+         Heads      : constant N.Element_Count := 32;
+         Head_Size  : constant N.Element_Count := 64;
+
+         Format : constant G.Tensor_Type := G.Type_Q8_0;
+
+         Team : aliased Model_Runner.Backend.CPU.Pool
+           (Model_Runner.Backend.CPU.Default_Workers
+              (Model_Runner.Platform.Core_Count));
+
+         --  Seconds one product of this shape takes, median of the rounds.
+         --
+         --  Returns zero when the shape cannot be built, so a stage that
+         --  could not be measured reports as absent rather than as free.
+         function Product_Seconds
+           (Rows : N.Element_Count; Columns : N.Element_Count)
+            return Long_Float
+         is
+            Span : constant B.Byte_Count :=
+              B.Byte_Count (Columns) / B.Byte_Count (G.Block_Elements (Format))
+              * B.Byte_Count (G.Block_Bytes (Format));
+
+            Data    : B.Byte_Array_Access;
+            Item    : T.View;
+            Status  : E.Error_Info;
+            Inputs  : T.Real_Array_Access;
+            Outputs : T.Real_Array_Access;
+            Rates   : Rate_Array (1 .. Rounds) := [others => 0.0];
+         begin
+            T.Allocate (Columns * Batch, Inputs);
+            T.Allocate (Rows * Batch, Outputs);
+            B.Allocate (Span * B.Byte_Count (Rows), Data);
+            if Data = null or else Inputs = null or else Outputs = null then
+               T.Free (Inputs);
+               T.Free (Outputs);
+               B.Free (Data);
+               return 0.0;
+            end if;
+
+            Fill (Data.all);
+            Tame_Scales
+              (Data.all, Format,
+               B.Byte_Count (Rows) * B.Byte_Count (Columns)
+               / B.Byte_Count (G.Block_Elements (Format)));
+            T.Make (Format, Rows, Columns, Data, 0, Item, Status);
+            if E.Is_Error (Status) then
+               T.Free (Inputs);
+               T.Free (Outputs);
+               B.Free (Data);
+               return 0.0;
+            end if;
+
+            for Index in Inputs.all'Range loop
+               Inputs.all (Index) := N.Real (Index mod 17) * 0.125 - 1.0;
+            end loop;
+
+            for Pass in Rates'Range loop
+               declare
+                  Started : constant Ada.Real_Time.Time :=
+                    Ada.Real_Time.Clock;
+                  Passes  : Long_Long_Integer := 0;
+                  Elapsed : Duration := 0.0;
+               begin
+                  loop
+                     Model_Runner.Backend.CPU.Dispatch_Batch
+                       (Team'Unchecked_Access, Item, Inputs, Batch, Outputs,
+                        Status);
+                     exit when E.Is_Error (Status);
+                     Passes := Passes + 1;
+                     Elapsed :=
+                       Ada.Real_Time.To_Duration
+                         (Ada.Real_Time.Clock - Started);
+                     exit when Elapsed >= Seconds;
+                  end loop;
+
+                  if Passes > 0 and then Elapsed > 0.0 then
+                     --  Passes a second, so the median below is of a rate
+                     --  and the reciprocal is taken once, at the end. A
+                     --  median of durations and a median of rates pick the
+                     --  same pass, but only one of them can be compared
+                     --  with the rates every other measure here reports.
+                     Rates (Pass) :=
+                       Long_Float (Passes) / Long_Float (Elapsed);
+                  end if;
+               end;
+            end loop;
+
+            T.Free (Inputs);
+            T.Free (Outputs);
+            B.Free (Data);
+
+            return (if Middle (Rates) > 0.0 then 1.0 / Middle (Rates)
+                    else 0.0);
+         end Product_Seconds;
+
+         --  Seconds one pass of a vector kernel over Length elements takes.
+         function Vector_Seconds
+           (Which : Character; Length : N.Element_Count) return Long_Float
+         is
+            Values : N.Real_Array (0 .. Length - 1);
+            Weight : constant N.Real_Array (0 .. Length - 1) := [others => 1.0];
+            Target : N.Real_Array (0 .. Length - 1) := [others => 0.0];
+            Rates  : Rate_Array (1 .. Rounds) := [others => 0.0];
+            Ok     : Boolean;
+            Held   : N.Real := 0.0;
+         begin
+            for Index in Values'Range loop
+               Values (Index) := N.Real (Index mod 23) * 0.125 - 1.0;
+            end loop;
+
+            for Pass in Rates'Range loop
+               declare
+                  Started : constant Ada.Real_Time.Time :=
+                    Ada.Real_Time.Clock;
+                  Passes  : Long_Long_Integer := 0;
+                  Elapsed : Duration := 0.0;
+               begin
+                  loop
+                     case Which is
+                        when 'S' =>
+                           Target := Values;
+                           Model_Runner.Kernels.Softmax (Target, Ok);
+                        when 'N' =>
+                           Model_Runner.Kernels.RMS_Norm
+                             (Values, Weight, 1.0E-5, Target);
+                        when 'L' =>
+                           Target := Values;
+                           Model_Runner.Kernels.SiLU (Target);
+                           Model_Runner.Kernels.Multiply (Target, Weight);
+                        when others =>
+                           Target := Values;
+                           Model_Runner.Kernels.Apply_Rotary
+                             (Target, Heads, Head_Size, Head_Size, 7,
+                              10000.0);
+                     end case;
+
+                     Held := Held + Target (Target'First);
+                     Passes := Passes + 1;
+                     Elapsed :=
+                       Ada.Real_Time.To_Duration
+                         (Ada.Real_Time.Clock - Started);
+                     exit when Elapsed >= Seconds;
+                  end loop;
+
+                  if Passes > 0 and then Elapsed > 0.0 then
+                     Rates (Pass) :=
+                       Long_Float (Passes) / Long_Float (Elapsed);
+                  end if;
+               end;
+            end loop;
+
+            if Held = N.Real'Last then
+               IO.Put_Line ("");
+            end if;
+
+            return (if Middle (Rates) > 0.0 then 1.0 / Middle (Rates)
+                    else 0.0);
+         end Vector_Seconds;
+
+         Stages : constant := 8;
+
+         --  Named here rather than in an array of pointers, so that nothing
+         --  is allocated for a table that is eight strings long and read
+         --  once.
+         function Label_Of (Index : Positive) return String
+         is (case Index is
+                when 1 => "attention projections, q k v o",
+                when 2 => "feed forward, gate up down    ",
+                when 3 => "normalization, twice a layer  ",
+                when 4 => "activation and gate           ",
+                when 5 => "rotation                      ",
+                when 6 => "the vocabulary projection     ",
+                when 7 => "softmax over the vocabulary   ",
+                when others => "normalization, once at the end");
+
+         Costs : array (1 .. Stages) of Long_Float := [others => 0.0];
+         Total : Long_Float := 0.0;
+      begin
+         Model_Runner.Backend.CPU.Use_Integer_Activations (Whole);
+         IO.Put_Line ("  " & Name);
+
+         Costs (1) :=
+           Long_Float (Layers)
+           * (2.0 * Product_Seconds (Embedding, Embedding)
+              + 2.0 * Product_Seconds (Grouped, Embedding));
+         Costs (2) :=
+           Long_Float (Layers)
+           * (2.0 * Product_Seconds (Inner, Embedding)
+              + Product_Seconds (Embedding, Inner));
+         Costs (3) :=
+           Long_Float (Layers * Batch) * 2.0 * Vector_Seconds ('N', Embedding);
+         Costs (4) :=
+           Long_Float (Layers * Batch) * Vector_Seconds ('L', Inner);
+         Costs (5) :=
+           Long_Float (Layers * Batch) * 2.0 * Vector_Seconds ('R', Embedding);
+         Costs (6) := Product_Seconds (Vocabulary, Embedding);
+         Costs (7) := Vector_Seconds ('S', Vocabulary);
+         Costs (8) := Long_Float (Batch) * Vector_Seconds ('N', Embedding);
+
+         for Cost of Costs loop
+            Total := Total + Cost;
+         end loop;
+
+         for Index in Costs'Range loop
+            IO.Put_Line
+              ("   " & Label_Of (Index)
+               & Long_Float'Image (Costs (Index) * 1.0E3 / Long_Float (Batch))
+               & " ms   "
+               & (if Total > 0.0
+                  then Long_Float'Image (Costs (Index) / Total * 100.0)
+                  else " -")
+               & " per cent");
+         end loop;
+
+         IO.Put_Line
+           ("   what a token costs of these  "
+            & Long_Float'Image (Total * 1.0E3 / Long_Float (Batch)) & " ms");
+         IO.Put_Line
+           ("   attention over the cache is not measured here; it is inside "
+            & "Llama");
+
+         Model_Runner.Backend.CPU.Close (Team);
+         Model_Runner.Backend.CPU.Use_Integer_Activations (Held);
+      end Measure_Token_Budget;
+
+      --  The same row product with the activations quantized to a byte.
+      --
+      --  Both paths read the same weight bytes and the same vector; what
+      --  differs is that one widens every weight to binary32 and multiplies
+      --  in binary64, and the other multiplies two bytes into an integer and
+      --  rounds once a block. The quantization itself is not in either
+      --  figure: it happens once per matrix product and this is a figure
+      --  about the product.
+      procedure Measure_Integer_Product
+        (Name : String; Vectors_Per_Pass : N.Element_Count)
+      is
+         package QI renames Model_Runner.Quantization.Integers;
+
+         Rows    : constant N.Element_Count := 512;
+         Columns : constant N.Element_Count := 2048;
+         Format  : constant G.Tensor_Type := G.Type_Q8_0;
+         Per     : constant N.Element_Count :=
+           N.Element_Count (G.Block_Elements (Format));
+         Width   : constant B.Byte_Count := B.Byte_Count (G.Block_Bytes (Format));
+         Blocks  : constant N.Element_Count := Columns / Per;
+
+         Data   : B.Byte_Array_Access;
+         Inputs : T.Real_Array_Access;
+
+         Values : QI.Signed_Array (0 .. Columns * Vectors_Per_Pass - 1);
+         Scales : N.Real_Array (0 .. Columns * Vectors_Per_Pass / Per - 1);
+         Totals : QI.Sum_Array (0 .. Columns * Vectors_Per_Pass / Per - 1);
+
+         Sums   : N.Wide_Real_Array (0 .. Vectors_Per_Pass - 1);
+         Ok     : Boolean;
+
+         Float_Rate, Integer_Rate : Long_Float := 0.0;
+      begin
+         B.Allocate
+           (Width * B.Byte_Count (Blocks) * B.Byte_Count (Rows), Data);
+         T.Allocate (Columns * Vectors_Per_Pass, Inputs);
+         if Data = null or else Inputs = null then
+            return;
+         end if;
+         Fill (Data.all);
+         Tame_Scales (Data.all, Format,
+                      B.Byte_Count (Rows) * B.Byte_Count (Columns)
+                      / B.Byte_Count (Per));
+         for Index in Inputs.all'Range loop
+            Inputs.all (Index) := N.Real (Index mod 17) * 0.125 - 1.0;
+         end loop;
+
+         QI.Quantize_Vectors
+           (Inputs.all, Vectors_Per_Pass, Columns, Values, Scales, Totals, Ok);
+         if not Ok then
+            IO.Put_Line ("  " & Name & " could not be quantized");
+            B.Free (Data);
+            T.Free (Inputs);
+            return;
+         end if;
+
+         declare
+            Rates : Rate_Array (1 .. Rounds) := [others => 0.0];
+         begin
+            for Pass in Rates'Range loop
+               declare
+                  Started : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+                  Done    : Long_Long_Integer := 0;
+                  Elapsed : Duration := 0.0;
+               begin
+                  loop
+                     for Row in 0 .. Rows - 1 loop
+                        Sums := [others => 0.0];
+                        Q.Accumulate_Dot
+                          (Format, Data.all,
+                           B.Byte_Count (Row) * Width * B.Byte_Count (Blocks),
+                           Blocks, Inputs.all, Inputs.all'First, Columns,
+                           Vectors_Per_Pass, Sums, Ok);
+                     end loop;
+                     Done := Done + Long_Long_Integer (Rows * Columns
+                                                       * Vectors_Per_Pass);
+                     Elapsed := Ada.Real_Time.To_Duration
+                       (Ada.Real_Time.Clock - Started);
+                     exit when Elapsed >= Seconds;
+                  end loop;
+                  Rates (Pass) := Rate_Of (Done, Elapsed);
+               end;
+            end loop;
+            Float_Rate := Middle (Rates);
+         end;
+
+         declare
+            Rates : Rate_Array (1 .. Rounds) := [others => 0.0];
+         begin
+            for Pass in Rates'Range loop
+               declare
+                  Started : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+                  Done    : Long_Long_Integer := 0;
+                  Elapsed : Duration := 0.0;
+               begin
+                  loop
+                     for Row in 0 .. Rows - 1 loop
+                        Sums := [others => 0.0];
+                        QI.Accumulate_Rows
+                          (Format, Data.all,
+                           B.Byte_Count (Row) * Width * B.Byte_Count (Blocks),
+                           Width * B.Byte_Count (Blocks), 1,
+                           Blocks, Values, Scales, Totals, 0, Columns,
+                           Vectors_Per_Pass, Sums, Ok);
+                     end loop;
+                     Done := Done + Long_Long_Integer (Rows * Columns
+                                                       * Vectors_Per_Pass);
+                     Elapsed := Ada.Real_Time.To_Duration
+                       (Ada.Real_Time.Clock - Started);
+                     exit when Elapsed >= Seconds;
+                  end loop;
+                  Rates (Pass) := Rate_Of (Done, Elapsed);
+               end;
+            end loop;
+            Integer_Rate := Middle (Rates);
+         end;
+
+         Report_Rate ("  " & Name & ", binary32 weights", Float_Rate);
+         Report_Rate ("  " & Name & ", quantized activations", Integer_Rate);
+         if Float_Rate > 0.0 then
+            IO.Put_Line
+              ("    " & Long_Float'Image (Integer_Rate / Float_Rate)
+               & "x the floating-point path");
+         end if;
+
+         B.Free (Data);
+         T.Free (Inputs);
+      end Measure_Integer_Product;
 
       --  How the matrix product scales, with nothing else in the way.
       --
@@ -1574,6 +1969,19 @@ package body Benchmarks is
       IO.Put_Line ("output grammar, one token filtered");
       Measure_Grammar ("at a place one character may follow", False);
       Measure_Grammar ("inside a string, where most may", True);
+      IO.New_Line;
+
+      IO.Put_Line ("q8_0 row product, one path against the other")
+      ;
+      Measure_Integer_Product ("one vector a pass ", 1);
+      Measure_Integer_Product ("thirty-two a pass ", 32);
+      IO.New_Line;
+
+      IO.Put_Line ("where a token's time goes");
+      Measure_Token_Budget ("generating, the arithmetic a run uses", 1);
+      Measure_Token_Budget ("generating, the floating-point arithmetic",
+                            1, Whole => False);
+      Measure_Token_Budget ("reading a prompt, thirty-two a pass", 32);
       IO.New_Line;
 
       IO.Put_Line ("vector kernels");

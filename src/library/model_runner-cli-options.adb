@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 76) of Registry_Row :=
+   Registry : constant array (1 .. 77) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -45,6 +45,9 @@ package body Model_Runner.CLI.Options is
        [Command_Run | Command_Embed | Command_Inspect => True,
         others => False],
        Text ("kv_cache")),
+      (Text ("--arith"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("arith")),
       (Text ("--pooling"), [Command_Embed => True, others => False],
        Text ("pooling")),
       (Text ("--load-session"), [Command_Run => True, others => False],
@@ -240,6 +243,30 @@ package body Model_Runner.CLI.Options is
       end loop;
       return Room (1 .. Used);
    end Cache_Names;
+
+   -----------------------
+   -- Arithmetic_Names --
+   -----------------------
+
+   function Arithmetic_Names return String is
+      Room : String (1 .. 64) := [others => ' '];
+      Used : Natural := 0;
+
+      procedure Add (Value : String) is
+      begin
+         if Used > 0 then
+            Room (Used + 1 .. Used + 2) := ", ";
+            Used := Used + 2;
+         end if;
+         Room (Used + 1 .. Used + Value'Length) := Value;
+         Used := Used + Value'Length;
+      end Add;
+   begin
+      for Mode in Model_Runner.Llama.Arithmetic_Mode loop
+         Add (Model_Runner.Llama.Arithmetic_Name (Mode));
+      end loop;
+      return Room (1 .. Used);
+   end Arithmetic_Names;
 
    -------------------
    -- Pooling_Names --
@@ -766,6 +793,7 @@ package body Model_Runner.CLI.Options is
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Repack,
          Flag_Cache,
+         Flag_Arithmetic,
          Flag_Pooling,
          Flag_Load_Session,
          Flag_Save_Session,
@@ -1277,6 +1305,32 @@ package body Model_Runner.CLI.Options is
                         --  Named against the modes this build has, and
                         --  refused by name otherwise, which is the answer
                         --  --backend and --chat-template already give.
+                        if not Found then
+                           Fail (E.CLI_Invalid_Option_Value, Name,
+                                 T.To_String (Asked));
+                           return;
+                        end if;
+                     end;
+
+                  elsif Name = "--arith" then
+                     declare
+                        Asked : T.Bounded;
+                        Found : Boolean := False;
+                     begin
+                        Bounded_Value (Flag_Arithmetic, Asked, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        for Mode in Model_Runner.Llama.Arithmetic_Mode loop
+                           if Model_Runner.Llama.Arithmetic_Name (Mode)
+                             = T.To_String (Asked)
+                           then
+                              Result.Arithmetic := Mode;
+                              Found := True;
+                           end if;
+                        end loop;
+
                         if not Found then
                            Fail (E.CLI_Invalid_Option_Value, Name,
                                  T.To_String (Asked));

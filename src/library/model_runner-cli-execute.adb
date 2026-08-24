@@ -1450,6 +1450,13 @@ package body Model_Runner.CLI.Execute is
             end;
          end if;
 
+         --  The arithmetic, told to the backend before the session opens
+         --  and therefore before anything is dispatched. The backend states
+         --  that it must be told once and not part way through a run, which
+         --  is why this is here and not a parameter of every product.
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (L."=" (Item.Arithmetic, L.Integer_Activations));
+
          L.Open
            (Session, Prepared, Item.Context_Size,
             Session_Bounds => Session_Bounds (Item),
@@ -2335,6 +2342,13 @@ package body Model_Runner.CLI.Execute is
             Fail (Condition);
             return;
          end if;
+
+         --  The arithmetic, told to the backend before the session opens
+         --  and therefore before anything is dispatched. The backend states
+         --  that it must be told once and not part way through a run, which
+         --  is why this is here and not a parameter of every product.
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (L."=" (Item.Arithmetic, L.Integer_Activations));
 
          L.Open
            (Session, Prepared, Item.Context_Size,

@@ -25,10 +25,11 @@ package body Tool_Commands is
    Opts_None      : aliased constant String := " ";
    Opts_Check     : aliased constant String := " --repository --record-warnings ";
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
+   Opts_Conform   : aliased constant String := " --arith ";
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
-     & " --backend --repeat-penalty --draft-model --draft-tokens --kv-cache --repeats"
-     & " --anyway --wait ";
+     & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
+     & " --kv-cache --repeats --anyway --wait ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
    Opts_External  : aliased constant String :=
      " --model --prompt --max-tokens --threads --expect --repack --backend"
@@ -41,9 +42,10 @@ package body Tool_Commands is
 
    Takes_Check     : aliased constant String := "[ROOT] [--repository] [--record-warnings]";
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
+   Takes_Conform   : aliased constant String := "[--arith MODE]";
    Takes_Speed     : aliased constant String :=
      "--model PATH [--prompt-file PATH] [--max-tokens N] [--threads N]"
-     & " [--batch-size N] [--repack MODE] [--backend NAME]"
+     & " [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
      & " [--kv-cache MODE] [--repeats N] [--anyway] [--wait MINUTES]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway] [--wait MINUTES]";
@@ -117,8 +119,8 @@ package body Tool_Commands is
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
        Opts_Check'Access),
-      (Name_Conformance'Access, Nothing'Access, Says_Conformance'Access,
-       Opts_None'Access),
+      (Name_Conformance'Access, Takes_Conform'Access,
+       Says_Conformance'Access, Opts_Conform'Access),
       (Name_Fixture_Check'Access, Nothing'Access, Says_Fixture_Check'Access,
        Opts_None'Access),
       (Name_Fuzz'Access, Takes_Fuzz'Access, Says_Fuzz'Access,

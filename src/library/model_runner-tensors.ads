@@ -3,6 +3,7 @@ with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.Numerics;
+with Model_Runner.Quantization.Integers;
 
 --  Read-only tensor views over model bytes.
 --
@@ -259,5 +260,40 @@ package Model_Runner.Tensors is
       Target  : in out Real_Array;
       First   : Element_Count;
       Last    : Element_Count);
+
+   --  The same product with the activations already quantized to a byte.
+   --
+   --  Row for row this computes what Mat_Mul_Range computes against
+   --  activations rounded to one byte apiece with a scale for every
+   --  thirty-two of them: within a block it is more accurate, since the
+   --  block's product is an exact integer where the other path rounds every
+   --  element, and across the vector it is less, since the input was
+   --  rounded once before it arrived. What the difference is allowed to be
+   --  is stated and measured in the conformance suite.
+   --
+   --  Refused rather than approximated when the format has no integer
+   --  kernel or the shapes do not line up: Handled comes back False and the
+   --  caller runs Mat_Mul_Range, which is what every caller does.
+   --
+   --  @param Item Weight view.
+   --  @param Values Quantized activations, Count vectors of Columns.
+   --  @param Scales One scale per thirty-two elements of Values.
+   --  @param Totals One block sum per thirty-two elements of Values.
+   --  @param Count Number of input vectors.
+   --  @param Target Count output vectors laid end to end, each of length
+   --    Rows; vector K starts at Target'First + K * Rows.
+   --  @param First First row to compute, zero based.
+   --  @param Last Last row to compute, zero based.
+   --  @param Handled True when every row in the range was computed here.
+   procedure Mat_Mul_Range_Packed
+     (Item    : View;
+      Values  : Model_Runner.Quantization.Integers.Signed_Array;
+      Scales  : Real_Array;
+      Totals  : Model_Runner.Quantization.Integers.Sum_Array;
+      Count   : Element_Count;
+      Target  : in out Real_Array;
+      First   : Element_Count;
+      Last    : Element_Count;
+      Handled : out Boolean);
 
 end Model_Runner.Tensors;

@@ -149,6 +149,11 @@ package Model_Runner.CLI.Options is
    --  @return Comma-separated identifiers, in declaration order.
    function Cache_Names return String;
 
+   --  The arithmetics a caller may name, in one line.
+   --
+   --  @return Comma-separated identifiers, in declaration order.
+   function Arithmetic_Names return String;
+
    --  Report whether a command takes an option.
    --
    --  Every option used to be accepted by every command: `inspect m.gguf
@@ -284,7 +289,11 @@ package Model_Runner.CLI.Options is
 
       Max_Tokens   : Natural := 256;
       Context_Size : Natural := 0;
-      Batch_Size   : Natural := 32;
+
+      --  The engine's cap, for the reason written above Generation's own
+      --  default: it is what measured fastest on both backends, and on the
+      --  device by nearly a factor of two.
+      Batch_Size   : Natural := 128;
 
       --  Worker count for matrix-vector products. Zero means "choose from the
       --  processor count"; one means serial execution on the calling task.
@@ -394,6 +403,13 @@ package Model_Runner.CLI.Options is
       --  figure was measured against.
       Cache      : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Exact;
+
+      --  How a matrix product multiplies. Quantized, because it is twice
+      --  the speed for a bound the conformance sweep states and holds, and
+      --  because a default nobody selects is a path nobody exercises.
+      --  --arith f32 is the other one and the reference backend is neither.
+      Arithmetic : Model_Runner.Llama.Arithmetic_Mode :=
+        Model_Runner.Llama.Integer_Activations;
 
       --  How an embedding reduces the positions of its text, and whether
       --  the result is scaled to unit length. Unit length is the default
