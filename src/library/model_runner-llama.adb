@@ -2821,15 +2821,30 @@ package body Model_Runner.Llama is
       --  unless it is passed. It has no default for that reason.
       Max_Bias   : Real;
       Query_At   : Element_Count;
+
+      --  The heads this call is to blend, and how far apart the rows of the
+      --  score buffer are.
+      --
+      --  A head at a time was one buffer for all of them, which is right
+      --  when one task walks the heads in order and wrong the moment two do
+      --  it at once: the scores of a head are written, softmaxed and read
+      --  back within its own iteration, so two heads sharing them is two
+      --  heads answering with each other's arithmetic. A row apiece is what
+      --  lets a share of the heads run beside another share.
+      From_Head  : Element_Count;
+      To_Head    : Element_Count;
+      Score_Room : Element_Count;
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
    begin
       Ok := True;
 
-      for Head in 0 .. Heads - 1 loop
+      for Head in From_Head .. To_Head loop
          declare
             Group    : constant Element_Count := Head / Group_Size;
+            At_Score : constant Element_Count :=
+              Scores'First + Head * Score_Room;
             Q_Origin : constant Element_Count := Query'First + Head * Head_Size;
             Usable   : Boolean;
          begin
@@ -2844,7 +2859,7 @@ package body Model_Runner.Llama is
                        + N.Wide_Real (Query (Q_Origin + Component))
                          * N.Wide_Real (Keys (Origin + Component));
                   end loop;
-                  Scores (Scores'First + Step) := Real (Sum) * Scale;
+                  Scores (At_Score + Step) := Real (Sum) * Scale;
                end;
             end loop;
 
@@ -2863,8 +2878,8 @@ package body Model_Runner.Llama is
             begin
                if Slope > 0.0 then
                   for Step in First .. Last loop
-                     Scores (Scores'First + Step) :=
-                       Scores (Scores'First + Step)
+                     Scores (At_Score + Step) :=
+                       Scores (At_Score + Step)
                        - Slope
                          * Real (abs (Integer (Step) - Integer (Query_At)));
                   end loop;
@@ -2873,33 +2888,68 @@ package body Model_Runner.Llama is
 
             if Cap > 0.0 then
                for Step in First .. Last loop
-                  Scores (Scores'First + Step) :=
-                    Capped (Scores (Scores'First + Step), Cap);
+                  Scores (At_Score + Step) :=
+                    Capped (Scores (At_Score + Step), Cap);
                end loop;
             end if;
 
             K.Softmax
-              (Scores (Scores'First + First .. Scores'First + Last), Usable);
+              (Scores (At_Score + First .. At_Score + Last), Usable);
             if not Usable then
                Ok := False;
                return;
             end if;
 
-            for Component in 0 .. Value_Size - 1 loop
-               declare
-                  Sum : N.Wide_Real := 0.0;
-               begin
-                  for Step in First .. Last loop
-                     Sum := Sum
-                       + N.Wide_Real (Scores (Scores'First + Step))
-                         * N.Wide_Real
-                             (Values (Values'First + V_Base + Step * V_Width
-                                      + Group * Value_Size + Component));
-                  end loop;
-                  Target (Target'First + Head * Value_Size + Component) :=
-                    Real (Sum);
-               end;
-            end loop;
+            --  A component at a time was one pass over the whole cache per
+            --  component: the values of a position are contiguous, so
+            --  holding the component still and walking the steps reads
+            --  every V_Width'th element and touches a cache line for each
+            --  one of them. Holding a run of components instead and walking
+            --  the steps once reads them where they lie.
+            --
+            --  Bit for bit what it replaces. Each component still sums over
+            --  the steps in ascending order and rounds once at the end;
+            --  what moved is where the sum is kept, not what is added to
+            --  it. A run at a time rather than all of them because the run
+            --  is on the stack and a head's width is a model's to choose.
+            declare
+               Run : constant Element_Count := 64;
+               At_Component : Element_Count := 0;
+            begin
+               while At_Component < Value_Size loop
+                  declare
+                     Here : constant Element_Count :=
+                       Element_Count'Min (Run, Value_Size - At_Component);
+                     Sums : N.Wide_Real_Array (0 .. Here - 1) :=
+                       [others => 0.0];
+                  begin
+                     for Step in First .. Last loop
+                        declare
+                           Weight : constant N.Wide_Real :=
+                             N.Wide_Real (Scores (At_Score + Step));
+                           At_Value : constant Element_Count :=
+                             Values'First + V_Base + Step * V_Width
+                             + Group * Value_Size + At_Component;
+                        begin
+                           for Component in 0 .. Here - 1 loop
+                              Sums (Component) := Sums (Component)
+                                + Weight
+                                  * N.Wide_Real
+                                      (Values (At_Value + Component));
+                           end loop;
+                        end;
+                     end loop;
+
+                     for Component in 0 .. Here - 1 loop
+                        Target (Target'First + Head * Value_Size
+                                + At_Component + Component) :=
+                          Real (Sums (Component));
+                     end loop;
+
+                     At_Component := At_Component + Here;
+                  end;
+               end loop;
+            end;
          end;
       end loop;
    end Blend_Exact;
@@ -3072,7 +3122,8 @@ package body Model_Runner.Llama is
                K_Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                Value_Size, Element_Count (Source.Settings.Group_Size),
                Since, Ends, Scale, Source.Settings.Attention_Cap,
-               Source.Settings.Max_Bias, Asking, Item.Scores.all,
+               Source.Settings.Max_Bias, Asking,
+               0, Heads - 1, Item.Score_Room, Item.Scores.all,
                Target (Target'First + B_At .. Target'First + B_At
                        + Blend_Span - 1), Fine);
 
@@ -3157,15 +3208,30 @@ package body Model_Runner.Llama is
       Cap        : Real;
       Max_Bias   : Real;
       Query_At   : Element_Count;
+
+      --  The heads this call is to blend, and how far apart the rows of the
+      --  score buffer are.
+      --
+      --  A head at a time was one buffer for all of them, which is right
+      --  when one task walks the heads in order and wrong the moment two do
+      --  it at once: the scores of a head are written, softmaxed and read
+      --  back within its own iteration, so two heads sharing them is two
+      --  heads answering with each other's arithmetic. A row apiece is what
+      --  lets a share of the heads run beside another share.
+      From_Head  : Element_Count;
+      To_Head    : Element_Count;
+      Score_Room : Element_Count;
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
    begin
       Ok := True;
 
-      for Head in 0 .. Heads - 1 loop
+      for Head in From_Head .. To_Head loop
          declare
             Group    : constant Element_Count := Head / Group_Size;
+            At_Score : constant Element_Count :=
+              Scores'First + Head * Score_Room;
             Q_Origin : constant Element_Count := Query'First + Head * Head_Size;
             Usable   : Boolean;
          begin
@@ -3186,7 +3252,7 @@ package body Model_Runner.Llama is
                              (Unpack (Keys,
                                       Origin + B.Byte_Count (Component), Row));
                   end loop;
-                  Scores (Scores'First + Step) := Real (Sum) * Scale;
+                  Scores (At_Score + Step) := Real (Sum) * Scale;
                end;
             end loop;
 
@@ -3200,8 +3266,8 @@ package body Model_Runner.Llama is
             begin
                if Slope > 0.0 then
                   for Step in First .. Last loop
-                     Scores (Scores'First + Step) :=
-                       Scores (Scores'First + Step)
+                     Scores (At_Score + Step) :=
+                       Scores (At_Score + Step)
                        - Slope
                          * Real (abs (Integer (Step) - Integer (Query_At)));
                   end loop;
@@ -3210,38 +3276,68 @@ package body Model_Runner.Llama is
 
             if Cap > 0.0 then
                for Step in First .. Last loop
-                  Scores (Scores'First + Step) :=
-                    Capped (Scores (Scores'First + Step), Cap);
+                  Scores (At_Score + Step) :=
+                    Capped (Scores (At_Score + Step), Cap);
                end loop;
             end if;
 
             K.Softmax
-              (Scores (Scores'First + First .. Scores'First + Last), Usable);
+              (Scores (At_Score + First .. At_Score + Last), Usable);
             if not Usable then
                Ok := False;
                return;
             end if;
 
-            for Component in 0 .. Value_Size - 1 loop
-               declare
-                  Sum : N.Wide_Real := 0.0;
-               begin
-                  for Step in First .. Last loop
-                     Sum := Sum
-                       + N.Wide_Real (Scores (Scores'First + Step))
-                         * N.Wide_Real
-                             (Unpack
-                                (Values,
-                                 B.Byte_Count (Values'First)
-                                 + B.Byte_Count (V_Base + Step * V_Width
-                                                 + Group * Value_Size
-                                                 + Component),
-                                 Val_Scales (Val_Scales'First + Rows + Step)));
-                  end loop;
-                  Target (Target'First + Head * Value_Size + Component) :=
-                    Real (Sum);
-               end;
-            end loop;
+            --  A run of components at a time rather than one, for the
+            --  reason written out in Blend_Exact: a position's values are
+            --  contiguous and holding the component still walks them a line
+            --  at a time. Bit for bit what it replaces -- each component
+            --  still sums over the steps in ascending order.
+            declare
+               Run : constant Element_Count := 64;
+               At_Component : Element_Count := 0;
+            begin
+               while At_Component < Value_Size loop
+                  declare
+                     Here : constant Element_Count :=
+                       Element_Count'Min (Run, Value_Size - At_Component);
+                     Sums : N.Wide_Real_Array (0 .. Here - 1) :=
+                       [others => 0.0];
+                  begin
+                     for Step in First .. Last loop
+                        declare
+                           Weight : constant N.Wide_Real :=
+                             N.Wide_Real (Scores (At_Score + Step));
+                           At_Byte : constant B.Byte_Count :=
+                             B.Byte_Count (Values'First)
+                             + B.Byte_Count (V_Base + Step * V_Width
+                                             + Group * Value_Size
+                                             + At_Component);
+                           Scaled : constant Real :=
+                             Val_Scales (Val_Scales'First + Rows + Step);
+                        begin
+                           for Component in 0 .. Here - 1 loop
+                              Sums (Component) := Sums (Component)
+                                + Weight
+                                  * N.Wide_Real
+                                      (Unpack
+                                         (Values,
+                                          At_Byte + B.Byte_Count (Component),
+                                          Scaled));
+                           end loop;
+                        end;
+                     end loop;
+
+                     for Component in 0 .. Here - 1 loop
+                        Target (Target'First + Head * Value_Size
+                                + At_Component + Component) :=
+                          Real (Sums (Component));
+                     end loop;
+
+                     At_Component := At_Component + Here;
+                  end;
+               end loop;
+            end;
          end;
       end loop;
    end Blend_Eighth;
@@ -3264,15 +3360,30 @@ package body Model_Runner.Llama is
       Cap        : Real;
       Max_Bias   : Real;
       Query_At   : Element_Count;
+
+      --  The heads this call is to blend, and how far apart the rows of the
+      --  score buffer are.
+      --
+      --  A head at a time was one buffer for all of them, which is right
+      --  when one task walks the heads in order and wrong the moment two do
+      --  it at once: the scores of a head are written, softmaxed and read
+      --  back within its own iteration, so two heads sharing them is two
+      --  heads answering with each other's arithmetic. A row apiece is what
+      --  lets a share of the heads run beside another share.
+      From_Head  : Element_Count;
+      To_Head    : Element_Count;
+      Score_Room : Element_Count;
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
    begin
       Ok := True;
 
-      for Head in 0 .. Heads - 1 loop
+      for Head in From_Head .. To_Head loop
          declare
             Group    : constant Element_Count := Head / Group_Size;
+            At_Score : constant Element_Count :=
+              Scores'First + Head * Score_Room;
             Q_Origin : constant Element_Count := Query'First + Head * Head_Size;
             Usable   : Boolean;
          begin
@@ -3288,7 +3399,7 @@ package body Model_Runner.Llama is
                          * N.Wide_Real
                              (N.To_Real (Keys (Origin + Component)));
                   end loop;
-                  Scores (Scores'First + Step) := Real (Sum) * Scale;
+                  Scores (At_Score + Step) := Real (Sum) * Scale;
                end;
             end loop;
 
@@ -3304,8 +3415,8 @@ package body Model_Runner.Llama is
             begin
                if Slope > 0.0 then
                   for Step in First .. Last loop
-                     Scores (Scores'First + Step) :=
-                       Scores (Scores'First + Step)
+                     Scores (At_Score + Step) :=
+                       Scores (At_Score + Step)
                        - Slope
                          * Real (abs (Integer (Step) - Integer (Query_At)));
                   end loop;
@@ -3314,35 +3425,60 @@ package body Model_Runner.Llama is
 
             if Cap > 0.0 then
                for Step in First .. Last loop
-                  Scores (Scores'First + Step) :=
-                    Capped (Scores (Scores'First + Step), Cap);
+                  Scores (At_Score + Step) :=
+                    Capped (Scores (At_Score + Step), Cap);
                end loop;
             end if;
 
             K.Softmax
-              (Scores (Scores'First + First .. Scores'First + Last), Usable);
+              (Scores (At_Score + First .. At_Score + Last), Usable);
             if not Usable then
                Ok := False;
                return;
             end if;
 
-            for Component in 0 .. Value_Size - 1 loop
-               declare
-                  Sum : N.Wide_Real := 0.0;
-               begin
-                  for Step in First .. Last loop
-                     Sum := Sum
-                       + N.Wide_Real (Scores (Scores'First + Step))
-                         * N.Wide_Real
-                             (N.To_Real
-                                (Values (Values'First + V_Base
-                                         + Step * V_Width
-                                         + Group * Value_Size + Component)));
-                  end loop;
-                  Target (Target'First + Head * Value_Size + Component) :=
-                    Real (Sum);
-               end;
-            end loop;
+            --  A run of components at a time rather than one, for the
+            --  reason written out in Blend_Exact. Bit for bit what it
+            --  replaces.
+            declare
+               Run : constant Element_Count := 64;
+               At_Component : Element_Count := 0;
+            begin
+               while At_Component < Value_Size loop
+                  declare
+                     Here : constant Element_Count :=
+                       Element_Count'Min (Run, Value_Size - At_Component);
+                     Sums : N.Wide_Real_Array (0 .. Here - 1) :=
+                       [others => 0.0];
+                  begin
+                     for Step in First .. Last loop
+                        declare
+                           Weight : constant N.Wide_Real :=
+                             N.Wide_Real (Scores (At_Score + Step));
+                           At_Value : constant Element_Count :=
+                             Values'First + V_Base + Step * V_Width
+                             + Group * Value_Size + At_Component;
+                        begin
+                           for Component in 0 .. Here - 1 loop
+                              Sums (Component) := Sums (Component)
+                                + Weight
+                                  * N.Wide_Real
+                                      (N.To_Real
+                                         (Values (At_Value + Component)));
+                           end loop;
+                        end;
+                     end loop;
+
+                     for Component in 0 .. Here - 1 loop
+                        Target (Target'First + Head * Value_Size
+                                + At_Component + Component) :=
+                          Real (Sums (Component));
+                     end loop;
+
+                     At_Component := At_Component + Here;
+                  end;
+               end loop;
+            end;
          end;
       end loop;
    end Blend_Halved;
@@ -4712,7 +4848,10 @@ package body Model_Runner.Llama is
          T.Allocate (KV, Item.Key_Row);
          T.Allocate (KV_Out, Item.Value_Row);
          T.Allocate (Blend, Item.Attention);
-         T.Allocate (Element_Count (Capacity), Item.Scores);
+         Item.Score_Room := Element_Count (Capacity);
+         T.Allocate
+           (Element_Count (Natural'Max (1, Settings.Heads))
+            * Item.Score_Room, Item.Scores);
          T.Allocate (Feed, Item.Gate);
          T.Allocate (Feed, Item.Up);
          T.Allocate (Element_Count (Settings.Vocabulary), Item.Logit_Row);
@@ -5416,17 +5555,89 @@ package body Model_Runner.Llama is
                First : constant Element_Count :=
                  Earliest (Settings, Reserved, Natural (Index));
                Usable : Boolean;
+
+               --  A share of the heads, for the worker pool.
+               --
+               --  Attention ran on the calling task while every worker sat
+               --  idle, and the budget under "Where a token's time goes"
+               --  says it is about a third of a generated token now that
+               --  the products have got two and a half times faster. A head
+               --  is independent of every other head: it reads its own
+               --  slice of the query, writes its own row of scores and its
+               --  own slice of the blend, so the only thing that had to
+               --  change before this was possible is that the scores are a
+               --  row a head rather than one row shared.
+               type Blend_Share is limited new Workers_CPU.Task_Item with
+                  record
+                     Ok : Boolean := True;
+                  end record;
+
+               overriding procedure Run
+                 (Share : in out Blend_Share;
+                  From  : Element_Count;
+                  To    : Element_Count);
+
+               overriding procedure Run
+                 (Share : in out Blend_Share;
+                  From  : Element_Count;
+                  To    : Element_Count)
+               is
+                  Fine : Boolean := True;
+               begin
+                  if From > To then
+                     return;
+                  end if;
+
+                  if Item.Held = Eighth then
+                     Blend_Eighth
+                       (Item.Query.all, Item.Byte_Keys.all,
+                        Item.Byte_Values.all,
+                        Item.Key_Scales.all, Item.Value_Scales.all,
+                        Base, V_Base, Rows_Base, KV_Width, V_Width, Heads,
+                        Head_Size, Value_Size,
+                        Element_Count (Settings.Group_Size),
+                        First, Reserved, Scale, Settings.Attention_Cap,
+                        Settings.Max_Bias, Reserved,
+                        From, To, Item.Score_Room,
+                        Item.Scores.all, Item.Attention.all, Fine);
+                  elsif Item.Held = Exact then
+                     Blend_Exact
+                       (Item.Query.all, Item.Keys.all, Item.Values.all,
+                        Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+                        Value_Size, Element_Count (Settings.Group_Size),
+                        First, Reserved, Scale, Settings.Attention_Cap,
+                        Settings.Max_Bias, Reserved,
+                        From, To, Item.Score_Room,
+                        Item.Scores.all, Item.Attention.all, Fine);
+                  else
+                     Blend_Halved
+                       (Item.Query.all, Item.Half_Keys.all,
+                        Item.Half_Values.all,
+                        Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+                        Value_Size, Element_Count (Settings.Group_Size),
+                        First, Reserved, Scale, Settings.Attention_Cap,
+                        Settings.Max_Bias, Reserved,
+                        From, To, Item.Score_Room,
+                        Item.Scores.all, Item.Attention.all, Fine);
+                  end if;
+
+                  --  Only ever set false, by any share that could not
+                  --  finish, and read by nobody until the pool has
+                  --  collected every worker -- which is a rendezvous
+                  --  through a protected object and orders these writes
+                  --  against that read.
+                  if not Fine then
+                     Share.Ok := False;
+                  end if;
+               end Run;
+
+               Share  : aliased Blend_Share;
+               Shared : E.Error_Info;
             begin
-               if Item.Held = Eighth then
-                  Blend_Eighth
-                    (Item.Query.all, Item.Byte_Keys.all, Item.Byte_Values.all,
-                     Item.Key_Scales.all, Item.Value_Scales.all,
-                     Base, V_Base, Rows_Base, KV_Width, V_Width, Heads,
-                     Head_Size, Value_Size,
-                     Element_Count (Settings.Group_Size),
-                     First, Reserved, Scale, Settings.Attention_Cap,
-                     Settings.Max_Bias, Reserved,
-                     Item.Scores.all, Item.Attention.all, Usable);
+               if Item.Held /= Exact or else not Resident then
+                  Workers_CPU.Dispatch_Shares
+                    (Item.Team, Heads, Share'Unchecked_Access, Shared);
+                  Usable := Share.Ok and then E.Is_Ok (Shared);
                elsif Item.Held = Exact and then Resident then
                   --  Attention and the matrix that reads its result, named
                   --  together so they go over as one command buffer and the
@@ -5451,22 +5662,6 @@ package body Model_Runner.Llama is
                         Value_Size, First, Reserved, Base, V_Base, KV_Width,
                         V_Width, Scale, Item.Attention.all, Usable);
                   end if;
-               elsif Item.Held = Exact then
-                  Blend_Exact
-                    (Item.Query.all, Item.Keys.all, Item.Values.all,
-                     Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
-                     Value_Size, Element_Count (Settings.Group_Size),
-                     First, Reserved, Scale, Settings.Attention_Cap,
-                     Settings.Max_Bias, Reserved,
-                     Item.Scores.all, Item.Attention.all, Usable);
-               else
-                  Blend_Halved
-                    (Item.Query.all, Item.Half_Keys.all, Item.Half_Values.all,
-                     Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
-                     Value_Size, Element_Count (Settings.Group_Size),
-                     First, Reserved, Scale, Settings.Attention_Cap,
-                     Settings.Max_Bias, Reserved,
-                     Item.Scores.all, Item.Attention.all, Usable);
                end if;
 
                if not Usable then
@@ -6121,64 +6316,107 @@ package body Model_Runner.Llama is
                end;
             end if;
 
-            for Which in 0 .. Count - 1 loop
-               exit when Item.Held = Exact and then Resident;
-
+            --  Every position of the batch, in shares of the heads.
+            --
+            --  A head at a time down the positions rather than a position at
+            --  a time down the heads, which is the same work in the other
+            --  order and is what makes it one hand-off a layer instead of
+            --  one per position: a hundred and twenty-eight positions of
+            --  twenty-two layers would otherwise be nearly three thousand
+            --  rendezvous for a prompt. It also needs no score buffer beyond
+            --  the row a head already has, where sharing the positions out
+            --  would have needed a row per share per head.
+            if not (Item.Held = Exact and then Resident) then
                declare
-                  --  Causal: this token sees the committed context and the
-                  --  batch tokens up to and including itself, and with a
-                  --  sliding window only the window's worth of those.
-                  --
-                  --  Bidirectional: it sees every position of the text,
-                  --  which is the whole batch -- the ones after it as well
-                  --  as the ones before. The cache holds them all by now,
-                  --  because every key and value of the batch was published
-                  --  before any attention read one.
-                  Last_Step : constant Element_Count :=
-                    (if Settings.Causal
-                     then Reserved + Which
-                     else Reserved + Count - 1);
-                  First_Step : constant Element_Count :=
-                    Earliest (Settings, Last_Step, Natural (Index));
-                  Q_At      : constant Element_Count := Slot (Which, Wide);
-                  B_At      : constant Element_Count := Slot (Which, Blend);
-                  Usable    : Boolean;
-               begin
-                  if Item.Held = Eighth then
-                     Blend_Eighth
-                       (Query.all (Q_At .. Q_At + Wide - 1),
-                        Item.Byte_Keys.all, Item.Byte_Values.all,
-                        Item.Key_Scales.all, Item.Value_Scales.all,
-                        Base, V_Base, Rows_Base, KV_Width, V_Width, Heads,
-                        Head_Size, Value_Size,
-                        Element_Count (Settings.Group_Size),
-                        First_Step, Last_Step, Scale,
-                        Settings.Attention_Cap, Settings.Max_Bias,
-                        Reserved + Which, Item.Scores.all,
-                        Attend.all (B_At .. B_At + Blend - 1), Usable);
-                  elsif Item.Held = Exact then
-                     Blend_Exact
-                       (Query.all (Q_At .. Q_At + Wide - 1),
-                        Item.Keys.all, Item.Values.all,
-                        Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
-                        Value_Size, Element_Count (Settings.Group_Size),
-                        First_Step, Last_Step, Scale,
-                        Settings.Attention_Cap, Settings.Max_Bias,
-                        Reserved + Which, Item.Scores.all,
-                        Attend.all (B_At .. B_At + Blend - 1), Usable);
-                  else
-                     Blend_Halved
-                       (Query.all (Q_At .. Q_At + Wide - 1),
-                        Item.Half_Keys.all, Item.Half_Values.all,
-                        Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
-                        Value_Size, Element_Count (Settings.Group_Size),
-                        First_Step, Last_Step, Scale,
-                        Settings.Attention_Cap, Settings.Max_Bias,
-                        Reserved + Which, Item.Scores.all,
-                        Attend.all (B_At .. B_At + Blend - 1), Usable);
-                  end if;
+                  type Batch_Share is limited new Workers_CPU.Task_Item with
+                     record
+                        Ok : Boolean := True;
+                     end record;
 
-                  if not Usable then
+                  overriding procedure Run
+                    (Share : in out Batch_Share;
+                     From  : Element_Count;
+                     To    : Element_Count);
+
+                  overriding procedure Run
+                    (Share : in out Batch_Share;
+                     From  : Element_Count;
+                     To    : Element_Count) is
+                  begin
+                     if From > To then
+                        return;
+                     end if;
+
+                     for Which in 0 .. Count - 1 loop
+                        declare
+                           Last_Step : constant Element_Count :=
+                             (if Settings.Causal
+                              then Reserved + Which
+                              else Reserved + Count - 1);
+                           First_Step : constant Element_Count :=
+                             Earliest (Settings, Last_Step, Natural (Index));
+                           Q_At   : constant Element_Count :=
+                             Slot (Which, Wide);
+                           B_At   : constant Element_Count :=
+                             Slot (Which, Blend);
+                           Usable : Boolean := True;
+                        begin
+                           if Item.Held = Eighth then
+                              Blend_Eighth
+                                (Query.all (Q_At .. Q_At + Wide - 1),
+                                 Item.Byte_Keys.all, Item.Byte_Values.all,
+                                 Item.Key_Scales.all, Item.Value_Scales.all,
+                                 Base, V_Base, Rows_Base, KV_Width, V_Width,
+                                 Heads, Head_Size, Value_Size,
+                                 Element_Count (Settings.Group_Size),
+                                 First_Step, Last_Step, Scale,
+                                 Settings.Attention_Cap, Settings.Max_Bias,
+                                 Reserved + Which,
+                                 From, To, Item.Score_Room, Item.Scores.all,
+                                 Attend.all (B_At .. B_At + Blend - 1),
+                                 Usable);
+                           elsif Item.Held = Exact then
+                              Blend_Exact
+                                (Query.all (Q_At .. Q_At + Wide - 1),
+                                 Item.Keys.all, Item.Values.all,
+                                 Base, V_Base, KV_Width, V_Width, Heads,
+                                 Head_Size, Value_Size,
+                                 Element_Count (Settings.Group_Size),
+                                 First_Step, Last_Step, Scale,
+                                 Settings.Attention_Cap, Settings.Max_Bias,
+                                 Reserved + Which,
+                                 From, To, Item.Score_Room, Item.Scores.all,
+                                 Attend.all (B_At .. B_At + Blend - 1),
+                                 Usable);
+                           else
+                              Blend_Halved
+                                (Query.all (Q_At .. Q_At + Wide - 1),
+                                 Item.Half_Keys.all, Item.Half_Values.all,
+                                 Base, V_Base, KV_Width, V_Width, Heads,
+                                 Head_Size, Value_Size,
+                                 Element_Count (Settings.Group_Size),
+                                 First_Step, Last_Step, Scale,
+                                 Settings.Attention_Cap, Settings.Max_Bias,
+                                 Reserved + Which,
+                                 From, To, Item.Score_Room, Item.Scores.all,
+                                 Attend.all (B_At .. B_At + Blend - 1),
+                                 Usable);
+                           end if;
+
+                           if not Usable then
+                              Share.Ok := False;
+                           end if;
+                        end;
+                     end loop;
+                  end Run;
+
+                  Share  : aliased Batch_Share;
+                  Shared : E.Error_Info;
+               begin
+                  Workers_CPU.Dispatch_Shares
+                    (Item.Team, Heads, Share'Unchecked_Access, Shared);
+
+                  if not Share.Ok or else E.Is_Error (Shared) then
                      Release;
                      Item.Current := Failed;
                      Status := E.Make (E.Tensor_Non_Finite_Value);
@@ -6187,7 +6425,7 @@ package body Model_Runner.Llama is
                      return;
                   end if;
                end;
-            end loop;
+            end if;
 
             Product_Batch
               (Item, Current.Attention_Out, Attend, Count, Norm, Status);

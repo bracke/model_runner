@@ -1289,6 +1289,13 @@ private
       --  before the rotation. Null for one that does not.
       Head_Row   : Model_Runner.Tensors.Real_Array_Access := null;
       Scores     : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  How far apart the score rows of two heads are. One row a head
+      --  rather than one for all of them, so that a share of the heads can
+      --  be blended beside another share; a head's scores are written,
+      --  softmaxed and read back inside its own iteration, and two heads
+      --  sharing a row is two heads answering with each other's arithmetic.
+      Score_Room : Model_Runner.Numerics.Element_Count := 0;
       Gate       : Model_Runner.Tensors.Real_Array_Access := null;
       Up         : Model_Runner.Tensors.Real_Array_Access := null;
 

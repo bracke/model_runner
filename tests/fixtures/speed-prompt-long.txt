@@ -1,0 +1,92 @@
+Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. Explain, in plain language and without using any lists, how a modern
+processor keeps several instructions in flight at the same time. Cover
+the instruction pipeline, out-of-order execution, branch prediction and
+the cache hierarchy, and say briefly why a program that walks memory in
+a predictable order runs faster than one that jumps around, even when
+both perform the same number of arithmetic operations in total.
+Finish with one sentence naming the single change a programmer can make
+that most often helps. 
