@@ -423,7 +423,8 @@ package body Model_Runner.Presentation is
       Resident       : Natural := 0;
       Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
-      Given_Back     : Natural := 0)
+      Given_Back     : Natural := 0;
+      Cached_Bytes   : Interfaces.Unsigned_64 := 0)
    is
       function Seconds (Value : Model_Runner.Clocks.Nanoseconds) return String
       is (Message
@@ -506,6 +507,13 @@ package body Model_Runner.Presentation is
          Put_Field
            (Item, "statistics.given_back",
             T.Image (Long_Long_Integer (Given_Back)), Diagnostic);
+
+         --  And whether the context is there as well as the weights. A
+         --  device holding one and not the other attends on the processor,
+         --  and nothing here used to say so.
+         Put_Field
+           (Item, "statistics.cached_bytes",
+            T.Image (Long_Long_Integer (Cached_Bytes)), Diagnostic);
       end if;
 
       Put_Field

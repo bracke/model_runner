@@ -152,6 +152,18 @@ package Model_Runner.Backend.Device is
    --  @return Count of matrices released to make room.
    function Given_Back return Natural;
 
+   --  How many bytes of context the device is holding.
+   --
+   --  A device holding the weights and not the context is a device that
+   --  computes the products there and hands attention back, and the only
+   --  sign of it from outside is a run spending processor time it should
+   --  not need. This program could report the first and not the second, and
+   --  a figure that halved with no cause found is what made that a gap
+   --  worth closing rather than an omission.
+   --
+   --  @return Bytes of key and value cache resident, or zero for none.
+   function Cached_Bytes return Interfaces.Unsigned_64;
+
    --  One matrix-vector product, on the device.
    --
    --  @param Weight Weight view; must be binary32.

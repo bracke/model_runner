@@ -261,6 +261,11 @@ package Model_Runner.Presentation is
    --    others. Anything above zero says the model does not fit and is being
    --    uploaded again as it is wanted, which is the difference between a
    --    device that is computing and one that is being fed.
+   --  @param Cached_Bytes How many bytes of context the device is holding.
+   --    Zero says it holds none, which is a different thing from holding no
+   --    weights: a device with the model and not the context computes the
+   --    products there and hands attention back, and processor time a run
+   --    should not have needed was the only sign of it.
    procedure Put_Statistics
      (Item           : in out Console;
       Outcome        : Model_Runner.Generation.Result;
@@ -268,7 +273,8 @@ package Model_Runner.Presentation is
       Resident       : Natural := 0;
       Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
-      Given_Back     : Natural := 0);
+      Given_Back     : Natural := 0;
+      Cached_Bytes   : Interfaces.Unsigned_64 := 0);
 
    --  Somewhere for per-token explanations to go: standard error, one line
    --  a token, in a shape a program can read.

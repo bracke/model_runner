@@ -704,6 +704,8 @@ package body Model_Runner.CLI.Execute is
                      then Opt.Repack_Names
                      elsif Opt.Option_Name (Index) = "--kv-cache"
                      then Opt.Cache_Names
+                     elsif Opt.Option_Name (Index) = "--arith"
+                     then Opt.Arithmetic_Names
                      elsif Opt.Option_Name (Index) = "--pooling"
                      then Opt.Pooling_Names
                      elsif Opt.Option_Name (Index) = "--color"
@@ -2156,7 +2158,9 @@ package body Model_Runner.CLI.Execute is
                      Imported       => Model_Runner.Backend.Device.Imported,
                      Resident_Bytes =>
                        Model_Runner.Backend.Device.Resident_Bytes,
-                     Given_Back     => Model_Runner.Backend.Device.Given_Back);
+                     Given_Back     => Model_Runner.Backend.Device.Given_Back,
+                     Cached_Bytes   =>
+                       Model_Runner.Backend.Device.Cached_Bytes);
                else
                   Pres.Put_Statistics (Screen, Outcome);
                end if;

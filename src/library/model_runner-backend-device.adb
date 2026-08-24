@@ -246,6 +246,9 @@ package body Model_Runner.Backend.Device is
 
    function Given_Back return Natural is (Products.Given_Back (Engine));
 
+   function Cached_Bytes return Interfaces.Unsigned_64
+   is (Products.Cached_Bytes (Engine));
+
    function Queues return Natural is (Devices.Queue_Count (Opened));
 
    function Waited return Natural is (Products.Waited (Engine));
