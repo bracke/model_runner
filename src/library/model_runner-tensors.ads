@@ -1,3 +1,4 @@
+with System;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
@@ -45,7 +46,17 @@ package Model_Runner.Tensors is
       Format  : Model_Runner.GGUF.Tensor_Type := Model_Runner.GGUF.Type_F32;
       Rows    : Element_Count := 0;
       Columns : Element_Count := 0;
-      Data    : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  Where the buffer begins and how much of it there is, rather than an
+      --  access to it. An access to an unconstrained array carries its
+      --  bounds with it and can only be made by allocating, which is exactly
+      --  what a weight read from a mapped file must not do: the bytes are
+      --  already in memory, at an address this program did not allocate and
+      --  may not free. An address and a length can describe either, and the
+      --  overlay each reader declares over them costs nothing.
+      Base    : System.Address := System.Null_Address;
+      Span    : Model_Runner.Bytes.Byte_Count := 0;
+
       Offset  : Model_Runner.Bytes.Byte_Count := 0;
       Length  : Model_Runner.Bytes.Byte_Count := 0;
    end record;
@@ -113,6 +124,30 @@ package Model_Runner.Tensors is
       Rows    : Element_Count;
       Columns : Element_Count;
       Data    : Model_Runner.Bytes.Byte_Array_Access;
+      Offset  : Model_Runner.Bytes.Byte_Count;
+      Result  : out View;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+   --  The same, over a buffer this program did not allocate.
+   --
+   --  What a mapped model's weights are: bytes at an address the host gave
+   --  back, which nothing here owns, frees or may write to. The view records
+   --  where they are and how far they go and is otherwise the same view.
+   --
+   --  @param Format Element format.
+   --  @param Rows Number of rows.
+   --  @param Columns Contiguous elements per row.
+   --  @param Base First byte of the buffer.
+   --  @param Span Bytes the buffer holds.
+   --  @param Offset Byte position of the first element within it.
+   --  @param Result Constructed view; empty on failure.
+   --  @param Status As above.
+   procedure Make
+     (Format  : Model_Runner.GGUF.Tensor_Type;
+      Rows    : Element_Count;
+      Columns : Element_Count;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
       Offset  : Model_Runner.Bytes.Byte_Count;
       Result  : out View;
       Status  : out Model_Runner.Errors.Error_Info);

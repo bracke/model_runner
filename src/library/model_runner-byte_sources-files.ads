@@ -1,3 +1,4 @@
+with System;
 private with Ada.Streams.Stream_IO;
 
 private with Model_Runner.Platform.Mapping;
@@ -95,6 +96,13 @@ package Model_Runner.Byte_Sources.Files is
    --  @param Self Source instance.
    --  @return True when the file is mapped.
    overriding function Is_Mapped (Self : File_Source) return Boolean;
+
+   --  The mapping's first byte, or Null_Address when the file is read
+   --  rather than mapped.
+   --
+   --  @param Self Source instance.
+   --  @return Address of the first mapped byte, or Null_Address.
+   overriding function Base (Self : File_Source) return System.Address;
 
    --  Path the source was opened with.
    --

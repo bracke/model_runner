@@ -1,3 +1,4 @@
+with System;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 
@@ -46,6 +47,23 @@ package Model_Runner.Byte_Sources is
    --  @param Self Source instance.
    --  @return True when reads are served from mapped memory.
    function Is_Mapped (Self : Source) return Boolean is abstract;
+
+   --  Where the source's bytes already are, when they are anywhere.
+   --
+   --  A reader that would otherwise copy a span into a buffer of its own can
+   --  ask for this instead and read the bytes where they lie. For a mapped
+   --  file that is the mapping; for a source that is already an array in
+   --  this process, it is that array. Null_Address means the bytes are not
+   --  addressable as a whole and must be read.
+   --
+   --  What is returned is the first byte of the source, so a caller wanting
+   --  a span at an offset adds the offset itself. Nothing here owns the
+   --  memory, nothing may write to it, and it stays valid only as long as
+   --  the source is open.
+   --
+   --  @param Self Source instance.
+   --  @return Address of the first byte, or Null_Address.
+   function Base (Self : Source) return System.Address is abstract;
 
    --  Stable identifier of the source used in diagnostics.
    --

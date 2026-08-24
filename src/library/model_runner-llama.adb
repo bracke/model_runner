@@ -1,12 +1,17 @@
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
+with System.Storage_Elements;
+
 with Model_Runner.Arithmetic;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Text;
 
 package body Model_Runner.Llama is
+
+   use type System.Address;
+   use type System.Storage_Elements.Integer_Address;
 
    --  The same reason the kernels give. Every activation and weight here
    --  came out of a model file, so a not-a-number or an infinity is possible
@@ -982,7 +987,8 @@ package body Model_Runner.Llama is
            (Format  => Containers.Tensor_Format (Source, Index),
             Rows    => Rows,
             Columns => Columns,
-            Data    => Item.Arena,
+            Base    => Item.Weights_Base,
+            Span    => Item.Weights_Span,
             Offset  =>
               B.Byte_Count (Containers.Tensor_Offset (Source, Index))
               - Item.Arena_Base,
@@ -1055,7 +1061,8 @@ package body Model_Runner.Llama is
            (Format  => Whole.Format,
             Rows    => Rows,
             Columns => Columns,
-            Data    => Item.Arena,
+            Base    => Item.Weights_Base,
+            Span    => Item.Weights_Span,
             Offset  => Whole.Offset + B.Byte_Count (First_Row) * Row_Bytes,
             Result  => Result,
             Status  => Status);
@@ -1184,7 +1191,8 @@ package body Model_Runner.Llama is
            (Format  => Whole.Format,
             Rows    => Rows,
             Columns => Whole.Columns,
-            Data    => Whole.Data,
+            Base    => Whole.Base,
+            Span    => Whole.Span,
             Offset  =>
               Whole.Offset
               + B.Byte_Count (Which) * B.Byte_Count (Rows)
@@ -1269,8 +1277,13 @@ package body Model_Runner.Llama is
       --  back nothing, which costs nothing, and a model cannot know whether
       --  the device holds its addresses.
       Model_Runner.Backend.Device.Forget_Matrices;
+      --  Only what was allocated is released. A borrowed span belongs to the
+      --  source that gave it and is unmapped when that source closes.
       B.Free (Item.Arena);
       Item.Arena_Base := 0;
+      Item.Weights_Base := System.Null_Address;
+      Item.Weights_Span := 0;
+      Item.Weights_Held := False;
    end Release_Weights;
 
    --  The feed-forward gate this architecture was trained with.
@@ -1641,24 +1654,70 @@ package body Model_Runner.Llama is
          Length : constant B.Byte_Count :=
            B.Byte_Count (Containers.Tensor_Data_Bytes (Source));
       begin
-         Mem.Check_Allocation
-           (Item.Accounting, Mem.Model_Weights,
-            Interfaces.Unsigned_64 (Length), Status);
-         if E.Is_Error (Status) then
-            Fail (Status);
-            return;
-         end if;
-
-         B.Allocate (Length, Item.Arena);
-         if Item.Arena = null then
-            Fail (E.Make (E.Memory_Allocation_Failed));
-            return;
-         end if;
-
-         Mem.Record_Allocation
-           (Item.Accounting, Mem.Model_Weights,
-            Interfaces.Unsigned_64 (Length));
          Item.Arena_Base := B.Byte_Count (Containers.Data_Offset (Source));
+
+         --  Where the source says its bytes already are. A mapped file
+         --  answers with its mapping, and then nothing is allocated and
+         --  nothing is copied: the weights are the file's own pages, faulted
+         --  in as they are read. A source that cannot say answers with
+         --  nothing and is read into an arena, as every source was.
+         --  Only a mapping is borrowed, and only when it holds the whole
+         --  tensor section. A source that is already an array in this
+         --  process could say where it is too, and is not asked: that array
+         --  belongs to whoever passed it and may be freed while the model
+         --  still refers to it, where a mapping belongs to the source and
+         --  lives exactly as long as it does.
+         if Bytes.Is_Mapped
+           and then Bytes.Base /= System.Null_Address
+           and then Bytes.Size >= Item.Arena_Base + Length
+
+           --  Unless the device was opened to read the weights where they
+           --  lie. Both ways avoid a copy and they are exclusive: the driver
+           --  imports host memory it can pin and refuses a file's pages, so
+           --  a caller who asked for the device to take the model's memory
+           --  is given memory the device will take.
+           and then not
+             (Model_Runner.Backend."="
+                (Backend, Model_Runner.Backend.Backend_Device)
+              and then Model_Runner.Backend.Device.Shares_Host)
+         then
+            Item.Weights_Base :=
+              System.Storage_Elements.To_Address
+                (System.Storage_Elements.To_Integer (Bytes.Base)
+                 + System.Storage_Elements.Integer_Address (Item.Arena_Base));
+            Item.Weights_Span := Length;
+            Item.Weights_Held := False;
+
+            --  Counted as what it is. A read-only mapping costs address
+            --  space rather than resident pages, so it is not charged
+            --  against the memory limit and does not appear as memory this
+            --  program is holding -- which is the whole of the difference
+            --  between mapping a model and reading one.
+            Mem.Record_Mapping
+              (Item.Accounting, Interfaces.Unsigned_64 (Length));
+         else
+            Mem.Check_Allocation
+              (Item.Accounting, Mem.Model_Weights,
+               Interfaces.Unsigned_64 (Length), Status);
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
+
+            B.Allocate (Length, Item.Arena);
+            if Item.Arena = null then
+               Fail (E.Make (E.Memory_Allocation_Failed));
+               return;
+            end if;
+
+            Mem.Record_Allocation
+              (Item.Accounting, Mem.Model_Weights,
+               Interfaces.Unsigned_64 (Length));
+
+            Item.Weights_Base := Item.Arena.all'Address;
+            Item.Weights_Span := B.Byte_Count (Item.Arena.all'Length);
+            Item.Weights_Held := True;
+         end if;
 
          --  The file is validated, and now it is read. Between those two
          --  moments it may have been replaced -- a download finishing over
@@ -1672,10 +1731,13 @@ package body Model_Runner.Llama is
          end if;
 
          P.Publish (Observer, P.Load_Progress (P.Preparing_Tensors));
-         Bytes.Read (Item.Arena_Base, Item.Arena.all, Status);
-         if E.Is_Error (Status) then
-            Fail (Status);
-            return;
+
+         if Item.Weights_Held then
+            Bytes.Read (Item.Arena_Base, Item.Arena.all, Status);
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
          end if;
       end;
 
@@ -2466,8 +2528,7 @@ package body Model_Runner.Llama is
             if Skipped = 0 then
                declare
                   Was : constant Interfaces.Unsigned_64 :=
-                    (if Item.Arena = null then 0
-                     else Interfaces.Unsigned_64 (Item.Arena.all'Length));
+                    Interfaces.Unsigned_64 (Item.Weights_Span);
                begin
                   Release_Weights (Item);
                   Mem.Record_Release
@@ -2502,7 +2563,7 @@ package body Model_Runner.Llama is
             function Counted_Before (Upto : Natural) return Boolean is
             begin
                for Earlier in Held'First .. Upto - 1 loop
-                  if Held (Earlier).all.Data = Held (Upto).all.Data
+                  if Held (Earlier).all.Base = Held (Upto).all.Base
                     and then Held (Earlier).all.Offset
                              = Held (Upto).all.Offset
                   then
@@ -3551,6 +3612,10 @@ package body Model_Runner.Llama is
    -- Template_Ready --
    ---------------------
 
+   function Weights_Mapped (Item : Model) return Boolean
+   is (not Item.Weights_Held
+       and then Item.Weights_Base /= System.Null_Address);
+
    function Template_Ready (Item : Model) return Boolean
    is (Item.Chat_Present and then Model_Runner.Templates.Is_Compiled (Item.Chat));
 
@@ -3710,6 +3775,14 @@ package body Model_Runner.Llama is
                      At_Row : constant B.Byte_Count :=
                        Target.Offset
                        + B.Byte_Count (Row) * T.Row_Bytes (Target);
+
+                     --  The one place a view is written through rather than
+                     --  read. It reaches here only for a model prepared as
+                     --  binary32, whose weights are the copy the repacking
+                     --  made and never a mapped file, which nothing may
+                     --  write to.
+                     Held : B.Byte_Array (1 .. Target.Span)
+                       with Import, Address => Target.Base;
                   begin
                      for Column in 0 .. Target.Columns - 1 loop
                         declare
@@ -3719,21 +3792,18 @@ package body Model_Runner.Llama is
                            Was : constant Real :=
                              N.From_Bits
                                (Interfaces.Unsigned_32
-                                  (Target.Data (Target.Data'First + At_Byte))
+                                  (Held (Held'First + At_Byte))
                                 or Interfaces.Shift_Left
                                      (Interfaces.Unsigned_32
-                                        (Target.Data
-                                           (Target.Data'First + At_Byte + 1)),
+                                        (Held (Held'First + At_Byte + 1)),
                                       8)
                                 or Interfaces.Shift_Left
                                      (Interfaces.Unsigned_32
-                                        (Target.Data
-                                           (Target.Data'First + At_Byte + 2)),
+                                        (Held (Held'First + At_Byte + 2)),
                                       16)
                                 or Interfaces.Shift_Left
                                      (Interfaces.Unsigned_32
-                                        (Target.Data
-                                           (Target.Data'First + At_Byte + 3)),
+                                        (Held (Held'First + At_Byte + 3)),
                                       24));
 
                            Now : constant Real :=
@@ -3743,15 +3813,15 @@ package body Model_Runner.Llama is
                            Bits : constant Interfaces.Unsigned_32 :=
                              N.Bits (Now);
                         begin
-                           Target.Data (Target.Data'First + At_Byte) :=
+                           Held (Held'First + At_Byte) :=
                              B.Byte (Bits and 16#FF#);
-                           Target.Data (Target.Data'First + At_Byte + 1) :=
+                           Held (Held'First + At_Byte + 1) :=
                              B.Byte
                                (Interfaces.Shift_Right (Bits, 8) and 16#FF#);
-                           Target.Data (Target.Data'First + At_Byte + 2) :=
+                           Held (Held'First + At_Byte + 2) :=
                              B.Byte
                                (Interfaces.Shift_Right (Bits, 16) and 16#FF#);
-                           Target.Data (Target.Data'First + At_Byte + 3) :=
+                           Held (Held'First + At_Byte + 3) :=
                              B.Byte
                                (Interfaces.Shift_Right (Bits, 24) and 16#FF#);
                         end;
@@ -4000,17 +4070,23 @@ package body Model_Runner.Llama is
       --  And the weights themselves, by their size and a sample. Reading
       --  all of them would be a second pass over a model at every load for
       --  a number only a saved session uses.
-      if Item.Arena /= null then
-         Mix (Interfaces.Unsigned_64 (Item.Arena.all'Length));
+      if Item.Weights_Base /= System.Null_Address then
+         Mix (Interfaces.Unsigned_64 (Item.Weights_Span));
 
          declare
+            --  Through the weights wherever they are: the copy when there
+            --  is one, the file's own pages when there is not. Reading the
+            --  arena directly was what this did, and the arena is null for
+            --  a model that was never copied.
+            Held : B.Byte_Array (1 .. Item.Weights_Span)
+              with Import, Address => Item.Weights_Base;
+
             Step : constant B.Byte_Count :=
-              B.Byte_Count'Max (1, B.Byte_Count (Item.Arena.all'Length) / 4096);
+              B.Byte_Count'Max (1, Item.Weights_Span / 4096);
             At_Byte : B.Byte_Count := 0;
          begin
-            while At_Byte < B.Byte_Count (Item.Arena.all'Length) loop
-               Mix (Interfaces.Unsigned_64
-                      (Item.Arena.all (Item.Arena.all'First + At_Byte)));
+            while At_Byte < Item.Weights_Span loop
+               Mix (Interfaces.Unsigned_64 (Held (Held'First + At_Byte)));
                At_Byte := At_Byte + Step;
             end loop;
          end;
@@ -5448,7 +5524,7 @@ package body Model_Runner.Llama is
                --  was added beside a projection down that belonged to the
                --  gated one, and Falcon then ran with its feed-forward
                --  computed and discarded.
-               if Current.Gate.Data = null then
+               if not T.Is_Present (Current.Gate) then
                   --  No gate: up, a Gaussian unit, down. The gate being
                   --  absent is what says so, rather than the architecture,
                   --  so an architecture added later with the same
@@ -6184,7 +6260,7 @@ package body Model_Runner.Llama is
                --  As in the single-token path: the two arrangements differ
                --  only in how Gate is filled, and the projection down is
                --  written once so that neither can skip it.
-               if Current.Gate.Data = null then
+               if not T.Is_Present (Current.Gate) then
                   --  No gate: up, a Gaussian unit, down. As in the
                   --  single-token path, the gate being absent is what says
                   --  so.

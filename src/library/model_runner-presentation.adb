@@ -462,6 +462,13 @@ package body Model_Runner.Presentation is
       Put_Field
         (Item, "statistics.workers",
          T.Image (Long_Long_Integer (Outcome.Workers)), Diagnostic);
+      Put_Field
+        (Item, "statistics.weights",
+         Message
+           (Item,
+            (if Outcome.Weights_Mapped
+             then "statistics.weights.mapped"
+             else "statistics.weights.read")), Diagnostic);
       --  What a draft model proposed and how much of it was taken, for a
       --  run that had one. The only number that says whether the draft was
       --  worth its own passes.

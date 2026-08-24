@@ -7,6 +7,8 @@ with Model_Runner.Quantization;
 
 package body Model_Runner.Tensors is
 
+   use type System.Address;
+
    --  Weights come from a model file and may be infinities or not-a-numbers,
    --  so the kernels here can produce one. That is data, not a fault: callers
    --  test with Kernels.All_Finite and report it. Validity checking raises on
@@ -94,7 +96,8 @@ package body Model_Runner.Tensors is
    ----------------
 
    function Is_Present (Item : View) return Boolean
-   is (Item.Data /= null and then Item.Rows > 0 and then Item.Columns > 0);
+   is (Item.Base /= System.Null_Address
+       and then Item.Rows > 0 and then Item.Columns > 0);
 
    ----------------
    -- Row_Bytes --
@@ -123,11 +126,34 @@ package body Model_Runner.Tensors is
    -- Make --
    ----------
 
+   --  The owned form, said in terms of the borrowed one: a buffer this
+   --  program allocated is a buffer at an address with a length, and nothing
+   --  below this line needs to know which it was handed.
    procedure Make
      (Format  : G.Tensor_Type;
       Rows    : Element_Count;
       Columns : Element_Count;
       Data    : B.Byte_Array_Access;
+      Offset  : B.Byte_Count;
+      Result  : out View;
+      Status  : out E.Error_Info) is
+   begin
+      if Data = null then
+         Result := Empty_View;
+         Status := E.Make (E.Tensor_Out_Of_Bounds);
+         return;
+      end if;
+
+      Make (Format, Rows, Columns, Data.all'Address,
+            B.Byte_Count (Data.all'Length), Offset, Result, Status);
+   end Make;
+
+   procedure Make
+     (Format  : G.Tensor_Type;
+      Rows    : Element_Count;
+      Columns : Element_Count;
+      Base    : System.Address;
+      Span    : B.Byte_Count;
       Offset  : B.Byte_Count;
       Result  : out View;
       Status  : out E.Error_Info)
@@ -143,7 +169,7 @@ package body Model_Runner.Tensors is
          return;
       end if;
 
-      if Rows = 0 or else Columns = 0 or else Data = null then
+      if Rows = 0 or else Columns = 0 or else Base = System.Null_Address then
          Status := E.Make (E.Tensor_Invalid_Shape);
          E.Add_Integer (Status, "rows", Long_Long_Integer (Rows));
          E.Add_Integer (Status, "columns", Long_Long_Integer (Columns));
@@ -171,7 +197,7 @@ package body Model_Runner.Tensors is
             return;
          end if;
 
-         if B.Byte_Count (A.Value (Finish)) > Data.all'Length then
+         if B.Byte_Count (A.Value (Finish)) > Span then
             Status := E.Make (E.Tensor_Out_Of_Bounds);
             E.Add_Integer
               (Status, "offset", Long_Long_Integer (Offset), E.Param_Offset);
@@ -179,7 +205,7 @@ package body Model_Runner.Tensors is
               (Status, "size", Long_Long_Integer (A.Value (Total)),
                E.Param_Bytes);
             E.Add_Integer
-              (Status, "available", Long_Long_Integer (Data.all'Length),
+              (Status, "available", Long_Long_Integer (Span),
                E.Param_Bytes);
             return;
          end if;
@@ -188,7 +214,8 @@ package body Model_Runner.Tensors is
            (Format  => Format,
             Rows    => Rows,
             Columns => Columns,
-            Data    => Data,
+            Base    => Base,
+            Span    => Span,
             Offset  => Offset,
             Length  => B.Byte_Count (A.Value (Total)));
          Status := E.Success;
@@ -220,17 +247,22 @@ package body Model_Runner.Tensors is
       --  The same kernel the matrix product uses, with one input vector, so
       --  a row computed alone and the same row computed inside a batch give
       --  the same bits.
-      Q.Accumulate_Dot
-        (Format  => Item.Format,
-         Data    => Item.Data.all,
-         Offset  => Item.Offset + B.Byte_Count (Row) * Row_Bytes (Item),
-         Blocks  => Item.Columns / Per_Block,
-         Vectors => Vector,
-         First   => Vector'First,
-         Stride  => Item.Columns,
-         Count   => 1,
-         Sums    => Sums,
-         Ok      => Ok);
+      declare
+         Held : B.Byte_Array (1 .. Item.Span)
+           with Import, Address => Item.Base;
+      begin
+         Q.Accumulate_Dot
+           (Format  => Item.Format,
+            Data    => Held,
+            Offset  => Item.Offset + B.Byte_Count (Row) * Row_Bytes (Item),
+            Blocks  => Item.Columns / Per_Block,
+            Vectors => Vector,
+            First   => Vector'First,
+            Stride  => Item.Columns,
+            Count   => 1,
+            Sums    => Sums,
+            Ok      => Ok);
+      end;
 
       return (if Ok then Real (Sums (0)) else 0.0);
    end Row_Dot;
@@ -274,10 +306,15 @@ package body Model_Runner.Tensors is
               Element_Count'Min (Chunk_Elements (Per_Block), Remaining);
             Blocks    : constant Element_Count := Span / Per_Block;
          begin
-            Q.Decode_Blocks
-              (Item.Format, Item.Data.all, Base, Blocks,
-               Target (Target'First + Column
-                       .. Target'First + Column + Span - 1), Ok);
+            declare
+               Held : B.Byte_Array (1 .. Item.Span)
+                 with Import, Address => Item.Base;
+            begin
+               Q.Decode_Blocks
+                 (Item.Format, Held, Base, Blocks,
+                  Target (Target'First + Column
+                          .. Target'First + Column + Span - 1), Ok);
+            end;
             if not Ok then
                Status := E.Make (E.Tensor_Out_Of_Bounds);
                return;
@@ -370,29 +407,37 @@ package body Model_Runner.Tensors is
 
       Blocks := Item.Columns / Per_Block;
 
-      for Row in First .. Last loop
-         Sums := [others => 0.0];
+      --  Declared once around the row loop rather than once a row: an
+      --  overlay costs nothing to enter, and nothing to leave, but saying so
+      --  once reads better than saying it for every row.
+      declare
+         Held : B.Byte_Array (1 .. Item.Span)
+           with Import, Address => Item.Base;
+      begin
+         for Row in First .. Last loop
+            Sums := [others => 0.0];
 
-         --  One call for the whole row. The multiply is folded into the
-         --  decode, so the weights are never written out in any form: there
-         --  is no span buffer to size, to fill or to read back.
-         Q.Accumulate_Dot
-           (Format  => Item.Format,
-            Data    => Item.Data.all,
-            Offset  => Item.Offset + B.Byte_Count (Row) * Row_Bytes (Item),
-            Blocks  => Blocks,
-            Vectors => Vectors,
-            First   => Vectors'First,
-            Stride  => Item.Columns,
-            Count   => Count,
-            Sums    => Sums,
-            Ok      => Ok);
+            --  One call for the whole row. The multiply is folded into the
+            --  decode, so the weights are never written out in any form:
+            --  there is no span buffer to size, to fill or to read back.
+            Q.Accumulate_Dot
+              (Format  => Item.Format,
+               Data    => Held,
+               Offset  => Item.Offset + B.Byte_Count (Row) * Row_Bytes (Item),
+               Blocks  => Blocks,
+               Vectors => Vectors,
+               First   => Vectors'First,
+               Stride  => Item.Columns,
+               Count   => Count,
+               Sums    => Sums,
+               Ok      => Ok);
 
-         for Which in 0 .. Count - 1 loop
-            Target (Target'First + Which * Item.Rows + Row) :=
-              (if Ok then Real (Sums (Which)) else 0.0);
+            for Which in 0 .. Count - 1 loop
+               Target (Target'First + Which * Item.Rows + Row) :=
+                 (if Ok then Real (Sums (Which)) else 0.0);
+            end loop;
          end loop;
-      end loop;
+      end;
    end Mat_Mul_Range;
 
 end Model_Runner.Tensors;

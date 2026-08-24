@@ -1,3 +1,4 @@
+with System;
 private with Ada.Finalization;
 
 with Interfaces;
@@ -942,6 +943,18 @@ package Model_Runner.Llama is
    --  @return The fingerprint, or zero before preparation.
    function Fingerprint (Item : Model) return Interfaces.Unsigned_64;
 
+   --  Whether this model's weights are the file's own pages.
+   --
+   --  True when the model was prepared from a mapped source and nothing was
+   --  copied: the weights cost address space rather than memory, and are
+   --  read as they are touched. False when they were read into an arena,
+   --  which is what a source that cannot be mapped, or a device that wants
+   --  the host's own pointer, leads to.
+   --
+   --  @param Item Prepared model.
+   --  @return True when the weights are borrowed rather than held.
+   function Weights_Mapped (Item : Model) return Boolean;
+
    --  Drop the oldest positions and slide the rest down.
    --
    --  What it is for is a context that has filled. A run that stops there
@@ -1105,8 +1118,20 @@ private
       Ready       : Boolean := False;
       Sessions    : Natural := 0;
       Settings    : Configuration;
+      --  The model's weights, and where in the file they begin.
+      --
+      --  Arena is the copy, and is null when there is none: a source that
+      --  can say where its bytes already are is read where they lie, which
+      --  for a mapped file means the weights are the file's own pages --
+      --  never copied, never counted as this program's memory, and faulted
+      --  in as they are touched rather than all at once. Weights_Base and
+      --  Weights_Span describe whichever of the two it turned out to be, and
+      --  everything downstream reads only those.
       Arena       : Model_Runner.Bytes.Byte_Array_Access := null;
       Arena_Base  : Model_Runner.Bytes.Byte_Count := 0;
+      Weights_Base : System.Address := System.Null_Address;
+      Weights_Span : Model_Runner.Bytes.Byte_Count := 0;
+      Weights_Held : Boolean := False;
 
       --  The decoded copy of the weight matrices, when one was asked for.
       --  Every matrix view then refers into this instead of into the file's

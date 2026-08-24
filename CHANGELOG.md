@@ -316,6 +316,42 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A mapped model's weights are the file's own pages.** The file was
+  mapped and the mapping served reads, and then the whole tensor section was
+  read into one arena -- so an eleven-gigabyte model cost eleven gigabytes
+  of memory and 5.248 s of loading warm, 38.684 s cold, before it had
+  answered anything. The arena is gone for any source that can say where its
+  bytes already are. Loading a one-gigabyte model costs 0.065 s against
+  0.55 s; twelve tokens of Qwen3-30B-A3B from a cold cache take 15.84 s
+  where the loading alone used to take 38.684 s; and the resident set peaks
+  at 4.6 GB rather than 11.25 GB, because a mixture routes to eight experts
+  of a hundred and twenty-eight and the pages of the other hundred and
+  twenty are never touched.
+
+  What stood in the way was Ada rather than design. An access to an
+  unconstrained array carries its bounds and can only be made by allocating,
+  so it cannot be pointed at a mapping: converting an address to one needs a
+  general access type, and converting an access-to-constrained to an
+  access-to-unconstrained is refused because the designated subtypes must
+  statically match. Both were tried. So a view holds the address its buffer
+  begins at and how far it runs, and each reader declares an overlay over
+  the two -- which is what the device backend was already doing for every
+  product it recorded, and which is now the only way weights are addressed.
+
+  Three decisions worth naming. Only a mapping is borrowed: a source that is
+  already an array in this process could say where it is and is not asked,
+  because that array belongs to whoever passed it and may be freed while the
+  model still refers to it. Mapped bytes are counted as mapped and are not
+  charged against the memory limit, which is what this program's accounting
+  has always said a mapping is -- address space rather than resident pages
+  -- and is what lets a model larger than memory run. And a device opened to
+  read the weights where they lie still gets them: that import wants the
+  host's own pointer and this driver will not take a file's pages, so asked
+  for both, a run copied 633 233 408 bytes to the device and read none where
+  they lay. The two ways of not copying a model are exclusive on this
+  hardware; the caller who named one gets it, and `--show-stats` says which
+  of the two happened.
+
 - **Four formats decode about twice as fast, from one source compiled
   twice.** Q5_0 and Q5_1 keep the fifth bit of each element at a varying
   place in a thirty-two bit word, so the shift amount varies with the

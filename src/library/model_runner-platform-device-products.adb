@@ -2647,7 +2647,8 @@ package body Model_Runner.Platform.Device.Products is
 
    procedure Add_Product
      (Steps   : in out Sequence;
-      Weights : Model_Runner.Bytes.Byte_Array_Access;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
       At_Byte : Model_Runner.Bytes.Byte_Count;
       Packing : Weight_Packing;
       Rows    : Natural;
@@ -2655,16 +2656,15 @@ package body Model_Runner.Platform.Device.Products is
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address)
    is
-      use type Model_Runner.Bytes.Byte_Array_Access;
    begin
-      if Steps.Held = Sequence_Limit or else Weights = null then
+      if Steps.Held = Sequence_Limit or else Base = System.Null_Address then
          Added := False;
          return;
       end if;
 
       Steps.Held := Steps.Held + 1;
       Steps.Items (Steps.Held) :=
-        (Weights => Weights, At_Byte => At_Byte, Packing => Packing,
+        (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => False,
          Blends => False, Unit => 0, Attends => False,
          others => <>);
@@ -2677,7 +2677,8 @@ package body Model_Runner.Platform.Device.Products is
 
    procedure Add_Chained_Product
      (Steps   : in out Sequence;
-      Weights : Model_Runner.Bytes.Byte_Array_Access;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
       At_Byte : Model_Runner.Bytes.Byte_Count;
       Packing : Weight_Packing;
       Rows    : Natural;
@@ -2685,7 +2686,6 @@ package body Model_Runner.Platform.Device.Products is
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address)
    is
-      use type Model_Runner.Bytes.Byte_Array_Access;
    begin
       --  Nothing to chain to, no room, or a width that does not meet the
       --  one before it. Each is a refusal rather than something patched
@@ -2693,7 +2693,7 @@ package body Model_Runner.Platform.Device.Products is
       --  and be wrong.
       if Steps.Held = 0
         or else Steps.Held = Sequence_Limit
-        or else Weights = null
+        or else Base = System.Null_Address
         or else Columns /= Steps.Items (Steps.Held).Rows
       then
          Added := False;
@@ -2702,7 +2702,7 @@ package body Model_Runner.Platform.Device.Products is
 
       Steps.Held := Steps.Held + 1;
       Steps.Items (Steps.Held) :=
-        (Weights => Weights, At_Byte => At_Byte, Packing => Packing,
+        (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => True,
          Blends => False, Unit => 0, Attends => False,
          others => <>);
@@ -2729,7 +2729,8 @@ package body Model_Runner.Platform.Device.Products is
 
       Steps.Held := Steps.Held + 1;
       Steps.Items (Steps.Held) :=
-        (Weights => null, At_Byte => 0, Packing => Weight_Packing'First,
+        (Base => System.Null_Address, Span => 0, At_Byte => 0,
+         Packing => Weight_Packing'First,
          Rows => Steps.Items (Steps.Held - 1).Rows,
          Columns => Steps.Items (Steps.Held - 1).Rows,
          Key => System.Null_Address, Chained => True,
@@ -2783,7 +2784,8 @@ package body Model_Runner.Platform.Device.Products is
 
       Steps.Held := Steps.Held + 1;
       Steps.Items (Steps.Held) :=
-        (Weights => null, At_Byte => 0, Packing => Weight_Packing'First,
+        (Base => System.Null_Address, Span => 0, At_Byte => 0,
+         Packing => Weight_Packing'First,
 
          --  What it writes for one position, and what it reads for one:
          --  said as rows and columns so that a product chained to it and a
@@ -2814,7 +2816,6 @@ package body Model_Runner.Platform.Device.Products is
       Cancelled : out Boolean;
       Cancel    : Model_Runner.Cancellation.Token_Reference := null)
    is
-      use type Model_Runner.Bytes.Byte_Array_Access;
       use type System.Storage_Elements.Integer_Address;
 
       Ignored : constant Boolean := Set_Asking (Item);
@@ -2925,8 +2926,8 @@ package body Model_Runner.Platform.Device.Products is
                         * Interfaces.Unsigned_64 (This.Columns) > Max_Elements
               or else Interfaces.Unsigned_64 (This.Columns)
                         * Interfaces.Unsigned_64 (Count) > Max_Elements
-              or else This.Weights = null
-              or else Interfaces.Unsigned_64 (This.Weights.all'Length)
+              or else This.Base = System.Null_Address
+              or else Interfaces.Unsigned_64 (This.Span)
                         < Interfaces.Unsigned_64 (This.At_Byte)
                           + Interfaces.Unsigned_64 (This.Rows) * Wide
             then
@@ -2965,6 +2966,12 @@ package body Model_Runner.Platform.Device.Products is
       for Index in 1 .. Steps.Held loop
          declare
             This : Step renames Steps.Items (Index);
+
+            --  The storage this step's matrix lies in, read where it lies.
+            --  Zero length for the steps that name no matrix, which are
+            --  left before the overlay is used.
+            Held : Model_Runner.Bytes.Byte_Array (1 .. This.Span)
+              with Import, Address => This.Base;
          begin
             --  Neither a combining step nor an attention step names a
             --  matrix: one reads the two results before it, the other reads
@@ -2974,7 +2981,7 @@ package body Model_Runner.Platform.Device.Products is
             end if;
 
             Acquire_Weights
-              (Item, This.Weights.all, This.At_Byte, This.Packing,
+              (Item, Held, This.At_Byte, This.Packing,
                This.Rows, This.Columns, Places (Index).Weight,
                Places (Index).Buffer, Places (Index).Memory,
                Places (Index).Base, Places (Index).Borrowed, Good, This.Key);

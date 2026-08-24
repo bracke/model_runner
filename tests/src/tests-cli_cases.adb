@@ -627,10 +627,14 @@ package body Tests.CLI_Cases is
                           "a sequence just opened held something");
 
                   Products.Add_Product
-                    (Steps, Held, 0, Products.Values_F32, Rows, Cols, Added);
+                    (Steps, Held.all'Address,
+                     Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                     0, Products.Values_F32, Rows, Cols, Added);
                   Assert (Added, "a sequence refused its first product");
                   Products.Add_Product
-                    (Steps, Held, Values, Products.Values_F32, Rows, Cols,
+                    (Steps, Held.all'Address,
+                     Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                     Values, Products.Values_F32, Rows, Cols,
                      Added);
                   Assert (Added, "a sequence refused its second product");
                   Assert (Products.Length (Steps) = 2,
@@ -711,12 +715,16 @@ package body Tests.CLI_Cases is
                      --  And chained, where the middle never comes back.
                      Products.Open_Sequence (Chain);
                      Products.Add_Product
-                       (Chain, Held, 0, Products.Values_F32, Rows, Cols,
+                       (Chain, Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                        0, Products.Values_F32, Rows, Cols,
                         Added);
                      Assert (Added, "a chain refused its first product");
 
                      Products.Add_Chained_Product
-                       (Chain, Second_Held, 0, Products.Values_F32,
+                       (Chain, Second_Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Second_Held.all'Length),
+                        0, Products.Values_F32,
                         Rows, Rows, Added);
                      Assert (Added, "a chain refused its chained product");
 
@@ -739,7 +747,9 @@ package body Tests.CLI_Cases is
                      --  A chain has to have something to chain to.
                      Products.Open_Sequence (Chain);
                      Products.Add_Chained_Product
-                       (Chain, Second_Held, 0, Products.Values_F32,
+                       (Chain, Second_Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Second_Held.all'Length),
+                        0, Products.Values_F32,
                         Rows, Rows, Added);
                      Assert (not Added,
                              "a sequence chained a product to nothing");
@@ -747,10 +757,14 @@ package body Tests.CLI_Cases is
                      --  And the widths have to meet.
                      Products.Open_Sequence (Chain);
                      Products.Add_Product
-                       (Chain, Held, 0, Products.Values_F32, Rows, Cols,
+                       (Chain, Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                        0, Products.Values_F32, Rows, Cols,
                         Added);
                      Products.Add_Chained_Product
-                       (Chain, Second_Held, 0, Products.Values_F32,
+                       (Chain, Second_Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Second_Held.all'Length),
+                        0, Products.Values_F32,
                         Rows, Rows + 1, Added);
                      Assert (not Added,
                              "a sequence chained a product whose columns do"
@@ -788,10 +802,14 @@ package body Tests.CLI_Cases is
 
                      Products.Open_Sequence (Blend);
                      Products.Add_Product
-                       (Blend, Held, 0, Products.Values_F32, Rows, Cols,
+                       (Blend, Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                        0, Products.Values_F32, Rows, Cols,
                         Added);
                      Products.Add_Product
-                       (Blend, Held, Values, Products.Values_F32, Rows, Cols,
+                       (Blend, Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                        Values, Products.Values_F32, Rows, Cols,
                         Added);
                      Assert (Added, "a sequence refused a second arm");
 
@@ -826,7 +844,9 @@ package body Tests.CLI_Cases is
                      --  to match.
                      Products.Open_Sequence (Blend);
                      Products.Add_Product
-                       (Blend, Held, 0, Products.Values_F32, Rows, Cols,
+                       (Blend, Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                        0, Products.Values_F32, Rows, Cols,
                         Added);
                      Products.Add_Combination (Blend, 0, Added);
                      Assert (not Added,
@@ -914,7 +934,8 @@ package body Tests.CLI_Cases is
                        (Format  => Model_Runner.GGUF.Type_F32,
                         Rows    => N.Element_Count (Rows),
                         Columns => N.Element_Count (Cols),
-                        Data    => Store,
+                        Base    => Store.all'Address,
+                        Span    => Model_Runner.Bytes.Byte_Count (Store.all'Length),
                         Offset  =>
                           Model_Runner.Bytes.Byte_Count (Index - 1) * Span,
                         others  => <>);
@@ -1004,7 +1025,8 @@ package body Tests.CLI_Cases is
                           (Format  => Model_Runner.GGUF.Type_F32,
                            Rows    => N.Element_Count (Rows),
                            Columns => N.Element_Count (Rows),
-                           Data    => Down_Held,
+                           Base    => Down_Held.all'Address,
+                           Span    => Model_Runner.Bytes.Byte_Count (Down_Held.all'Length),
                            Offset  => 0,
                            others  => <>);
 

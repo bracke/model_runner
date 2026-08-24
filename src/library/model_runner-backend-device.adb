@@ -1,12 +1,17 @@
+with System;
+with System.Storage_Elements;
+
 with Model_Runner.Bytes;
 with Model_Runner.Platform.Device.Products;
 
 package body Model_Runner.Backend.Device is
 
+   use type System.Address;
+   use type System.Storage_Elements.Integer_Address;
+
    use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.GGUF.Tensor_Type;
    use type Model_Runner.Tensors.Real_Array_Access;
-   use type Model_Runner.Bytes.Byte_Array_Access;
    use type Model_Runner.Bytes.Byte_Count;
    use type Interfaces.Unsigned_64;
 
@@ -231,6 +236,8 @@ package body Model_Runner.Backend.Device is
    -- Imported --
    ---------------
 
+   function Shares_Host return Boolean is (Sharing);
+
    function Imported return Natural is (Products.Imported (Engine));
 
    -----------------
@@ -318,6 +325,16 @@ package body Model_Runner.Backend.Device is
    --  public operations are. Written once because the checks are the same
    --  and a second copy of them is a second place for one to be missing.
 
+   --  Where a tensor begins, as an address. A view says where its buffer is
+   --  and how far into it the tensor starts; the device wants the two added,
+   --  as the name it keeps a resident matrix under.
+   function At_Offset
+     (Base : System.Address; Offset : Model_Runner.Bytes.Byte_Count)
+      return System.Address
+   is (System.Storage_Elements.To_Address
+         (System.Storage_Elements.To_Integer (Base)
+          + System.Storage_Elements.Integer_Address (Offset)));
+
    --  Why a product that did not run did not run.
    --
    --  This backend has one operation and the device has it, so a product
@@ -393,7 +410,7 @@ package body Model_Runner.Backend.Device is
 
       if Vectors = null or else Target = null
         or else Count = 0
-        or else Weight.Data = null
+        or else Weight.Base = System.Null_Address
         or else Vectors.all'Length < Count * Weight.Columns
         or else Target.all'Length < Count * Weight.Rows
       then
@@ -414,7 +431,7 @@ package body Model_Runner.Backend.Device is
            * Model_Runner.Bytes.Byte_Count (Wide);
       begin
          if Wide = 0
-           or else Weight.Data.all'Length < Weight.Offset + Bytes
+           or else Weight.Span < Weight.Offset + Bytes
          then
             Status := E.Make (E.Tensor_Shape_Mismatch);
             return;
@@ -427,9 +444,8 @@ package body Model_Runner.Backend.Device is
          --  handed a page-aligned range, and a range described by the matrix
          --  alone would be one nobody could check the ends of.
          declare
-            Storage : Model_Runner.Bytes.Byte_Array
-              (1 .. Weight.Data.all'Length)
-              with Import, Address => Weight.Data.all'Address;
+            Storage : Model_Runner.Bytes.Byte_Array (1 .. Weight.Span)
+              with Import, Address => Weight.Base;
          begin
             Products.Multiply
               (Engine, Storage, Weight.Offset, Packing,
@@ -592,7 +608,8 @@ package body Model_Runner.Backend.Device is
    begin
       Ok := False;
 
-      if not Ready_Now or else Into = null or else Weight.Data = null
+      if not Ready_Now or else Into = null
+        or else Weight.Base = System.Null_Address
         or else Into.all'Length < Slots * Weight.Rows
         or else Weight.Columns
                   /= Model_Runner.Numerics.Element_Count (Heads)
@@ -619,10 +636,9 @@ package body Model_Runner.Backend.Device is
       --  Chained: the projection reads the blend where it lies, which is
       --  the whole point of naming the two together.
       Products.Add_Chained_Product
-        (Steps, Weight.Data, Weight.Offset, Packing,
+        (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
          Natural (Weight.Rows), Natural (Weight.Columns), Added,
-         Key => Weight.Data.all (Weight.Data.all'First + Weight.Offset)
-                  'Address);
+         Key => At_Offset (Weight.Base, Weight.Offset));
       if not Added then
          return;
       end if;
@@ -707,7 +723,7 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
 
-            if This.Data = null
+            if This.Base = System.Null_Address
               or else Vector = null
               or else Into (Into'First + (Index - Weights'First)) = null
               or else Vector.all'Length < This.Columns
@@ -719,10 +735,9 @@ package body Model_Runner.Backend.Device is
             end if;
 
             Products.Add_Product
-              (Steps, This.Data, This.Offset, Packing,
+              (Steps, This.Base, This.Span, This.Offset, Packing,
                Natural (This.Rows), Natural (This.Columns), Added,
-               Key => This.Data.all
-                        (This.Data.all'First + This.Offset)'Address);
+               Key => At_Offset (This.Base, This.Offset));
             if not Added then
                Status := E.Make (E.Tensor_Shape_Mismatch);
                return;
@@ -850,7 +865,7 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
 
-            if This.Data = null then
+            if This.Base = System.Null_Address then
                Status := E.Make (E.Tensor_Shape_Mismatch);
                return;
             end if;
@@ -868,16 +883,14 @@ package body Model_Runner.Backend.Device is
                Wanted := Wanted + Gate.Rows * Spread;
 
                Products.Add_Chained_Product
-                 (Steps, This.Data, This.Offset, Packing,
+                 (Steps, This.Base, This.Span, This.Offset, Packing,
                   Natural (This.Rows), Natural (This.Columns), Added,
-                  Key => This.Data.all
-                           (This.Data.all'First + This.Offset)'Address);
+                  Key => At_Offset (This.Base, This.Offset));
             else
                Products.Add_Product
-                 (Steps, This.Data, This.Offset, Packing,
+                 (Steps, This.Base, This.Span, This.Offset, Packing,
                   Natural (This.Rows), Natural (This.Columns), Added,
-                  Key => This.Data.all
-                           (This.Data.all'First + This.Offset)'Address);
+                  Key => At_Offset (This.Base, This.Offset));
             end if;
 
             if not Added then

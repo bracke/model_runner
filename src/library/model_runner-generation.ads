@@ -183,6 +183,14 @@ package Model_Runner.Generation is
         Model_Runner.Backend.Backend_CPU;
       Workers          : Positive := 1;
 
+      --  Whether the weights this run read were the model file's own pages
+      --  or a copy of them. It is the difference between a load that costs
+      --  nothing and one that costs the whole file, and between a resident
+      --  set the size of what was touched and one the size of the model, so
+      --  a reader comparing two runs wants to know which they are looking
+      --  at.
+      Weights_Mapped   : Boolean := False;
+
       --  How many tokens a draft model proposed and how many of those the
       --  real one agreed with. Both zero without a draft.
       --

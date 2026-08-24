@@ -1643,7 +1643,9 @@ package body Tests.Backend_Cases is
 
          Products.Open_Sequence (Steps);
          Products.Add_Product
-           (Steps, Identity, 0, Products.Values_F32,
+           (Steps, Identity.all'Address,
+            Model_Runner.Bytes.Byte_Count (Identity.all'Length),
+            0, Products.Values_F32,
             Natural (Span), Natural (Span), Added);
          Assert (Added, "a sequence would not take the product");
 
@@ -1845,8 +1847,11 @@ package body Tests.Backend_Cases is
 
       Matrix := (Format => Model_Runner.GGUF.Type_F32,
                  Rows => Span, Columns => Span,
-                 Data => Weights, Offset => 0,
-                 Length => Weights.all'Length);
+                 Base => Weights.all'Address,
+                 Span => Model_Runner.Bytes.Byte_Count (Weights.all'Length),
+                 Offset => 0,
+                 Length => Model_Runner.Bytes.Byte_Count
+                             (Weights.all'Length));
 
       Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Ok);
 

@@ -131,6 +131,18 @@ package Model_Runner.Backend.Device is
    --  @return Count taken rather than copied.
    function Imported return Natural;
 
+   --  Whether this device was opened to read the weights where they lie.
+   --
+   --  Asked by the preparation, because the two ways of not copying a model
+   --  are exclusive on the hardware this runs on: a device that takes the
+   --  host's own pointer cannot be handed one into a mapped file -- the
+   --  driver will not import pages it cannot pin -- so a caller who asked
+   --  for that gets a model read into memory the device can take, and a
+   --  caller who did not gets the file's pages and no copy at all.
+   --
+   --  @return True when the device was opened sharing the host's memory.
+   function Shares_Host return Boolean;
+
    --  How many matrices have been given back to make room for others.
    --
    --  Zero for a model the device can hold. A number that rises with every

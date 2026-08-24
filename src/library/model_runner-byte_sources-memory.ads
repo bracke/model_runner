@@ -1,3 +1,4 @@
+with System;
 --  A byte source backed by a caller-owned buffer.
 --
 --  Used by the synthetic-model fixtures in the tests crate and by the
@@ -35,6 +36,12 @@ package Model_Runner.Byte_Sources.Memory is
    --  @param Self Source instance.
    --  @return Always False.
    overriding function Is_Mapped (Self : Buffer_Source) return Boolean;
+
+   --  The buffer itself, which is already in this process.
+   --
+   --  @param Self Source instance.
+   --  @return Address of the first byte, or Null_Address when there is none.
+   overriding function Base (Self : Buffer_Source) return System.Address;
 
    --  Report that a buffer cannot change behind the reader.
    --

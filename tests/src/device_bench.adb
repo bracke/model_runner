@@ -329,7 +329,9 @@ package body Device_Bench is
               (Order, Heads, Wide, Wide, Sharing, 0, Steps_Count - 1,
                0, Layers * Kept * Narrow, Narrow, Narrow, 0.125, 0.0, Added);
             Products.Add_Chained_Product
-              (Order, Weights, 0, Products.Values_F32, Rows, Cols, Added);
+              (Order, Weights.all'Address,
+               Model_Runner.Bytes.Byte_Count (Weights.all'Length), 0,
+               Products.Values_F32, Rows, Cols, Added);
 
             if not Added then
                Ada.Text_IO.Put_Line
@@ -389,7 +391,9 @@ package body Device_Bench is
             --  them where they lie.
             Products.Open_Sequence (Linked);
             Products.Add_Product
-              (Linked, Weights, 0, Products.Values_F32, Span, Cols, Added);
+              (Linked, Weights.all'Address,
+               Model_Runner.Bytes.Byte_Count (Weights.all'Length), 0,
+               Products.Values_F32, Span, Cols, Added);
             Products.Add_Attention
               (Linked, Heads, Wide, Wide, Sharing, 0, Steps_Count - 1,
                0, Layers * Kept * Narrow, Narrow, Narrow, 0.125, 0.0, Added,
@@ -400,7 +404,9 @@ package body Device_Bench is
             --  rotation happens between the two.
             Products.Open_Sequence (Split);
             Products.Add_Product
-              (Split, Weights, 0, Products.Values_F32, Span, Cols, Added);
+              (Split, Weights.all'Address,
+               Model_Runner.Bytes.Byte_Count (Weights.all'Length), 0,
+               Products.Values_F32, Span, Cols, Added);
 
             if not Added then
                Ada.Text_IO.Put_Line ("    the pair would not record");

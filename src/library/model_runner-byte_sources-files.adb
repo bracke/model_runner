@@ -275,6 +275,15 @@ package body Model_Runner.Byte_Sources.Files is
    is (Self.Mapped);
 
    ----------
+   -- Base --
+   ----------
+
+   overriding function Base (Self : File_Source) return System.Address
+   is (if Self.Mapped
+       then Model_Runner.Platform.Mapping.Base (Self.Map)
+       else System.Null_Address);
+
+   ----------
    -- Name --
    ----------
 

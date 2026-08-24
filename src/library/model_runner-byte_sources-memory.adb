@@ -52,6 +52,18 @@ package body Model_Runner.Byte_Sources.Memory is
    -- Is_Mapped --
    ---------------
 
+   ----------
+   -- Base --
+   ----------
+
+   --  A buffer source is memory already: what it would copy from is what a
+   --  caller would copy to, so it says where it is and the copy does not
+   --  happen. An empty one addresses nothing.
+   overriding function Base (Self : Buffer_Source) return System.Address
+   is (if Self.Data /= null and then Self.Data.all'Length > 0
+       then Self.Data.all'Address
+       else System.Null_Address);
+
    overriding function Is_Mapped (Self : Buffer_Source) return Boolean is
       pragma Unreferenced (Self);
    begin

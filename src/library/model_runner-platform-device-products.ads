@@ -287,7 +287,8 @@ package Model_Runner.Platform.Device.Products is
    --  single call has and the reason a device reads a model's own storage.
    --
    --  @param Steps Sequence to add to.
-   --  @param Weights Storage the matrix lies in.
+   --  @param Base First byte of the storage the matrix lies in.
+   --  @param Span Bytes that storage holds.
    --  @param At_Byte Where in that storage the matrix begins.
    --  @param Packing How each row is packed.
    --  @param Rows Number of rows.
@@ -298,7 +299,8 @@ package Model_Runner.Platform.Device.Products is
    --    record rather than a silent truncation.
    procedure Add_Product
      (Steps   : in out Sequence;
-      Weights : Model_Runner.Bytes.Byte_Array_Access;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
       At_Byte : Model_Runner.Bytes.Byte_Count;
       Packing : Weight_Packing;
       Rows    : Natural;
@@ -324,7 +326,8 @@ package Model_Runner.Platform.Device.Products is
    --  first product is chained has nothing to chain to and is refused.
    --
    --  @param Steps Sequence to add to.
-   --  @param Weights Storage the matrix lies in.
+   --  @param Base First byte of the storage the matrix lies in.
+   --  @param Span Bytes that storage holds.
    --  @param At_Byte Where in that storage the matrix begins.
    --  @param Packing How each row is packed.
    --  @param Rows Number of rows.
@@ -335,7 +338,8 @@ package Model_Runner.Platform.Device.Products is
    --  @param Key Identifies the matrix so the device may keep it.
    procedure Add_Chained_Product
      (Steps   : in out Sequence;
-      Weights : Model_Runner.Bytes.Byte_Array_Access;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
       At_Byte : Model_Runner.Bytes.Byte_Count;
       Packing : Weight_Packing;
       Rows    : Natural;
@@ -877,7 +881,12 @@ private
    end record;
 
    type Step is record
-      Weights : Model_Runner.Bytes.Byte_Array_Access := null;
+      --  Where the matrix lies and how much of it there is, rather than an
+      --  access to it: a mapped model's weights are at an address this
+      --  program did not allocate, and an access to an unconstrained array
+      --  cannot be made to point at one.
+      Base    : System.Address := System.Null_Address;
+      Span    : Model_Runner.Bytes.Byte_Count := 0;
       At_Byte : Model_Runner.Bytes.Byte_Count := 0;
       Packing : Weight_Packing := Weight_Packing'First;
       Rows    : Natural := 0;
