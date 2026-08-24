@@ -16,6 +16,11 @@ check the result.
 
 ## What has been compared
 
+Agreement, not speed. What each runtime costs for the same file is a separate
+question and is answered in the README's `### Against llama.cpp`, with the
+runs and the loads recorded in `docs/measured-figures.txt`; nothing on this
+page is a timing.
+
 This has now been done once, against `llama.cpp` `b1-717dad5` and
 TinyLlama-1.1B-Chat-v1.0 Q8_0 (Apache-2.0; see
 [fixture-provenance.md](fixture-provenance.md)). The recording is

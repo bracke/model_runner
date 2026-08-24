@@ -7,6 +7,348 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A run says how much of the context the device is holding.** It could say
+  how much of the *model* was there and not how much of the context, so a
+  device computing the products there and attending here looked exactly like
+  one doing all of it -- and the only sign from outside was processor time a
+  run should not have needed. `--show-stats` reports **bytes of context on
+  the device** now.
+
+  It was added to answer an open question and its first act was to kill the
+  answer that had been guessed. The device's 110-token prompt reads 1.7 s
+  against 0.608 s an hour earlier, and that was written up as attention
+  falling back off the device. The context is resident: 92274688 bytes, at
+  the default budget and under a smaller one alike. Compiling the processor
+  fallback out entirely, so that it cannot run at all, leaves the same prompt
+  at 1.692 s and 1.05 s of processor. Attention is on the device throughout.
+
+  What is left is inside the device path, which has not changed since the
+  sitting that read 0.608 s, on a part where llama.cpp still reads 1666
+  tokens a second. The question is narrower and still open, and the figures
+  file carries what has been ruled out.
+
+- **The integer product is built twice, and the plan for it was wrong about
+  the work.** The plan called for a hand-written kernel reaching `VPDPBUSD`
+  through a machine code insertion, a third instruction-set level and a new
+  host question to gate it. What it needed was one switch clause. The kernel
+  is written around a sixteen-bit multiply-add, which the wider sets have
+  more and wider lanes of, and the compiler finds it once it is told which
+  machine it is compiling for:
+
+  | | 110-token prompt | 64 generated |
+  |---|---:|---:|
+  | the baseline | 1.476 s | 2.672 s |
+  | `-march=x86-64-v3` | **1.297 s** | **2.402 s** |
+  | `-march=x86-64-v4`, 256-bit | 1.308 s | 2.366 s |
+
+  Twelve per cent and ten, from ordinary Ada nobody rewrote. v4 is level with
+  v3 and excludes far more hardware, so v3 is built -- and the host question
+  it needs, avx2 and bmi2, is the one this program already asks for the
+  decoders, so no new level and no new host body were needed either. There
+  are no intrinsics here and no assembly.
+
+  One source and two compilations of it, as `Decoders` is, with contraction
+  off on the wider one so the two answer bit for bit and a test says so.
+
+  Published: the 110-token prompt is 83.4 tokens a second and sixty-four
+  generated tokens 26.2, against llama.cpp's 377.7 and 39.9 on the same file
+  and host -- 4.5 times and 1.5, where the first reading of that table said
+  16 and 3.3.
+
+- **Attention runs in shares of the heads.** It was the one part of a forward
+  pass still running entirely on the calling task while every worker sat
+  idle, and the token budget had just named it the largest thing left on the
+  processor. A head reads its own slice of the query and writes its own slice
+  of the blend, so heads are independent -- the one thing that had to change
+  first is that the scores are a row a head rather than one row shared, since
+  a head writes its scores, softmaxes them and reads them back inside its own
+  iteration.
+
+  A 1419-token prompt goes from 83.757 s to **31.043 s**, which is 45.7 tokens
+  a second against 16.9, and the 110-token prompt 1.767 s to 1.377 s. That
+  shape is the point:
+  attention is quadratic in the context and the rest of a forward pass is
+  linear, so at a hundred and ten tokens it is a fifth of the gain and at
+  fourteen hundred it is nearly all of it. `speed-prompt-long.txt` is a
+  fixture now so the first line can be taken again.
+
+  Every digest is unchanged: a head's arithmetic does not depend on which
+  heads are computed beside it, so this is the same values in a different
+  order of execution rather than something the tolerance had to allow.
+
+  It nearly did not land. The gate reported four logits of the sweep's 1.1
+  million outside tolerance -- all gemma3, generating a token at a time, one
+  apart by 0.5131 against a bound of 0.5 -- while the same sweep run on its
+  own was clean, which is the worst way for a gate to be wrong: differently
+  from the thing it reproduces. **The sweep now sets its own arithmetic**,
+  from the command line and from nothing else. It had been inheriting it: the
+  gate runs the unit suite first, one of its cases runs the program in the
+  same process, and the program's default arithmetic is the quantized one, so
+  the whole cross product was running in an arithmetic nobody asked for and
+  being held to the tight bound while doing it.
+
+  `Model_Runner.Backend.CPU` gained a `Task_Item` interface and
+  `Dispatch_Shares` for it, with a test that the shares cover every item
+  exactly once at every worker count. The pool cuts a count of items the way it cuts
+  the rows of a matrix and knows nothing else about the work, which is what
+  keeps a blend's twenty parameters out of the backend.
+
+- **The token budget says what to do next, and what not to.** It measured
+  the floating-point path because `tests benchmark` never asked for the other
+  one, so since the default changed it had been describing a run nobody
+  makes. It sets the arithmetic itself now and reports both. Generating, at a
+  load of 0.14: the feed-forward matrices are 69.1 per cent of a token, the
+  attention projections 21.0, the vocabulary projection 6.4, and everything
+  that is not a matrix product 3.5 -- 31.078 ms of these against 73.752 at
+  `--arith f32`.
+
+  Two decisions fall out of it. **The products are 96.5 per cent of what it
+  measures**, so the rotation (0.101 ms, since its angles were tabulated) and
+  the two transcendental kernels (0.845 ms together) are not worth an
+  instruction set: a wider `Exp` would be worth about two per cent of a token
+  if it won outright, and it has lost once already.
+
+  And **a generated token really costs 44.2 ms against the 31.078 accounted
+  for**. The missing third is attention over the cache, which this tool
+  cannot reach because the three blend kernels have no entry point outside
+  `Model_Runner.Llama`. That gap was about a ninth of a token when the budget
+  was first taken; the products have got 2.4 times faster since and attention
+  has not. It is the largest single thing left on the processor, and it is
+  the one part of a forward pass that still runs entirely on the calling task
+  with the worker pool idle beside it.
+
+- **The activation a product writes is out of a standing mapping too.** The
+  entry before this one kept the read-back's mapping and left this one,
+  saying its wrong answers had a cause nobody had found. The cause was that
+  the two products which write an activation are textually different -- one
+  names `Columns`, the other `Steps.Items (1).Columns` -- so converting the
+  obvious form converted one of them and left the other calling a writer that
+  unmaps when it is done. **One writer left on a buffer pulls the mapping out
+  from under every other writer of it.**
+
+  With both standing, and `Write_Into` gone because nothing called it any
+  more, the device's 110-token prompt goes 1.054 s → 0.660 s → **0.608 s**
+  across the three steps, and sixty-four generated tokens 4.541 s → 4.292 s →
+  **3.626 s**, which is that row's best reading in eight sittings. The gap to
+  llama.cpp on the device is **9.2 times on the prompt and 3.2 generating**,
+  where the first reading of that table said 29 and 4.1 -- and none of it came
+  from the shader, which nothing has touched.
+
+  Three explanations were tried and measured out before the real one was
+  looked for, and none of them was wrong about anything except being the
+  cause. The rule that would have found it first is in the code now: the unit
+  that can be converted safely is every user of one buffer, not one call
+  site.
+
+- **A product's results are read out of a standing mapping.** Every product
+  mapped the device's result memory, copied out of it and unmapped it again,
+  twice a call counting the activation -- and the cache beside it had already
+  written down that a map and an unmap pair costs about a millisecond and a
+  half. B1 to B3 had ruled out the shader's memory pattern, its decode and
+  its dispatch width, and left the cost of a call itself, which the batch
+  measurement bracketed at 0.6 to 2.3 ms. This is most of that.
+
+  The 110-token prompt on the device goes from 1.054 s to **0.660 s**, which
+  is 166.7 tokens a second against llama.cpp's 1679 on the same file and
+  host -- ten times, where the first reading of that table said twenty-nine.
+  The device table now shows the device finishing the long run two and a half
+  times sooner than the processor for a sixtieth of the processor time.
+
+  The activation a product writes in is the other pair and is not done. It
+  produced wrong answers, the drafted device test caught them, and three
+  explanations were tried and measured out: a mapping sized by the call
+  rather than the allocation, another path unmapping the same memory
+  underneath it, and a megabyte of batch copied through a constant on the
+  stack. None was it. The comment where that write is says so, so that the
+  next person does not spend the afternoon twice.
+
+- **A prompt is read in batches of a hundred and twenty-eight.** The default
+  was thirty-two, chosen for the processor, and the device had never been
+  asked what it wanted. It wants fewer calls: a 110-token prompt on the
+  device reads 2.767 s at a batch of eight, 1.973 s at thirty-two and
+  **1.054 s** at the cap -- sixteen passes over the weights either way, so
+  the whole of that factor of 2.6 is how many times the host tells the device
+  to do something. On the processor the same sweep reads 2.125 s at
+  thirty-two and 1.738 s at the cap.
+
+  So the device's 110-token prompt goes from 1.951 s to 1.054 s and its
+  processor time from 1.07 s to **0.12 s**, against the processor backend's
+  8.79 s for a run it now loses by sixty per cent. The gap to llama.cpp on
+  the device is 15.7 times where it was 29, and none of it came from the
+  shader.
+
+  What the default costs is how often a run can be cancelled or report
+  progress while reading a prompt: every hundred and twenty-eight tokens
+  rather than every thirty-two, about a second on this model. A caller who
+  wants a finer grain asks for a smaller batch and pays for it in prefill.
+
+  Five figure groups gained `model_runner-generation.ads` and
+  `model_runner-cli-options.ads` as sources, because this change walked
+  through a hole: the default batch decides every prompt figure published in
+  the README and lived in a file no group named, so raising it moved six
+  numbers with no fingerprint firing.
+
+- **Four rows against one reading of the activation.** The quantized product
+  multiplied a row at a time, so the activation block was loaded once for
+  every row of the matrix -- two thousand times for a matrix of two thousand
+  rows, out of the nearest cache, which is not the same as out of a
+  register. It multiplies four rows at once now, which also gives the
+  processor four independent chains where one row gave it one.
+
+  The 110-token prompt goes from 2.284 s to 2.056 s, which is 53.5 tokens a
+  second against llama.cpp's 387.0 on the same file and host. Generating does
+  not move and was not expected to: one token is one vector, and there is
+  nothing to reuse a reading of. Nor does any value: the generated text's
+  digest is what it was, because a row's blocks are still accumulated first
+  to last whatever the tile.
+
+  The tile is four because four measured fastest -- 2.120 s at two, 1.948 s
+  at four, 2.122 s at eight, on the prompt. Eight spills the accumulators it
+  was meant to keep, which is the whole of why this has a number in it rather
+  than an argument.
+
+  `Accumulate_Dot_Integer` is gone rather than kept beside it. A format with
+  two implementations has one nobody tests, and the tiled entry answers for a
+  tile of one.
+
+  One reading in the sitting is a finding rather than a figure. **Fourteen
+  threads beat seven for the first time in a year** -- 0.535 s against
+  0.600 s for seventy-six per cent more processor time -- because a product
+  that multiplies bytes waits on memory less and on execution units more, so
+  a second thread on a core has something to do again. The bargain has now
+  been eighteen per cent better, eleven worse, seven worse, nothing, and
+  eleven better, on one machine, and every one of those readings was right
+  when it was taken. The default stays one worker per core: eleven per cent
+  of wall for seventy-six per cent of energy is not a bargain on a part
+  sharing fifteen watts with a device.
+
+- **Quantized activations are what a run does by default.** `--arith int8`
+  became the default and `--arith f32` the option, because two times the
+  speed for a bound the sweep states and holds is a bargain worth taking by
+  default -- and because a default nobody selects is a path nobody
+  exercises. Twelve tokens take 0.593 s against 1.299 s at `f32`, and 3.52 s
+  of processor time against 8.62; a 110-token prompt 2.284 s and sixty-four
+  generated tokens 2.927 s, which is 48.2 and 21.9 tokens a second against
+  llama.cpp's 377.5 and 39.9 on the same file and host. Every figure in
+  `## Speed` was taken again at the new default in one sitting.
+
+  Two of them are worth reading twice. **The processor backend now wins the
+  short run against the device** and has nearly caught it on the long one --
+  nothing on the device moved, and the shader still multiplies in binary32;
+  what the device keeps is the processor row, 0.22 s against 3.57 s. And the
+  reference backend is thirty-six times the work of the processor one where
+  it was seventeen, which is one side moving and not two.
+
+- **The sweep runs the quantized path rather than only bounding it.** Every
+  gate run now compares it against the independent implementation on the
+  formats that have an integer kernel, at one shape, and reports what it
+  compared in a bucket of its own: 1248 logits, 9.13E-02 worst absolute,
+  1.92 worst relative, none outside the pair stated for it.
+
+  The bucket exists because the first version of the pass proved nothing. It
+  reported 1.47E-06 -- the exact path's own error -- and the reason was that
+  `Dispatch` and `Dispatch_Batch` ran their serial branch straight into the
+  floating-point product, so a run with no pool got the arithmetic it had not
+  asked for, silently, and a sweep comparing through that branch compared the
+  same two numbers twice. The serial path quantizes now, and a count of zero
+  in that bucket is what a fallback would look like.
+
+- **`--arith int8`, activations quantized to a byte.** A weight in a
+  quantized format is already a small integer and a scale; the vector it is
+  multiplied by was binary32, so the weight was widened to meet it and every
+  element product rounded twice. Rounding the vector instead -- once, before
+  the product, with a scale for every thirty-two elements -- makes a block
+  product an exact integer sum of thirty-two byte products and one multiply
+  by the two scales. That is twice the speed on this model: a 110-token
+  prompt in 2.210 s against 4.940, sixty-four tokens generated in 2.922 s
+  against 5.642, and half the processor time with it.
+
+  Inside a block the new path is the more accurate one -- the integer sum
+  cannot exceed 516128 and rounds nothing, where the other rounds every
+  product and then the sum. What it costs is that the input arrived rounded,
+  and the conformance sweep holds it to 5.0E-2 relative and 5.0E-1 absolute:
+  0.426 worst absolute and 1.92 worst relative over 28311 sequences, none
+  outside the bound. `--arith f32` is still the default and is what the
+  published figures are measured against; `--backend reference` never
+  quantizes anything.
+
+  Two things about it are worth keeping. The width that made it work is
+  sixteen bits, not eight: baseline x86-64 has no byte dot product and does
+  have a sixteen-bit pair multiplied into a thirty-two bit lane, so the
+  weights are unpacked to halfwords and the kernel needs no intrinsic and no
+  instruction set beyond the baseline. And the first version was *slower* --
+  41 per cent behind at thirty-two vectors a pass -- because it unpacked the
+  weights inside the loop over the batch rather than outside it, so every
+  vector re-read the block and a batch stopped being a batch.
+
+  The sweep's tolerance chain now takes the widest of the pairs that apply
+  rather than the first: a run with a rounded cache and quantized
+  activations answered to the cache's bound alone, which is a gate reporting
+  the mode it happened to test first.
+
+- **Attention reads a position's values where they lie.** The blend held one
+  component still and walked the whole cache for it, once for every component
+  of a head -- `Value_Size` passes over the same bytes, each of them touching
+  a cache line for four bytes of it, when a position's values are contiguous
+  and one pass serves sixty-four components at a time. All three blends do
+  it the second way now, a run of components at a time so the accumulators
+  stay on the stack whatever width a model gives a head.
+
+  Bit for bit what it replaced. Each component still sums over the steps in
+  ascending order and rounds once, so the run's digest is unchanged and the
+  conformance sweep moved no logit; what moved is where the sum is kept.
+
+- **The rotation computes an angle once instead of once a head.**
+  `Apply_Rotary` sat its head loop outside its pair loop and recomputed
+  `Power`, `Cos` and `Sin` for every pair of every head, though the angle
+  depends on the pair and the position and on nothing else. On a
+  thirty-two-head model that is thirty-two times the transcendental calls the
+  rotation needs, and they are the most expensive arithmetic in the package.
+  The angles are tabulated first, in the wide format the rotation reads --
+  rounding the table to `Real` would round twice where the rotation rounds
+  once -- and every head is then rotated against them. Also bit for bit.
+
+  Together the two are worth about a tenth of a run: the 110-token prompt
+  goes from 21.5 to 24.1 tokens a second on the processor and 64 generated
+  tokens from 11.0 to 12.2, with the device side moving less because less of
+  it is here. Every figure in `## Speed` was re-taken in one sitting for
+  them, and `docs/measured-figures.txt` says which sitting and at what load.
+
+- **`tests benchmark` says where a token's time goes.** Seven matrix products
+  a layer, two normalizations, an activation, a rotation and one projection
+  over the vocabulary, measured on TinyLlama-1.1B's own shapes at one vector
+  a pass and at thirty-two, each reported as milliseconds a token and as a
+  share of the token. Generating, the feed-forward matrices are 71 per cent
+  of it, the attention projections 20, and everything that is not a matrix
+  product together is under 3.
+
+  It exists because a whole-run figure is five things at once and three
+  attempts at making this engine faster were aimed by reading rather than by
+  measuring -- one of them at the attention call, which turned out not to be
+  what was slow. Attention over the cache is not in the table, and the
+  omission is the honest kind: the blends are inside `Model_Runner.Llama`
+  with no entry point this tool can reach, and a proxy for them would report
+  a number about the proxy.
+
+- **What the other runtime costs for the same file.** The comparison with
+  llama.cpp has been about agreement since it was written -- same tokens,
+  same greedy continuation, same pooled vector -- and never about time, so
+  this repository published how long a token takes here and nothing about
+  what that is beside. `## Speed` now carries both sides, taken in one
+  sitting on one host against one file: 21.5 tokens a second of prompt and
+  11.0 generated on the processor against 387.6 and 40.0, and 54.1 and 16.2
+  on the device against 1670.4 and 57.4.
+
+  Three and a half times slower generating and eighteen to thirty-one times
+  slower on the prompt, and the two are not one finding. Generating is the
+  bus -- 12 GB/s of this model against 44 -- and that is a gap in kernels
+  compiled for baseline x86-64. The prompt is a different shape of work: a
+  batch here shares one reading of the weights and multiplies a row at a
+  time, and there it is a product of two matrices against hand-written
+  kernels. `docs/measured-figures.txt` records the runs, the loads and the
+  build of the other runtime, and why the command says `--device none`
+  rather than `-ngl 0`.
+
 - **The eleventh architecture, read from a file somebody else wrote.**
   qwen3moe was the one architecture with no published file behind it -- the
   smallest published mixture is thirty billion parameters -- so what stood
