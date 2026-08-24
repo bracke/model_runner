@@ -223,6 +223,17 @@ private
       Family   : Natural := 0;
       Queues   : Natural := 0;
       Upload   : Natural := 0;
+
+      --  The kind to allocate a buffer the processor reads back out of.
+      --
+      --  Upload is chosen for what the device reads: memory it owns, which
+      --  the processor writes through a combining buffer and cannot read
+      --  back at any speed at all. Reading is what a result is for, so a
+      --  result is allocated out of a kind the processor caches even when
+      --  that means the device reaches across the bus for it. Same kind as
+      --  Upload where the device offers no cached one.
+      Download : Natural := 0;
+
       Fast     : Natural := 0;
       Shared   : Boolean := False;
       Heap     : Interfaces.Unsigned_64 := 0;

@@ -789,6 +789,11 @@ private
       Family  : Natural := 0;
       Upload  : Natural := 0;
 
+      --  The kind a buffer the processor reads back is allocated out of.
+      --  What the context chose, and the same as Upload on a device with no
+      --  cached kind to choose.
+      Download : Natural := 0;
+
       --  Made once, in this order, and released in the reverse of it.
       Shader     : System.Address := System.Null_Address;
 

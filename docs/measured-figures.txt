@@ -3428,8 +3428,47 @@ reference 1613C400FF391C67 src/library/model_runner-backend-reference.adb src/li
 # read 1.212, 2.043 and 1.993 s across three sittings on code that did not
 # change it, which is a fifteen-watt part's own business.
 
+# 2026-08-25, a result buffer is allocated out of memory the processor
+# caches. The whole group re-measured, because it moves every device figure
+# in it and none of the processor ones.
+#
+#   six-token run, 12 generated          cpu 0.509 s   device 0.563 s
+#     evaluating the prompt              cpu 0.083 s   device 0.074 s
+#     generating                         cpu 0.426 s   device 0.490 s
+#     processor time                     cpu 3.05 s    device 0.04 s
+#   110-token prompt, nothing generated  cpu 1.272 s   device 0.610 s
+#     processor time                     cpu 7.84 s    device 0.12 s
+#   where the weights are                23.19, 3.18 and 1.69 tokens/s
+#   five ratios, from `tests benchmark`  q8_0 0.56 one vector, 0.14 at
+#                                        eight, 0.043 at thirty-two; q4_0
+#                                        0.69; f32 1.33; load 1.04 to 2.06
+#
+# What the engine asked the device for was one kind of memory: the first
+# that is host-visible, coherent and the device's own. That is right for
+# what the device reads and wrong for what the processor does -- reading it
+# back is uncached, around a tenth of the bandwidth writing it gets -- and a
+# 110-token prompt reads about ninety megabytes of results. It is why this
+# group's device column read 1.70 s on 2026-08-24 and 0.608 s the day
+# before on the same code: which of those a sitting got was the driver's
+# choice and not the program's.
+#
+# So this group now names the file that makes the choice --
+# src/platform/posix/model_runner-platform-device.adb -- which nothing here
+# named while it decided every device figure in the file. That is the second
+# time a figure has turned out to rest on a source no group listed, after
+# the default batch, and the rule both of them teach is that provenance
+# covers what decides a number rather than what computes it.
+#
+# The digest claim in this group changed meaning rather than value. The
+# six-token run's two backends print different digests now -- 33f48397 on
+# the processor and 5abff916 on the device -- because the processor's
+# default arithmetic is int8 and the device computes in binary32; the
+# processor at --arith f32 prints 5abff916 and takes 1.170 s doing it. The
+# 110-token prompt agrees on cbf29ce4 either way.
+
 # load: 1.30 to 1.30 and 1.30 to 1.19 for the six-token pair, 1.19 to 2.70 and 1.50 to 1.46 for the 110-token pair, and 0.49 for the per-format ratios, 2026-08-24
-device BC0FC0D956A919B3 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads
+# load: 1.18 to 1.18 and 1.18 to 1.09 for the six-token pair, 1.09 to 1.08 and 1.08 to 1.08 for the 110-token pair, 1.04 to 2.06 for the benchmark, and 0.17, 0.17 and 0.24 before the three residency runs, 2026-08-25
+device 0E71ED575629C2CC src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -3627,8 +3666,26 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # having llama.cpp built, which nothing here checks and nobody should have
 # to install to run the suite.
 
-# covers: the four rows of the llama.cpp comparison table and the seconds quoted under it, and the 880.6 t/s that says why the command names --device none
+# covers: the four rows of the llama.cpp comparison table and the seconds quoted under it, and the 792.4 t/s that says why the command names --device none
 # load: 0.16 to 1.69 and 0.87 to 2.70 for the processor rows, 0.75 to 0.69 and 0.69 to 0.68 for the device ones, and 0.68 and 0.97 at the start of the two llama-bench runs, 2026-08-24
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes -- read by both runtimes.
 # load: 1.39 to 1.89 and 1.47 to 2.92 for the processor rows, 1.50 to 1.46 and 1.46 to 1.39 for the device ones, and 1.39 and 2.40 at the start of the two llama-bench runs, 2026-08-24
-outside BC0FC0D956A919B3 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads
+# 2026-08-25, taken again with a result buffer the processor caches, which
+# moves the two device rows and neither processor one. The engine's rows are
+# 110 tokens in 1.259 s and 64 generated in 2.236 s on the processor, 0.597 s
+# and 2.649 s on the device.
+#
+#   model_runner, processor     87.4 t/s prompt, 28.6 t/s generating
+#   llama.cpp, processor       399.4 t/s prompt, 40.8 t/s generating
+#   model_runner, device       184.3 t/s prompt, 24.2 t/s generating
+#   llama.cpp, device         1689.5 t/s prompt, 57.5 t/s generating
+#   llama.cpp at -ngl 0        792.4 t/s, which is the device answering
+#
+# The gap is 4.6 and 1.4 on the processor, 9.2 and 2.4 on the device. The
+# sitting before this one read the device rows at 25 and 3.1 behind, and the
+# difference is a second of uncached reads rather than anything either
+# runtime did; the device group beside this one says what it was. llama.cpp
+# is at 95b8e33e1, build 10597, three rounds, as before.
+
+# load: 1.09 to 1.08 and 1.08 to 1.58 for the processor rows, 1.08 to 1.08 and 1.13 to 1.04 for the device ones, and 1.05, 1.02 and 0.94 at the start of the three llama-bench runs, 2026-08-25
+outside 0E71ED575629C2CC src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb

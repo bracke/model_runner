@@ -1481,55 +1481,54 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | **0.532 s** | 1.025 s |
-| -- evaluating the prompt | 0.097 s | 0.189 s |
-| -- generating | 0.453 s | 0.769 s |
-| -- processor time | 3.11 s | **0.27 s** |
-| 110-token prompt, nothing generated | **1.384 s** | 1.679 s |
-| -- processor time | 8.15 s | **1.04 s** |
+| 6-token prompt, 12 generated | **0.509 s** | 0.563 s |
+| -- evaluating the prompt | 0.083 s | 0.074 s |
+| -- generating | 0.426 s | 0.490 s |
+| -- processor time | 3.05 s | **0.04 s** |
+| 110-token prompt, nothing generated | 1.272 s | **0.610 s** |
+| -- processor time | 7.84 s | **0.12 s** |
 
-All six cells were taken in one sitting on 2026-08-24, back to back, each
+All six cells were taken in one sitting on 2026-08-25, back to back, each
 waiting for the machine to fall below 1.50 before it started -- so the two
 columns are comparable, which they were not in the version of this table
 before last.
 
-**The processor wins both runs now, and the device's long run has an open
-question against it.** Three changes took the device's 110-token prompt from
-1.951 s to 1.054 s to 0.660 s to 0.608 s -- the default batch, then the
-results a product reads back, then the activation it writes, none of them in
-the shader. This reading is 1.696 s, and the extra time is processor time:
-1.04 s against the 0.11 s the same run reported an hour earlier.
+**The device wins the prompt by more than two to one and spends a
+sixtieth of the processor's time doing it.** Four changes took its 110-token
+prompt from 1.951 s to 0.610 s -- the default batch, the results a product
+reads back, the activation it writes, and the kind of memory those results
+are read out of. None of them is in the shader.
 
-That reading was first explained here as attention falling back off the
-device, and it is not. The engine could report how much of the model the
-device held and not how much of the context, so the explanation was a guess
-about the one number nobody could see. It can report both now -- `--show-stats`
-says **bytes of context on the device** -- and what it says is that the
-context is there: 92274688 bytes of it, under a smaller `--device-memory`
-as well as the default.
+The last of those was an open question on this page for a day, and the
+answer is worth keeping because the question looked like a hardware mood.
+The same run read 0.608 s in one sitting and 1.70 s in the next with the
+code between them unchanged, and the difference was all processor time: 1.04
+s against 0.11 s. The explanation published here first was that attention
+had fallen back off the device, and that was a guess about a number nobody
+could see -- so the engine was taught to report it. `--show-stats` says
+**bytes of context on the device**, and it said the context was there:
+92274688 bytes of it, under a smaller `--device-memory` as well as the
+default. With the processor fallback compiled out entirely, so that it could
+not run at all, the run still took 1.692 s. Attention was on the device
+throughout.
 
-The guess was tested and killed rather than argued away. With the processor
-fallback compiled out entirely, so that it cannot run at all, the same
-prompt still takes 1.692 s and still spends 1.05 s of processor. Attention
-is on the device throughout.
+What it was: a buffer the processor reads was being allocated out of memory
+the device owns. This engine asked for one kind of memory for everything it
+shares with the device -- the first kind that is host-visible, coherent and
+the device's own, which is the right answer for what the device reads and
+the wrong one for what the processor does. Reading it back is uncached and
+uncombined, around a tenth of the bandwidth writing it gets, and a 110-token
+prompt reads about ninety megabytes of results. That is the missing second.
+A result buffer is allocated out of a cached kind now, and uploads and the
+cache still come from the device's own memory, which is what they want.
 
-So what is left is inside the device path itself, and that path has not
-changed since the reading that gave 0.608 s: attention in shares of the
-heads was bisected out twice, a wider `--device-memory` does nothing, and
-llama.cpp on the same device in the same sitting still reads 1666 tokens a
-second, so the part is not throttled. A figure that tripled with the code
-that produces it unchanged is worth leaving on the page with what has been
-ruled out beside it.
+Once a bisect could run -- every commit in the range builds, which is a
+property that has to be maintained deliberately -- it said the slowdown was
+in none of them. That is what turned the search from the program's history
+to the machine underneath it.
 
 The processor row is still the argument for the backend where it holds:
-0.26 s against 3.56 s on the short run.
-
-The device column of the long run read 1.212 s, 2.043 s, 1.993 s, 1.984 s
-and 1.951 s across five sittings on code that did not change it, the machine
-quiet each time, before the batch moved it to 1.054 s and the two standing
-mappings to 0.608 s. What moves is a fifteen-watt part's own state after a day of
-being measured, which is its business and not this program's, and it is the
-reason this table says which sitting it comes from.
+0.04 s against 3.05 s on the short run, which is a seventy-sixth.
 
 The load each run printed is in `docs/measured-figures.txt`. Note that a
 `cpu` run's load-after is mostly its own doing: seven workers for a second is
@@ -1537,9 +1536,14 @@ eight seconds of processor time, so that column ends above where it started
 whatever else the machine is doing, and it is the load before a run that says
 whether the machine was quiet when it started.
 
-Both backends print the same digest of what they generated -- `5abff916` for
-the short run and `cbf29ce4` for the long one -- so this is the same text,
-not a faster answer to a different question.
+Both backends print the same digest of what they read -- `cbf29ce4` for the
+110-token prompt -- so this is the same text, not a faster answer to a
+different question. The short run's two digests differ, and what they say is
+which arithmetic ran rather than which backend: `--arith int8` is the
+processor's default and the device computes in binary32, and asking the
+processor for `--arith f32` brings back the device's own `5abff916`. It
+costs 1.170 s that way against 0.509 s, which is the quantized activations
+measured from the other end.
 
 Both rows are the device attending for itself. The short run generates, and
 generating goes a position at a time, so its 1.262 s became 1.098 s when each
@@ -1708,9 +1712,9 @@ Two more that ought to have helped, measured after the batch did. The
   and now it has numbers.
 
 What the arithmetic says is left. Sixty-four tokens generated on the device
-take 4.541 s, which is 71 ms a token, and a token is 22 layers of three
-submissions each -- so about 1.1 ms a submission, which lands squarely inside
-the 0.6 to 2.3 ms a call the batch measurement bracketed. **Device generation
+take 2.649 s, which is 41 ms a token, and a token is 22 layers of three
+submissions each -- so about 0.63 ms a submission, which lands on the floor
+of the 0.6 to 2.3 ms a call the batch measurement bracketed. **Device generation
 is very nearly all host round-trip.** Three submissions a layer is structural
 rather than careless: the normalizations, the rotation and the cache writes
 happen here, between the products, so a layer cannot become one recording
@@ -1770,9 +1774,9 @@ what it was written expecting. The same model and prompt, three ways:
 
 | Where the weights are | Generation |
 | --- | --- |
-| copied to the device, all of them | 14.38 tokens/s |
-| a fifth copied, the rest uploaded again as wanted | 3.07 tokens/s |
-| read where they lie, none copied | 1.65 tokens/s |
+| copied to the device, all of them | 23.19 tokens/s |
+| a seventh copied, the rest uploaded again as wanted | 3.18 tokens/s |
+| read where they lie, none copied | 1.69 tokens/s |
 
 So giving matrices back and uploading them again beats reading the host's
 memory by nearly two to one, and either costs four to nine times what having
@@ -1780,7 +1784,7 @@ the weights there costs. Reading where they lie is worth asking for only when
 the machine cannot hold the model twice -- which for a seven-billion
 parameter model at eight bits is fourteen gigabytes against seven. The
 statistics say which of the three happened: 155 matrices on the device and
-none given back for the first row, 23 on the device and 1992 given back for
+none given back for the first row, 21 on the device and 1994 given back for
 the second, 154 read where they lie for the third.
 
 Under the model, one product at a time, `tests benchmark` measures where that
@@ -1813,6 +1817,10 @@ single-vector rows and left the batched ones where they were:
 | q8_0, eight vectors | 0.27 | 0.24 |
 | q8_0, thirty-two vectors | 0.104 | 0.105 |
 
+Both of those columns were taken before the results a product reads back
+came out of cached memory, and the ratios below are from after it: the point
+they make about load survives the change, the numbers do not.
+
 Which is what the bias predicted: the single-vector cases are the close ones,
 where a processor slowed by other work is most of the difference, and the
 batched cases are so far in the device's favour that the machine around them
@@ -1827,21 +1835,21 @@ arrived with nothing timing them, and a format can be perfectly correct and
 four times slower than the one beside it with nothing to say so. A 512 by
 2048 matrix, resident, against the serial processor path -- the device's time
 as a fraction of it, so below one is faster there, taken in one run at a load
-of 0.49 falling to 1.20:
+of 1.04 rising to 2.06, most of the rise being the run itself:
 
 | Format | One vector | Eight | | Format | One vector | Eight |
 | --- | --- | --- | --- | --- | --- | --- |
-| Q2_K | 0.38 | 0.20 | | Q3_K | 0.60 | 0.25 |
-| IQ4_NL | 0.49 | 0.27 | | F16 | 0.71 | 0.30 |
-| Q5_1 | 0.53 | 0.27 | | Q8_0 | 0.75 | 0.26 |
-| Q5_0 | 0.56 | 0.27 | | Q4_K | 0.75 | 0.29 |
-| Q4_1 | 0.58 | 0.27 | | Q5_K | 0.77 | 0.29 |
-| IQ4_XS | 0.60 | 0.29 | | Q6_K | 0.88 | 0.32 |
-| | | | | Q4_0 | 0.92 | 0.29 |
-| | | | | BF16 | 1.25 | 0.34 |
-| | | | | F32 | 1.46 | 0.34 |
+| Q2_K | 0.28 | 0.11 | | Q3_K | 0.46 | 0.13 |
+| IQ4_NL | 0.37 | 0.14 | | F16 | 0.59 | 0.17 |
+| Q5_1 | 0.41 | 0.14 | | Q8_0 | 0.56 | 0.14 |
+| Q5_0 | 0.41 | 0.14 | | Q4_K | 0.61 | 0.16 |
+| Q4_1 | 0.45 | 0.14 | | Q5_K | 0.62 | 0.14 |
+| IQ4_XS | 0.46 | 0.15 | | Q6_K | 0.68 | 0.19 |
+| | | | | Q4_0 | 0.69 | 0.15 |
+| | | | | BF16 | 1.04 | 0.20 |
+| | | | | F32 | 1.33 | 0.21 |
 
-and q8_0 at thirty-two vectors a pass, which is 0.13.
+and q8_0 at thirty-two vectors a pass, which is 0.043.
 
 Read the one-vector column as a statement about the processor as much as
 about the device, because that is what it is. The formats the device wins hardest on
@@ -1906,21 +1914,22 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 83.4 t/s | 26.2 t/s |
-| llama.cpp, processor | 377.7 t/s | 39.9 t/s |
-| model_runner, device | 65.5 t/s | 18.2 t/s |
-| llama.cpp, device | 1666.5 t/s | 56.4 t/s |
+| model_runner, processor | 87.4 t/s | 28.6 t/s |
+| llama.cpp, processor | 399.4 t/s | 40.8 t/s |
+| model_runner, device | 184.3 t/s | 24.2 t/s |
+| llama.cpp, device | 1689.5 t/s | 57.5 t/s |
 
-On the processor: **1.5 times slower generating and 4.5 times slower reading
-a prompt**, where the first reading of this table said 3.3 and 16. The device
-rows are the ones with the open question described under
-`### The device backend`: they read 180.9 and 17.7 an hour before this
-sitting, and what moved them is not in this section.
+On the processor: **1.4 times slower generating and 4.6 times slower reading
+a prompt**, where the first reading of this table said 3.3 and 16. On the
+device, 2.4 and 9.2, where it said 3.8 and 10.1 -- and where the sitting
+before this one said 3.1 and 25, because the device rows were being measured
+with a second of uncached memory reads in them. `### The device backend`
+says what that was.
 
 The two halves of that are not the same finding. Generating reads every
 weight once a token and does one multiply with each, so it is the bus rather
-than the arithmetic that answers: llama.cpp's 40.0 t/s is about 45 GB/s of
-this model, and 22.6 t/s is about 25. Being over half way to the other
+than the arithmetic that answers: llama.cpp's 40.8 t/s is about 46 GB/s of
+this model, and 28.6 t/s is about 32. Being over half way to the other
 program's bandwidth is where quantizing the activations left this, and what
 is left is a gap in the kernels -- they are ordinary Ada compiled for
 baseline x86-64, which `## Not implemented` says and this measures -- rather
@@ -1950,27 +1959,28 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 1.319 s
-and 64 in 2.447 s on the processor, 1.679 s and 3.510 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 1.259 s
+and 64 in 2.236 s on the processor, 0.597 s and 2.649 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 762.6 t/s rather
-than 377.7 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 792.4 t/s rather
+than 399.4 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The noisiest row is the device generating: 18.2 t/s here, its best yet,
-against 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in nine
-earlier sittings at comparable loads. The processor rows and
+The noisiest row is the device generating: 24.2 t/s here, its best yet,
+against 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
+earlier sittings at comparable loads -- though the last of those is the only
+one measured with the results read back out of cached memory. The processor rows and
 both prompt rows repeat to a few per cent. Every figure in the table is one
 model, one file, one host and two prompt lengths, and a model that is not a
 small dense llama may sit anywhere with respect to it.
 
 The processor rows have moved five times since the first reading -- 21.5 to
-24.1 to 48.2 to 53.5 to about 62 to 79.9 to 83.4 on the prompt, and 11.0 to
-12.2 to about 23 to 26.2 generating -- and the moves are different kinds of thing. One of
+24.1 to 48.2 to 53.5 to about 62 to 79.9 to 87.4 on the prompt, and 11.0 to
+12.2 to about 23 to 28.6 generating -- and the moves are different kinds of thing. One of
 them is the machine rather than the program, and is quoted loosely for that
 reason: the prompt read 1.687, 1.732 and 1.767 s across three sittings with
 nothing between them touching the processor path at all, before attention

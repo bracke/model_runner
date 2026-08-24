@@ -69,6 +69,7 @@ package body Model_Runner.Platform.Device is
       Item.Queue := System.Null_Address;
       Item.Family := 0;
       Item.Upload := 0;
+      Item.Download := 0;
       Item.Fast := 0;
       Item.Shared := False;
       Item.Heap := 0;

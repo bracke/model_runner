@@ -571,12 +571,18 @@ package body Model_Runner.Platform.Device.Products is
    end Set_Asking;
 
    --  Make a buffer and the memory behind it, both released by the caller.
+   --
+   --  Read says the processor reads what is in it, which decides which kind
+   --  of memory it is made of rather than anything about the buffer itself:
+   --  a result is read back and an upload is not, and the two want opposite
+   --  kinds. See Engine.Download.
    procedure Take
      (Item   : in out Engine;
       Bytes  : Interfaces.Unsigned_64;
       Buffer : out Address;
       Memory : out Address;
-      Ok     : out Boolean)
+      Ok     : out Boolean;
+      Read   : Boolean := False)
    is
       Create : constant Create_Call := To_Create (Point ("vkCreateBuffer"));
       Wants  : constant Requirements_Call :=
@@ -615,7 +621,8 @@ package body Model_Runner.Platform.Device.Products is
       begin
          Wants (Item.Logical, Buffer, Needed'Address);
          Request.Size := Needed.Size;
-         Request.Which := C.unsigned (Item.Upload);
+         Request.Which :=
+           C.unsigned (if Read then Item.Download else Item.Upload);
 
          if Allocate (Item.Logical, Request'Address, Null_Handle,
                       Made'Access) /= 0
@@ -961,6 +968,7 @@ package body Model_Runner.Platform.Device.Products is
       Item.Queue := On.Queue;
       Item.Family := On.Family;
       Item.Upload := On.Upload;
+      Item.Download := On.Download;
 
       --  The shader.
       declare
@@ -1466,6 +1474,7 @@ package body Model_Runner.Platform.Device.Products is
       Item.Queue := Null_Handle;
       Item.Family := 0;
       Item.Upload := 0;
+      Item.Download := 0;
       Item.Instance := Null_Handle;
 
       --  Whoever was asking before this, if anyone was. Close is called from
@@ -2091,7 +2100,7 @@ package body Model_Runner.Platform.Device.Products is
          Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
          Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
          Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
-               Good);
+               Good, Read => True);
          if not Good then
             Release_Borrowed;
             return;
@@ -2464,7 +2473,7 @@ package body Model_Runner.Platform.Device.Products is
          Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
          Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
          Take (Item, Blend_Bytes, Item.Result_Buffer, Item.Result_Memory,
-               Good);
+               Good, Read => True);
          if not Good then
             return;
          end if;
@@ -3081,7 +3090,7 @@ package body Model_Runner.Platform.Device.Products is
          Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
          Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
          Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
-               Good);
+               Good, Read => True);
          if not Good then
             Release_All;
             return;

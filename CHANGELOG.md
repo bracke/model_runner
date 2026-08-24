@@ -5,6 +5,38 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A buffer the processor reads back is allocated out of memory the
+  processor caches.** The engine asked the device for one kind of memory for
+  everything they share: the first that is host-visible, coherent and the
+  device's own. That is the right answer for what the device reads and the
+  wrong one for what the processor does. Reading such memory back is uncached
+  and uncombined, around a tenth of the bandwidth writing it gets, and a
+  110-token prompt reads about ninety megabytes of results out of it.
+
+  A result buffer comes from a kind the processor caches now, chosen at open
+  and falling back to the other where a device offers none; uploads and the
+  cache still come from the device's own memory, which is what they want.
+
+  | device, 110-token prompt | before | after |
+  | --- | ---: | ---: |
+  | wall | 1.702 s | **0.610 s** |
+  | processor time | 1.04 s | **0.12 s** |
+
+  Generating goes 18.2 to 24.2 tokens a second with it, the six-token run
+  1.025 s to 0.563 s, and `tests benchmark` halves every batched device ratio
+  -- q8_0 at thirty-two vectors a pass from 0.104 to 0.043 of the processor's
+  time. Same digests throughout.
+
+  This is the open question the entry below was written to investigate. The
+  same run had read 0.608 s in one sitting and 1.70 s in the next with the
+  code between them unchanged, which looked like a fifteen-watt part's own
+  state and was not: which kind of memory the driver handed back was the
+  difference, and asking for a cached one makes the fast reading the only
+  reading. The figures file now names the source that makes that choice,
+  which nothing named while it decided every device figure published here.
+
 ### Added
 
 - **A run says how much of the context the device is holding.** It could say
@@ -22,10 +54,7 @@ Keep a Changelog and the project uses semantic versioning.
   fallback out entirely, so that it cannot run at all, leaves the same prompt
   at 1.692 s and 1.05 s of processor. Attention is on the device throughout.
 
-  What is left is inside the device path, which has not changed since the
-  sitting that read 0.608 s, on a part where llama.cpp still reads 1666
-  tokens a second. The question is narrower and still open, and the figures
-  file carries what has been ruled out.
+  What was left was inside the device path, and the entry below closes it.
 
 - **The integer product is built twice, and the plan for it was wrong about
   the work.** The plan called for a hand-written kernel reaching `VPDPBUSD`

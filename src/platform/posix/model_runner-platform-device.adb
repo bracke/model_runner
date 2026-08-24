@@ -159,6 +159,7 @@ package body Model_Runner.Platform.Device is
    Memory_Device_Local  : constant := 1;
    Memory_Host_Visible  : constant := 2;
    Memory_Host_Coherent : constant := 4;
+   Memory_Host_Cached   : constant := 8;
 
    Max_Families : constant := 16;
 
@@ -623,8 +624,9 @@ package body Model_Runner.Platform.Device is
 
          Room : Memory_Properties;
 
-         Upload : Integer := -1;
-         Fast   : Integer := -1;
+         Upload   : Integer := -1;
+         Download : Integer := -1;
+         Fast     : Integer := -1;
       begin
          if Memory = null then
             Item.Family := 0;
@@ -663,6 +665,20 @@ package body Model_Runner.Platform.Device is
                      Item.Shared := Local;
                   end if;
 
+                  --  A kind the processor reads at the speed it reads its
+                  --  own memory. Without the cached bit a read is a read of
+                  --  the device's memory a word at a time and uncombined,
+                  --  which is around a tenth of the bandwidth writing it
+                  --  gets: this machine offers no kind that is both cached
+                  --  and the device's own, and a result is read far more
+                  --  than the device reads it back.
+                  if Download < 0
+                    and then Writable
+                    and then (Flags and Memory_Host_Cached) /= 0
+                  then
+                     Download := Which - 1;
+                  end if;
+
                   if Fast < 0 and then Local then
                      Fast := Which - 1;
                   end if;
@@ -686,6 +702,13 @@ package body Model_Runner.Platform.Device is
          end if;
 
          Item.Upload := Natural (Upload);
+
+         --  A device with no cached kind reads its results out of the same
+         --  memory it writes them to, which is what every device did before
+         --  this was asked for.
+         Item.Download :=
+           (if Download < 0 then Natural (Upload) else Natural (Download));
+
          Item.Fast := Natural (Fast);
 
          for Which in 1 .. Natural'Min (Natural (Room.Heap_Count),
@@ -879,6 +902,7 @@ package body Model_Runner.Platform.Device is
       Item.Queue := System.Null_Address;
       Item.Family := 0;
       Item.Upload := 0;
+      Item.Download := 0;
       Item.Fast := 0;
       Item.Shared := False;
       Item.Heap := 0;
