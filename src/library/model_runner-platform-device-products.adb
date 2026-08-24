@@ -822,39 +822,65 @@ package body Model_Runner.Platform.Device.Products is
       Memory := Null_Handle;
    end Give_Back_Buffer;
 
-   --  Copy values into a buffer's memory.
-   procedure Write_Into
+   --  Where a buffer's memory is mapped, mapping it if it is not yet.
+   --
+   --  A standing mapping rather than a pair of calls per use. Vulkan allows
+   --  one mapping of a memory object at a time and does not mind how long it
+   --  stands; what making one costs is what this stops paying twice a
+   --  product.
+   --
+   --  Two things about it have to be got right and both were got wrong
+   --  first, so they are written down. The mapping covers the whole
+   --  allocation and not the bytes one call happens to want, because the
+   --  next call may want more and a mapping is not extended by asking again.
+   --  And nothing else may unmap these two memories while an address into
+   --  them is held. A writer that maps and unmaps around its own copy --
+   --  which is what Write_Bytes still does, correctly, for memory nobody
+   --  keeps a pointer into -- pulls the mapping out from under every other
+   --  writer of the same buffer.
+   procedure Standing
      (Item   : in out Engine;
       Memory : Address;
+      Where  : in out Address;
       Bytes  : Interfaces.Unsigned_64;
-      Values : Model_Runner.Numerics.Real_Array;
       Ok     : out Boolean)
    is
-      Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
-      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+      Map : constant Map_Call := To_Map (Point ("vkMapMemory"));
 
-      Where : aliased Address := Null_Handle;
+      Found : aliased Address := Null_Handle;
    begin
       Ok := False;
 
-      if Map = null or else Unmap = null then
+      if Where /= Null_Handle then
+         Ok := True;
          return;
       end if;
 
-      if Map (Item.Logical, Memory, 0, Bytes, 0, Where'Access) /= 0 then
+      if Map = null or else Memory = Null_Handle or else Bytes = 0 then
          return;
       end if;
 
-      declare
-         Room : Model_Runner.Numerics.Real_Array (Values'Range)
-           with Import, Address => Where;
-      begin
-         Room := Values;
-      end;
+      if Map (Item.Logical, Memory, 0, Bytes, 0, Found'Access) /= 0 then
+         return;
+      end if;
 
-      Unmap (Item.Logical, Memory);
+      Where := Found;
       Ok := True;
-   end Write_Into;
+   end Standing;
+
+   --  Give back a standing mapping, before the memory behind it goes.
+   procedure Unmap_Standing
+     (Item : in out Engine; Memory : Address; Where : in out Address)
+   is
+      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+   begin
+      if Where /= Null_Handle and then Unmap /= null
+        and then Memory /= Null_Handle
+      then
+         Unmap (Item.Logical, Memory);
+      end if;
+      Where := Null_Handle;
+   end Unmap_Standing;
 
    --  The same for storage this does not interpret. A packed matrix is bytes
    --  until the shader reads it, and copying it as anything else would be
@@ -1412,6 +1438,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
       Item.Cache_Bytes := 0;
 
+      Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
+      Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
       Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
       Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
       Item.Vector_Bytes := 0;
@@ -1537,6 +1565,13 @@ package body Model_Runner.Platform.Device.Products is
    is (Item.Budget);
 
    function Given_Back (Item : Engine) return Natural is (Item.Released);
+
+   -------------------
+   -- Cached_Bytes --
+   -------------------
+
+   function Cached_Bytes (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.Cache_Bytes);
 
    --  Whether a buffer of this many bytes is past what the device said it
    --  will read. A device that stated nothing bounds nothing here: the
@@ -2041,6 +2076,7 @@ package body Model_Runner.Platform.Device.Products is
 
       --  The two that change every call, grown when they have to.
       if Item.Vector_Bytes < Vector_Bytes then
+         Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
          Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
          Take (Item, Vector_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
                Good);
@@ -2052,6 +2088,7 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Item.Result_Bytes < Result_Bytes then
+         Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
          Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
          Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
                Good);
@@ -2062,13 +2099,33 @@ package body Model_Runner.Platform.Device.Products is
          Item.Result_Bytes := Result_Bytes;
       end if;
 
-      Write_Into
-        (Item, Item.Vector_Memory, Vector_Bytes,
-         Vectors (Vectors'First
-                  .. Vectors'First
-                     + Model_Runner.Numerics.Element_Count (Columns)
-                       * Model_Runner.Numerics.Element_Count (Count) - 1),
-         Good);
+      --  Still a map and an unmap of its own, unlike the read-back below.
+      --  Keeping this one standing as well was written and measured and is
+      --  not here: the results it produced were wrong -- the drafted device
+      --  test, which runs a batched evaluator and a single-token one over
+      --  the same weights, said the two disagreed -- and the cause was not
+      --  found. What is known is that the read-back's standing mapping is
+      --  correct and worth 1.66 times on a prompt, and that this one is a
+      --  separate question with the same shape and a different answer.
+      declare
+         Wanted : Model_Runner.Numerics.Real_Array
+           renames Vectors (Vectors'First
+                            .. Vectors'First
+                               + Model_Runner.Numerics.Element_Count (Columns)
+                                 * Model_Runner.Numerics.Element_Count (Count)
+                               - 1);
+      begin
+         Standing (Item, Item.Vector_Memory, Item.Vector_At,
+                   Item.Vector_Bytes, Good);
+         if Good then
+            declare
+               Room : Model_Runner.Numerics.Real_Array (Wanted'Range)
+                 with Import, Address => Item.Vector_At;
+            begin
+               Room := Wanted;
+            end;
+         end if;
+      end;
       if not Good then
          Release_Borrowed;
          return;
@@ -2189,14 +2246,11 @@ package body Model_Runner.Platform.Device.Products is
 
       --  And what came out.
       declare
-         Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
-         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
-
-         Where : aliased Address := Null_Handle;
+         Good_Map : Boolean;
       begin
-         if Map (Item.Logical, Item.Result_Memory, 0, Result_Bytes, 0,
-                 Where'Access) /= 0
-         then
+         Standing (Item, Item.Result_Memory, Item.Result_At,
+                   Item.Result_Bytes, Good_Map);
+         if not Good_Map then
             Release_Borrowed;
             return;
          end if;
@@ -2207,12 +2261,10 @@ package body Model_Runner.Platform.Device.Products is
                .. Target'First
                   + Model_Runner.Numerics.Element_Count (Rows)
                     * Model_Runner.Numerics.Element_Count (Count) - 1)
-              with Import, Address => Where;
+              with Import, Address => Item.Result_At;
          begin
             Target (Slice'Range) := Slice;
          end;
-
-         Unmap (Item.Logical, Item.Result_Memory);
       end;
 
       Release_Borrowed;
@@ -2398,6 +2450,7 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Item.Vector_Bytes < Query_Bytes then
+         Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
          Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
          Take (Item, Query_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
                Good);
@@ -2408,6 +2461,7 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Item.Result_Bytes < Blend_Bytes then
+         Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
          Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
          Take (Item, Blend_Bytes, Item.Result_Buffer, Item.Result_Memory,
                Good);
@@ -2417,7 +2471,28 @@ package body Model_Runner.Platform.Device.Products is
          Item.Result_Bytes := Blend_Bytes;
       end if;
 
-      Write_Into (Item, Item.Vector_Memory, Query_Bytes, Query, Good);
+      --  Through the standing mapping, like every other writer of this
+      --  buffer, and they had to move together: a writer that unmaps when
+      --  it is done pulls the mapping out from under the others and leaves
+      --  them writing into memory that is no longer there. Converting one of
+      --  the two products and not the other is exactly that, and it is what
+      --  made a drafted device run disagree with an undrafted one for an
+      --  afternoon -- the two products are textually different and one
+      --  search-and-replace found only the first of them.
+      declare
+         Wanted : Model_Runner.Numerics.Real_Array renames Query;
+      begin
+         Standing (Item, Item.Vector_Memory, Item.Vector_At,
+                   Item.Vector_Bytes, Good);
+         if Good then
+            declare
+               Room : Model_Runner.Numerics.Real_Array (Wanted'Range)
+                 with Import, Address => Item.Vector_At;
+            begin
+               Room := Wanted;
+            end;
+         end if;
+      end;
       if not Good then
          return;
       end if;
@@ -2516,14 +2591,11 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       declare
-         Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
-         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
-
-         Where : aliased Address := Null_Handle;
+         Good_Map : Boolean;
       begin
-         if Map (Item.Logical, Item.Result_Memory, 0, Blend_Bytes, 0,
-                 Where'Access) /= 0
-         then
+         Standing (Item, Item.Result_Memory, Item.Result_At,
+                   Item.Result_Bytes, Good_Map);
+         if not Good_Map then
             return;
          end if;
 
@@ -2537,12 +2609,10 @@ package body Model_Runner.Platform.Device.Products is
                   + Model_Runner.Numerics.Element_Count (Slots)
                     * Model_Runner.Numerics.Element_Count (Heads)
                     * Model_Runner.Numerics.Element_Count (Value_Size) - 1)
-              with Import, Address => Where;
+              with Import, Address => Item.Result_At;
          begin
             Target (Slice'Range) := Slice;
          end;
-
-         Unmap (Item.Logical, Item.Result_Memory);
       end;
 
       Ok := True;
@@ -2996,6 +3066,7 @@ package body Model_Runner.Platform.Device.Products is
 
       --  The two that change every call, grown when they have to.
       if Item.Vector_Bytes < Vector_Bytes then
+         Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
          Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
          Take (Item, Vector_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
                Good);
@@ -3007,6 +3078,7 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Item.Result_Bytes < Result_Bytes then
+         Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
          Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
          Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
                Good);
@@ -3018,14 +3090,26 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       --  The activation goes over once, however many products read it.
-      Write_Into
-        (Item, Item.Vector_Memory, Vector_Bytes,
-         Vectors (Vectors'First
-                  .. Vectors'First
-                     + Model_Runner.Numerics.Element_Count
-                         (Steps.Items (1).Columns)
-                       * Model_Runner.Numerics.Element_Count (Count) - 1),
-         Good);
+      declare
+         Wanted : Model_Runner.Numerics.Real_Array
+           renames Vectors (Vectors'First
+                            .. Vectors'First
+                               + Model_Runner.Numerics.Element_Count
+                                   (Steps.Items (1).Columns)
+                                 * Model_Runner.Numerics.Element_Count (Count)
+                               - 1);
+      begin
+         Standing (Item, Item.Vector_Memory, Item.Vector_At,
+                   Item.Vector_Bytes, Good);
+         if Good then
+            declare
+               Room : Model_Runner.Numerics.Real_Array (Wanted'Range)
+                 with Import, Address => Item.Vector_At;
+            begin
+               Room := Wanted;
+            end;
+         end if;
+      end;
       if not Good then
          Release_All;
          return;
@@ -3336,15 +3420,12 @@ package body Model_Runner.Platform.Device.Products is
 
       --  And what came out, product by product, out of the one mapping.
       declare
-         Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
-         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
-
-         Where  : aliased Address := Null_Handle;
-         Filled : Model_Runner.Numerics.Element_Count := Target'First;
+         Good_Map : Boolean;
+         Filled   : Model_Runner.Numerics.Element_Count := Target'First;
       begin
-         if Map (Item.Logical, Item.Result_Memory, 0, Result_Bytes, 0,
-                 Where'Access) /= 0
-         then
+         Standing (Item, Item.Result_Memory, Item.Result_At,
+                   Item.Result_Bytes, Good_Map);
+         if not Good_Map then
             Release_All;
             return;
          end if;
@@ -3360,7 +3441,8 @@ package body Model_Runner.Platform.Device.Products is
                  with Import,
                       Address =>
                         System.Storage_Elements.To_Address
-                          (System.Storage_Elements.To_Integer (Where)
+                          (System.Storage_Elements.To_Integer
+                             (Item.Result_At)
                            + System.Storage_Elements.Integer_Address
                                (Places (Index).At_Byte));
             begin
@@ -3369,7 +3451,6 @@ package body Model_Runner.Platform.Device.Products is
             end;
          end loop;
 
-         Unmap (Item.Logical, Item.Result_Memory);
       end;
 
       Release_All;

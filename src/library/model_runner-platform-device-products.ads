@@ -694,6 +694,18 @@ package Model_Runner.Platform.Device.Products is
    --  @return Count of matrices released to make room.
    function Given_Back (Item : Engine) return Natural;
 
+   --  How many bytes of context the device is holding.
+   --
+   --  Zero when the device holds none, which is a different thing from
+   --  holding no weights and is the one this program could not say. A
+   --  device that has the weights and not the context computes the products
+   --  there and attends here, and the only sign of it from outside is that
+   --  a run spends processor time it should not need.
+   --
+   --  @param Item Engine to ask.
+   --  @return Bytes of key and value cache resident, or zero for none.
+   function Cached_Bytes (Item : Engine) return Interfaces.Unsigned_64;
+
 private
 
    --  One descriptor set for every product a sequence may hold.
@@ -861,9 +873,16 @@ private
       Vector_Memory : System.Address := System.Null_Address;
       Vector_Bytes  : Interfaces.Unsigned_64 := 0;
 
+      --  Where that memory is mapped, kept from one call to the next, for
+      --  the reason written against Result_At below.
+      Vector_At     : System.Address := System.Null_Address;
+
       Result_Buffer : System.Address := System.Null_Address;
       Result_Memory : System.Address := System.Null_Address;
       Result_Bytes  : Interfaces.Unsigned_64 := 0;
+
+      --  And where the results are mapped, for the same reason.
+      Result_At     : System.Address := System.Null_Address;
 
       --  Where a cache goes when attention is done here. Grown when it has
       --  to and kept between calls, like the two above.
