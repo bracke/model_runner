@@ -355,6 +355,12 @@ package body Model_Runner.Kernels is
       --  this is the correction the method states for that; a file may scale
       --  it further, which is what Attenuation is.
       Magnitude : Wide_Real := 1.0;
+
+      --  How many pairs there are, how many of them are tabulated at once,
+      --  and where the run being tabulated begins.
+      Pairs   : constant Element_Count := Rotary / 2;
+      Run     : constant Element_Count := 128;
+      At_Pair : Element_Count := 0;
    begin
       if Heads = 0 or else Head_Size = 0 or else Rotary = 0
         or else Rotary > Head_Size
@@ -377,13 +383,37 @@ package body Model_Runner.Kernels is
          Magnitude := 1.0;
       end if;
 
-      for Head in 0 .. Heads - 1 loop
+      --  The angles first, then every head against them.
+      --
+      --  An angle depends on the pair and the position and on nothing else,
+      --  so a head loop outside a pair loop computed the whole table once
+      --  for each head: a power, a cosine and a sine per pair per head,
+      --  where a power, a cosine and a sine per pair is all there is to
+      --  know. On a model with thirty-two heads that is thirty-two times
+      --  the transcendental calls the rotation needs, and they are the most
+      --  expensive arithmetic in this package.
+      --
+      --  Bit for bit what it replaces. The same angle is computed by the
+      --  same expression and kept in the same format -- rounding the table
+      --  to Real would round twice where the rotation below rounds once,
+      --  and move every rotated vector off the bits every other path
+      --  produces. A pair touches two elements of one head and no other
+      --  pair or head touches them, so the order the two loops run in is
+      --  not part of the answer.
+      --
+      --  A run of pairs at a time because the table is on the stack and a
+      --  head's width is a model's to choose.
+      while At_Pair < Pairs loop
          declare
-            Origin : constant Element_Count :=
-              Vector'First + Head * Head_Size;
+            Here    : constant Element_Count :=
+              Element_Count'Min (Run, Pairs - At_Pair);
+            Cosines : N.Wide_Real_Array (0 .. Here - 1);
+            Sines   : N.Wide_Real_Array (0 .. Here - 1);
          begin
-            for Pair in 0 .. Rotary / 2 - 1 loop
+            for Index in 0 .. Here - 1 loop
                declare
+                  Pair : constant Element_Count := At_Pair + Index;
+
                   Exponent : constant Wide_Real :=
                     -2.0 * Wide_Real (Pair) / Wide_Real (Rotary);
 
@@ -423,27 +453,49 @@ package body Model_Runner.Kernels is
                   --  tried and both were caught by asking the kernel whether
                   --  turning back by N equals rotating N earlier, which is
                   --  the identity a shifted context rests on.
-                  Cosine   : constant Wide_Real :=
+               begin
+                  Cosines (Index) :=
                     (if Backwards then N.Cos (Theta)
                      else N.Cos (Theta) * Magnitude);
-                  Sine     : constant Wide_Real :=
+                  Sines (Index) :=
                     (if Backwards then -N.Sin (Theta)
                      else N.Sin (Theta) * Magnitude);
-                  Even     : constant Element_Count :=
-                    (if Pairing = Interleaved
-                     then Origin + 2 * Pair
-                     else Origin + Pair);
-                  Odd      : constant Element_Count :=
-                    (if Pairing = Interleaved
-                     then Even + 1
-                     else Even + Rotary / 2);
-                  First    : constant Wide_Real := Wide_Real (Vector (Even));
-                  Second   : constant Wide_Real := Wide_Real (Vector (Odd));
-               begin
-                  Vector (Even) := Real (First * Cosine - Second * Sine);
-                  Vector (Odd) := Real (First * Sine + Second * Cosine);
                end;
             end loop;
+
+            for Head in 0 .. Heads - 1 loop
+               declare
+                  Origin : constant Element_Count :=
+                    Vector'First + Head * Head_Size;
+               begin
+                  for Index in 0 .. Here - 1 loop
+                     declare
+                        Pair   : constant Element_Count := At_Pair + Index;
+                        Even   : constant Element_Count :=
+                          (if Pairing = Interleaved
+                           then Origin + 2 * Pair
+                           else Origin + Pair);
+                        Odd    : constant Element_Count :=
+                          (if Pairing = Interleaved
+                           then Even + 1
+                           else Even + Pairs);
+                        First  : constant Wide_Real :=
+                          Wide_Real (Vector (Even));
+                        Second : constant Wide_Real :=
+                          Wide_Real (Vector (Odd));
+                     begin
+                        Vector (Even) :=
+                          Real (First * Cosines (Index)
+                                - Second * Sines (Index));
+                        Vector (Odd) :=
+                          Real (First * Sines (Index)
+                                + Second * Cosines (Index));
+                     end;
+                  end loop;
+               end;
+            end loop;
+
+            At_Pair := At_Pair + Here;
          end;
       end loop;
    end Apply_Rotary;
