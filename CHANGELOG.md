@@ -7,6 +7,41 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The device shader decodes four weights out of a word.** It read its
+  weights from a buffer bound as words and extracted every byte by hand --
+  about seven operations a weight, against the eight fused multiply-adds it
+  then did with each one. Reading a word and sign-extending four bytes out of
+  it with shifts is exact and costs about two.
+
+  | device | before | after |
+  | --- | ---: | ---: |
+  | 110-token prompt | 0.540 s | **0.507 s** |
+  | 64 generated | 2.114 s | **2.015 s** |
+
+  Better in every one of three alternated rounds on both, with the digests
+  unchanged -- the same arithmetic reached by fewer instructions, so an
+  unchanged digest is the check that the sign extension is right.
+
+  **The first version of it measured sixteen per cent worse**, at 0.628 s
+  against 0.543. It returned the four decoded bytes as an `ivec4` from a
+  helper; the same four expressions written inline at the point of use are
+  the table above. A vector returned across a call is a vector the compiler
+  puts in memory, and counting instructions would never have found it -- the
+  two versions have the same arithmetic and nearly the same instruction
+  count.
+
+  The ceiling was measured before the work rather than assumed: with the
+  decode replaced by a constant the prompt reads 0.427 s, so unpacking was
+  about a quarter of the shader. Rather less than that quarter came back.
+
+  Not done, and recorded so it is not reached for first: this device offers
+  `VK_KHR_8bit_storage`, and binding the weights as bytes would remove the
+  extraction outright -- at the cost of an instance extension, a device
+  extension, and a features struct threaded through the `pNext` chain at
+  device creation. The shader-side fix took most of the same ground for none
+  of that.
+
+
 - **A generated token's block loop lives inside the insertion**, so the
   accumulator is a register from a row's first block to its last rather than
   something loaded and stored at every one of them. Sixty-four tokens in

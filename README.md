@@ -1260,10 +1260,10 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. Taken back to back
-in the same sitting, the same run at fourteen threads takes **0.459 s** of
-wall against **0.470 s** at seven, and 4.74 s of processor time against
-2.68 s -- both starting at a load under 1.5, the fourteen-thread run at
-0.80.
+in the same sitting, the same run at fourteen threads takes **0.455 s** of
+wall against **0.481 s** at seven, and 4.73 s of processor time against
+2.69 s -- both starting at a load under 1.5, the fourteen-thread run at
+1.09.
 
 That is one per cent *off* the wall for seventy-eight per cent more
 processor time, and it is the first reading in a year where the second worker
@@ -1481,12 +1481,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.479 s | **0.449 s** |
-| -- evaluating the prompt | 0.081 s | 0.062 s |
-| -- generating | 0.396 s | 0.387 s |
-| -- processor time | 2.69 s | **0.03 s** |
-| 110-token prompt, nothing generated | 1.225 s | **0.586 s** |
-| -- processor time | 7.33 s | **0.12 s** |
+| 6-token prompt, 12 generated | 0.475 s | **0.425 s** |
+| -- evaluating the prompt | 0.079 s | 0.052 s |
+| -- generating | 0.396 s | 0.376 s |
+| -- processor time | 2.70 s | **0.03 s** |
+| 110-token prompt, nothing generated | 1.213 s | **0.527 s** |
+| -- processor time | 7.30 s | **0.12 s** |
 
 All six cells were taken in one sitting on 2026-08-25, back to back, each
 waiting for the machine to fall below 1.50 before it started -- so the two
@@ -1880,21 +1880,21 @@ arrived with nothing timing them, and a format can be perfectly correct and
 four times slower than the one beside it with nothing to say so. A 512 by
 2048 matrix, resident, against the serial processor path -- the device's time
 as a fraction of it, so below one is faster there, taken in one run at a load
-of 1.13 rising to 3.13, most of the rise being the run itself:
+of 1.09 rising to 2.79, most of the rise being the run itself:
 
 | Format | One vector | Eight | | Format | One vector | Eight |
 | --- | --- | --- | --- | --- | --- | --- |
-| Q2_K | 0.28 | 0.11 | | Q3_K | 0.43 | 0.11 |
-| IQ4_NL | 0.24 | 0.08 | | F16 | 0.39 | 0.12 |
-| Q5_1 | 0.27 | 0.08 | | Q8_0 | 0.40 | 0.09 |
-| Q5_0 | 0.26 | 0.08 | | Q4_K | 0.54 | 0.12 |
-| Q4_1 | 0.27 | 0.07 | | Q5_K | 0.60 | 0.14 |
-| IQ4_XS | 0.42 | 0.11 | | Q6_K | 0.51 | 0.12 |
-| | | | | Q4_0 | 0.40 | 0.08 |
+| Q2_K | 0.28 | 0.10 | | Q3_K | 0.41 | 0.11 |
+| IQ4_NL | 0.24 | 0.08 | | F16 | 0.40 | 0.12 |
+| Q5_1 | 0.26 | 0.08 | | Q8_0 | **0.36** | **0.08** |
+| Q5_0 | 0.26 | 0.08 | | Q4_K | 0.52 | 0.12 |
+| Q4_1 | 0.26 | 0.07 | | Q5_K | 0.59 | 0.15 |
+| IQ4_XS | 0.41 | 0.11 | | Q6_K | 0.52 | 0.12 |
+| | | | | Q4_0 | 0.40 | 0.07 |
 | | | | | BF16 | 0.68 | 0.14 |
-| | | | | F32 | 0.92 | 0.15 |
+| | | | | F32 | 0.89 | 0.15 |
 
-and q8_0 at thirty-two vectors a pass, which is 0.037.
+and q8_0 at thirty-two vectors a pass, which is 0.036.
 
 Read the one-vector column as a statement about the processor as much as
 about the device, because that is what it is. The formats the device wins hardest on
@@ -1959,14 +1959,14 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 90.8 t/s | **29.8 t/s** |
-| llama.cpp, processor | 387.1 t/s | 40.2 t/s |
-| model_runner, device | 191.9 t/s | 31.1 t/s |
-| llama.cpp, device | 1678.8 t/s | 57.6 t/s |
+| model_runner, processor | 91.7 t/s | 28.9 t/s |
+| llama.cpp, processor | 389.5 t/s | 40.2 t/s |
+| model_runner, device | **214.4 t/s** | **32.0 t/s** |
+| llama.cpp, device | 1682.3 t/s | 57.4 t/s |
 
-On the processor: **1.3 times slower generating and 4.3 times slower reading
+On the processor: **1.4 times slower generating and 4.2 times slower reading
 a prompt**, where the first reading of this table said 3.3 and 16. On the
-device, 1.9 and 8.7, where it said 3.8 and 10.1 -- and where the sitting
+device, **1.8** and 7.8, where it said 3.8 and 10.1 -- and where the sitting
 before this one said 3.1 and 25, because the device rows were being measured
 with a second of uncached memory reads in them. `### The device backend`
 says what that was.
@@ -1974,7 +1974,7 @@ says what that was.
 The two halves of that are not the same finding. Generating reads every
 weight once a token and does one multiply with each, so it is the bus rather
 than the arithmetic that answers: llama.cpp's 40.2 t/s is about 45 GB/s of
-this model, and 29.8 t/s is about 34. Being over half way to the other
+this model, and 28.9 t/s is about 33. Being over half way to the other
 program's bandwidth is where quantizing the activations left this, and what
 is left is a gap in the kernels -- they are ordinary Ada compiled for
 baseline x86-64, which `## Not implemented` says and this measures -- rather
@@ -2004,19 +2004,19 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 1.212 s
-and 64 in 2.148 s on the processor, 0.573 s and 2.058 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 1.200 s
+and 64 in 2.213 s on the processor, 0.513 s and 2.001 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 779.9 t/s rather
-than 387.1 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 775.6 t/s rather
+than 389.5 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
 The noisiest row is the device generating, and it has just stopped being
-the slow one: 31.1 t/s here, against 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
+the slow one: 32.0 t/s here, against 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
 earlier sittings at comparable loads -- though the last of those is the only
 one measured with the results read back out of cached memory. The processor rows and
 both prompt rows repeat to a few per cent. Every figure in the table is one
@@ -2076,9 +2076,9 @@ All three at a load of 1.4 to 2.4, medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.467 s | 39 ms a token |
-| the same model at two bits | 1.652 s | 138 ms a token |
-| the first, drafted by the second | 3.549 s | 24 proposed, 7 accepted |
+| TinyLlama-1.1B at eight bits | 0.490 s | 41 ms a token |
+| the same model at two bits | 1.709 s | 142 ms a token |
+| the first, drafted by the second | 4.062 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking
@@ -2235,14 +2235,14 @@ tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt.txt \
 
 | `--batch-size` | prompt evaluation, `cpu` | rate | `device` |
 |---|---|---|---|
-| 1 (one token at a time) | 3.728 s | 29.5 tokens/s | |
-| 2 | 2.288 s | 48.1 tokens/s | |
-| 4 | 1.569 s | 70.1 tokens/s | |
-| 8 | 1.379 s | 79.8 tokens/s | 0.721 s |
-| 16 | 1.352 s | 81.4 tokens/s | |
-| 32 | 1.287 s | 85.5 tokens/s | 0.547 s |
-| 64 | 1.283 s | 85.7 tokens/s | |
-| 128 (cap, default) | 1.292 s | 85.1 tokens/s | 0.573 s |
+| 1 (one token at a time) | 3.792 s | 29.0 tokens/s | |
+| 2 | 2.330 s | 47.2 tokens/s | |
+| 4 | 1.666 s | 66.0 tokens/s | |
+| 8 | 1.413 s | 77.8 tokens/s | 0.721 s |
+| 16 | 1.322 s | 83.2 tokens/s | |
+| 32 | 1.290 s | 85.3 tokens/s | 0.508 s |
+| 64 | 1.254 s | 87.7 tokens/s | |
+| 128 (cap, default) | 1.283 s | 85.7 tokens/s | 0.513 s |
 
 This table used to be measured through the chat template while the figure at
 the top of the section was measured raw, and neither said which. That is

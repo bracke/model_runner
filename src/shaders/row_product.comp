@@ -166,6 +166,25 @@ int signed_at(uint at) {
     return value > 127 ? value - 256 : value;
 }
 
+//  Four signed bytes out of one word, in the order they lie.
+//
+//  The same four values signed_at would give for four consecutive addresses,
+//  and about a quarter of the work: one load and two shifts an element,
+//  against a load, a shift, a mask, a compare and a subtract each. Shifting
+//  a byte to the top of a signed integer and back down is what sign-extends
+//  it, and it is exact where the unpacking built into the language is not --
+//  unpackSnorm4x8 clamps, and would turn a quant of -128 into -127 without
+//  saying so.
+//
+//  The decode is worth measuring rather than assuming: building this shader
+//  with the eight-bit branch's decode replaced by a constant takes the
+//  device prompt from 0.573 s to 0.427, so unpacking is about a quarter of
+//  what this spends.
+//  Kept as four expressions at the point of use rather than a vector
+//  returned from here: a vector of four returned across a call is a vector
+//  the compiler put in memory, and doing that measured sixteen per cent
+//  worse than the byte-at-a-time decode it was meant to replace.
+
 //  A half-precision number, which is how every packed format writes a scale
 //  and how F16 writes a weight.
 float half_at(uint at) {
@@ -282,8 +301,29 @@ void main() {
             float scale = half_at(at);
             uint col = b * 32u;
 
-            for (uint j = 0u; j < 32u; ++j) {
-                accumulate(col + j, scale * float(signed_at(at + 2u + j)));
+            //  Where this block's quants begin, as a word and an offset
+            //  into it. A block is thirty-four bytes, so consecutive blocks
+            //  alternate between starting on a word and starting two bytes
+            //  into one; that is the only case there is, and it is decided
+            //  once a block rather than once an element.
+            uint q = at + 2u;
+            uint at_word = q >> 2u;
+
+            //  Two bytes in or none, chosen once and applied by shifting
+            //  rather than by branching in the loop.
+            uint low = (q & 3u) * 8u;
+
+            for (uint g = 0u; g < 8u; ++g) {
+                uint first = w[at_word + g];
+                uint word = low == 0u
+                          ? first
+                          : (first >> low)
+                            | (w[at_word + g + 1u] << (32u - low));
+
+                accumulate(col + g * 4u,      scale * float(int(word << 24) >> 24));
+                accumulate(col + g * 4u + 1u, scale * float(int(word << 16) >> 24));
+                accumulate(col + g * 4u + 2u, scale * float(int(word <<  8) >> 24));
+                accumulate(col + g * 4u + 3u, scale * float(int(word) >> 24));
             }
         }
     } else if (shape.format == FMT_Q4_0) {
