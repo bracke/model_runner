@@ -281,7 +281,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
          --  what the block loop streams.
          Lane_Count : constant := 4;
          subtype Lane_Range is Element_Count range 0 .. Lane_Count - 1;
-         type Lanes is array (Lane_Range) of N.Real with Alignment => 32;
+         --  Sixteen, which is what four binary32 values occupy, and not
+         --  thirty-two. Asking for more than the data needs pads every entry
+         --  out to the alignment, and the insertion below walks these by
+         --  hand with a stride of sixteen: a stride the type does not have
+         --  is wrong answers, which is what it gave, twice, before the test
+         --  that compares the compilations said so.
+         type Lanes is array (Lane_Range) of N.Real with Alignment => 16;
 
          --  One set for every vector and row of this tile, laid out with the
          --  rows together so that a block's pass over them is sequential.
@@ -400,116 +406,222 @@ package body Model_Runner.Quantization.Integers.Kernels is
                      end loop;
                   end if;
 
-                  for Row in 0 .. Rows - 1 loop
-                     --  Both scales at once, because the insertion
-                     --  multiplies the eight sums by one number.
-                     declare
-                        Both : constant N.Real := Scaling (Row) * Scaled;
-
-                        Into : Lanes renames Running (Which * Rows + Row);
-
-                        LF : constant Character := ASCII.LF;
-                     begin
-                        if Deep then
-                           --  Four byte products a lane where the other two
-                           --  do two sixteen-bit ones, against operands half
-                           --  the width and with no widening to reach them.
+                  --  Four rows to an insertion, and what that is really
+                  --  for is the three operands it stops re-reading.
+                  --
+                  --  A counter said so. Reading the loop the compiler
+                  --  produced, one row at a time cost eighteen instructions
+                  --  and one of them multiplied: the rest were the
+                  --  activations loaded again, the bias correction loaded
+                  --  again, four pointers advanced and a branch -- all of
+                  --  which are the same for every row of the group. Loading
+                  --  them once and holding them in registers is twelve and a
+                  --  half instructions a row instead.
+                  --
+                  --  The operands, which the insertion names by number:
+                  --  %0 the group's four running lane sums, %1 its four
+                  --  rows of weight bytes, %2 the activation block where
+                  --  the quantizer left it, %3 the group's four weight
+                  --  scales, %4 the bias correction, %5 the activation
+                  --  scale. Only %5 is a register the compiler chose; the
+                  --  rest are addresses this walks by hand, which is why
+                  --  the stride of the type they point into is a fact this
+                  --  code depends on.
+                  if Deep and then Rows mod 4 = 0 then
+                     for Group in 0 .. Rows / 4 - 1 loop
+                        declare
+                           LF : constant Character := ASCII.LF;
+                        begin
                            System.Machine_Code.Asm
-                             ("vpxor %%xmm1, %%xmm1, %%xmm1"     & LF &
-                              "vmovdqa (%1), %%ymm0"             & LF &
-                              "vpdpbusd (%2), %%ymm0, %%ymm1"    & LF &
-                              "vextracti128 $1, %%ymm1, %%xmm2"  & LF &
-                              "vpaddd %%xmm2, %%xmm1, %%xmm1"    & LF &
-                              "vpaddd (%4), %%xmm1, %%xmm1"      & LF &
-                              "vcvtdq2ps %%xmm1, %%xmm1"         & LF &
-                              "vbroadcastss %3, %%xmm2"          & LF &
-                              "vmulps %%xmm2, %%xmm1, %%xmm1"    & LF &
-                              "vaddps (%0), %%xmm1, %%xmm1"      & LF &
-                              "vmovaps %%xmm1, (%0)",
+                             ("vmovdqu (%2), %%ymm4" & LF &
+                              "vmovdqa (%4), %%xmm3" & LF &
+                              "vmulss 0(%3), %5, %%xmm5" & LF &
+                              "vmovdqa 0(%1), %%ymm0" & LF &
+                              "vpxor %%xmm1, %%xmm1, %%xmm1" & LF &
+                              "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                              "vextracti128 $1, %%ymm1, %%xmm2" & LF &
+                              "vpaddd %%xmm2, %%xmm1, %%xmm1" & LF &
+                              "vpaddd %%xmm3, %%xmm1, %%xmm1" & LF &
+                              "vcvtdq2ps %%xmm1, %%xmm1" & LF &
+                              "vbroadcastss %%xmm5, %%xmm2" & LF &
+                              "vmulps %%xmm2, %%xmm1, %%xmm1" & LF &
+                              "vaddps 0(%0), %%xmm1, %%xmm1" & LF &
+                              "vmovaps %%xmm1, 0(%0)" & LF &
+                              "vmulss 4(%3), %5, %%xmm5" & LF &
+                              "vmovdqa 32(%1), %%ymm0" & LF &
+                              "vpxor %%xmm1, %%xmm1, %%xmm1" & LF &
+                              "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                              "vextracti128 $1, %%ymm1, %%xmm2" & LF &
+                              "vpaddd %%xmm2, %%xmm1, %%xmm1" & LF &
+                              "vpaddd %%xmm3, %%xmm1, %%xmm1" & LF &
+                              "vcvtdq2ps %%xmm1, %%xmm1" & LF &
+                              "vbroadcastss %%xmm5, %%xmm2" & LF &
+                              "vmulps %%xmm2, %%xmm1, %%xmm1" & LF &
+                              "vaddps 16(%0), %%xmm1, %%xmm1" & LF &
+                              "vmovaps %%xmm1, 16(%0)" & LF &
+                              "vmulss 8(%3), %5, %%xmm5" & LF &
+                              "vmovdqa 64(%1), %%ymm0" & LF &
+                              "vpxor %%xmm1, %%xmm1, %%xmm1" & LF &
+                              "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                              "vextracti128 $1, %%ymm1, %%xmm2" & LF &
+                              "vpaddd %%xmm2, %%xmm1, %%xmm1" & LF &
+                              "vpaddd %%xmm3, %%xmm1, %%xmm1" & LF &
+                              "vcvtdq2ps %%xmm1, %%xmm1" & LF &
+                              "vbroadcastss %%xmm5, %%xmm2" & LF &
+                              "vmulps %%xmm2, %%xmm1, %%xmm1" & LF &
+                              "vaddps 32(%0), %%xmm1, %%xmm1" & LF &
+                              "vmovaps %%xmm1, 32(%0)" & LF &
+                              "vmulss 12(%3), %5, %%xmm5" & LF &
+                              "vmovdqa 96(%1), %%ymm0" & LF &
+                              "vpxor %%xmm1, %%xmm1, %%xmm1" & LF &
+                              "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                              "vextracti128 $1, %%ymm1, %%xmm2" & LF &
+                              "vpaddd %%xmm2, %%xmm1, %%xmm1" & LF &
+                              "vpaddd %%xmm3, %%xmm1, %%xmm1" & LF &
+                              "vcvtdq2ps %%xmm1, %%xmm1" & LF &
+                              "vbroadcastss %%xmm5, %%xmm2" & LF &
+                              "vmulps %%xmm2, %%xmm1, %%xmm1" & LF &
+                              "vaddps 48(%0), %%xmm1, %%xmm1" & LF &
+                              "vmovaps %%xmm1, 48(%0)",
                               Inputs =>
                                 [System.Address'Asm_Input
-                                   ("r", Into'Address),
+                                   ("r", Running (Which * Rows
+                                                  + Group * 4)'Address),
                                  System.Address'Asm_Input
-                                   ("r", Raw (Row)'Address),
+                                   ("r", Raw (Group * 4)'Address),
                                  System.Address'Asm_Input
                                    ("r", Values (Values'First
                                                  + At_Value)'Address),
-                                 N.Real'Asm_Input ("m", Both),
                                  System.Address'Asm_Input
-                                   ("r", Fixing'Address)],
-                              Clobber  => "ymm0,ymm1,ymm2,memory",
-                              Volatile => True);
-                        elsif Wider then
-                           --  Two multiply-adds over the block, their
-                           --  results added, widened to binary32, scaled and
-                           --  added to what this row and vector have so far.
-                           --  What is not here is the reduction to a scalar:
-                           --  that happens once a row and a vector, below,
-                           --  rather than once for each of a row's blocks.
-                           System.Machine_Code.Asm
-                             ("vmovdqa (%1), %%ymm0"            & LF &
-                              "vmovdqa 32(%1), %%ymm1"          & LF &
-                              "vpmaddwd (%2), %%ymm0, %%ymm0"   & LF &
-                              "vpmaddwd 32(%2), %%ymm1, %%ymm1" & LF &
-                              "vpaddd %%ymm1, %%ymm0, %%ymm0"   & LF &
-                              "vextracti128 $1, %%ymm0, %%xmm1" & LF &
-                              "vpaddd %%xmm1, %%xmm0, %%xmm0"   & LF &
-                              "vcvtdq2ps %%xmm0, %%xmm0"        & LF &
-                              "vbroadcastss %3, %%xmm2"         & LF &
-                              "vmulps %%xmm2, %%xmm0, %%xmm0"   & LF &
-                              "vaddps (%0), %%xmm0, %%xmm0"     & LF &
-                              "vmovaps %%xmm0, (%0)",
-                              Inputs =>
-                                [System.Address'Asm_Input
-                                   ("r", Into'Address),
+                                   ("r", Scaling (Group * 4)'Address),
                                  System.Address'Asm_Input
-                                   ("r", Weights (Row)'Address),
-                                 System.Address'Asm_Input
-                                   ("r", Active'Address),
-                                 N.Real'Asm_Input ("m", Both)],
-                              Clobber  => "ymm0,ymm1,ymm2,memory",
-                              Volatile => True);
-                        else
-                           --  The same eight sums, in a set every x86-64
-                           --  has. Four multiply-adds of eight elements
-                           --  rather than two of sixteen, and the halves
-                           --  added in the pairs that make the lanes come
-                           --  out where the wide one puts them: the first
-                           --  quarter with the third, the second with the
-                           --  fourth. Everything after that is elementwise,
-                           --  so the two answer the same bits.
-                           System.Machine_Code.Asm
-                             ("movdqa (%1), %%xmm0"        & LF &
-                              "movdqa 16(%1), %%xmm1"      & LF &
-                              "movdqa 32(%1), %%xmm2"      & LF &
-                              "movdqa 48(%1), %%xmm3"      & LF &
-                              "pmaddwd (%2), %%xmm0"       & LF &
-                              "pmaddwd 16(%2), %%xmm1"     & LF &
-                              "pmaddwd 32(%2), %%xmm2"     & LF &
-                              "pmaddwd 48(%2), %%xmm3"     & LF &
-                              "paddd %%xmm2, %%xmm0"       & LF &
-                              "paddd %%xmm3, %%xmm1"       & LF &
-                              "paddd %%xmm1, %%xmm0"       & LF &
-                              "cvtdq2ps %%xmm0, %%xmm0"    & LF &
-                              "movss %3, %%xmm4"           & LF &
-                              "shufps $0, %%xmm4, %%xmm4"  & LF &
-                              "mulps %%xmm4, %%xmm0"       & LF &
-                              "addps (%0), %%xmm0"         & LF &
-                              "movaps %%xmm0, (%0)",
-                              Inputs =>
-                                [System.Address'Asm_Input
-                                   ("r", Into'Address),
-                                 System.Address'Asm_Input
-                                   ("r", Weights (Row)'Address),
-                                 System.Address'Asm_Input
-                                   ("r", Active'Address),
-                                 N.Real'Asm_Input ("m", Both)],
+                                   ("r", Fixing'Address),
+                                 N.Real'Asm_Input ("x", Scaled)],
                               Clobber  =>
-                                "xmm0,xmm1,xmm2,xmm3,xmm4,memory",
+                                "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,memory",
                               Volatile => True);
-                        end if;
-                     end;
-                  end loop;
+                        end;
+                     end loop;
+                     else
+                     for Row in 0 .. Rows - 1 loop
+                        --  Both scales at once, because the insertion
+                        --  multiplies the eight sums by one number.
+                        declare
+                           Both : constant N.Real := Scaling (Row) * Scaled;
+
+                           Into : Lanes renames Running (Which * Rows + Row);
+
+                           LF : constant Character := ASCII.LF;
+                        begin
+                           if Deep then
+                              --  Four byte products a lane where the other two
+                              --  do two sixteen-bit ones, against operands half
+                              --  the width and with no widening to reach them.
+                              System.Machine_Code.Asm
+                                ("vpxor %%xmm1, %%xmm1, %%xmm1"     & LF &
+                                 "vmovdqa (%1), %%ymm0"             & LF &
+                                 "vpdpbusd (%2), %%ymm0, %%ymm1"    & LF &
+                                 "vextracti128 $1, %%ymm1, %%xmm2"  & LF &
+                                 "vpaddd %%xmm2, %%xmm1, %%xmm1"    & LF &
+                                 "vpaddd (%4), %%xmm1, %%xmm1"      & LF &
+                                 "vcvtdq2ps %%xmm1, %%xmm1"         & LF &
+                                 "vbroadcastss %3, %%xmm2"          & LF &
+                                 "vmulps %%xmm2, %%xmm1, %%xmm1"    & LF &
+                                 "vaddps (%0), %%xmm1, %%xmm1"      & LF &
+                                 "vmovaps %%xmm1, (%0)",
+                                 Inputs =>
+                                   [System.Address'Asm_Input
+                                      ("r", Into'Address),
+                                    System.Address'Asm_Input
+                                      ("r", Raw (Row)'Address),
+                                    System.Address'Asm_Input
+                                      ("r", Values (Values'First
+                                                    + At_Value)'Address),
+                                    --  In a register, not in memory. Asking
+                                    --  for "m" makes the compiler put Both
+                                    --  somewhere addressable, which it does by
+                                    --  storing it to the stack one instruction
+                                    --  before this reads it back: that reload
+                                    --  was the hottest instruction in the
+                                    --  kernel at nine per cent, for a value
+                                    --  that never left the register file.
+                                    N.Real'Asm_Input ("x", Both),
+                                    System.Address'Asm_Input
+                                      ("r", Fixing'Address)],
+                                 Clobber  => "ymm0,ymm1,ymm2,memory",
+                                 Volatile => True);
+                           elsif Wider then
+                              --  Two multiply-adds over the block, their
+                              --  results added, widened to binary32, scaled and
+                              --  added to what this row and vector have so far.
+                              --  What is not here is the reduction to a scalar:
+                              --  that happens once a row and a vector, below,
+                              --  rather than once for each of a row's blocks.
+                              System.Machine_Code.Asm
+                                ("vmovdqa (%1), %%ymm0"            & LF &
+                                 "vmovdqa 32(%1), %%ymm1"          & LF &
+                                 "vpmaddwd (%2), %%ymm0, %%ymm0"   & LF &
+                                 "vpmaddwd 32(%2), %%ymm1, %%ymm1" & LF &
+                                 "vpaddd %%ymm1, %%ymm0, %%ymm0"   & LF &
+                                 "vextracti128 $1, %%ymm0, %%xmm1" & LF &
+                                 "vpaddd %%xmm1, %%xmm0, %%xmm0"   & LF &
+                                 "vcvtdq2ps %%xmm0, %%xmm0"        & LF &
+                                 "vbroadcastss %3, %%xmm2"         & LF &
+                                 "vmulps %%xmm2, %%xmm0, %%xmm0"   & LF &
+                                 "vaddps (%0), %%xmm0, %%xmm0"     & LF &
+                                 "vmovaps %%xmm0, (%0)",
+                                 Inputs =>
+                                   [System.Address'Asm_Input
+                                      ("r", Into'Address),
+                                    System.Address'Asm_Input
+                                      ("r", Weights (Row)'Address),
+                                    System.Address'Asm_Input
+                                      ("r", Active'Address),
+                                    N.Real'Asm_Input ("m", Both)],
+                                 Clobber  => "ymm0,ymm1,ymm2,memory",
+                                 Volatile => True);
+                           else
+                              --  The same eight sums, in a set every x86-64
+                              --  has. Four multiply-adds of eight elements
+                              --  rather than two of sixteen, and the halves
+                              --  added in the pairs that make the lanes come
+                              --  out where the wide one puts them: the first
+                              --  quarter with the third, the second with the
+                              --  fourth. Everything after that is elementwise,
+                              --  so the two answer the same bits.
+                              System.Machine_Code.Asm
+                                ("movdqa (%1), %%xmm0"        & LF &
+                                 "movdqa 16(%1), %%xmm1"      & LF &
+                                 "movdqa 32(%1), %%xmm2"      & LF &
+                                 "movdqa 48(%1), %%xmm3"      & LF &
+                                 "pmaddwd (%2), %%xmm0"       & LF &
+                                 "pmaddwd 16(%2), %%xmm1"     & LF &
+                                 "pmaddwd 32(%2), %%xmm2"     & LF &
+                                 "pmaddwd 48(%2), %%xmm3"     & LF &
+                                 "paddd %%xmm2, %%xmm0"       & LF &
+                                 "paddd %%xmm3, %%xmm1"       & LF &
+                                 "paddd %%xmm1, %%xmm0"       & LF &
+                                 "cvtdq2ps %%xmm0, %%xmm0"    & LF &
+                                 "movss %3, %%xmm4"           & LF &
+                                 "shufps $0, %%xmm4, %%xmm4"  & LF &
+                                 "mulps %%xmm4, %%xmm0"       & LF &
+                                 "addps (%0), %%xmm0"         & LF &
+                                 "movaps %%xmm0, (%0)",
+                                 Inputs =>
+                                   [System.Address'Asm_Input
+                                      ("r", Into'Address),
+                                    System.Address'Asm_Input
+                                      ("r", Weights (Row)'Address),
+                                    System.Address'Asm_Input
+                                      ("r", Active'Address),
+                                    N.Real'Asm_Input ("m", Both)],
+                                 Clobber  =>
+                                   "xmm0,xmm1,xmm2,xmm3,xmm4,memory",
+                                 Volatile => True);
+                           end if;
+                        end;
+                     end loop;
+                  end if;
                end;
             end loop;
          end loop;

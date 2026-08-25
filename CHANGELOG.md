@@ -18,12 +18,64 @@ Keep a Changelog and the project uses semantic versioning.
   1.9 per cent of cycles stalled at the front end. It is not stalling. What
   the prompt costs is instructions -- about ninety-three thousand million for
   something near a hundred and ten thousand million multiply-accumulates,
-  twenty-odd instructions for each one that multiplies.
+  twenty-odd instructions for each one that multiplies. Seventy-two thousand
+  million now, at 2.87 a cycle: the counter is the thing that made each of
+  those steps decidable.
 
   The README now carries that correction under its own heading rather than
   quietly restating the number.
 
+- **Every figure group names the third compilation and the flag reader that
+  chooses it.** `tests check` guards seven groups of published figures with a
+  fingerprint over the sources they depend on, and none of the seven named
+  `model_runner-quantization-integers-deep.ads` -- the instantiation built
+  for `x86-64-v4` -- or the platform body whose answer decides whether a run
+  enters it. Either could have been changed, and with it every processor
+  figure in the README, with the gate saying nothing. That is the fourth such
+  hole found by looking; the previous three were the default batch size, the
+  row-tile constant and the integer kernel itself.
+
 ### Changed
+
+- **Four rows of the integer product go into one machine code insertion.**
+  The byte dot product is one instruction; the loop around it was not.
+  Reading the code the compiler produced for a single row, eighteen
+  instructions went by for the one that multiplied, and the other seventeen
+  were the activation block loaded again, the bias correction loaded again,
+  four pointers advanced and a branch -- every one of them the same for
+  every row of a tile. Four rows written as one insertion load them once and
+  hold them: fifty instructions for the group rather than seventy-two.
+
+  The 110-token prompt goes from **89.9 to 72.0 thousand million
+  instructions**, a fifth fewer, and from 1.163 s to **1.092 s**, medians of
+  three alternated rounds. Generating does not move -- 2.192 s against 2.195
+  -- and was not expected to: a generated token is one vector, and one vector
+  spends its time fetching weights rather than issuing instructions. The
+  instruction count is what settles it, because unlike a time it does not
+  vary between runs.
+
+  Against llama.cpp on the same file, the processor's prompt goes from 92.2
+  to **99.0 tokens a second** and the gap from 4.2 to **3.8 times**.
+
+- **Eight lanes were re-measured and not taken, and the earlier reading of
+  them was wrong.** The insertion folds the instruction's eight integer lanes
+  into four before scaling them, which costs a `vextracti128` and a `vpaddd`
+  a row. Keeping eight removes both and is faster -- 65.4 thousand million
+  instructions against 72.0, and 1.022 s against 1.092 over three alternated
+  rounds -- but it changes what the model says, because the fold is what
+  makes each float accumulator receive an exact wider integer sum. The byte
+  path agrees with both sixteen-bit compilations on this model today; the
+  README says that agreement is not promised, and it is still worth more than
+  six per cent. `docs/measured-figures.txt` carries the numbers so the choice
+  can be reversed.
+
+  The reading before this one said eight lanes were *slower*, and it was
+  measuring a bug: the lane array carried `Alignment => 32` on sixteen bytes
+  of data, so GNAT padded every entry out to thirty-two while the insertion
+  walked them with a stride of sixteen. It produced wrong answers rather than
+  slow ones. The test that compares the three compilations caught it; the
+  conformance sweep did not, and would not -- a tolerance wide enough for a
+  different rounding is wide enough for some wrong sums as well.
 
 - **The activations are read where the quantizer left them.** The byte
   instruction's memory operand needs no alignment, so copying a block of them
