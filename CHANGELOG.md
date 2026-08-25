@@ -190,6 +190,47 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured and not kept
 
+- **A register-blocked tile for the prompt, four rows by four vectors.**
+  Written, correct -- the conformance sweep passed with nothing outside
+  tolerance -- and across three attempts it does not beat the kernel it
+  replaces: 1.234 s against 1.254, then 1.243 against 1.291, then 1.299
+  against 1.249. Against a five per cent noise floor none of those is
+  separated from nothing.
+
+  Two real defects were found and fixed on the way -- the weights were packed
+  once per group of four vectors rather than once per chunk, thirty-two times
+  over, and the innermost loop computed an index with a division in it -- and
+  fixing them moved the figure inside the noise and no further.
+
+  **Tiling amortises loads and nothing else.** Per row, per vector, per block
+  the work is a zero, a multiply-add, a widening and a fused multiply-add,
+  plus a scale multiply and a bias multiply-add in scalar; not one of those
+  six is shared between the tile's elements, because each carries its own
+  pair of scales. Sixteen elements share four weight loads and four
+  activation loads, which is about 5.3 multiply-accumulates an instruction
+  against 4.6 -- and the packing spends the difference.
+
+  That says something about the remaining four-times gap on the prompt. The
+  other runtime's inner loop pays the same six operations per element; at 387
+  tokens a second it sustains about 2.5 instructions a cycle a core where
+  this sustains about 0.7. **The prompt gap is not an instruction-mix problem
+  and no rearrangement of the arithmetic will close it.** It is stalls, and
+  finding them wants a cycle counter, which `perf_event_paranoid = 4` has
+  denied this whole effort.
+
+- **The device shader's decode is a quarter of a prompt.** Built with the
+  eight-bit branch's decode replaced by a constant -- wrong answers, right
+  shape -- the device prompt reads 0.427 s against 0.573. A repack that
+  removed all of it would be worth about 191 to 258 tokens a second.
+
+  Measured rather than assumed, and the measurement redirects the work: the
+  bytes are already bytes, and what costs is that the buffer is bound as
+  words so every weight is extracted with a shift and a mask. The way to it
+  is `GL_EXT_shader_8bit_storage` and a binding of the right type, not a
+  repack -- one that kept the byte count could not remove the extraction, and
+  one that did not would cost four times the device memory.
+
+
 - **Rows a tile beyond eight buy nothing.** 1.305 s at eight, 1.273 at
   twelve, 1.309 at sixteen and 1.316 at twenty-four on a 110-token prompt,
   with the spread inside one setting as wide as the gaps between them. The

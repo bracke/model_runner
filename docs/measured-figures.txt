@@ -1098,6 +1098,69 @@
 # into cache-sized panels first. That packing is the remaining work and is
 # not here.
 #
+# 2026-08-25, two things measured and neither kept. Nothing here moved;
+# this is recorded so the next reader does not build them again.
+#
+# A register-blocked tile for the prompt, four rows by four vectors.
+#
+# The shape a blocked matrix product has: sixteen accumulators living in
+# registers from a row's first block to its last, the weights packed by block
+# so a block's four rows are contiguous, the scale applied by an embedded
+# broadcast, and the whole thing in the deepest compilation because sixteen
+# accumulators want more than sixteen registers. It is written, it is
+# correct -- the sweep passed with nothing outside tolerance -- and across
+# three attempts it does not beat the kernel it replaces:
+#
+#   as first written          1.234 s against 1.254, spread 1.192 to 1.357
+#   packing hoisted out of
+#     the vector-group loop   1.243 s against 1.291, better in three rounds
+#   scales gathered before
+#     the innermost loop      1.299 s against 1.249, worse in two of three
+#
+# Against a noise floor of about five per cent, none of those is separated
+# from nothing. Two real defects were found and fixed on the way -- the
+# weights were being packed once per group of four vectors rather than once
+# per chunk, thirty-two times over; and the innermost loop computed an index
+# with a division in it -- and fixing them moved the figure inside the noise
+# and no further.
+#
+# Why it cannot pay, which is the part worth keeping. Tiling amortises loads
+# and nothing else. Per row, per vector, per block the work is a zero, a
+# multiply-add, a widening and a fused multiply-add -- four vector
+# instructions -- plus a scale multiply and a bias multiply-add in scalar.
+# None of those six is shared between the tile's elements, because every one
+# of them carries its own pair of scales. A tile of sixteen shares four
+# weight loads and four activation loads across sixteen elements, and that is
+# the whole of what it buys: about 5.3 multiply-accumulates an instruction
+# against 4.6. Fifteen per cent of ceiling, and the packing and the gathering
+# spend it.
+#
+# Which says something about the four-times gap to the other runtime that no
+# amount of this will close. Its inner loop pays the same six operations per
+# element -- the same instruction mix, the same scale multiply. At 387 tokens
+# a second it is sustaining about 2.5 instructions a cycle a core; this
+# program at 91 is sustaining about 0.7. The prompt gap is not a
+# multiply-accumulates-per-instruction problem and cannot be fixed by
+# arranging the arithmetic better. It is stalls, and finding them wants a
+# profiler: perf_event_paranoid is 4 on this host, so nothing here has ever
+# seen a cycle counter.
+#
+# And the device shader's decode, measured rather than repacked.
+#
+# Built with the eight-bit branch's decode replaced by a constant -- wrong
+# answers, right shape -- the device prompt reads 0.415, 0.427 and 0.452 s
+# against 0.573 with the real one. So unpacking the weights is about a
+# quarter of what the shader spends, and a repack that removed all of it
+# would take the device prompt from 191 tokens a second to about 258.
+#
+# That is worth having and it is not what it looks like. The bytes are
+# already bytes; what costs is that the buffer is bound as words and every
+# weight is extracted with a shift and a mask. The way to it is
+# GL_EXT_shader_8bit_storage and a binding of the right type, not a repack of
+# the model -- a repack that kept the byte count could not remove the
+# extraction, and one that did not keep it would cost four times the device
+# memory.
+#
 # covers: the row-product table under "Kernels"
 # 2026-08-11, IQ4_NL and IQ4_XS. Re-measured rather than argued about, and
 # they could be, because these two groups need no model: `tests benchmark`
