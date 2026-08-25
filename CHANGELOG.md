@@ -129,6 +129,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The budget covers a generated token as well as a batch.** `--budget`
+  reported only the batched path, so asking it about a run of sixty-four
+  tokens described the six-token prompt in front of them. The single-token
+  evaluator carries the same marks now, and the phases mean the same thing in
+  both -- which is the point, since a token and a prompt divide their time
+  very differently and measuring them the same way is the only way to see it.
+
+  Sixty-four tokens on the device: feeding 1.495 s, projecting 0.369,
+  attending 0.285, reading out 0.110, everything else 0.047, accounting for
+  2.304 s of a 2.390 s run.
+
+  **The products are eighty-one per cent of it and they run at about 33 to 36
+  gigabytes a second, against a part that can do near ninety.** A layer's
+  feed-forward is 1062 microseconds a token for 34.6 million weights and its
+  projections 262 for 5.2 million -- within a tenth of each other per weight,
+  and their four-to-one ratio is their weight ratio. There is no outlier to
+  attack.
+
+  Attending reads 12.4 per cent where a prompt spends 6.2, and that is not
+  what it looks like either: `Attend_And_Project` sends attention and the
+  matrix reading its blend as one submission, so most of it is a
+  four-megabyte product. What remains is about a hundred microseconds a
+  submission, and collapsing those is the change already recorded as slower.
+
+  So a generated token on the device is where a prompt on the processor is:
+  the arithmetic is arranged about as well as this program knows how, and
+  what is left is that the products do not reach the speed the memory could
+  feed them.
+
+
 - **A run can say where a prompt's time went.** `tests speed --budget` asks
   the session to keep account of itself and reports the phases as each run
   ends: normalizing, projecting, rotating, attending, feeding, joining,

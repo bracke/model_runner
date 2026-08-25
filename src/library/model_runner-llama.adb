@@ -5370,6 +5370,13 @@ package body Model_Runner.Llama is
       Reserved  : constant Element_Count := Element_Count (Item.Committed);
       Scale     : constant Real :=
         Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
+
+      --  Where the last phase boundary was, for a caller that asked for a
+      --  budget. The batched path keeps one of these too, and the phases
+      --  mean the same thing in both -- which is the point: a token and a
+      --  prompt divide their time very differently and the only way to see
+      --  that is to measure them the same way.
+      Mark : Ada.Real_Time.Time := Ada.Real_Time.Clock;
    begin
       Logits := [others => 0.0];
 
@@ -5508,6 +5515,8 @@ package body Model_Runner.Llama is
                Item.Post_Room.all := Item.Normalized.all;
             end if;
 
+            Charge (Item, Normalizing, Mark);
+
             Product_Group
               (Item,
                [Current.Query, Current.Key, Current.Value],
@@ -5515,6 +5524,8 @@ package body Model_Runner.Llama is
                [Item.Query, Item.Key_Row, Item.Value_Row],
                Status);
             exit when E.Is_Error (Status);
+
+            Charge (Item, Projecting, Mark);
 
             --  The projection bias, before the rotary encoding, because the
             --  bias is part of the projection and the encoding acts on what
@@ -5587,6 +5598,10 @@ package body Model_Runner.Llama is
                     N.To_Half (Item.Value_Row.all (Offset));
                end loop;
             end if;
+
+            --  Rotating covers the cache write, as it does in the batched
+            --  path and for the same reason.
+            Charge (Item, Rotating, Mark);
 
             --  Causal attention over the committed positions and this one.
             --  Grouped-query attention maps each query head to its key-value
@@ -5718,6 +5733,8 @@ package body Model_Runner.Llama is
                end if;
             end;
 
+            Charge (Item, Attending, Mark);
+
             --  Done already where the pair went over together.
             if not Projected then
                Product
@@ -5726,6 +5743,8 @@ package body Model_Runner.Llama is
                exit when E.Is_Error (Status);
             end if;
 
+            Charge (Item, Projecting, Mark);
+
             if Current.Out_Bias /= null then
                K.Add (Item.Normalized.all, Current.Out_Bias.all);
             end if;
@@ -5733,6 +5752,8 @@ package body Model_Runner.Llama is
               (Source, Item.Normalized.all, Item.Activation.all,
                Current.Post_Attention_Norm,
                Current.Post_Attention_Norm_Bias, Item.Post_Room);
+
+            Charge (Item, Joining, Mark);
 
             --  Feed-forward block. It reads what the layer normalized on
             --  the way in where the architecture runs the two in parallel,
@@ -5746,6 +5767,8 @@ package body Model_Runner.Llama is
                  (Source, Item.Activation.all, Current.Feed_Norm.all,
                   Current.Feed_Norm_Bias, Item.Normalized.all);
             end if;
+
+            Charge (Item, Normalizing, Mark);
 
             if Settings.Experts > 0 then
                Mixture
@@ -5817,11 +5840,15 @@ package body Model_Runner.Llama is
                   K.Add (Item.Normalized.all, Current.Down_Bias.all);
                end if;
 
+               Charge (Item, Feeding, Mark);
+
                Join_Residual
                  (Source, Item.Normalized.all, Item.Activation.all,
                   Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
                   Item.Post_Room);
             end if;
+
+            Charge (Item, Joining, Mark);
          end;
       end loop;
 
@@ -5841,6 +5868,8 @@ package body Model_Runner.Llama is
          Item.Current := Failed;
          return;
       end if;
+
+      Charge (Item, Reading_Out, Mark);
 
       Logits := Item.Logit_Row.all;
       Finish_Logits (Source, Logits);
