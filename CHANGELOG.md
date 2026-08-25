@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Sixteen per cent of a prompt was `memset`.** The strip kernel's first
+  working version gave three of its arrays `[others => 0.0]`, which is
+  sixty-four kilobytes zeroed for every strip of four vectors and every
+  entry of it written by the loop that follows. The instruction count barely
+  noticed -- `rep stos` moves sixty-four bytes an instruction -- and nothing
+  in the source reads as expensive. `perf report` named it on the first run.
+
 - **The claim that the prompt gap is stalls was wrong, and a counter says
   so.** `perf_event_paranoid` was 4 on the machine every figure here comes
   from, so nothing in this project had ever seen a cycle counter; a commit
@@ -37,6 +44,39 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A prompt runs the kernel a generated token already had.** The
+  single-vector path keeps a row's accumulator in a register from its first
+  block to its last, reads the weight bytes where the file holds them and
+  biases them in flight, and takes the whole bias correction out once at the
+  end. A batch could have none of that while it kept an accumulator for
+  every row and every vector at once -- eight rows against a hundred and
+  twenty-eight vectors is a thousand of them.
+
+  A **strip** of four vectors against a panel of two rows is eight
+  accumulators, and `-march=x86-64-v4` has thirty-two registers to hold
+  them, so the batch is swept a strip at a time and every one of those
+  things becomes possible for it too. Per row, vector and block: five
+  instructions against twelve and a half, with the scale broadcast out of
+  memory by the fused multiply-add itself rather than by an instruction
+  before it. No panel is packed and none is needed -- two rows of this model
+  are under five kilobytes, so the order of the loops is the packing.
+
+  The 110-token prompt goes from **1.093 s to 0.847 s**, medians of three
+  alternated rounds, better in every one; instructions 72.0 to **64.8**
+  thousand million and cycles 25.1 to **16.1**, which is four instructions a
+  cycle against 2.87. Against llama.cpp the processor's prompt goes from
+  99.0 to **137.5 tokens a second** and the gap from 3.8 times to **2.8**.
+  Generating does not move: 2.185 s against 2.190.
+
+  The generated tokens hash to `448c2ed68ec342ee` where they said
+  `1cb5fffbb21399ad`. A strip keeps the byte instruction's eight lanes where
+  the kernel it replaces folded them into four, and that fold was what made
+  the byte path agree with the sixteen-bit one on this model -- a
+  coincidence the README already said was not promised. Two weak signs point
+  the other way: each accumulator now carries half the magnitude, and the
+  digests it lands on are the ones `--arith f32` and the device backend
+  already produce.
+
 - **Four rows of the integer product go into one machine code insertion.**
   The byte dot product is one instruction; the loop around it was not.
   Reading the code the compiler produced for a single row, eighteen
@@ -56,6 +96,31 @@ Keep a Changelog and the project uses semantic versioning.
 
   Against llama.cpp on the same file, the processor's prompt goes from 92.2
   to **99.0 tokens a second** and the gap from 4.2 to **3.8 times**.
+
+- **The device's prompt was measured and left alone.** Its shader already
+  reads each weight once for the eight vectors an invocation carries; what
+  it re-reads is the activations, which lie a row apart. Building it with
+  that read replaced by a single address takes the 110-token device prompt
+  from 0.516 s to 0.394, so they are about a quarter of it. Two ways of
+  removing them were built and both are worse: a window of the activations
+  staged in shared memory measures **1.399 s**, because two barriers a
+  window is sixteen a row on a part where barriers are dearer than reads;
+  and turning the batch so those eight values are consecutive measures
+  **0.746 s**, because a lane reads thirty-two consecutive columns of one
+  vector and the turn trades that contiguity for a shorter one. The ablation
+  had measured removing seven eighths of the loads, not their scatter.
+
+- **A generated token stops getting faster at four shares.** That it is
+  bound by the memory path rather than the arithmetic had only ever been
+  inferred from a ratio. Varying the worker count says it: sixty-four tokens
+  take 2.303 s at three shares, 2.123 at four, 2.144 at five and 2.187 at
+  eight, for 6.3, 7.3, 8.7 and 12.7 seconds of processor time -- eight is
+  both the slowest and the dearest. A prompt is the opposite and wants every
+  share, 0.815 s at eight against 1.051 at four. Cutting a one-vector job to
+  four shares was written and measured and is **not** in this release: the
+  processor time fell a quarter but the wall rose three per cent, because
+  the pool wakes every worker whatever the job asks for. Doing it properly
+  needs the coordinator to wake only the team.
 
 - **Eight lanes were re-measured and not taken, and the earlier reading of
   them was wrong.** The insertion folds the instruction's eight integer lanes
