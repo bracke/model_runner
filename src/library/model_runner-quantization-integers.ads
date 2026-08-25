@@ -136,11 +136,31 @@ package Model_Runner.Quantization.Integers is
    --  2.120 s at two rows, 1.948 s at four and 2.122 s at eight. Four sets
    --  of accumulators and one activation block are what fit in registers
    --  together, and four is enough chains to interleave against a
-   --  multiply-add latency; eight spills them back to the stack and pays
-   --  for the reuse it bought. A caller with fewer rows left than this
-   --  passes fewer; the kernel is written for the general count and the
-   --  constant is the tile a caller should ask for.
-   Row_Tile : constant := 4;
+   --  multiply-add latency. A caller with fewer rows left than this passes
+   --  fewer; the kernel is written for the general count and this is only
+   --  the largest tile it will take.
+   --
+   --  Eight rather than the four it was, and what changed is not this
+   --  kernel but how many vectors reach it. A tile reads the activation
+   --  once and the activation is re-read once per tile, so the traffic it
+   --  saves grows with the batch: at the thirty-two vectors a pass that was
+   --  the default when four was chosen, eight measured worse -- 2.122 s
+   --  against 1.948 -- and at the hundred and twenty-eight that a prompt is
+   --  read in now it measures better, 1.281 s against 1.379.
+   --
+   --  Which is why Wanted_Tile exists rather than this deciding alone: a
+   --  generated token is one vector, where the activation is two kilobytes
+   --  and in the nearest cache whatever the tile, and there eight is
+   --  slightly worse than four -- 2.593 s against 2.545. The tile that
+   --  suits a prompt is not the tile that suits a token.
+   Row_Tile : constant := 8;
+
+   --  How many rows to ask for, given how many vectors are being multiplied.
+   --
+   --  @param Count Vectors in the pass.
+   --  @return The tile to ask Accumulate_Rows for.
+   function Wanted_Tile (Count : Element_Index) return Element_Index
+   is (if Count > 1 then Row_Tile else 4);
 
    --  The same product over several consecutive rows at once.
    --

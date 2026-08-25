@@ -489,12 +489,16 @@ package body Model_Runner.Tensors is
          Tiled : Model_Runner.Numerics.Wide_Real_Array
            (0 .. QI.Row_Tile * Count - 1);
 
+         --  How many rows to take at once, which depends on how many
+         --  vectors there are: see Wanted_Tile.
+         Wanted : constant Element_Count := QI.Wanted_Tile (Count);
+
          At_Row : Element_Count := First;
       begin
          while At_Row <= Last loop
             declare
                Here : constant Element_Count :=
-                 Element_Count'Min (QI.Row_Tile, Last - At_Row + 1);
+                 Element_Count'Min (Wanted, Last - At_Row + 1);
             begin
                Tiled := [others => 0.0];
 

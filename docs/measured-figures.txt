@@ -894,6 +894,44 @@
 # The device's 110-token prompt is 1.679 s here, which is the open question
 # the entry above describes and not a new one.
 
+# 2026-08-25, the tile a product takes is chosen from the batch rather than
+# fixed at four, so every group naming the kernel or the tensor package moved
+# and all seven were taken again in one sitting, load under 1.20 before each
+# run.
+#
+#   twelve tokens, seven workers    0.550 s wall, 3.10 s processor
+#   the same at fourteen threads    0.527 s wall, 5.65 s processor
+#   four tokens, reference          9.708 s wall against 0.545 s
+#   six-token run                   cpu 0.545 s   device 0.556 s
+#     evaluating the prompt         cpu 0.092 s   device 0.066 s
+#     generating                    cpu 0.465 s   device 0.489 s
+#     processor time                cpu 3.10 s    device 0.03 s
+#   110-token prompt                cpu 1.284 s   device 0.589 s
+#     processor time                cpu 7.64 s    device 0.12 s
+#   sixty-four generated            cpu 2.528 s   device 2.744 s
+#   batch sweep, 110 tokens         4.264 s at one, 1.208 s at 128
+#   drafted, q2_k drafting q8_0     3.582 s, 24 proposed, 7 accepted
+#   row dot, q8_0                   2511 Me/s, 0.40 ns an element
+#   device ratios                   q8_0 0.56 one vector, 0.14 at eight,
+#                                   0.043 at thirty-two; load 1.14 to 2.61
+#   llama.cpp, processor            389.6 t/s prompt, 40.2 t/s generating
+#   llama.cpp, device              1671.5 t/s prompt, 57.7 t/s generating
+#   llama.cpp at -ngl 0             782.3 t/s
+#
+# The tile is eight where a pass carries more than one vector and four where
+# it carries one, and what that is worth is three per cent of the prompt with
+# generation level -- three rounds alternated, the prompt faster in every one.
+#
+# What the change is really about is that four had gone stale without
+# anything noticing. It was measured -- 2.120 s at two, 1.948 at four, 2.122
+# at eight -- when a prompt was read thirty-two vectors at a time. A tile
+# reads the activation once and the activation is re-read once per tile, so
+# what a larger tile saves grows with the batch, and when the default became
+# a hundred and twenty-eight the answer moved: 1.379 at four, 1.351 at six,
+# 1.281 at eight. Nothing asked the question again, because a constant
+# carries no fingerprint. That is the same failure as a figure resting on a
+# source no group names, one level down.
+#
 # covers: the row-product table under "Kernels"
 # 2026-08-11, IQ4_NL and IQ4_XS. Re-measured rather than argued about, and
 # they could be, because these two groups need no model: `tests benchmark`
@@ -1383,7 +1421,7 @@
 # take.
 
 # load: 0.72 at the start of the pinned `tests benchmark` run this comes from, 2026-08-24
-kernels 5A1A7BF5ABC2A802 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb
+kernels A268E97D20C6F42C src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
@@ -2025,7 +2063,7 @@ kernels 5A1A7BF5ABC2A802 src/library/model_runner-quantization.adb src/library/m
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
 # load: 0.35 to 0.97 for the twelve-token run and 0.97 to 2.09 for the fourteen-thread one, 1.39 to 3.72 across the batch-size sweep, 2026-08-24
-engine 87F1F39D82E901A1 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads
+engine FCEFBFE67419CB0B src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -2124,7 +2162,7 @@ engine 87F1F39D82E901A1 src/library/model_runner-llama.adb src/library/model_run
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes.
 # load: 1.49 to 1.49 for the cpu run and 1.49 to 1.30 for the reference one, taken back to back, 2026-08-24
-reference 1613C400FF391C67 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads
+reference E9026D5A195D8BF9 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -2897,6 +2935,53 @@ reference 1613C400FF391C67 src/library/model_runner-backend-reference.adb src/li
 # divided two files inconsistently -- so a bisect over it needs --skip, and
 # the reading it gives without one is a reading of whatever was built last.
 
+# 2026-08-25, a layer collapsed into one submission, measured, and taken
+# back out. Nothing here moved, because the change did not land -- this is
+# recorded so that the next reader does not build it a second time.
+#
+# The claim it tested was this file's own: that device generation is very
+# nearly all host round-trip, arrived at by dividing 41 ms a token by the 66
+# submissions a token makes and finding 0.63 ms, which sits inside the 0.6 to
+# 2.3 ms a call the batch sweep had bracketed. That is arithmetic landing in
+# a plausible range, not a measurement.
+#
+# What was built: a fourth shader doing the normalizations and the residual
+# additions on the device, a step kind for each, steps naming which earlier
+# step they read rather than only the one before them, and a barrier emitted
+# only where a step reads something not yet visible. With it a layer's second
+# half is one submission, and with the next layer's projections carried too a
+# whole layer is one. Three configurations, three rounds, alternated, load
+# under 1.20 before each, every digest 448c2ed68ec342ee:
+#
+#   three submissions a layer   2.623, 2.665, 2.650 s generating
+#   two, the block fused        2.686, 2.811, 2.767 s
+#   one, the whole layer        2.794, 2.824, 2.728 s
+#
+# Monotonically worse as the submissions fall. Fusing trades submissions for
+# pipeline barriers -- three a layer against ten -- and a barrier drains the
+# device where a submission does not. Against dispatches this small the drain
+# costs more than the call it replaced.
+#
+# Two smaller things were measured out with it, both on the processor's
+# integer kernel and both aimed at the same suspicion, that the kernel is
+# bound by re-reading activations rather than by arithmetic:
+#
+#   keeping the eight lane sums a block product leaves, instead of reducing
+#   them to a scalar each time, so that the reduction happens once a row.
+#   The prompt goes 1.259 s to 3.321 s -- 2.6 times worse -- because the
+#   lane form is no longer a reduction and the compiler stops emitting the
+#   sixteen-bit multiply-add it was written around. Only a reduction shape
+#   gets that instruction out of GCC.
+#
+#   storing the quantized activations sixteen bits wide so that the kernel
+#   stops widening the same values again for every four rows of the matrix,
+#   which is a quarter of its element operations. Three rounds alternated:
+#   the prompt reads 1.480, 1.254, 1.313 s at eight bits against 1.369,
+#   1.403, 1.414 at sixteen, and generation is level. Doubling the
+#   activation array costs more in traffic than the widening costs in
+#   arithmetic, which says the kernel is bound by reading activations and
+#   not by widening them.
+#
 # covers: the two-row table under "The device backend" -- the six-token run
 # and the 110-token prompt, on both backends -- the claim that the two print
 # the same digest, the five per-format ratios in the table under it, which
@@ -3468,7 +3553,7 @@ reference 1613C400FF391C67 src/library/model_runner-backend-reference.adb src/li
 
 # load: 1.30 to 1.30 and 1.30 to 1.19 for the six-token pair, 1.19 to 2.70 and 1.50 to 1.46 for the 110-token pair, and 0.49 for the per-format ratios, 2026-08-24
 # load: 1.18 to 1.18 and 1.18 to 1.09 for the six-token pair, 1.09 to 1.08 and 1.08 to 1.08 for the 110-token pair, 1.04 to 2.06 for the benchmark, and 0.17, 0.17 and 0.24 before the three residency runs, 2026-08-25
-device 0E71ED575629C2CC src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb
+device 0B13867B2DADF76C src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -3595,13 +3680,13 @@ device 0E71ED575629C2CC src/shaders/row_product.comp src/library/model_runner-sh
 
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0 as TheBloke published it, drafted by a two-bit file requantized locally whose source and tool nobody recorded. That second file is why this group cannot be reproduced, and saying so here is the point of this line.
 # load: 1.46 to 1.99 for the model, 1.42 to 1.42 for the draft and 1.39 to 2.41 for the two together, 2026-08-24
-drafting 64374D82F3EA57FE src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads
+drafting 1BE9E25D88A0B7B6 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
 # model: none. These figures time the worker pool on tensors this tool builds itself.
 # load: 0.72 at the start of the pinned `tests benchmark` run this comes from, 2026-08-24
-scaling 57F9C3D2282A5E7A src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb
+scaling A00C26A5EBB1E07A src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker
@@ -3688,4 +3773,4 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # is at 95b8e33e1, build 10597, three rounds, as before.
 
 # load: 1.09 to 1.08 and 1.08 to 1.58 for the processor rows, 1.08 to 1.08 and 1.13 to 1.04 for the device ones, and 1.05, 1.02 and 0.94 at the start of the three llama-bench runs, 2026-08-25
-outside 0E71ED575629C2CC src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb
+outside 0B13867B2DADF76C src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb

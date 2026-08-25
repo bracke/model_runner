@@ -5,6 +5,68 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **How many rows a tile takes is chosen from the batch rather than fixed.**
+  Four was measured and published: 2.120 s at two rows a tile, 1.948 at four
+  and 2.122 at eight on a 110-token prompt, read as four being where the
+  register file runs out. Taken again it says 1.379 at four, 1.351 at six and
+  1.281 at eight, with nothing about the kernel changed between the sittings.
+
+  What changed is the batch. That first sweep ran when a prompt was read
+  thirty-two vectors at a time and the default is a hundred and twenty-eight
+  now; a tile reads the activation once and the activation is re-read once
+  per tile, so what a larger tile saves grows with the batch. The answer
+  moved and nothing asked the question again -- which is the same shape of
+  mistake as a published figure resting on a source no group named.
+
+  A generated token is one vector, where the activation is two kilobytes and
+  in the nearest cache whatever the tile, and there eight measures slightly
+  worse than four -- 2.593 s against 2.545. So it is eight for a prompt and
+  four for a token, which is the only reading that took both. No value moves;
+  the digests are what they were.
+
+### Measured and not kept
+
+- **A layer collapsed into one submission on the device, which is slower.**
+  This file's own reasoning said device generation was very nearly all host
+  round-trip: 41 ms a token divided by the 66 submissions a token makes is
+  0.63 ms, which sits inside the 0.6 to 2.3 ms a call the batch sweep had
+  bracketed. That is arithmetic landing in a plausible range rather than a
+  measurement, and building the change is what showed the difference.
+
+  What was built: a fourth shader doing the normalizations and the residual
+  additions on the device, a step kind for each, sequence steps naming which
+  earlier step they read rather than only the one before them, and a barrier
+  emitted only where a step reads something not yet visible. With it a
+  layer's second half goes over as one submission; carrying that on through
+  the next layer's projections makes a whole layer one. Three rounds,
+  alternated, every digest identical:
+
+  | A token of 64, generated | median |
+  | --- | ---: |
+  | three submissions a layer | **2.650 s** |
+  | two -- the block in one recording | 2.767 s |
+  | one -- the whole layer | 2.794 s |
+
+  Monotonically worse as the submissions fall. Fusing trades submissions for
+  pipeline barriers -- three a layer against ten -- and a barrier drains the
+  device where a submission does not; against dispatches this small the
+  drain costs more than the call it replaced. Taken back out, and the README
+  now says what is ruled out rather than naming a next step it cannot
+  support.
+
+- **Two attempts on the processor's integer kernel, both measured out.**
+  Keeping the eight lane sums a block product leaves, so that the horizontal
+  reduction happens once a row rather than once a block, costs 2.6 times the
+  prompt -- the lane form is no longer a reduction and the compiler stops
+  emitting the sixteen-bit multiply-add the kernel was written around.
+  Storing the quantized activations sixteen bits wide, so the kernel stops
+  widening the same values again for every four rows, is level generating
+  and slower on the prompt: doubling the activation array costs more in
+  traffic than the widening costs in arithmetic. Both say the same thing --
+  that this kernel is bound by reading activations, not by widening them.
+
 ### Fixed
 
 - **A buffer the processor reads back is allocated out of memory the
