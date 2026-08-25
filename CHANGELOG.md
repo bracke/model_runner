@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A generated token's block loop lives inside the insertion**, so the
+  accumulator is a register from a row's first block to its last rather than
+  something loaded and stored at every one of them. Sixty-four tokens in
+  **2.187 s against 2.400**, better in each of three alternated rounds and
+  steady to a hundredth of a second.
+
+  About eleven instructions a block become seven: the load and the store go,
+  and a fused multiply-add replaces a separate multiply and add.
+
+  It is only for one vector, and the reason is arithmetic about registers. A
+  token multiplies one vector, so the accumulators are one a row -- four of
+  them. A prompt multiplies a hundred and twenty-eight, which is a thousand
+  accumulator sets against sixteen registers; holding those means re-reading
+  the weights once per vector tile, sixteen passes over a gigabyte, unless
+  the weights are packed into cache-sized panels first. That packing is the
+  remaining work and is not here.
+
+  The prompt's readings across the same six runs are the useful accident:
+  1.192 to 1.300 s while never entering the path. That is a control nobody
+  set up, and it puts this machine's noise floor at about five per cent --
+  the size of several changes measured today, and why single readings keep
+  being wrong here.
+
+
 - **A third compilation of the integer kernel, through the byte dot
   product.** `VPDPBUSD` multiplies four eight-bit pairs into a lane where the
   other two compilations multiply two sixteen-bit ones, and no `-march` makes

@@ -13,6 +13,156 @@ package body Model_Runner.Quantization.Integers.Kernels is
    use type N.Real;
    use type N.Wide_Real;
 
+   --  One vector against a tile of rows, with the block loop inside.
+   --
+   --  Written separately from Rows because it is a different shape rather
+   --  than a different instruction: there, a block is loaded, multiplied and
+   --  its result put back to memory before the next one; here a row's whole
+   --  run of blocks is one insertion and the accumulator is a register from
+   --  the first block to the last. The caller has already established that
+   --  every index below is in range.
+   --
+   --  Only for one vector. With two the accumulators double, with a hundred
+   --  and twenty-eight there are a thousand of them and no register file
+   --  holds that -- which is why a prompt cannot have this and needs the
+   --  weights packed into cache-sized panels instead.
+   procedure Rows_Singly
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array);
+
+   procedure Rows_Singly
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      LF : constant Character := ASCII.LF;
+
+      --  Room for the largest run of blocks a row can have here, so that
+      --  nothing is allocated inside the loop. A row of a model this reads
+      --  is at most this many blocks wide; a wider one is refused above.
+      Scale_Room : constant := 1024;
+
+      --  Both scales multiplied together, one for each block, so the
+      --  insertion below reads one number a block rather than two. Built
+      --  once for a row, which is sixty-four multiplies against the two
+      --  thousand the row itself costs.
+      Row_Scale : array (0 .. Scale_Room - 1) of N.Real := [others => 0.0];
+
+      --  Eight partial sums, reduced once when the row is done.
+      type Lanes_8 is array (0 .. 7) of N.Real with Alignment => 32;
+      Landed : Lanes_8 := [others => 0.0];
+
+      --  A block of this format, in bytes: a scale and thirty-two quants.
+      Width : constant B.Byte_Count :=
+        B.Byte_Count (G.Block_Bytes (G.Type_Q8_0));
+   begin
+      if Blocks > Scale_Room then
+         return;
+      end if;
+
+      for Row in 0 .. Rows - 1 loop
+         declare
+            Base : constant B.Byte_Index :=
+              Data'First + Offset + Row_Bytes * B.Byte_Count (Row);
+
+            --  What the bias put in, taken out once for the whole row: a
+            --  sum over blocks of the scale against the block's own
+            --  activation total.
+            Undo : N.Wide_Real := 0.0;
+         begin
+            for Block in 0 .. Blocks - 1 loop
+               declare
+                  At_Byte : constant B.Byte_Index :=
+                    Base + Width * B.Byte_Count (Block);
+
+                  Scaled : constant N.Real :=
+                    Scales (Scales'First + First / Activation_Block + Block);
+
+                  Weighted : constant N.Real :=
+                    N.To_Real
+                      (N.Half
+                         (Interfaces.Unsigned_16 (Data (At_Byte))
+                          or Interfaces.Shift_Left
+                               (Interfaces.Unsigned_16
+                                  (Data (At_Byte + 1)), 8)));
+               begin
+                  Row_Scale (Natural (Block)) := Weighted * Scaled;
+                  Undo := Undo
+                    + N.Wide_Real (Row_Scale (Natural (Block)))
+                      * N.Wide_Real
+                          (Totals (Totals'First
+                                   + First / Activation_Block + Block));
+               end;
+            end loop;
+
+            Landed := [others => 0.0];
+
+            --  The whole row: a running accumulator in a register, one
+            --  multiply-add a block, and nothing written until the end.
+            System.Machine_Code.Asm
+              ("vpxor %%ymm6, %%ymm6, %%ymm6"        & LF &
+               "movl $0x80808080, %%eax"             & LF &
+               "vmovd %%eax, %%xmm7"                 & LF &
+               "vpbroadcastd %%xmm7, %%ymm7"         & LF &
+               "xorq %%rcx, %%rcx"                   & LF &
+               "1:"                                  & LF &
+               "vmovdqu (%1,%%rcx,1), %%ymm0"        & LF &
+               "vpxor %%ymm7, %%ymm0, %%ymm0"        & LF &
+               "vpxor %%ymm1, %%ymm1, %%ymm1"        & LF &
+               "vpdpbusd (%2), %%ymm0, %%ymm1"       & LF &
+               "vcvtdq2ps %%ymm1, %%ymm1"            & LF &
+               "vbroadcastss (%3), %%ymm2"           & LF &
+               "vfmadd231ps %%ymm2, %%ymm1, %%ymm6"  & LF &
+               "addq $34, %1"                        & LF &
+               "addq $32, %2"                        & LF &
+               "addq $4, %3"                         & LF &
+               "decq %4"                             & LF &
+               "jnz 1b"                              & LF &
+               "vmovaps %%ymm6, (%0)",
+               Inputs =>
+                 [System.Address'Asm_Input ("r", Landed'Address),
+                  System.Address'Asm_Input ("r", Data (Base + 2)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First)'Address),
+                  System.Address'Asm_Input ("r", Row_Scale (0)'Address),
+                  Element_Count'Asm_Input ("r", Blocks)],
+               Clobber  =>
+                 "rax,rcx,ymm0,ymm1,ymm2,ymm6,ymm7,memory",
+               Volatile => True);
+
+            declare
+               Total : N.Wide_Real := 0.0;
+            begin
+               for Lane in Landed'Range loop
+                  Total := Total + N.Wide_Real (Landed (Lane));
+               end loop;
+
+               Sums (Sums'First + Row) :=
+                 Sums (Sums'First + Row) + Total - 128.0 * Undo;
+            end;
+         end;
+      end loop;
+   end Rows_Singly;
+
    ----------
    -- Rows --
    ----------
@@ -52,6 +202,26 @@ package body Model_Runner.Quantization.Integers.Kernels is
                       Row_Bytes * B.Byte_Count (Rows - 1)
                       + Width * B.Byte_Count (Blocks))
       then
+         return;
+      end if;
+
+      --  One vector, and the block loop inside the insertion.
+      --
+      --  A generated token multiplies one vector, so the accumulators are
+      --  one for each row of the tile rather than one for each row and each
+      --  vector of a batch -- four against a thousand, which is the whole
+      --  reason this shape is possible here and not for a prompt. Four fit
+      --  in registers, so the block loop can live inside the insertion and
+      --  the accumulator never touch memory.
+      --
+      --  That is worth three of the eleven instructions a block costs
+      --  otherwise: the load and the store of the accumulator go, and the
+      --  separate multiply and add become one fused multiply-add.
+      if Deep and then Count = 1 then
+         Rows_Singly
+           (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales, Totals,
+            First, Sums);
+         Ok := True;
          return;
       end if;
 
