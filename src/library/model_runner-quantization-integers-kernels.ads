@@ -41,8 +41,21 @@
 --  elementwise, so the two produce identical bits -- which is what lets the
 --  answer stay a property of the model rather than of the host that ran it.
 --  A test asserts the equality.
+--  Deep says this compilation may reach the byte dot product, which is an
+--  AVX-512 instruction and so a strictly narrower promise than Wider: every
+--  host that has it has the wide lanes too, and the instantiation carrying
+--  it is built for x86-64-v4.
+--
+--  It is a separate arithmetic rather than a faster spelling of the same
+--  one. The byte instruction is unsigned against signed, so the weight byte
+--  is biased into range and the bias taken back out with the activation
+--  block's own sum -- which the Totals table already carries. What comes out
+--  agrees with the other two to the bound the conformance sweep states and
+--  not bit for bit, which is a change from what those two promise each
+--  other and is written up beside the tolerance.
 private generic
    Wider : Boolean := False;
+   Deep  : Boolean := False;
 package Model_Runner.Quantization.Integers.Kernels is
 
    --  The product of a span of weight blocks with quantized activations,

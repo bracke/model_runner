@@ -224,6 +224,18 @@ package body Model_Runner.Platform is
          return False;
    end Wide_Vectors;
 
+   ---------------------
+   -- Byte_Products --
+   ---------------------
+
+   function Byte_Products return Boolean is
+   begin
+      return Model_Runner.Platform.Instructions.Byte_Products;
+   exception
+      when others =>
+         return False;
+   end Byte_Products;
+
    ----------------
    -- Core_Count --
    ----------------

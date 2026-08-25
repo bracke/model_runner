@@ -85,6 +85,21 @@ package Model_Runner.Platform is
    --  @return True only where the host says so plainly.
    function Wide_Vectors return Boolean;
 
+   --  Whether this processor offers the byte dot product -- the instruction
+   --  that multiplies four eight-bit pairs into one thirty-two bit lane.
+   --
+   --  A separate question from the one above and a narrower one: every
+   --  processor that has this has the wider lanes as well, and the
+   --  compilation reaching for it is built for the whole instruction set
+   --  that carries it rather than the one instruction.
+   --
+   --  False where the host says no and where it cannot be asked. The
+   --  sixteen-bit path computes the same products to the bound the
+   --  conformance sweep states either way.
+   --
+   --  @return True only where the host says so plainly.
+   function Byte_Products return Boolean;
+
    --  The host this build targets, as hostkit reports it.
    --
    --  Asked rather than inferred. The engine has one behaviour that differs

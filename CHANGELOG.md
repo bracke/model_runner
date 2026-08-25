@@ -7,6 +7,39 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A third compilation of the integer kernel, through the byte dot
+  product.** `VPDPBUSD` multiplies four eight-bit pairs into a lane where the
+  other two compilations multiply two sixteen-bit ones, and no `-march` makes
+  the compiler reach it, so it goes in as a machine code insertion. With it
+  the weights are never widened -- they are the bytes the file holds -- which
+  is the unpack loop gone and half the operand traffic besides.
+
+  | | 110-token prompt | 64 generated |
+  |---|---:|---:|
+  | the sixteen-bit product | 1.271 s | 2.496 s |
+  | the byte dot product | **1.222 s** | **2.354 s** |
+
+  Medians of three alternated rounds, better in every one.
+
+  The instruction is unsigned against signed, so the weight byte is biased by
+  128 and the bias taken back out with the activation block's own sum -- the
+  `Totals` table this kernel is already handed and does not otherwise read.
+  **Where that correction went decided everything.** As a scalar
+  read-modify-write in the innermost loop it cost fifteen per cent of a
+  prompt, more than the instruction saved; built once a block as a vector and
+  added inside the insertion as one integer add, it is the table above. Same
+  instruction, same arithmetic, different place to put four bytes.
+
+  **This is the first change whose answer depends on the host's instruction
+  set.** The two sixteen-bit compilations still agree bit for bit and their
+  test still asserts it. The byte one groups a block's products differently
+  into its lanes, so the rounding falls elsewhere when they are scaled; it is
+  held to the five per cent the conformance sweep already states for the
+  quantized path, and the test says so with the reason written into it. A
+  caller who needs a run reproducible across hosts of different instruction
+  sets should ask for `--arith f32`.
+
+
 - **A row is computed by eight invocations of the shader rather than one**,
   which is worth **twenty-nine per cent of a generated token** on the device:
   2.099 s for sixty-four against 2.973, better in each of three alternated

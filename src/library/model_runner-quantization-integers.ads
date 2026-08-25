@@ -91,6 +91,16 @@ package Model_Runner.Quantization.Integers is
    --  @param Allowed True where the host has the wider instructions.
    procedure Use_Wide_Rows (Allowed : Boolean);
 
+   --  Whether the deepest compilation may be entered.
+   --
+   --  A narrower promise than the wide one and a separate question: it needs
+   --  the byte dot product, which is an AVX-512 instruction, and the
+   --  compilation carrying it is built for the whole of that set. Told the
+   --  same way and for the same reason.
+   --
+   --  @param Allowed True only where the host answered plainly.
+   procedure Use_Deep_Rows (Allowed : Boolean);
+
    --  Quantize a run of vectors to one byte an element.
    --
    --  Symmetric and per block: the scale is the block's largest magnitude

@@ -6,4 +6,4 @@ with Model_Runner.Quantization.Integers.Kernels;
 --  Model_Runner.Quantization.Integers.Wide. Which of them a run enters is
 --  decided once, by asking the host, and told to this package's parent.
 private package Model_Runner.Quantization.Integers.Plain is
-  new Model_Runner.Quantization.Integers.Kernels (Wider => False);
+  new Model_Runner.Quantization.Integers.Kernels (Wider => False, Deep => False);

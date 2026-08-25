@@ -117,9 +117,45 @@ package body Model_Runner.Quantization.Integers.Kernels is
          --  rows together so that a block's pass over them is sequential.
          type Lane_Table is array (Element_Count range <>) of Lanes;
 
+         --  The same thirty-two weights as bytes, which is what the byte
+         --  dot product wants and what the file already holds. Biased into
+         --  unsigned where they are read, because the instruction is
+         --  unsigned against signed and the bias comes back out below.
+         type Byte_Block is array (Block_Range) of Interfaces.Unsigned_8
+           with Alignment => 32;
+         type Row_Bytes_Table is array (Row_Range) of Byte_Block
+           with Alignment => 32;
+
+         --  And the activations as the bytes they were quantized to, for
+         --  the same reason.
+         type Signed_Block is array (Block_Range) of Interfaces.Integer_8
+           with Alignment => 32;
+
          Weights : Row_Blocks;
+         Raw     : Row_Bytes_Table;
          Scaling : Row_Scales;
          Active  : Wide_Block;
+         Narrow  : Signed_Block;
+
+         --  What the bias costs, in the shape the instruction can take it.
+         --
+         --  Biasing the weight byte by 128 makes the instruction's unsigned
+         --  operand and turns sum(w*a) into sum(w*a) + 128*sum(a). The
+         --  second term wants the activation block's own sum, which is the
+         --  Totals table this is already handed -- it was put there for the
+         --  formats that carry a minimum and is unread for this one.
+         --
+         --  Held as a vector with the whole correction in its first lane and
+         --  nothing in the others, so that undoing the bias is one integer
+         --  add inside the insertion. Accumulating it outside instead -- a
+         --  multiply and a read-modify-write of memory for every row, vector
+         --  and block -- cost fifteen per cent of a prompt, which was more
+         --  than the instruction saved. It is built once for each vector and
+         --  block, and every row of the tile adds the same one.
+         type Fix_Lanes is array (Lane_Range) of Interfaces.Integer_32
+           with Alignment => 16;
+
+         Fixing : Fix_Lanes := [others => 0];
 
          Running : Lane_Table (0 .. Count * Rows - 1)
            := [others => [others => 0.0]];
@@ -140,17 +176,30 @@ package body Model_Runner.Quantization.Integers.Kernels is
                                (Interfaces.Unsigned_16
                                   (Data (At_Byte + 1)), 8)));
 
-                  for Index in Block_Range loop
-                     declare
-                        U : constant Interfaces.Unsigned_8 :=
-                          Data (At_Byte + 2 + B.Byte_Count (Index));
-                     begin
-                        Weights (Row) (Index) :=
-                          Interfaces.Integer_16
-                            (if U < 128 then Integer (U)
-                             else Integer (U) - 256);
-                     end;
-                  end loop;
+                  if Deep then
+                     --  No widening at all: the byte the file holds, with
+                     --  its sign bit flipped, is the operand. Flipping that
+                     --  bit is adding 128 to a two's complement byte, which
+                     --  is exactly the bias the instruction's unsigned
+                     --  operand needs.
+                     for Index in Block_Range loop
+                        Raw (Row) (Index) :=
+                          Data (At_Byte + 2 + B.Byte_Count (Index))
+                          xor 16#80#;
+                     end loop;
+                  else
+                     for Index in Block_Range loop
+                        declare
+                           U : constant Interfaces.Unsigned_8 :=
+                             Data (At_Byte + 2 + B.Byte_Count (Index));
+                        begin
+                           Weights (Row) (Index) :=
+                             Interfaces.Integer_16
+                               (if U < 128 then Integer (U)
+                                else Integer (U) - 256);
+                        end;
+                     end loop;
+                  end if;
                end;
             end loop;
 
@@ -163,11 +212,28 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   Scaled   : constant N.Real :=
                     Scales (Scales'First + At_Scale);
                begin
-                  for Index in Block_Range loop
-                     Active (Index) :=
-                       Interfaces.Integer_16
-                         (Values (Values'First + At_Value + Index));
-                  end loop;
+                  if Deep then
+                     for Index in Block_Range loop
+                        Narrow (Index) :=
+                          Interfaces.Integer_8
+                            (Values (Values'First + At_Value + Index));
+                     end loop;
+
+                     --  The whole of this block's bias, for every row of the
+                     --  tile to add.
+                     declare
+                        use type Interfaces.Integer_32;
+                     begin
+                        Fixing (0) :=
+                          (-128) * Totals (Totals'First + At_Scale);
+                     end;
+                  else
+                     for Index in Block_Range loop
+                        Active (Index) :=
+                          Interfaces.Integer_16
+                            (Values (Values'First + At_Value + Index));
+                     end loop;
+                  end if;
 
                   for Row in 0 .. Rows - 1 loop
                      --  Both scales at once, because the insertion
@@ -179,7 +245,35 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
                         LF : constant Character := ASCII.LF;
                      begin
-                        if Wider then
+                        if Deep then
+                           --  Four byte products a lane where the other two
+                           --  do two sixteen-bit ones, against operands half
+                           --  the width and with no widening to reach them.
+                           System.Machine_Code.Asm
+                             ("vpxor %%xmm1, %%xmm1, %%xmm1"     & LF &
+                              "vmovdqa (%1), %%ymm0"             & LF &
+                              "vpdpbusd (%2), %%ymm0, %%ymm1"    & LF &
+                              "vextracti128 $1, %%ymm1, %%xmm2"  & LF &
+                              "vpaddd %%xmm2, %%xmm1, %%xmm1"    & LF &
+                              "vpaddd (%4), %%xmm1, %%xmm1"      & LF &
+                              "vcvtdq2ps %%xmm1, %%xmm1"         & LF &
+                              "vbroadcastss %3, %%xmm2"          & LF &
+                              "vmulps %%xmm2, %%xmm1, %%xmm1"    & LF &
+                              "vaddps (%0), %%xmm1, %%xmm1"      & LF &
+                              "vmovaps %%xmm1, (%0)",
+                              Inputs =>
+                                [System.Address'Asm_Input
+                                   ("r", Into'Address),
+                                 System.Address'Asm_Input
+                                   ("r", Raw (Row)'Address),
+                                 System.Address'Asm_Input
+                                   ("r", Narrow'Address),
+                                 N.Real'Asm_Input ("m", Both),
+                                 System.Address'Asm_Input
+                                   ("r", Fixing'Address)],
+                              Clobber  => "ymm0,ymm1,ymm2,memory",
+                              Volatile => True);
+                        elsif Wider then
                            --  Two multiply-adds over the block, their
                            --  results added, widened to binary32, scaled and
                            --  added to what this row and vector have so far.

@@ -1,3 +1,4 @@
+with Model_Runner.Quantization.Integers.Deep;
 with Model_Runner.Quantization.Integers.Plain;
 with Model_Runner.Quantization.Integers.Wide;
 
@@ -8,6 +9,11 @@ package body Model_Runner.Quantization.Integers is
    --  protocol Model_Runner.Quantization states for its own such flag.
    Wider : Boolean := False;
 
+   --  And whether the deepest one may be, which is a narrower promise: it
+   --  needs the byte dot product and the whole of the instruction set that
+   --  carries it.
+   Deeper : Boolean := False;
+
    ---------------------
    -- Use_Wide_Rows --
    ---------------------
@@ -16,6 +22,15 @@ package body Model_Runner.Quantization.Integers is
    begin
       Wider := Allowed;
    end Use_Wide_Rows;
+
+   --------------------
+   -- Use_Deep_Rows --
+   --------------------
+
+   procedure Use_Deep_Rows (Allowed : Boolean) is
+   begin
+      Deeper := Allowed;
+   end Use_Deep_Rows;
 
    package G renames Model_Runner.GGUF;
    package N renames Model_Runner.Numerics;
@@ -147,12 +162,18 @@ package body Model_Runner.Quantization.Integers is
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
       Ok        : out Boolean) is
    begin
-      --  One source, two compilations, and the host decides which. The
-      --  wider one is entered only where the host says it has the
-      --  instructions, which it is asked once and told here rather than
-      --  reading a machine itself: this package interprets what a model
-      --  file holds and may not reach a host.
-      if Wider then
+      --  One source, three compilations, and the host decides which. Each
+      --  is entered only where the host says it has the instructions, which
+      --  it is asked once and told here rather than reading a machine
+      --  itself: this package interprets what a model file holds and may not
+      --  reach a host.
+      --
+      --  Deepest first, because the deeper promise implies the wider one.
+      if Deeper then
+         Deep.Rows
+           (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+            Totals, First, Stride, Count, Sums, Ok);
+      elsif Wider then
          Wide.Rows
            (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
             Totals, First, Stride, Count, Sums, Ok);

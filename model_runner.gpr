@@ -88,6 +88,15 @@ project Model_Runner is
         Model_Runner_Config.Ada_Compiler_Switches
         & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
            "-march=x86-64-v3", "-ffp-contract=off");
+
+      --  And the third, for the set that carries the byte dot product. The
+      --  whole set rather than the one instruction, because a processor
+      --  offering the instruction offers the rest and the host question
+      --  asks for all of it before this is ever entered.
+      for Switches ("model_runner-quantization-integers-deep.ads") use
+        Model_Runner_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+           "-march=x86-64-v4", "-ffp-contract=off");
    end Compiler;
 
    --  Bytes out as bytes in. Alire's generated switches carry -gnatW8 and the

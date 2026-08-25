@@ -1333,7 +1333,8 @@ package body Tests.GGUF_Cases is
       Assert (Checked_Rows = 15, "not every format was checked");
    end Fused_Dot_Matches_Decoder;
 
-   --  Both compilations of the integer product answer the same bits.
+   --  The two sixteen-bit compilations of the integer product answer the
+   --  same bits, and the byte one answers within the bound.
    --
    --  Bit for bit rather than within a tolerance, and for the reason the
    --  decoders' twin gives: the wider instantiation is built with
@@ -1366,6 +1367,7 @@ package body Tests.GGUF_Cases is
       Count   : constant N.Element_Count := 3;
 
       Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+      Deep : constant Boolean := Model_Runner.Platform.Byte_Products;
 
       Data    : B.Byte_Array_Access;
       Vectors : N.Real_Array (0 .. Columns * Count - 1);
@@ -1405,6 +1407,10 @@ package body Tests.GGUF_Cases is
         (Vectors, Count, Columns, Values, Scales, Totals, Ok);
       Assert (Ok, "the activations could not be quantized");
 
+      --  The deepest is asked for by name below; the two here are the
+      --  sixteen-bit pair, which do have to agree exactly.
+      QI.Use_Deep_Rows (False);
+
       QI.Use_Wide_Rows (False);
       QI.Accumulate_Rows
         (Format, Data.all, 0, Width * B.Byte_Count (Blocks), Rows, Blocks,
@@ -1425,9 +1431,56 @@ package body Tests.GGUF_Cases is
                  & N.Wide_Real'Image (Wide_Sums (Index)));
       end loop;
 
+      --  And the third compilation, which is held to the sweep's bound
+      --  rather than to the bits.
+      --
+      --  It cannot be an equality and is not meant to be. The byte dot
+      --  product multiplies four eight-bit pairs into a lane where the other
+      --  two multiply two sixteen-bit ones, so a lane holds a different set
+      --  of the block's products; the sums it makes are exact integers
+      --  either way, and what differs is where the rounding falls when they
+      --  are scaled. This is the one place in the program where the answer
+      --  depends on the host's instruction set, and the README says so
+      --  beside the figures it moves.
+      if Deep then
+         declare
+            Deep_Sums : N.Wide_Real_Array (0 .. Rows * Count - 1) :=
+              [others => 0.0];
+
+            --  The bound the quantized path is already held to everywhere
+            --  else, quoted from the same place rather than invented here.
+            Room : constant N.Wide_Real := 5.0E-2;
+         begin
+            QI.Use_Deep_Rows (True);
+            QI.Accumulate_Rows
+              (Format, Data.all, 0, Width * B.Byte_Count (Blocks), Rows,
+               Blocks, Values, Scales, Totals, 0, Columns, Count, Deep_Sums,
+               Ok);
+            QI.Use_Deep_Rows (False);
+            Assert (Ok, "the byte product refused the call");
+
+            for Index in Plain_Sums'Range loop
+               declare
+                  Apart : constant N.Wide_Real :=
+                    abs (Deep_Sums (Index) - Plain_Sums (Index));
+
+                  Scale : constant N.Wide_Real :=
+                    N.Wide_Real'Max (abs Plain_Sums (Index), 1.0);
+               begin
+                  Assert (Apart / Scale <= Room,
+                          "the byte product disagrees past the bound at"
+                          & N.Element_Count'Image (Index) & ":"
+                          & N.Wide_Real'Image (Plain_Sums (Index))
+                          & " against" & N.Wide_Real'Image (Deep_Sums (Index)));
+               end;
+            end loop;
+         end;
+      end if;
+
       --  Left as the backend set it, so a test that ran does not decide
       --  what every later one runs.
       QI.Use_Wide_Rows (Wide);
+      QI.Use_Deep_Rows (Deep);
       B.Free (Data);
    end Both_Row_Kernels_Answer_The_Same_Bits;
 
@@ -6129,7 +6182,8 @@ package body Tests.GGUF_Cases is
          "the fused dot product agrees with the reference decoder");
       Register_Routine
         (T, Both_Row_Kernels_Answer_The_Same_Bits'Access,
-         "the two compilations of the integer product answer the same bits");
+         "the sixteen-bit compilations of the integer product answer the "
+         & "same bits and the byte one answers within the bound");
       Register_Routine
         (T, Quantized_Product_Matches_The_Float_One'Access,
          "the product that quantizes its activations agrees with the one "

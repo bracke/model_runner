@@ -1,7 +1,9 @@
 --  What the host's processor can be asked to do beyond the baseline.
 --
---  One question, asked once: does this processor have the per-lane shifts and
---  the gathers that four of the fifteen quantized formats decode faster with.
+--  Two questions, each asked once: does this processor have the per-lane
+--  shifts and the gathers that four of the fifteen quantized formats decode
+--  faster with, and does it have the byte dot product the integer product
+--  multiplies through.
 --  Only the answer differs between hosts and only the way of asking is
 --  host-specific, so this is one spec with one body per host, beside the
 --  topology body it is modelled on.
@@ -20,5 +22,18 @@ private package Model_Runner.Platform.Instructions is
    --
    --  @return True only where the host says so plainly.
    function Wide_Vectors return Boolean;
+
+   --  Whether this processor offers a byte dot product -- the instruction
+   --  that multiplies four eight-bit pairs into one thirty-two bit lane,
+   --  where the wider set above multiplies two sixteen-bit pairs.
+   --
+   --  Asked separately from Wide_Vectors because it is a separate answer: a
+   --  processor may have the wide lanes and not this, and every processor
+   --  that has this has those. False costs the integer product the byte
+   --  instruction and nothing else -- the sixteen-bit path computes the same
+   --  values to the bound the sweep states.
+   --
+   --  @return True only where the host says so plainly.
+   function Byte_Products return Boolean;
 
 end Model_Runner.Platform.Instructions;

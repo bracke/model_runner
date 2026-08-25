@@ -775,4 +775,6 @@ begin
      (Model_Runner.Platform.Wide_Vectors);
    Model_Runner.Quantization.Integers.Use_Wide_Rows
      (Model_Runner.Platform.Wide_Vectors);
+   Model_Runner.Quantization.Integers.Use_Deep_Rows
+     (Model_Runner.Platform.Byte_Products);
 end Model_Runner.Backend.CPU;

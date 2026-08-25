@@ -9,4 +9,6 @@ package body Model_Runner.Platform.Instructions is
 
    function Wide_Vectors return Boolean is (False);
 
+   function Byte_Products return Boolean is (False);
+
 end Model_Runner.Platform.Instructions;
