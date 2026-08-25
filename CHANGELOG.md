@@ -5,7 +5,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The claim that the prompt gap is stalls was wrong, and a counter says
+  so.** `perf_event_paranoid` was 4 on the machine every figure here comes
+  from, so nothing in this project had ever seen a cycle counter; a commit
+  message and a README paragraph both asserted the processor was losing to
+  stalls at 0.7 instructions a cycle against another runtime's 2.5. Both
+  figures were arithmetic on a guessed instruction count.
+
+  Measured: **3.40 instructions a cycle**, a 1.3 per cent cache miss rate,
+  1.9 per cent of cycles stalled at the front end. It is not stalling. What
+  the prompt costs is instructions -- about ninety-three thousand million for
+  something near a hundred and ten thousand million multiply-accumulates,
+  twenty-odd instructions for each one that multiplies.
+
+  The README now carries that correction under its own heading rather than
+  quietly restating the number.
+
 ### Changed
+
+- **The activations are read where the quantizer left them.** The byte
+  instruction's memory operand needs no alignment, so copying a block of them
+  into an aligned buffer first was thirty-two moves shared between eight rows
+  -- about four instructions for every multiply-add. Removing it takes the
+  instruction count from 96.3 to 93.2 thousand million and about five per
+  cent off a prompt: 1.191 s against 1.251, better in two rounds of three.
+  The instruction count is what settles it, since it does not vary between
+  runs the way a time does.
+
 
 - **The device shader decodes four weights out of a word.** It read its
   weights from a buffer bound as words and extracted every byte by hand --
@@ -254,6 +282,19 @@ Keep a Changelog and the project uses semantic versioning.
   the digests are what they were.
 
 ### Measured and not kept
+
+- **Four rows to one insertion**, so that one address computation and one
+  scale lookup would serve four multiply-adds. It executes **more**
+  instructions than the loop it replaces -- 98.7 thousand million against
+  96.3 -- and reads 1.328 s against 1.269. The hand count that predicted
+  otherwise was the third this week to be wrong, and this time a counter was
+  available to say so.
+
+  It also carried a defect the conformance sweep missed and the kernel's own
+  test caught: the lane type declared `Alignment => 32` on sixteen bytes of
+  data, so every entry is padded to thirty-two and a hand-written stride of
+  sixteen reads the wrong halves. An aspect that pads is a stride nobody
+  declared.
 
 - **A register-blocked tile for the prompt, four rows by four vectors.**
   Written, correct -- the conformance sweep passed with nothing outside

@@ -296,16 +296,10 @@ package body Model_Runner.Quantization.Integers.Kernels is
          type Row_Bytes_Table is array (Row_Range) of Byte_Block
            with Alignment => 32;
 
-         --  And the activations as the bytes they were quantized to, for
-         --  the same reason.
-         type Signed_Block is array (Block_Range) of Interfaces.Integer_8
-           with Alignment => 32;
-
          Weights : Row_Blocks;
          Raw     : Row_Bytes_Table;
          Scaling : Row_Scales;
          Active  : Wide_Block;
-         Narrow  : Signed_Block;
 
          --  What the bias costs, in the shape the instruction can take it.
          --
@@ -383,14 +377,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                     Scales (Scales'First + At_Scale);
                begin
                   if Deep then
-                     for Index in Block_Range loop
-                        Narrow (Index) :=
-                          Interfaces.Integer_8
-                            (Values (Values'First + At_Value + Index));
-                     end loop;
-
-                     --  The whole of this block's bias, for every row of the
-                     --  tile to add.
+                     --  No copy: the byte instruction's memory operand needs
+                     --  no alignment, so it reads the activations where the
+                     --  quantizer left them.
+                     --
+                     --  Copying them into a block of their own cost about
+                     --  four instructions for every multiply-add the kernel
+                     --  performs -- thirty-two moves shared between eight
+                     --  rows -- which a counter found and no amount of
+                     --  reading the source had.
                      declare
                         use type Interfaces.Integer_32;
                      begin
@@ -437,7 +432,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
                                  System.Address'Asm_Input
                                    ("r", Raw (Row)'Address),
                                  System.Address'Asm_Input
-                                   ("r", Narrow'Address),
+                                   ("r", Values (Values'First
+                                                 + At_Value)'Address),
                                  N.Real'Asm_Input ("m", Both),
                                  System.Address'Asm_Input
                                    ("r", Fixing'Address)],

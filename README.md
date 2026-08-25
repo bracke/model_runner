@@ -1260,10 +1260,10 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. Taken back to back
-in the same sitting, the same run at fourteen threads takes **0.459 s** of
-wall against **0.480 s** at seven, and 4.74 s of processor time against
+in the same sitting, the same run at fourteen threads takes **0.445 s** of
+wall against **0.480 s** at seven, and 4.75 s of processor time against
 2.71 s -- both starting at a load under 1.5, the fourteen-thread run at
-1.01.
+1.08.
 
 That is one per cent *off* the wall for seventy-eight per cent more
 processor time, and it is the first reading in a year where the second worker
@@ -1481,12 +1481,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.481 s | **0.426 s** |
-| -- evaluating the prompt | 0.086 s | 0.052 s |
-| -- generating | 0.394 s | 0.375 s |
-| -- processor time | 2.73 s | **0.04 s** |
-| 110-token prompt, nothing generated | 1.265 s | **0.535 s** |
-| -- processor time | 7.46 s | **0.11 s** |
+| 6-token prompt, 12 generated | 0.481 s | **0.428 s** |
+| -- evaluating the prompt | 0.086 s | 0.051 s |
+| -- generating | 0.397 s | 0.378 s |
+| -- processor time | 2.70 s | **0.04 s** |
+| 110-token prompt, nothing generated | 1.207 s | **0.567 s** |
+| -- processor time | 7.18 s | **0.12 s** |
 
 All six cells were taken in one sitting on 2026-08-25, back to back, each
 waiting for the machine to fall below 1.50 before it started -- so the two
@@ -1880,7 +1880,7 @@ arrived with nothing timing them, and a format can be perfectly correct and
 four times slower than the one beside it with nothing to say so. A 512 by
 2048 matrix, resident, against the serial processor path -- the device's time
 as a fraction of it, so below one is faster there, taken in one run at a load
-of 1.09 rising to 2.79, most of the rise being the run itself:
+of 1.08 rising to 1.28, most of the rise being the run itself:
 
 | Format | One vector | Eight | | Format | One vector | Eight |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -1959,22 +1959,22 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 87.9 t/s | 29.4 t/s |
-| llama.cpp, processor | 385.1 t/s | 40.0 t/s |
-| model_runner, device | 211.1 t/s | **31.8 t/s** |
-| llama.cpp, device | 1688.4 t/s | 57.7 t/s |
+| model_runner, processor | 92.2 t/s | 29.0 t/s |
+| llama.cpp, processor | 386.7 t/s | 40.4 t/s |
+| model_runner, device | 198.6 t/s | 28.1 t/s |
+| llama.cpp, device | 1686.7 t/s | 57.4 t/s |
 
-On the processor: **1.4 times slower generating and 4.4 times slower reading
+On the processor: **1.4 times slower generating and 4.2 times slower reading
 a prompt**, where the first reading of this table said 3.3 and 16. On the
-device, **1.8** and 8.0, where it said 3.8 and 10.1 -- and where the sitting
+device, 2.0 and 8.5, where it said 3.8 and 10.1 -- and where the sitting
 before this one said 3.1 and 25, because the device rows were being measured
 with a second of uncached memory reads in them. `### The device backend`
 says what that was.
 
 The two halves of that are not the same finding. Generating reads every
 weight once a token and does one multiply with each, so it is the bus rather
-than the arithmetic that answers: llama.cpp's 40.0 t/s is about 45 GB/s of
-this model, and 29.4 t/s is about 33. Being over half way to the other
+than the arithmetic that answers: llama.cpp's 40.4 t/s is about 45 GB/s of
+this model, and 29.0 t/s is about 33. Being over half way to the other
 program's bandwidth is where quantizing the activations left this, and what
 is left is a gap in the kernels -- they are ordinary Ada compiled for
 baseline x86-64, which `## Not implemented` says and this measures -- rather
@@ -2004,19 +2004,19 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 1.252 s
-and 64 in 2.175 s on the processor, 0.521 s and 2.010 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 1.193 s
+and 64 in 2.203 s on the processor, 0.554 s and 2.280 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 776.0 t/s rather
-than 385.1 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 778.5 t/s rather
+than 386.7 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
 The noisiest row is the device generating, and it has just stopped being
-the slow one: 31.8 t/s here, against 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
+the slow one: 28.1 t/s here, against 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
 earlier sittings at comparable loads -- though the last of those is the only
 one measured with the results read back out of cached memory. The processor rows and
 both prompt rows repeat to a few per cent. Every figure in the table is one
@@ -2077,8 +2077,8 @@ All three at a load of 1.4 to 2.4, medians of three:
 | | Twelve tokens | |
 | --- | --- | --- |
 | TinyLlama-1.1B at eight bits | 0.490 s | 41 ms a token |
-| the same model at two bits | 1.704 s | 142 ms a token |
-| the first, drafted by the second | 3.911 s | 24 proposed, 7 accepted |
+| the same model at two bits | 1.720 s | 143 ms a token |
+| the first, drafted by the second | 3.674 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking
@@ -2235,14 +2235,14 @@ tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt.txt \
 
 | `--batch-size` | prompt evaluation, `cpu` | rate | `device` |
 |---|---|---|---|
-| 1 (one token at a time) | 3.821 s | 28.8 tokens/s | |
-| 2 | 2.287 s | 48.1 tokens/s | |
-| 4 | 1.597 s | 68.9 tokens/s | |
-| 8 | 1.430 s | 76.9 tokens/s | 0.720 s |
-| 16 | 1.362 s | 80.8 tokens/s | |
-| 32 | 1.377 s | 79.9 tokens/s | 0.508 s |
-| 64 | 1.271 s | 86.5 tokens/s | |
-| 128 (cap, default) | 1.333 s | 82.5 tokens/s | 0.521 s |
+| 1 (one token at a time) | 3.863 s | 28.5 tokens/s | |
+| 2 | 2.338 s | 47.0 tokens/s | |
+| 4 | 1.631 s | 67.4 tokens/s | |
+| 8 | 1.372 s | 80.2 tokens/s | 0.711 s |
+| 16 | 1.297 s | 84.8 tokens/s | |
+| 32 | 1.337 s | 82.3 tokens/s | 0.519 s |
+| 64 | 1.296 s | 84.9 tokens/s | |
+| 128 (cap, default) | 1.195 s | 92.1 tokens/s | 0.554 s |
 
 This table used to be measured through the chat template while the figure at
 the top of the section was measured raw, and neither said which. That is
@@ -2660,10 +2660,47 @@ token -- and collapsing those is exactly the change measured under
 So a generated token on the device is in the same position as a prompt on the
 processor: the arithmetic is arranged about as well as this program knows how
 to arrange it, and what is left is that the products do not run at the speed
-the memory could feed them. On the processor that shows up as 0.7
-instructions a cycle against another runtime's 2.5. On the device there is
-less to see it with, and this file would rather say that than name a cause it
-cannot measure.
+the memory could feed them.
+
+### What the counters say, and what this file got wrong
+
+An earlier version of the paragraph above said the processor's prompt was
+losing to stalls, and put this program at 0.7 instructions a cycle against
+another runtime's 2.5. Both numbers were arithmetic on a guessed instruction
+count. `perf_event_paranoid` was 4 on the machine every figure here comes
+from, so nothing in this file had ever seen a cycle counter; with it lowered,
+the 110-token prompt reads:
+
+| | |
+|---|---:|
+| instructions | 93.2 G |
+| cycles | 27.4 G |
+| **instructions a cycle** | **3.40** |
+| cache miss rate | 1.3 % |
+| stalled cycles, front end | 1.9 % |
+
+**It is not stalling.** Three and a half instructions a cycle is near what
+this part can retire and above the figure that was attributed to the other
+runtime. What the prompt costs is instructions: about ninety-three thousand
+million of them for something near a hundred and ten thousand million
+multiply-accumulates, which is twenty-odd instructions for every one that
+multiplies.
+
+That is a better question than the one it replaces, and it has not been
+answered. Five attempts to cut the instruction count are recorded in
+`docs/measured-figures.txt`; four made no difference or were worse, including
+one that executed *more* instructions than the loop it replaced while looking
+like less code. The one that worked reads the activations where the quantizer
+left them rather than copying them into an aligned block first, which the
+byte instruction permits because its memory operand needs no alignment:
+ninety-six thousand million instructions down to ninety-three, and about five
+per cent of a prompt.
+
+The lesson this file would keep is narrower than the measurement. Every
+statement above about where time goes that was not read off a counter has
+turned out wrong -- the missing third of a prompt, the stalls, the
+instruction counts of three separate rewrites. A profiler was one sysctl away
+for the whole of that.
 
 ### Kernels
 
