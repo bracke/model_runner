@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 27) of Text_Access :=
+   Held : constant array (1 .. 28) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -46,7 +46,15 @@ package body Library_Surface is
       new String'("In_Range"),
       new String'("Is_NaN"),
       new String'("To_Natural"),
-      new String'("Wide_Bits")];
+      new String'("Wide_Bits"),
+
+      --  Where a run's time went, phase by phase. Here for the same reason
+      --  Hidden_State is: the program itself never asks -- a run reports
+      --  what it took, not what it spent it on -- and a caller measuring an
+      --  engine has no other way to find out. `tests speed --budget` is the
+      --  caller this was written for, and a library caller tuning against
+      --  its own model is the one it is kept for.
+      new String'("Time_Spent")];
 
    ---------------
    -- Is_Listed --

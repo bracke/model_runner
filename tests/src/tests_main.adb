@@ -1629,6 +1629,7 @@ begin
             Draft       => Option ("--draft-model", ""),
             Draft_Tokens => Number ("--draft-tokens", 4),
             Repeats     => Number ("--repeats", 3),
+            Budget      => Given ("--budget"),
             Result      => Result);
 
          Ada.Text_IO.Put_Line

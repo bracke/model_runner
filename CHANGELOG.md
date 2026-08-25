@@ -5,6 +5,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **A run can say where a prompt's time went.** `tests speed --budget` asks
+  the session to keep account of itself and reports the phases as each run
+  ends: normalizing, projecting, rotating, attending, feeding, joining,
+  reading out. Off unless asked -- the clock is read once at each boundary,
+  about a hundred and fifty reads for a batch of a hundred and ten, and a run
+  nobody asked should not pay even that.
+
+  The token budget under `tests benchmark` is a model: it multiplies the
+  shapes a model has and adds the pieces up, and it says in its own output
+  that attention is not among them. That is tolerable for a token and not for
+  a prompt, where attention is the term that grows with the context and
+  everything else is linear in it.
+
+  On a 110-token prompt the run takes 1.260 s and the phases account for
+  1.259 of it. The products are 89.3 per cent, the feed-forward is 3.4 times
+  the attention projections -- against 3.7 times the weights, so the two are
+  within a tenth of each other per weight -- and attention is 6.2 per cent,
+  where it is about a third of a generated token.
+
+  It was built to find a missing 54 per cent that turned out not to exist.
+  An ablation had put the multiply-adds at 39 per cent of a prompt and the
+  unpack at 7, and the remainder was written up as unaccounted for; what the
+  ablation actually measured was the product's inner loop against the whole
+  run, leaving the rest of the product's own work out of the total. A
+  difference between two builds is not a share of a run.
+
 ### Fixed
 
 - **Every figure group names the integer kernel now, and none of them did.**

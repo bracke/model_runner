@@ -1,3 +1,4 @@
+with Ada.Text_IO;
 with Ada.Directories;
 
 with Host_Load;
@@ -20,6 +21,7 @@ with Project_Tools.Files;
 package body Speed_Run is
 
    package CPU renames Model_Runner.Backend.CPU;
+   package IO renames Ada.Text_IO;
    package Containers renames Model_Runner.GGUF.Containers;
    package E renames Model_Runner.Errors;
    package Files renames Model_Runner.Byte_Sources.Files;
@@ -137,9 +139,15 @@ package body Speed_Run is
       Draft       : String := "";
       Draft_Tokens : Positive := 4;
       Repeats     : Positive;
+      Budget      : Boolean := False;
       Result      : out Report)
    is
       use type Model_Runner.Backend.Backend_Kind;
+
+      --  A phase name in a fixed width, so the seconds line up.
+      function Pad (Text : String) return String
+      is (if Text'Length >= 14 then Text (Text'First .. Text'First + 13)
+          else Text & [1 .. 14 - Text'Length => ' ']);
 
       procedure Say (Text : String) is
          Room : constant Natural :=
@@ -333,6 +341,10 @@ package body Speed_Run is
                           Cache => Cache, Status => Local);
                   exit when E.Is_Error (Local);
 
+                  --  After Open, so that what a budget reports is this run
+                  --  and not the buffers being made ready for it.
+                  L.Account (Session, Budget);
+
                   if Drafting then
                      L.Open (Draft_Session, Draft_Engine, Workers => Where,
                              Status => Local);
@@ -436,6 +448,46 @@ package body Speed_Run is
                   Result.Drafted := Outcome.Drafted;
                   Result.Accepted := Outcome.Accepted;
                   Result.Runs := Pass;
+
+                  --  Where the time went, for the caller who asked. Written
+                  --  as the run ends rather than kept, because a median of
+                  --  three runs is what this tool publishes and a budget is
+                  --  a description of one of them.
+                  if Budget then
+                     declare
+                        Times : constant L.Phase_Times :=
+                          L.Time_Spent (Session);
+                        Total : Duration := 0.0;
+                     begin
+                        for Phase in L.Phase loop
+                           Total := Total + Times (Phase);
+                        end loop;
+
+                        IO.Put_Line
+                          (IO.Standard_Error,
+                           "  where a prompt's time goes, run"
+                           & Natural'Image (Pass));
+
+                        for Phase in L.Phase loop
+                           IO.Put_Line
+                             (IO.Standard_Error,
+                              "    " & Pad (L.Phase'Image (Phase))
+                              & T.Image (Long_Float (Times (Phase)), 3)
+                              & " s   "
+                              & (if Total > 0.0
+                                 then T.Image
+                                        (Long_Float (Times (Phase))
+                                         / Long_Float (Total) * 100.0, 1)
+                                 else "-")
+                              & " per cent of what is accounted for");
+                        end loop;
+
+                        IO.Put_Line
+                          (IO.Standard_Error,
+                           "    " & Pad ("ACCOUNTED FOR")
+                           & T.Image (Long_Float (Total), 3) & " s");
+                     end;
+                  end if;
 
                   Model_Runner.Stops.Close (Stop);
                   if Drafting then

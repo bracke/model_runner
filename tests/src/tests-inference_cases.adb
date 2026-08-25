@@ -97,6 +97,80 @@ package body Tests.Inference_Cases is
    --  of its own output against itself can make: what the model makes of
    --  the first position depends on a token that comes after it.
    --
+   --  A session says where a batch's time went, and only when asked.
+   --
+   --  Two assertions rather than one, because the switch is half the point:
+   --  a run nobody asked a budget of reads no clocks, and the way to see
+   --  that from outside is that it reports nothing rather than reporting
+   --  something small. The other half is that the phases add up to
+   --  something -- not to any particular figure, which would be a
+   --  measurement pretending to be a test, but to more than nothing on a
+   --  batch that certainly did some work.
+   procedure A_Budget_Accounts_For_A_Batch
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image  : B.Byte_Array_Access;
+      Total  : Duration := 0.0;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Under  : Harness (Image);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Tokens : constant Vocab.Token_Array := [0, 1, 2, 3];
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open");
+
+         declare
+            Settings : constant L.Configuration := L.Config (Under.Ready);
+            Logits   : N.Real_Array
+              (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+         begin
+
+         --  Not asked: every phase stays zero.
+         L.Evaluate_Batch
+           (Live, Under.Ready, Tokens, Logits, Status => Status);
+         Assert (E.Is_Ok (Status), "the unaccounted batch failed");
+
+         for Phase in L.Phase loop
+            Assert (L.Time_Spent (Live) (Phase) = 0.0,
+                    "a session nobody asked reported time in "
+                    & L.Phase'Image (Phase));
+         end loop;
+
+         --  Asked: the phases hold something.
+         L.Account (Live, True);
+         L.Evaluate_Batch
+           (Live, Under.Ready, Tokens, Logits, Status => Status);
+         Assert (E.Is_Ok (Status), "the accounted batch failed");
+
+         for Phase in L.Phase loop
+            Total := Total + L.Time_Spent (Live) (Phase);
+         end loop;
+
+         Assert (Total > 0.0, "a budget was asked for and came back empty");
+
+         --  And turning it off clears what was there, so the next run is
+         --  measured rather than added to.
+         L.Account (Live, False);
+         for Phase in L.Phase loop
+            Assert (L.Time_Spent (Live) (Phase) = 0.0,
+                    "turning a budget off left "
+                    & L.Phase'Image (Phase) & " behind");
+         end loop;
+         end;
+
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end A_Budget_Accounts_For_A_Batch;
+
    --  A causal model cannot do this and must not: change the last token of
    --  a prompt and the first position's state is what it was. So the test
    --  is the same text twice with one later token different, and the
@@ -5605,6 +5679,10 @@ package body Tests.Inference_Cases is
         (T, Device_Reads_A_Model_In_Any_Format'Access,
          "a model in any format the program reads loads on the device, "
          & "without being repacked first");
+      Register_Routine
+        (T, A_Budget_Accounts_For_A_Batch'Access,
+         "a session asked for a budget says where a batch's time went, and "
+         & "one not asked says nothing");
    end Register_Tests;
 
 end Tests.Inference_Cases;

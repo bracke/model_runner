@@ -671,9 +671,51 @@ package Model_Runner.Llama is
       Failed,
       Closed);
 
+   --  The parts of an evaluation a budget attributes time to.
+   --
+   --  Coarse on purpose: these are the boundaries a caller can act on, and a
+   --  finer division would measure the clock as much as the work. Attending
+   --  is the one that grows with the context while the rest are linear in
+   --  it, which is the whole reason a prompt's budget is not a token's --
+   --  the token budget under `tests benchmark` models the linear parts and
+   --  says in its own output that attention is not among them.
+   type Phase is
+     (Normalizing, Projecting, Rotating, Attending, Feeding, Joining,
+      Reading_Out);
+
+   --  How long each of them took, in one run.
+   type Phase_Times is array (Phase) of Duration;
+
    --  Mutable evaluation state: the KV cache, the activation buffers and the
    --  committed position.
    type Session is tagged limited private;
+
+   --  Ask a session to keep account of where its time goes, or to stop.
+   --
+   --  Off by default, and worth saying why it is a switch rather than
+   --  always on: the clock is read at every boundary below, which is about a
+   --  hundred and fifty reads for a batch of a hundred and ten and nothing
+   --  beside the second that batch takes -- but a run nobody asked a budget
+   --  of should not pay even that, and a timing that is always collected is
+   --  a timing that eventually gets read by something that should not.
+   --
+   --  Turning it on clears what was there, so a caller measures the run it
+   --  asked about rather than that run plus whatever came before.
+   --
+   --  @param Item Session to account for.
+   --  @param Wanted True to keep account, False to stop.
+   procedure Account (Item : in out Session; Wanted : Boolean);
+
+   --  What each phase of this session's evaluations has taken.
+   --
+   --  Zero everywhere when nothing was accounted for, which is what a caller
+   --  that never asked sees. The sum is less than a run's wall time and is
+   --  meant to be: what is outside these phases is the caller's own work,
+   --  the pool's rendezvous, and whatever the operating system did instead.
+   --
+   --  @param Item Session to read.
+   --  @return The times, one per phase.
+   function Time_Spent (Item : Session) return Phase_Times;
 
    --  Estimate the memory a session with the requested capacity would need.
    --
@@ -1296,6 +1338,11 @@ private
       --  softmaxed and read back inside its own iteration, and two heads
       --  sharing a row is two heads answering with each other's arithmetic.
       Score_Room : Model_Runner.Numerics.Element_Count := 0;
+
+      --  Where this session's time went, and whether to keep asking.
+      Spent      : Phase_Times := [others => 0.0];
+      Budgeting  : Boolean := False;
+
       Gate       : Model_Runner.Tensors.Real_Array_Access := null;
       Up         : Model_Runner.Tensors.Real_Array_Access := null;
 

@@ -120,6 +120,9 @@ package Speed_Run is
    --    command rather than two hand-taken numbers.
    --  @param Draft_Tokens How many that model may propose at a time.
    --  @param Repeats How many times to run, for the median.
+   --  @param Budget True to report where the time went, phase by phase, on
+   --    standard error as each run ends. Off by default: the clock reads it
+   --    turns on are small but a run nobody asked should not pay them.
    --  @param Result What it measured.
    procedure Run
      (Path        : String;
@@ -136,6 +139,7 @@ package Speed_Run is
       Draft       : String := "";
       Draft_Tokens : Positive := 4;
       Repeats     : Positive;
+      Budget      : Boolean := False;
       Result      : out Report);
 
    --  The digest this tool prints, over any text.

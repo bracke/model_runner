@@ -1,3 +1,4 @@
+with Ada.Real_Time;
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
@@ -1392,6 +1393,51 @@ package body Model_Runner.Llama is
    --  the nine places a normalization happens cannot disagree.
    function Lifted_Norms (Item : Model'Class) return Boolean
    is (Item.Settings.Kind in Gemma | Gemma2 | Gemma3);
+
+   -------------
+   -- Account --
+   -------------
+
+   procedure Account (Item : in out Session; Wanted : Boolean) is
+   begin
+      Item.Spent := [others => 0.0];
+      Item.Budgeting := Wanted;
+   end Account;
+
+   ----------------
+   -- Time_Spent --
+   ----------------
+
+   function Time_Spent (Item : Session) return Phase_Times is (Item.Spent);
+
+   --  Charge what has passed since Mark to a phase, and move Mark to now.
+   --
+   --  Reading the clock is the whole cost of a budget, so it is read once
+   --  here and serves as both the end of one phase and the start of the
+   --  next: a pair of reads at every boundary would double what the
+   --  instrument costs and would also leave the gap between them charged to
+   --  nobody.
+   procedure Charge
+     (Item : in out Session;
+      To   : Phase;
+      Mark : in out Ada.Real_Time.Time);
+
+   procedure Charge
+     (Item : in out Session;
+      To   : Phase;
+      Mark : in out Ada.Real_Time.Time)
+   is
+      use type Ada.Real_Time.Time;
+      Now : Ada.Real_Time.Time;
+   begin
+      if not Item.Budgeting then
+         return;
+      end if;
+
+      Now := Ada.Real_Time.Clock;
+      Item.Spent (To) := Item.Spent (To) + Ada.Real_Time.To_Duration (Now - Mark);
+      Mark := Now;
+   end Charge;
 
    --  Normalize the way the architecture does, into Target.
    --
@@ -5848,6 +5894,10 @@ package body Model_Runner.Llama is
       Scale     : constant Real :=
         Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
 
+      --  Where the last phase boundary was, for a caller that asked for a
+      --  budget. Read once at each boundary and moved there; see Charge.
+      Mark : Ada.Real_Time.Time := Ada.Real_Time.Clock;
+
       --  One batch's activations. Held for the call rather than the session
       --  so that a session that never batches pays nothing for the option.
       Acts   : T.Real_Array_Access := null;
@@ -6165,6 +6215,8 @@ package body Model_Runner.Llama is
                  Norm.all (0 .. Count * Width - 1);
             end if;
 
+            Charge (Item, Normalizing, Mark);
+
             --  One pass over each weight for the whole batch.
             Product_Batch
               (Item, Current.Query, Norm, Count, Query, Status);
@@ -6175,6 +6227,8 @@ package body Model_Runner.Llama is
             Product_Batch
               (Item, Current.Value, Norm, Count, Values, Status);
             exit when E.Is_Error (Status);
+
+            Charge (Item, Projecting, Mark);
 
             --  Rotate at each token's own position, then publish every key
             --  and value before any attention reads them: token K of the
@@ -6269,6 +6323,12 @@ package body Model_Runner.Llama is
                   end if;
                end;
             end loop;
+
+            --  Rotating covers the cache writes too: they are the same loop
+            --  over the batch, and separating them would read the clock
+            --  twice a position rather than once a layer -- which is the
+            --  instrument measuring itself rather than the work.
+            Charge (Item, Rotating, Mark);
 
             --  The whole batch in one call where a device holds the cache.
             --  Every position of a batch reads the same cache and writes its
@@ -6427,9 +6487,12 @@ package body Model_Runner.Llama is
                end;
             end if;
 
+            Charge (Item, Attending, Mark);
+
             Product_Batch
               (Item, Current.Attention_Out, Attend, Count, Norm, Status);
             exit when E.Is_Error (Status);
+            Charge (Item, Projecting, Mark);
 
             if Current.Out_Bias /= null then
                for Which in 0 .. Count - 1 loop
@@ -6473,6 +6536,8 @@ package body Model_Runner.Llama is
                   end if;
                end;
             end loop;
+
+            Charge (Item, Joining, Mark);
 
             --  Which experts run is decided per position, so a batch has no
             --  one matrix to multiply the whole of it by: this is the one
@@ -6576,6 +6641,8 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
+            Charge (Item, Feeding, Mark);
+
             for Which in 0 .. Count - 1 loop
                declare
                   Origin : constant Element_Count := Slot (Which, Width);
@@ -6589,6 +6656,8 @@ package body Model_Runner.Llama is
                      Item.Post_Room);
                end;
             end loop;
+
+            Charge (Item, Joining, Mark);
          end;
       end loop;
 
@@ -6691,6 +6760,7 @@ package body Model_Runner.Llama is
       end loop;
       Item.Committed := Item.Committed + Natural (Count);
       Status := E.Success;
+      Charge (Item, Reading_Out, Mark);
       Release;
    exception
       when Occurrence : others =>
