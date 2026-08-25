@@ -80,7 +80,20 @@ package body Model_Runner.Platform.Device.Products is
    --  How many invocations one group has, which the shader states as well.
    --  The two have to agree: the dispatch below asks for one group per this
    --  many rows.
-   Group_Size : constant := 64;
+   --
+   --  Two hundred and fifty-six rather than the sixty-four it was, which is
+   --  four waves to a group rather than one. Nothing had ever varied it --
+   --  it was the width of a wave on the part this was written against, which
+   --  is a reason to pick a number and not a reason to keep it -- and it is
+   --  worth five per cent of a device prompt: 0.547 s against 0.579, better
+   --  in each of three alternated rounds. What it buys is latency hiding,
+   --  since a group is what the device can switch between when one of its
+   --  waves is waiting on memory, and one wave to a group leaves it nothing
+   --  to switch to. Generating reads about two per cent slower, which is
+   --  inside the spread of that row and the other way round in one round of
+   --  the three; a prompt has the rows to fill the wider group and a token
+   --  does not.
+   Group_Size : constant := 256;
 
    ---------------------------------------------------------------------------
    --  Structures

@@ -5,7 +5,54 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every figure group names the integer kernel now, and none of them did.**
+  Not one of the seven source lists in `docs/measured-figures.txt` held
+  `model_runner-quantization-integers.adb` or any of its children -- and that
+  is the arithmetic every processor figure in the file is measured through,
+  since `--arith int8` became the default. The kernel could be rewritten,
+  and was, with nothing asking for a re-measure.
+
+  Third time in two days. The default batch lived in a file no group named;
+  the rows a tile takes was a constant no fingerprint could cover; now the
+  kernel itself. What the three have in common is that a fingerprint follows
+  what a figure is *computed by* and keeps missing what it is *decided by*.
+
 ### Changed
+
+- **The block product goes through a machine code insertion.** The eight
+  partial sums a sixteen-bit multiply-add leaves were reduced to a scalar at
+  every block -- about seven instructions of shuffling for three of
+  arithmetic -- and an ablation puts the whole multiply-add step at 39 per
+  cent of a prompt while it issues at about a fifth of the rate this part
+  can. The insertion folds them to four, keeps those across a row, and
+  reduces once. The prompt reads 1.280 s against 1.323, better in each of
+  three alternated rounds; generating is level and no digest moves.
+
+  There are two insertions, one per instruction set, and that is what the
+  suite required rather than a flourish: a test asserts that both
+  compilations of this kernel answer the same bits, so that what a model says
+  is a property of the model and not of the host that ran it. The first
+  version was wide-only and failed it. The two are arranged so a sum holds
+  the same four of a block's sixteen pairs either way -- the wide one folds
+  the block's halves and then the register's, the baseline one adds all four
+  quarters -- and everything after that is elementwise.
+
+- **A device workgroup is 256 invocations rather than 64.** Nothing had ever
+  varied it; it was the wave width of the part this was written against,
+  which is a reason to pick a number and not a reason to keep it. The device
+  prompt reads 0.547 s against 0.579, better in each of three rounds. A group
+  is what the device switches to when one of its waves is waiting on memory,
+  and one wave to a group leaves it nothing to switch to.
+
+  Generating is the cost: about two per cent across the alternated rounds,
+  and eleven per cent in the sitting that re-took the published table. That
+  row has read 13.3 to 24.2 tokens a second across a dozen sittings on
+  unchanged code, so the rounds are what the choice rests on and the table is
+  what this sitting measured.
+
+
 
 - **How many rows a tile takes is chosen from the batch rather than fixed.**
   Four was measured and published: 2.120 s at two rows a tile, 1.948 at four
@@ -27,6 +74,18 @@ Keep a Changelog and the project uses semantic versioning.
   the digests are what they were.
 
 ### Measured and not kept
+
+- **Rows a tile beyond eight buy nothing.** 1.305 s at eight, 1.273 at
+  twelve, 1.309 at sixteen and 1.316 at twenty-four on a 110-token prompt,
+  with the spread inside one setting as wide as the gaps between them. The
+  activation traffic a larger tile saves has stopped being what the prompt
+  waits on -- which also corrects the claim that those re-reads dominate it.
+
+- **Naming the next block with a prefetch makes generating worse.** 2.591 s
+  against 2.533, worse in each of three rounds, with the prompt a wash. The
+  rows of a tile are separate streams but sequential ones, and the part had
+  already found them.
+
 
 - **A layer collapsed into one submission on the device, which is slower.**
   This file's own reasoning said device generation was very nearly all host

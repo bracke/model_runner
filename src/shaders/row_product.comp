@@ -37,7 +37,7 @@
 //  Rows are contiguous, which is the layout every weight in this program
 //  already has: a row is what a matrix-vector product reads in one run.
 
-layout(local_size_x = 64) in;
+layout(local_size_x = 256) in;
 
 layout(std430, binding = 0) readonly  buffer Weights { uint  w[]; };
 layout(std430, binding = 1) readonly  buffer Vectors { float x[]; };

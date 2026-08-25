@@ -1,10 +1,12 @@
+with System;
+with System.Machine_Code;
+
 package body Model_Runner.Quantization.Integers.Kernels is
 
    package B renames Model_Runner.Bytes;
    package G renames Model_Runner.GGUF;
    package N renames Model_Runner.Numerics;
 
-   use type Interfaces.Integer_32;
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_16;
    use type B.Byte_Count;
@@ -88,14 +90,39 @@ package body Model_Runner.Quantization.Integers.Kernels is
          pragma Suppress (Overflow_Check);
 
          subtype Block_Range is Element_Count range 0 .. Activation_Block - 1;
-         type Wide_Block is array (Block_Range) of Interfaces.Integer_16;
+
+         --  Aligned to thirty-two bytes because the insertion below reads
+         --  them with an aligned move. The compiled loop does not care, and
+         --  the alignment costs it nothing.
+         type Wide_Block is array (Block_Range) of Interfaces.Integer_16
+           with Alignment => 32;
          subtype Row_Range is Element_Count range 0 .. Row_Tile - 1;
-         type Row_Blocks is array (Row_Range) of Wide_Block;
+         type Row_Blocks is array (Row_Range) of Wide_Block
+           with Alignment => 32;
          type Row_Scales is array (Row_Range) of N.Real;
+
+         --  The eight partial sums the multiply-add leaves, kept across a
+         --  row's blocks rather than reduced at each of them.
+         --  Four rather than the eight the instruction leaves, because
+         --  these live in memory and are walked once per block: eight of
+         --  them for every row and vector of a tile is thirty-two kilobytes,
+         --  which is the whole of this machine's first-level cache. Folding
+         --  the halves together costs two instructions a block and halves
+         --  what the block loop streams.
+         Lane_Count : constant := 4;
+         subtype Lane_Range is Element_Count range 0 .. Lane_Count - 1;
+         type Lanes is array (Lane_Range) of N.Real with Alignment => 32;
+
+         --  One set for every vector and row of this tile, laid out with the
+         --  rows together so that a block's pass over them is sequential.
+         type Lane_Table is array (Element_Count range <>) of Lanes;
 
          Weights : Row_Blocks;
          Scaling : Row_Scales;
          Active  : Wide_Block;
+
+         Running : Lane_Table (0 .. Count * Rows - 1)
+           := [others => [others => 0.0]];
       begin
          for Block in 0 .. Blocks - 1 loop
             for Row in 0 .. Rows - 1 loop
@@ -143,24 +170,111 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   end loop;
 
                   for Row in 0 .. Rows - 1 loop
+                     --  Both scales at once, because the insertion
+                     --  multiplies the eight sums by one number.
                      declare
-                        Product : Interfaces.Integer_32 := 0;
-                     begin
-                        for Index in Block_Range loop
-                           Product := Product
-                             + Interfaces.Integer_32 (Weights (Row) (Index))
-                               * Interfaces.Integer_32 (Active (Index));
-                        end loop;
+                        Both : constant N.Real := Scaling (Row) * Scaled;
 
-                        Sums (Sums'First + Row * Count + Which) :=
-                          Sums (Sums'First + Row * Count + Which)
-                          + N.Wide_Real
-                              (N.Real (Product) * Scaling (Row) * Scaled);
+                        Into : Lanes renames Running (Which * Rows + Row);
+
+                        LF : constant Character := ASCII.LF;
+                     begin
+                        if Wider then
+                           --  Two multiply-adds over the block, their
+                           --  results added, widened to binary32, scaled and
+                           --  added to what this row and vector have so far.
+                           --  What is not here is the reduction to a scalar:
+                           --  that happens once a row and a vector, below,
+                           --  rather than once for each of a row's blocks.
+                           System.Machine_Code.Asm
+                             ("vmovdqa (%1), %%ymm0"            & LF &
+                              "vmovdqa 32(%1), %%ymm1"          & LF &
+                              "vpmaddwd (%2), %%ymm0, %%ymm0"   & LF &
+                              "vpmaddwd 32(%2), %%ymm1, %%ymm1" & LF &
+                              "vpaddd %%ymm1, %%ymm0, %%ymm0"   & LF &
+                              "vextracti128 $1, %%ymm0, %%xmm1" & LF &
+                              "vpaddd %%xmm1, %%xmm0, %%xmm0"   & LF &
+                              "vcvtdq2ps %%xmm0, %%xmm0"        & LF &
+                              "vbroadcastss %3, %%xmm2"         & LF &
+                              "vmulps %%xmm2, %%xmm0, %%xmm0"   & LF &
+                              "vaddps (%0), %%xmm0, %%xmm0"     & LF &
+                              "vmovaps %%xmm0, (%0)",
+                              Inputs =>
+                                [System.Address'Asm_Input
+                                   ("r", Into'Address),
+                                 System.Address'Asm_Input
+                                   ("r", Weights (Row)'Address),
+                                 System.Address'Asm_Input
+                                   ("r", Active'Address),
+                                 N.Real'Asm_Input ("m", Both)],
+                              Clobber  => "ymm0,ymm1,ymm2,memory",
+                              Volatile => True);
+                        else
+                           --  The same eight sums, in a set every x86-64
+                           --  has. Four multiply-adds of eight elements
+                           --  rather than two of sixteen, and the halves
+                           --  added in the pairs that make the lanes come
+                           --  out where the wide one puts them: the first
+                           --  quarter with the third, the second with the
+                           --  fourth. Everything after that is elementwise,
+                           --  so the two answer the same bits.
+                           System.Machine_Code.Asm
+                             ("movdqa (%1), %%xmm0"        & LF &
+                              "movdqa 16(%1), %%xmm1"      & LF &
+                              "movdqa 32(%1), %%xmm2"      & LF &
+                              "movdqa 48(%1), %%xmm3"      & LF &
+                              "pmaddwd (%2), %%xmm0"       & LF &
+                              "pmaddwd 16(%2), %%xmm1"     & LF &
+                              "pmaddwd 32(%2), %%xmm2"     & LF &
+                              "pmaddwd 48(%2), %%xmm3"     & LF &
+                              "paddd %%xmm2, %%xmm0"       & LF &
+                              "paddd %%xmm3, %%xmm1"       & LF &
+                              "paddd %%xmm1, %%xmm0"       & LF &
+                              "cvtdq2ps %%xmm0, %%xmm0"    & LF &
+                              "movss %3, %%xmm4"           & LF &
+                              "shufps $0, %%xmm4, %%xmm4"  & LF &
+                              "mulps %%xmm4, %%xmm0"       & LF &
+                              "addps (%0), %%xmm0"         & LF &
+                              "movaps %%xmm0, (%0)",
+                              Inputs =>
+                                [System.Address'Asm_Input
+                                   ("r", Into'Address),
+                                 System.Address'Asm_Input
+                                   ("r", Weights (Row)'Address),
+                                 System.Address'Asm_Input
+                                   ("r", Active'Address),
+                                 N.Real'Asm_Input ("m", Both)],
+                              Clobber  =>
+                                "xmm0,xmm1,xmm2,xmm3,xmm4,memory",
+                              Volatile => True);
+                        end if;
                      end;
                   end loop;
                end;
             end loop;
          end loop;
+
+         --  And the reduction the insertions left out: once a row and a
+         --  vector rather than once for each of a row's blocks.
+         declare
+            pragma Suppress (Index_Check);
+         begin
+            for Row in 0 .. Rows - 1 loop
+               for Which in 0 .. Count - 1 loop
+                  declare
+                     Total : N.Wide_Real := 0.0;
+                  begin
+                     for Lane in Lane_Range loop
+                        Total := Total
+                          + N.Wide_Real (Running (Which * Rows + Row) (Lane));
+                     end loop;
+
+                     Sums (Sums'First + Row * Count + Which) :=
+                       Sums (Sums'First + Row * Count + Which) + Total;
+                  end;
+               end loop;
+            end loop;
+         end;
       end;
 
       if Totals'Length = 0 then

@@ -1260,12 +1260,12 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. Taken back to back
-in the same sitting, the same run at fourteen threads takes **0.527 s** of
-wall against **0.550 s** at seven, and 5.65 s of processor time against
+in the same sitting, the same run at fourteen threads takes **0.522 s** of
+wall against **0.565 s** at seven, and 5.52 s of processor time against
 3.10 s -- both starting at a load under 1.5, the fourteen-thread run at
-0.76.
+1.01.
 
-That is four per cent *off* the wall for eighty-two per cent more
+That is eight per cent *off* the wall for seventy-eight per cent more
 processor time, and it is the first reading in a year where the second worker
 on a core bought anything. The bargain has been five different bargains on
 this one machine, and the sequence is the story: eighteen per cent off the
@@ -1273,14 +1273,14 @@ wall for fifty-five per cent more when the host was quiet and the kernels
 were slow; eleven per cent *worse* for twenty-nine per cent more while the
 host was sharing two thirds of a processor with somebody else; seven per cent
 worse for ninety-seven per cent more; nothing at all for ninety-seven; and
-four per cent better for eighty-two now.
+eight per cent better for seventy-eight now.
 
 What moved it back is the arithmetic. A second thread on a core cannot fetch
 memory the first one is already waiting for, which is why the middle three
 readings were what they were -- and a product that multiplies bytes rather
 than widening them into binary64 waits on memory less and on execution units
 more, so there is something for the second thread to do again. The default
-stays one worker per core: four per cent of wall for eighty-two per cent
+stays one worker per core: eight per cent of wall for seventy-eight per cent
 more energy is not a bargain on a part sharing fifteen watts with a device, and
 `--threads 14` is there for a caller who wants the other side of it.
 
@@ -1289,7 +1289,7 @@ against 10.1 s, taken with the shell's timer, on runs whose load nobody
 recorded, and including the model load that these exclude. Every number in it
 was replaced rather than corrected. Through all three readings the default of
 one worker per core is the one to keep, and it has never been a close call in
-energy; on this host it wins on energy by nearly half and gives up four
+energy; on this host it wins on energy by nearly half and gives up eight
 per cent of the wall to do it. A caller who wants to try the other way can still ask for
 `--threads 14`, and should measure it on their own machine rather than trust
 any of the figures here.
@@ -1481,12 +1481,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | **0.545 s** | 0.556 s |
-| -- evaluating the prompt | 0.092 s | 0.066 s |
-| -- generating | 0.465 s | 0.489 s |
-| -- processor time | 3.10 s | **0.03 s** |
-| 110-token prompt, nothing generated | 1.284 s | **0.589 s** |
-| -- processor time | 7.64 s | **0.12 s** |
+| 6-token prompt, 12 generated | **0.536 s** | 0.600 s |
+| -- evaluating the prompt | 0.082 s | 0.073 s |
+| -- generating | 0.454 s | 0.527 s |
+| -- processor time | 3.10 s | **0.05 s** |
+| 110-token prompt, nothing generated | 1.292 s | **0.534 s** |
+| -- processor time | 7.16 s | **0.11 s** |
 
 All six cells were taken in one sitting on 2026-08-25, back to back, each
 waiting for the machine to fall below 1.50 before it started -- so the two
@@ -1858,21 +1858,21 @@ arrived with nothing timing them, and a format can be perfectly correct and
 four times slower than the one beside it with nothing to say so. A 512 by
 2048 matrix, resident, against the serial processor path -- the device's time
 as a fraction of it, so below one is faster there, taken in one run at a load
-of 1.14 rising to 2.61, most of the rise being the run itself:
+of 1.10 rising to 1.72, most of the rise being the run itself:
 
 | Format | One vector | Eight | | Format | One vector | Eight |
 | --- | --- | --- | --- | --- | --- | --- |
 | Q2_K | 0.29 | 0.11 | | Q3_K | 0.45 | 0.13 |
-| IQ4_NL | 0.36 | 0.13 | | F16 | 0.56 | 0.17 |
-| Q5_1 | 0.39 | 0.14 | | Q8_0 | 0.56 | 0.14 |
+| IQ4_NL | 0.36 | 0.13 | | F16 | 0.60 | 0.18 |
+| Q5_1 | 0.40 | 0.14 | | Q8_0 | 0.55 | 0.14 |
 | Q5_0 | 0.41 | 0.14 | | Q4_K | 0.57 | 0.15 |
-| Q4_1 | 0.43 | 0.14 | | Q5_K | 0.59 | 0.14 |
-| IQ4_XS | 0.48 | 0.14 | | Q6_K | 0.68 | 0.18 |
-| | | | | Q4_0 | 0.68 | 0.15 |
-| | | | | BF16 | 0.99 | 0.19 |
-| | | | | F32 | 1.28 | 0.20 |
+| Q4_1 | 0.45 | 0.14 | | Q5_K | 0.59 | 0.15 |
+| IQ4_XS | 0.49 | 0.15 | | Q6_K | 0.70 | 0.18 |
+| | | | | Q4_0 | 0.69 | 0.15 |
+| | | | | BF16 | 1.07 | 0.21 |
+| | | | | F32 | 1.25 | 0.20 |
 
-and q8_0 at thirty-two vectors a pass, which is 0.043.
+and q8_0 at thirty-two vectors a pass, which is 0.042.
 
 Read the one-vector column as a statement about the processor as much as
 about the device, because that is what it is. The formats the device wins hardest on
@@ -1937,22 +1937,22 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 86.5 t/s | 25.3 t/s |
-| llama.cpp, processor | 389.6 t/s | 40.2 t/s |
-| model_runner, device | 191.0 t/s | 23.3 t/s |
-| llama.cpp, device | 1671.5 t/s | 57.7 t/s |
+| model_runner, processor | 86.1 t/s | 25.4 t/s |
+| llama.cpp, processor | 384.8 t/s | 40.1 t/s |
+| model_runner, device | 211.5 t/s | 21.1 t/s |
+| llama.cpp, device | 1672.3 t/s | 57.5 t/s |
 
 On the processor: **1.6 times slower generating and 4.5 times slower reading
 a prompt**, where the first reading of this table said 3.3 and 16. On the
-device, 2.5 and 8.8, where it said 3.8 and 10.1 -- and where the sitting
+device, 2.7 and 7.9, where it said 3.8 and 10.1 -- and where the sitting
 before this one said 3.1 and 25, because the device rows were being measured
 with a second of uncached memory reads in them. `### The device backend`
 says what that was.
 
 The two halves of that are not the same finding. Generating reads every
 weight once a token and does one multiply with each, so it is the bus rather
-than the arithmetic that answers: llama.cpp's 40.2 t/s is about 45 GB/s of
-this model, and 25.3 t/s is about 28. Being over half way to the other
+than the arithmetic that answers: llama.cpp's 40.1 t/s is about 45 GB/s of
+this model, and 25.4 t/s is about 28. Being over half way to the other
 program's bandwidth is where quantizing the activations left this, and what
 is left is a gap in the kernels -- they are ordinary Ada compiled for
 baseline x86-64, which `## Not implemented` says and this measures -- rather
@@ -1982,19 +1982,19 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 1.271 s
-and 64 in 2.528 s on the processor, 0.576 s and 2.744 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 1.278 s
+and 64 in 2.519 s on the processor, 0.520 s and 3.039 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 782.3 t/s rather
-than 389.6 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 773.9 t/s rather
+than 384.8 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The noisiest row is the device generating: 23.3 t/s here, against 24.2,
-18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
+The noisiest row is the device generating: 21.1 t/s here, against 23.3,
+24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
 earlier sittings at comparable loads -- though the last of those is the only
 one measured with the results read back out of cached memory. The processor rows and
 both prompt rows repeat to a few per cent. Every figure in the table is one
@@ -2054,9 +2054,9 @@ All three at a load of 1.4 to 2.4, medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.537 s | 45 ms a token |
-| the same model at two bits | 1.596 s | 133 ms a token |
-| the first, drafted by the second | 3.582 s | 24 proposed, 7 accepted |
+| TinyLlama-1.1B at eight bits | 0.533 s | 44 ms a token |
+| the same model at two bits | 1.607 s | 134 ms a token |
+| the first, drafted by the second | 3.769 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking
@@ -2213,14 +2213,14 @@ tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt.txt \
 
 | `--batch-size` | prompt evaluation, `cpu` | rate | `device` |
 |---|---|---|---|
-| 1 (one token at a time) | 4.264 s | 25.8 tokens/s | |
-| 2 | 2.400 s | 45.8 tokens/s | |
-| 4 | 1.796 s | 61.2 tokens/s | |
-| 8 | 1.559 s | 70.6 tokens/s | 0.897 s |
-| 16 | 1.433 s | 76.8 tokens/s | |
-| 32 | 1.426 s | 77.1 tokens/s | 0.602 s |
-| 64 | 1.202 s | 91.5 tokens/s | |
-| 128 (cap, default) | 1.208 s | 91.1 tokens/s | 0.576 s |
+| 1 (one token at a time) | 4.303 s | 25.6 tokens/s | |
+| 2 | 2.417 s | 45.5 tokens/s | |
+| 4 | 1.813 s | 60.7 tokens/s | |
+| 8 | 1.554 s | 70.8 tokens/s | 0.884 s |
+| 16 | 1.294 s | 85.0 tokens/s | |
+| 32 | 1.238 s | 88.9 tokens/s | 0.567 s |
+| 64 | 1.388 s | 79.3 tokens/s | |
+| 128 (cap, default) | 1.279 s | 86.0 tokens/s | 0.520 s |
 
 This table used to be measured through the chat template while the figure at
 the top of the section was measured raw, and neither said which. That is
@@ -2508,13 +2508,13 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.27 | Q3_K | 0.51 |
+| F32 | 0.27 | Q3_K | 0.50 |
 | Q4_0 | 0.32 | Q4_1 | 0.51 |
 | BF16 | 0.33 | IQ4_XS | 0.52 |
 | Q8_0 | 0.40 | Q5_0 | 0.56 |
 | Q4_K | 0.40 | F16 | 0.58 |
 | Q6_K | 0.40 | Q5_1 | 0.60 |
-| Q5_K | 0.42 | IQ4_NL | 0.66 |
+| Q5_K | 0.42 | IQ4_NL | 0.65 |
 | | | Q2_K | 0.74 |
 
 The two five-bit legacy formats used to be the outliers of this table, at

@@ -19,7 +19,30 @@
 --  twice, and the two answer bit for bit. A test asserts exactly that.
 --
 --  Task safety: pure functions on caller-supplied buffers, no state.
+--  Wider says which instruction set this compilation may name, which here
+--  decides which of two machine code insertions the block product goes
+--  through. It is a static constant in each instantiation, so the branch on
+--  it is folded and neither build carries the other's instructions.
+--
+--  What the insertions buy is not the multiply-add, which the compiler
+--  already finds on its own: it is the horizontal reduction around it. A
+--  block product reduced to a scalar at every block is about seven
+--  instructions of shuffling and adding for three of arithmetic, and an
+--  ablation puts the whole multiply-add step at 39 per cent of a prompt
+--  while it issues at about a fifth of the rate this part can. Keeping the
+--  eight partial sums the instruction leaves and reducing once a row
+--  instead is what they are for.
+--
+--  Both leave the same four sums, and that is a requirement rather than a
+--  coincidence. The wide one takes sixteen elements at a time and folds the
+--  block's two halves and then the register's; the baseline one takes eight
+--  and adds all four quarters. Either way a sum holds the same four of the
+--  block's sixteen pairs, and the floating-point work after that is
+--  elementwise, so the two produce identical bits -- which is what lets the
+--  answer stay a property of the model rather than of the host that ran it.
+--  A test asserts the equality.
 private generic
+   Wider : Boolean := False;
 package Model_Runner.Quantization.Integers.Kernels is
 
    --  The product of a span of weight blocks with quantized activations,
