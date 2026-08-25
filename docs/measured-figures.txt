@@ -3092,6 +3092,51 @@ reference 0E1977E3D5DBB8AB src/library/model_runner-backend-reference.adb src/li
 #   arithmetic, which says the kernel is bound by reading activations and
 #   not by widening them.
 #
+# 2026-08-25, a row is computed by eight invocations rather than one. The
+# shader and the products body changed, so these two groups moved and were
+# taken again.
+#
+#   six-token run                   cpu 0.541 s   device 0.445 s
+#     evaluating the prompt         cpu 0.091 s   device 0.057 s
+#     generating                    cpu 0.449 s   device 0.388 s
+#     processor time                cpu 3.07 s    device 0.03 s
+#   110-token prompt                cpu 1.273 s   device 0.577 s
+#     processor time                cpu 7.14 s    device 0.12 s
+#   sixty-four generated            cpu 2.527 s   device 2.098 s
+#   llama.cpp, processor            381.8 t/s prompt, 40.0 t/s generating
+#   llama.cpp, device              1684.8 t/s prompt, 57.4 t/s generating
+#   llama.cpp at -ngl 0             774.8 t/s
+#
+# The change and why it nearly was not kept. One invocation a row has a
+# wave's lanes reading one byte each from addresses a row apart, which is
+# sixty-four transactions for what fits in one; eight lanes to a row read
+# consecutive blocks instead. On the prompt that is a wash -- 0.531 s at one
+# lane against 0.537 at eight, 0.545 at four, 0.564 at two, three rounds
+# alternated -- and it was going to be reverted on that.
+#
+# Generating, the same three rounds: 2.973, 2.814, 3.013 s at one lane
+# against 2.096, 2.099, 2.105 at eight. Twenty-nine per cent, better in
+# every round, and steadier than the row it replaces by an order.
+#
+# What the coalescing argument missed is that the win is occupancy, not
+# transactions. A 2048-row product at 256 invocations a group is eight
+# workgroups and this part has twelve compute units, so a third of it idled
+# for every token; a prompt is sixteen dispatches deep and hides that, a
+# token is one dispatch and does not. Eight lanes makes it sixty-four
+# workgroups. Which is why the prompt says nothing and generating says
+# everything, and why measuring only the case the change was argued for
+# would have thrown it away.
+#
+# One earlier shape of the same idea was measured and dropped: dividing
+# inside a block, each lane taking every eighth element, has all eight lanes
+# decode the same scale for an eighth of the multiplies each. 0.603 s
+# against 0.520. Dividing by block keeps that work done once.
+#
+# Shared memory rather than a subgroup add, though this device offers
+# clustered arithmetic: that needs SPIR-V 1.3 and so a Vulkan 1.1 instance,
+# and this program asks for 1.0. One reduction a row is not worth narrowing
+# what the program runs on.
+#
 # covers: the two-row table under "The device backend" -- the six-token run
 # and the 110-token prompt, on both backends -- the claim that the two print
 # the same digest, the five per-format ratios in the table under it, which
@@ -3663,7 +3708,7 @@ reference 0E1977E3D5DBB8AB src/library/model_runner-backend-reference.adb src/li
 
 # load: 1.30 to 1.30 and 1.30 to 1.19 for the six-token pair, 1.19 to 2.70 and 1.50 to 1.46 for the 110-token pair, and 0.49 for the per-format ratios, 2026-08-24
 # load: 1.18 to 1.18 and 1.18 to 1.09 for the six-token pair, 1.09 to 1.08 and 1.08 to 1.08 for the 110-token pair, 1.04 to 2.06 for the benchmark, and 0.17, 0.17 and 0.24 before the three residency runs, 2026-08-25
-device 0E953705BD48BEFB src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads
+device 50D80D087B283045 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -3883,4 +3928,4 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # is at 95b8e33e1, build 10597, three rounds, as before.
 
 # load: 1.09 to 1.08 and 1.08 to 1.58 for the processor rows, 1.08 to 1.08 and 1.13 to 1.04 for the device ones, and 1.05, 1.02 and 0.94 at the start of the three llama-bench runs, 2026-08-25
-outside 0E953705BD48BEFB src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads
+outside 50D80D087B283045 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads

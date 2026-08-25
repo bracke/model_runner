@@ -91,6 +91,46 @@ const uint FMT_IQ4_XS = 14u;
 //  batching just bought.
 const uint GROUP = 8u;
 
+//  Invocations that share one row.
+//
+//  One invocation a row is the shape this began with, and it reads memory
+//  the worst way a device can be asked to: at any step the lanes of a wave
+//  want one byte each from addresses a whole row apart, so sixty-four lanes
+//  make sixty-four transactions to fetch what would fit in one. The part is
+//  not short of bandwidth -- 7.8 gigabytes a second of about ninety -- it is
+//  short of transactions, which is what that arrangement spends.
+//
+//  Eight lanes to a row, each taking every eighth block, is what this does.
+//
+//  Every eighth block rather than every eighth element, and the difference
+//  is the whole of what a block costs besides its quants: a scale to decode
+//  and an offset to work out, once per block. Divide inside a block and all
+//  eight lanes do that work for the same block -- eight times the scale
+//  decodes for an eighth of the multiplies each, which measured 0.603 s
+//  against 0.520 for the shape it replaced. Divide by block and it stays
+//  done once. Eight lanes then read from addresses a block apart rather
+//  than a row apart, which for eight-bit blocks is two hundred and seventy
+//  bytes rather than two thousand: a handful of cache lines instead of
+//  eight separate transactions.
+//
+//  What it costs is a reduction, and where that reduction goes is the whole
+//  difference between this and the attempt that failed. That one divided a
+//  row's blocks across lanes and reduced them at every block, through a
+//  barrier each time: 4.300 s at sixty-four lanes against 1.937 for the
+//  shape it replaced. This reduces once, at the end of the row, through one
+//  barrier for the whole workgroup -- sixty-four blocks of arithmetic per
+//  barrier rather than one.
+//
+//  Shared memory rather than a subgroup add, which would be fewer
+//  instructions and needs SPIR-V 1.3 and so a Vulkan 1.1 instance. This
+//  program asks for 1.0 and a device that offers only 1.0 runs everything
+//  else here; trading that away for one reduction a row is not a trade
+//  worth making.
+const uint LANES = 8u;
+
+//  Each invocation's share of its row, for the reduction below. Sized by
+//  the workgroup width declared above, which the two have to agree about.
+shared float shares[256u * GROUP];
 //  The sixteen levels a non-linear four-bit quant may take. A nibble in
 //  IQ4_NL and IQ4_XS is not a number but an index into this, and the table
 //  belongs to the format rather than to any file.
@@ -186,10 +226,17 @@ int q3k_scale(uint at, uint which) {
 }
 
 void main() {
-    uint row = gl_GlobalInvocationID.x;
-    if (row >= shape.rows) {
-        return;
-    }
+    //  Every lane of a cluster takes the same row, so what follows is
+    //  uniform across a cluster.
+    //
+    //  The lanes past the last row are clamped onto it rather than sent
+    //  home, and that is not tidiness: there is a barrier at the end of this
+    //  and a workgroup some of whose invocations returned before reaching it
+    //  is undefined. They compute a row that is already being computed and
+    //  the write below drops it.
+    uint wanted = gl_GlobalInvocationID.x / LANES;
+    uint row = min(wanted, shape.rows - 1u);
+    uint part = gl_GlobalInvocationID.x % LANES;
 
     //  The ones past the end of the batch read the last real vector rather
     //  than reading nothing: the loops below have to have a constant trip
@@ -208,11 +255,11 @@ void main() {
         //  backend asks of a tensor are multiples of four.
         uint at = base >> 2u;
 
-        for (uint col = 0u; col < shape.columns; ++col) {
+        for (uint col = part; col < shape.columns; col += LANES) {
             accumulate(col, uintBitsToFloat(w[at + col]));
         }
     } else if (shape.format == FMT_F16) {
-        for (uint col = 0u; col < shape.columns; ++col) {
+        for (uint col = part; col < shape.columns; col += LANES) {
             accumulate(col, half_at(base + col * 2u));
         }
     } else if (shape.format == FMT_BF16) {
@@ -221,7 +268,7 @@ void main() {
         //  shift and nothing else -- no exponent to rebias, and no case for
         //  infinity or not-a-number, because those patterns are already
         //  where binary32 keeps them.
-        for (uint col = 0u; col < shape.columns; ++col) {
+        for (uint col = part; col < shape.columns; col += LANES) {
             uint at = base + col * 2u;
             uint bits = (byte_at(at) | (byte_at(at + 1u) << 8u)) << 16u;
             accumulate(col, uintBitsToFloat(bits));
@@ -230,7 +277,7 @@ void main() {
         //  Thirty-two signed bytes behind one scale.
         uint blocks = shape.columns / 32u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 34u;
             float scale = half_at(at);
             uint col = b * 32u;
@@ -245,7 +292,7 @@ void main() {
         //  centred by taking eight away.
         uint blocks = shape.columns / 32u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 18u;
             float scale = half_at(at);
             uint col = b * 32u;
@@ -261,7 +308,7 @@ void main() {
         //  eight: a nibble is scaled and then lifted rather than centred.
         uint blocks = shape.columns / 32u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 20u;
             float scale = half_at(at);
             float lowest = half_at(at + 2u);
@@ -289,7 +336,7 @@ void main() {
 
         uint blocks = shape.columns / 32u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * stride;
             float scale = half_at(at);
             float lowest = centred ? 0.0 : half_at(at + 2u);
@@ -316,7 +363,7 @@ void main() {
         //  to centre on eight.
         uint blocks = shape.columns / 32u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 18u;
             float scale = half_at(at);
             uint col = b * 32u;
@@ -335,7 +382,7 @@ void main() {
         //  a four-bit scale and a four-bit minimum sharing one byte.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 84u;
             uint quants = at + 16u;
             float d = half_at(at + 80u);
@@ -377,7 +424,7 @@ void main() {
         //  to three rather than zero to seven.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 110u;
             uint quants = at + 32u;
             uint scales = at + 96u;
@@ -418,7 +465,7 @@ void main() {
         //  first sub-block and the high nibbles the second.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 144u;
             float d = half_at(at);
             float dmin = half_at(at + 2u);
@@ -458,7 +505,7 @@ void main() {
         //  quant, two bits of each byte serving one pair of sub-blocks.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 176u;
             float d = half_at(at);
             float dmin = half_at(at + 2u);
@@ -505,7 +552,7 @@ void main() {
         //  sub-block scale of its own.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 210u;
             float d = half_at(at + 208u);
             uint col0 = b * 256u;
@@ -562,7 +609,7 @@ void main() {
         //  taking thirty-two away.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = 0u; b < blocks; ++b) {
+        for (uint b = part; b < blocks; b += LANES) {
             uint at = base + b * 136u;
             float d = half_at(at);
             uint high = byte_at(at + 2u) | (byte_at(at + 3u) << 8u);
@@ -592,10 +639,33 @@ void main() {
 
     //  Only the vectors this dispatch was given. The rest are the padding
     //  above and belong to nobody.
+    //  What this lane holds is its eighth of the row. The add is outside
+    //  the test below because every lane of the cluster has to reach it.
     uint taken = min(GROUP, shape.count - shape.first);
+
+    for (uint k = 0u; k < GROUP; ++k) {
+        shares[gl_LocalInvocationID.x * GROUP + k] = sum[k];
+    }
+
+    barrier();
+
+    //  One lane of each cluster adds its row up and writes it. The others
+    //  have nothing left to do, and reached the barrier before stopping.
+    if (part != 0u) {
+        return;
+    }
+
+    if (wanted >= shape.rows) {
+        return;
+    }
+
     for (uint k = 0u; k < GROUP; ++k) {
         if (k < taken) {
-            y[(shape.first + k) * shape.rows + row] = sum[k];
+            float whole = 0.0;
+            for (uint lane = 0u; lane < LANES; ++lane) {
+                whole += shares[(gl_LocalInvocationID.x + lane) * GROUP + k];
+            }
+            y[(shape.first + k) * shape.rows + row] = whole;
         }
     }
 }

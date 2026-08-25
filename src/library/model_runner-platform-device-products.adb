@@ -95,6 +95,14 @@ package body Model_Runner.Platform.Device.Products is
    --  does not.
    Group_Size : constant := 256;
 
+   --  Invocations that share one row, which the shader states as well.
+   --
+   --  A row is divided across this many lanes so that their reads of the
+   --  weights are consecutive bytes rather than one byte each from addresses
+   --  a row apart. The dispatch below therefore asks for this many
+   --  invocations per row rather than one.
+   Row_Lanes : constant := 8;
+
    ---------------------------------------------------------------------------
    --  Structures
    ---------------------------------------------------------------------------
@@ -2246,7 +2254,8 @@ package body Model_Runner.Platform.Device.Products is
                         Product_Bytes, Shape'Address);
                   Dispatch
                     (Item.Buffer,
-                     C.unsigned ((Rows + Group_Size - 1) / Group_Size), 1, 1);
+                     C.unsigned ((Rows * Row_Lanes + Group_Size - 1)
+                                 / Group_Size), 1, 1);
                end;
 
                First := First + Batch_Group;
@@ -3416,7 +3425,7 @@ package body Model_Runner.Platform.Device.Products is
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
-                        C.unsigned ((This.Rows + Group_Size - 1)
+                        C.unsigned ((This.Rows * Row_Lanes + Group_Size - 1)
                                     / Group_Size), 1, 1);
                   end;
 

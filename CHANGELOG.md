@@ -5,6 +5,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **A row is computed by eight invocations of the shader rather than one**,
+  which is worth **twenty-nine per cent of a generated token** on the device:
+  2.099 s for sixty-four against 2.973, better in each of three alternated
+  rounds and steadier than the row it replaces by an order. The device now
+  wins the short run outright -- 0.445 s against the processor's 0.541 --
+  where it had been behind on everything but the long prompt.
+
+  It was nearly thrown away. On a prompt the change is a wash: 0.531 s at one
+  lane a row against 0.537 at eight, 0.545 at four, 0.564 at two, which is
+  inside the spread. Only measuring the case it was argued for saved it.
+
+  And the argument that motivated it was not the one that made it work. One
+  invocation a row has a wave's lanes reading a byte each from addresses a
+  row apart -- sixty-four transactions for what fits in one -- so this was
+  written for coalescing. What it actually buys is occupancy: a 2048-row
+  product at 256 invocations a group is eight workgroups and this part has
+  twelve compute units, so a third of it idled for every token. A prompt is
+  sixteen dispatches deep and hides that; a token is one dispatch and does
+  not. Eight lanes makes the same work sixty-four workgroups.
+
+  An earlier shape of the idea was measured and dropped: dividing inside a
+  block, each lane taking every eighth element, has all eight lanes decode
+  the same scale for an eighth of the multiplies each -- 0.603 s against
+  0.520. Dividing by block keeps that work done once. And the reduction is
+  through shared memory rather than a subgroup add, though this device offers
+  clustered arithmetic: that needs SPIR-V 1.3 and so a Vulkan 1.1 instance,
+  and this program asks for 1.0.
+
 ### Added
 
 - **A run can say where a prompt's time went.** `tests speed --budget` asks

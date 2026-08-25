@@ -1481,23 +1481,45 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | **0.537 s** | 0.576 s |
-| -- evaluating the prompt | 0.084 s | 0.073 s |
-| -- generating | 0.460 s | 0.504 s |
-| -- processor time | 3.09 s | **0.04 s** |
-| 110-token prompt, nothing generated | 1.240 s | **0.549 s** |
-| -- processor time | 7.10 s | **0.11 s** |
+| 6-token prompt, 12 generated | 0.541 s | **0.445 s** |
+| -- evaluating the prompt | 0.091 s | 0.057 s |
+| -- generating | 0.449 s | 0.388 s |
+| -- processor time | 3.07 s | **0.03 s** |
+| 110-token prompt, nothing generated | 1.273 s | **0.577 s** |
+| -- processor time | 7.14 s | **0.12 s** |
 
 All six cells were taken in one sitting on 2026-08-25, back to back, each
 waiting for the machine to fall below 1.50 before it started -- so the two
 columns are comparable, which they were not in the version of this table
 before last.
 
-**The device wins the prompt by more than two to one and spends a
-sixtieth of the processor's time doing it.** Four changes took its 110-token
-prompt from 1.951 s to 0.610 s -- the default batch, the results a product
-reads back, the activation it writes, and the kind of memory those results
-are read out of. None of them is in the shader.
+**The device wins both runs now, and spends a fiftieth of the processor's
+time doing it.** Five changes took its 110-token prompt from 1.951 s to
+0.577 s -- the default batch, the results a product reads back, the
+activation it writes, the kind of memory those results are read out of, and
+the width of a workgroup. The sixth is the one that finally moved the short
+run, and it is the only one of the six inside the shader: a row is computed
+by eight invocations rather than one.
+
+That last one is worth reading twice, because it was nearly thrown away. On
+a prompt it is a wash -- 0.531 s at one lane a row against 0.537 at eight,
+which is inside the spread -- and on that evidence it was going to be
+reverted. Generating it is 2.099 s against 2.973, better in each of three
+rounds and steadier than the row it replaces.
+
+The reason is arithmetic about the part rather than about the program. A
+2048-row product dispatched 256 invocations to a group is eight workgroups,
+and this device has twelve compute units: a third of it had nothing to do
+for every token generated. Reading a prompt hides that, because a prompt is
+sixteen dispatches deep and the second fills what the first left idle; a
+token is one dispatch and there is nothing behind it. Eight lanes to a row
+makes the same work sixty-four workgroups.
+
+So it is the first change here aimed at a part that was measurably idle
+rather than at an operation that looked expensive, and it is worth more than
+any of the arithmetic ones: **twenty-nine per cent of a generated token**,
+where quantizing the activations bought twice that on the processor and
+everything since has bought three to five per cent.
 
 The last of those was an open question on this page for a day, and the
 answer is worth keeping because the question looked like a hardware mood.
@@ -1937,22 +1959,22 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 89.6 t/s | 25.1 t/s |
-| llama.cpp, processor | 381.9 t/s | 40.2 t/s |
-| model_runner, device | 205.2 t/s | 22.0 t/s |
-| llama.cpp, device | 1678.9 t/s | 57.6 t/s |
+| model_runner, processor | 87.3 t/s | 25.3 t/s |
+| llama.cpp, processor | 381.8 t/s | 40.0 t/s |
+| model_runner, device | 195.4 t/s | **30.5 t/s** |
+| llama.cpp, device | 1684.8 t/s | 57.4 t/s |
 
-On the processor: **1.6 times slower generating and 4.3 times slower reading
+On the processor: **1.6 times slower generating and 4.4 times slower reading
 a prompt**, where the first reading of this table said 3.3 and 16. On the
-device, 2.6 and 8.2, where it said 3.8 and 10.1 -- and where the sitting
+device, **1.9** and 8.6, where it said 3.8 and 10.1 -- and where the sitting
 before this one said 3.1 and 25, because the device rows were being measured
 with a second of uncached memory reads in them. `### The device backend`
 says what that was.
 
 The two halves of that are not the same finding. Generating reads every
 weight once a token and does one multiply with each, so it is the bus rather
-than the arithmetic that answers: llama.cpp's 40.2 t/s is about 45 GB/s of
-this model, and 25.1 t/s is about 28. Being over half way to the other
+than the arithmetic that answers: llama.cpp's 40.0 t/s is about 45 GB/s of
+this model, and 25.3 t/s is about 28. Being over half way to the other
 program's bandwidth is where quantizing the activations left this, and what
 is left is a gap in the kernels -- they are ordinary Ada compiled for
 baseline x86-64, which `## Not implemented` says and this measures -- rather
@@ -1982,19 +2004,19 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 1.227 s
-and 64 in 2.551 s on the processor, 0.536 s and 2.908 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 1.260 s
+and 64 in 2.527 s on the processor, 0.563 s and 2.098 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 776.9 t/s rather
-than 381.9 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 774.8 t/s rather
+than 381.8 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The noisiest row is the device generating: 22.0 t/s here, against 21.1,
-23.3, 24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
+The noisiest row is the device generating, and it has just stopped being
+the slow one: 30.5 t/s here, against 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
 earlier sittings at comparable loads -- though the last of those is the only
 one measured with the results read back out of cached memory. The processor rows and
 both prompt rows repeat to a few per cent. Every figure in the table is one
