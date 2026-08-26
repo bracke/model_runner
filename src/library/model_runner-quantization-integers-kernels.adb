@@ -88,6 +88,20 @@ package body Model_Runner.Quantization.Integers.Kernels is
    --  because they are stored with an aligned move.
    type Lanes_8 is array (0 .. 7) of N.Real with Alignment => 32;
 
+   --  One vector against a tile of rows, for the four-bit k-quant.
+   procedure Rows_Singly_Q4K
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean);
+
    --  Two rows against four vectors, for the four-bit k-quant.
    procedure Rows_By_Strips_Q4K
      (Data      : Model_Runner.Bytes.Byte_Array;
@@ -1138,6 +1152,236 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Taken := True;
    end Rows_By_Strips_Q4K;
 
+   ------------------------
+   -- Rows_Singly_Q4K --
+   ------------------------
+
+   --  What Rows_Singly does for the eight-bit format, done for the four-bit
+   --  k-quant: one vector, and the block loop inside the insertion, with the
+   --  accumulator a register from a row's first sub-block to its last.
+   --
+   --  A generated token is where this format was furthest behind, and for a
+   --  reason worth writing down. The eight-bit format's generated token is
+   --  bound by the memory path and stops getting faster at four workers;
+   --  this one kept getting faster all the way to seven -- 1.510 s at two
+   --  shares, 1.130 at four, 0.993 at seven -- because the floating-point
+   --  path it was taking spends its time unpacking and multiplying rather
+   --  than waiting for bytes. A kernel cannot help a token that is waiting.
+   --  It can help one that is working.
+   --
+   --  The three differences from the eight-bit kernel are the three the
+   --  batch kernel beside this already records: a nibble needs no bias, one
+   --  read serves two sub-blocks, and the minimum's term is the sub-block's
+   --  activation total taken out once at the end.
+   procedure Rows_Singly_Q4K
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      LF : constant Character := ASCII.LF;
+
+      Deep       : constant := 8;
+      Scale_Room : constant := 1024;
+
+      --  Both scales multiplied together, one for every sub-block, so the
+      --  insertion reads one number a sub-block rather than three.
+      Row_Scale : array (0 .. Scale_Room - 1) of N.Real := [others => 0.0];
+
+      Landed : Lanes_8 := [others => 0.0];
+
+      Width : constant B.Byte_Count :=
+        B.Byte_Count (G.Block_Bytes (G.Type_Q4_K));
+
+      procedure Sub_Scale
+        (Base    : B.Byte_Index;
+         Index   : Natural;
+         Factor  : out Interfaces.Unsigned_8;
+         Minimum : out Interfaces.Unsigned_8);
+
+      --  As in the batch kernel beside this, and for the same reason: the
+      --  decoder that has this keeps it to itself.
+      procedure Sub_Scale
+        (Base    : B.Byte_Index;
+         Index   : Natural;
+         Factor  : out Interfaces.Unsigned_8;
+         Minimum : out Interfaces.Unsigned_8)
+      is
+         function Byte_At (Position : Natural) return Interfaces.Unsigned_8
+         is (Data (Base + B.Byte_Count (Position)));
+      begin
+         if Index < 4 then
+            Factor := Byte_At (Index) and 63;
+            Minimum := Byte_At (Index + 4) and 63;
+         else
+            Factor :=
+              (Byte_At (Index + 4) and 16#0F#)
+              or Interfaces.Shift_Left
+                   (Interfaces.Shift_Right (Byte_At (Index - 4), 6), 4);
+            Minimum :=
+              Interfaces.Shift_Right (Byte_At (Index + 4), 4)
+              or Interfaces.Shift_Left
+                   (Interfaces.Shift_Right (Byte_At (Index), 6), 4);
+         end if;
+      end Sub_Scale;
+   begin
+      Taken := False;
+
+      if Blocks * Deep > Scale_Room then
+         return;
+      end if;
+
+      for Row in 0 .. Rows - 1 loop
+         declare
+            Base : constant B.Byte_Index :=
+              Data'First + Offset + Row_Bytes * B.Byte_Count (Row);
+
+            --  The minimum's term, summed over the row rather than added
+            --  back on every sub-block.
+            Undo : N.Wide_Real := 0.0;
+         begin
+            for Block in 0 .. Blocks - 1 loop
+               declare
+                  At_Byte : constant B.Byte_Index :=
+                    Base + Width * B.Byte_Count (Block);
+
+                  Whole : constant N.Real := Scale_At (Data, At_Byte);
+                  Least : constant N.Real := Scale_At (Data, At_Byte + 2);
+               begin
+                  for Sub in 0 .. Deep - 1 loop
+                     declare
+                        Factor, Minimum : Interfaces.Unsigned_8;
+
+                        At_Scale : constant Element_Count :=
+                          First / Activation_Block
+                          + Block * Deep + Element_Count (Sub);
+
+                        Scaled : constant N.Real :=
+                          Scales (Scales'First + At_Scale);
+                     begin
+                        Sub_Scale (At_Byte + 4, Sub, Factor, Minimum);
+
+                        Row_Scale (Natural (Block) * Deep + Sub) :=
+                          Whole * N.Real (Natural (Factor)) * Scaled;
+
+                        Undo := Undo
+                          + N.Wide_Real
+                              (Least * N.Real (Natural (Minimum)) * Scaled)
+                            * N.Wide_Real
+                                (Totals (Totals'First + At_Scale));
+                     end;
+                  end loop;
+               end;
+            end loop;
+
+            Landed := [others => 0.0];
+
+            System.Machine_Code.Asm
+              ("vpxor %%ymm6, %%ymm6, %%ymm6" & LF &
+               "movl $0x0F0F0F0F, %%eax" & LF &
+               "vmovd %%eax, %%xmm7" & LF &
+               "vpbroadcastd %%xmm7, %%ymm7" & LF &
+               "1:" & LF &
+               "vmovdqu 16(%1), %%ymm0" & LF &
+               "vpand %%ymm7, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm7, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+               "vpdpbusd 0(%2), %%ymm4, %%ymm1" & LF &
+               "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+               "vbroadcastss 0(%3), %%ymm2" & LF &
+               "vfmadd231ps %%ymm2, %%ymm1, %%ymm6" & LF &
+               "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+               "vpdpbusd 32(%2), %%ymm5, %%ymm1" & LF &
+               "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+               "vbroadcastss 4(%3), %%ymm2" & LF &
+               "vfmadd231ps %%ymm2, %%ymm1, %%ymm6" & LF &
+               "vmovdqu 48(%1), %%ymm0" & LF &
+               "vpand %%ymm7, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm7, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+               "vpdpbusd 64(%2), %%ymm4, %%ymm1" & LF &
+               "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+               "vbroadcastss 8(%3), %%ymm2" & LF &
+               "vfmadd231ps %%ymm2, %%ymm1, %%ymm6" & LF &
+               "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+               "vpdpbusd 96(%2), %%ymm5, %%ymm1" & LF &
+               "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+               "vbroadcastss 12(%3), %%ymm2" & LF &
+               "vfmadd231ps %%ymm2, %%ymm1, %%ymm6" & LF &
+               "vmovdqu 80(%1), %%ymm0" & LF &
+               "vpand %%ymm7, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm7, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+               "vpdpbusd 128(%2), %%ymm4, %%ymm1" & LF &
+               "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+               "vbroadcastss 16(%3), %%ymm2" & LF &
+               "vfmadd231ps %%ymm2, %%ymm1, %%ymm6" & LF &
+               "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+               "vpdpbusd 160(%2), %%ymm5, %%ymm1" & LF &
+               "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+               "vbroadcastss 20(%3), %%ymm2" & LF &
+               "vfmadd231ps %%ymm2, %%ymm1, %%ymm6" & LF &
+               "vmovdqu 112(%1), %%ymm0" & LF &
+               "vpand %%ymm7, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm7, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+               "vpdpbusd 192(%2), %%ymm4, %%ymm1" & LF &
+               "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+               "vbroadcastss 24(%3), %%ymm2" & LF &
+               "vfmadd231ps %%ymm2, %%ymm1, %%ymm6" & LF &
+               "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+               "vpdpbusd 224(%2), %%ymm5, %%ymm1" & LF &
+               "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+               "vbroadcastss 28(%3), %%ymm2" & LF &
+               "vfmadd231ps %%ymm2, %%ymm1, %%ymm6" & LF &
+               "addq $144, %1" & LF &
+               "addq $256, %2" & LF &
+               "addq $32, %3" & LF &
+               "decq %4" & LF &
+               "jnz 1b" & LF &
+               "vmovaps %%ymm6, (%0)",
+               Inputs =>
+                 [System.Address'Asm_Input ("r", Landed'Address),
+                  System.Address'Asm_Input ("r", Data (Base)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First)'Address),
+                  System.Address'Asm_Input ("r", Row_Scale (0)'Address),
+                  Element_Count'Asm_Input ("r", Blocks)],
+               Clobber  =>
+                 "rax,ymm0,ymm1,ymm2,ymm4,ymm5,ymm6,ymm7,memory",
+               Volatile => True);
+
+            declare
+               Total : N.Wide_Real := 0.0;
+            begin
+               for Lane in Landed'Range loop
+                  Total := Total + N.Wide_Real (Landed (Lane));
+               end loop;
+
+               Sums (Sums'First + Row) :=
+                 Sums (Sums'First + Row) + Total - Undo;
+            end;
+         end;
+      end loop;
+
+      Taken := True;
+   end Rows_Singly_Q4K;
+
    ----------
    -- Rows --
    ----------
@@ -1189,11 +1433,45 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  this format went until now; what is claimed here is the batch,
       --  which is where a prompt spends itself.
       if Format = G.Type_Q4_K then
-         if not Deep
-           or else Count < 4
-           or else Rows mod 2 /= 0
-           or else Per /= 256
-         then
+         if not Deep or else Per /= 256 then
+            return;
+         end if;
+
+         --  One vector, which is a generated token, and which has a kernel
+         --  of its own for the same reason the eight-bit format does: the
+         --  accumulators are one to a row rather than one to a row and a
+         --  vector, so the sub-block loop lives inside the insertion.
+         if Count = 1 then
+            declare
+               Reach : constant Element_Count := First + Blocks * Per;
+               Done  : Boolean;
+            begin
+               if First < Values'First
+                 or else First mod Activation_Block /= 0
+                 or else Reach < First
+                 or else Reach - 1 > Values'Last
+                 or else Scales'Length
+                           < First / Activation_Block + Blocks * 8
+                 or else Totals'Length
+                           < First / Activation_Block + Blocks * 8
+               then
+                  return;
+               end if;
+
+               Rows_Singly_Q4K
+                 (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                  Totals, First, Sums, Done);
+
+               if not Done then
+                  return;
+               end if;
+            end;
+
+            Ok := True;
+            return;
+         end if;
+
+         if Count < 4 or else Rows mod 2 /= 0 then
             return;
          end if;
 

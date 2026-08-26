@@ -55,7 +55,9 @@ package body Model_Runner.Quantization.Integers is
      (Format : Model_Runner.GGUF.Tensor_Type;
       Count  : Element_Count) return Boolean
    is (Has_Integer_Kernel (Format)
-       and then (Format /= G.Type_Q4_K or else Count >= 4));
+       and then (Format /= G.Type_Q4_K
+                 or else Count = 1
+                 or else Count >= 4));
 
    ----------------------
    -- Quantize_Vectors --

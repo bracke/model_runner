@@ -44,6 +44,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **And a generated token of the four-bit k-quant has one too.** The
+  eight-bit format's generated token is bound by the memory path -- it stops
+  getting faster at four workers, and no kernel helps a token that is
+  waiting. This one was not waiting, and the worker sweep said so before
+  anything was written: 1.510 s at two shares, 1.130 at four, 0.993 at
+  seven, still improving where the eight-bit format is flat past four,
+  because the floating-point path it was taking spends its time unpacking
+  and multiplying rather than fetching.
+
+  Thirty-two generated tokens go from **0.938 s to 0.505** and from 6.33
+  seconds of processor time to 2.81, medians of three alternated rounds,
+  with the same digest and the prompt beside it unmoved. Fifty milliseconds
+  a token against eighty-four, where the eight-bit format takes thirty-three.
+
+  The kernel is the single-vector shape the eight-bit format already had,
+  with the three differences the batch kernel records: a nibble needs no
+  bias, one read serves two sub-blocks, and the minimum's term is the
+  sub-block's activation total taken out once at the end of a row.
+
 - **The four-bit k-quant has an integer kernel.** Every kernel of the last
   three days served Q8_0 and Q8_0 alone, and `Q4_K` -- which is what most
   published models are actually stored in -- took the floating-point path
