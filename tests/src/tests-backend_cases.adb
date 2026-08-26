@@ -656,7 +656,8 @@ package body Tests.Backend_Cases is
       --  third of each other for all six. The two sixteen-bit formats say
       --  it plainly: their weights reach the tile exactly, and they differ
       --  by as much as the k-quants do, so what is measured here is the
-      --  half-precision operand and not any decode. Their bound is set from that
+      --  half-precision operand and not any decode. Their bound is set from
+      --  that
       --  with room for a device that rounds a tile differently, and is
       --  stated separately so that the other eleven stay held to the tight
       --  one at both shapes.

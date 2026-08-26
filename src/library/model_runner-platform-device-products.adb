@@ -272,9 +272,9 @@ package body Model_Runner.Platform.Device.Products is
    --  matrix_product.comp decodes, at a width that is a whole number of
    --  their blocks -- and binary32 is deliberately not one of them, because
    --  the tile's operand is half precision and a caller who kept a model at
-   --  binary32 asked for the mantissa that would be lost; the rows have to divide by the tile, because a
-   --  workgroup writes a whole tile and a partial one would write into the
-   --  next vector's answers; and the batch has to be long enough to be
+   --  binary32 asked for the mantissa that would be lost; the rows have to
+   --  divide by the tile, because a workgroup writes a whole tile and a
+   --  partial one would write into the next vector's answers; and the batch has to be long enough to be
    --  worth rounding up to a tile.
    --
    --  Everything else -- nine formats, a generated token, a row count
