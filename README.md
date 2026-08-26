@@ -2810,6 +2810,9 @@ pleasant surprise.
 | Q4_K on the byte product, Q6_K on the old path | 1.355 s | 8.29 s of processor time |
 | both on the byte product | **0.990 s** | **5.47 s** |
 
+and `### The scales were decoded once for every strip` takes the same file to
+0.875 s further down, by removing work rather than by adding an instruction.
+
 Medians of three alternated rounds and the same digest again. **Four and a
 half times, end to end**: this file read a 110-token prompt in 4.598 s that
 morning.
@@ -2927,6 +2930,48 @@ A `Q5_K_M` file is the same mixture a `Q4_K_M` file is, so its six-bit
 tensors were already covered and its five-bit ones were the whole of what
 was left. Four of the fifteen formats have a kernel now, and between them
 they are what a `Q4_K_M` or a `Q5_K_M` file is made of.
+
+### The scales were decoded once for every strip
+
+A batch is swept four vectors at a time, so a 110-token prompt is
+twenty-eight strips -- and every one of them decoded the same weight scales
+again. For the eight-bit format that is one half-precision number per row and
+block. For the k-quants it is that plus twelve bytes of six-bit fields
+unpacked into eight scales and eight minimums, or sixteen signed sub-block
+scales. All of it is the same for every strip, and all of it was done
+twenty-eight times.
+
+A profile said where to look and the counter said what it was worth:
+`rows_by_strips` is 73.5 per cent of a prompt, and inside it the machine-code
+insertion is 43 per cent against 57 for the arithmetic around it.
+
+The scales are worked out once per call now, into a table the strips read.
+
+| 110-token prompt on the processor | before | after |
+|---|---:|---:|
+| Q4_K_M | 1.046 s | **0.875 s** |
+| Q5_K_M | 1.077 s | **0.882 s** |
+| Q8_0 | 0.815 s | 0.792 s |
+
+Medians of three alternated rounds, better in every round for the two
+k-quants, every digest unchanged, and a generated token untouched -- 2.240 s
+against 2.233 for sixty-four of them, because a generated token is one vector
+and goes through a kernel with no strips in it.
+
+**The eight-bit format has the least to gain and gains the least**, and its
+counter is the honest measure of the whole change: 54.9 thousand million
+instructions became 43.5, and 14.72 thousand million cycles became 14.45. A
+fifth of the work removed bought two per cent of the time, which says that
+kernel was never issue-bound. What the k-quants had was not a few more
+instructions but several times as many, and there the same removal is worth a
+fifth of the prompt.
+
+That is also why this was not found by reading. The redundancy is visible in
+the source -- a decode inside a loop whose caller loops over strips -- and it
+had been visible since the strip kernel was written. What made it worth
+finding was the profile, and what made it worth keeping is that the two
+figures disagree: the instruction count says a fifth and the clock says two
+per cent, and both are true of different formats.
 
 ### Attention had never been told the bounds were proved
 

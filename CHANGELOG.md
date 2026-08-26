@@ -306,6 +306,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The weight scales were decoded once for every strip of the batch, and
+  are worked out once for the call now: a `Q4_K_M` prompt on the processor
+  reads 0.875 s against 1.046.** A batch is swept four vectors at a time, so
+  a 110-token prompt is twenty-eight strips, and each of them decoded the
+  same scales again -- one half-precision number a row and block for the
+  eight-bit format, and for the k-quants that plus twelve bytes of six-bit
+  fields unpacked into eight scales and eight minimums, or sixteen signed
+  sub-block scales.
+
+  Medians of three alternated rounds, better in every round for the two
+  k-quants, every digest unchanged: `Q4_K_M` 1.046 s to 0.875, `Q5_K_M`
+  1.077 to 0.882, `Q8_0` 0.815 to 0.792. A generated token is untouched,
+  2.240 s against 2.233 for sixty-four, because it goes through a kernel
+  with no strips in it.
+
+  The eight-bit format's counter is the honest measure of the whole change:
+  54.9 thousand million instructions became 43.5 and 14.72 thousand million
+  cycles became 14.45 -- a fifth of the work removed bought two per cent of
+  the time, which says that kernel was never issue-bound. The k-quants did
+  not have a few more instructions but several times as many, and there the
+  same removal is worth a fifth of the prompt.
+
+  Found by profiling rather than by reading, though it was visible in the
+  source from the day the strip kernel was written: a decode inside a loop
+  whose caller loops over strips. `Sub_Block_Scale` is at body scope now
+  instead of copied into four kernels.
+
 - **The five-bit k-quant has both kernels, which completes what a "_M" file
   is made of.** `Q5_K` is `Q4_K` with a bit taken out of every quant and
   kept apart -- the same two scales, the same twelve packed six-bit scale

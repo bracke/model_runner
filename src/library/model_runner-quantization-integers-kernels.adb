@@ -69,6 +69,40 @@ package body Model_Runner.Quantization.Integers.Kernels is
       end if;
    end Scale_At;
 
+   --  The six-bit scale and minimum a Q4_K or Q5_K sub-block carries.
+   --
+   --  Twelve bytes hold sixteen six-bit numbers: the first four pairs whole
+   --  in a byte each, and the last four split, four bits in one byte and
+   --  two in the top of another that a lower sub-block is already using.
+   --
+   --  At body scope rather than inside a kernel because the tables the
+   --  strip kernels read are built once for a whole call now, and the
+   --  building is done where the call is dispatched.
+   procedure Sub_Block_Scale
+     (Data    : Model_Runner.Bytes.Byte_Array;
+      Base    : Model_Runner.Bytes.Byte_Index;
+      Index   : Natural;
+      Factor  : out Interfaces.Unsigned_8;
+      Minimum : out Interfaces.Unsigned_8)
+   is
+      function Byte_At (Position : Natural) return Interfaces.Unsigned_8
+      is (Data (Base + B.Byte_Count (Position)));
+   begin
+      if Index < 4 then
+         Factor := Byte_At (Index) and 63;
+         Minimum := Byte_At (Index + 4) and 63;
+      else
+         Factor :=
+           (Byte_At (Index + 4) and 16#0F#)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Byte_At (Index - 4), 6), 4);
+         Minimum :=
+           Interfaces.Shift_Right (Byte_At (Index + 4), 4)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Byte_At (Index), 6), 4);
+      end if;
+   end Sub_Block_Scale;
+
    --  One vector against a tile of rows, with the block loop inside.
    --
    --  Written separately from Rows because it is a different shape rather
@@ -124,6 +158,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
+      Steps     : Model_Runner.Numerics.Real_Array;
       First     : Element_Count;
       Stride    : Element_Count;
       Count     : Element_Count;
@@ -141,6 +176,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
+      Ups       : Model_Runner.Numerics.Real_Array;
+      Downs     : Model_Runner.Numerics.Real_Array;
       Totals    : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
@@ -173,6 +210,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
+      Ups       : Model_Runner.Numerics.Real_Array;
+      Downs     : Model_Runner.Numerics.Real_Array;
       Totals    : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
@@ -184,6 +223,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
    --  Two rows against four vectors, with the block loop inside the
    --  insertion. Only for the byte dot product.
+   --
+   --  @param Weights The weight side of every scale, one for each row and
+   --    block of the tile, row major. Handed in rather than read here
+   --    because it is the same for every strip and there are as many strips
+   --    as the batch is long divided by four: reading it here decoded a
+   --    half-precision number twenty-eight times over on a 110-token
+   --    prompt, and the counter said so.
    procedure Rows_By_Strips
      (Data      : Model_Runner.Bytes.Byte_Array;
       Offset    : Model_Runner.Bytes.Byte_Count;
@@ -192,6 +238,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
+      Weights   : Model_Runner.Numerics.Real_Array;
       Totals    : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
@@ -383,6 +430,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
+      Weights   : Model_Runner.Numerics.Real_Array;
       Totals    : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
@@ -442,8 +490,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
       type Strip_Lanes is array (0 .. Panel_Rows * Strip - 1) of Lanes_8;
       Landed : Strip_Lanes := [others => [others => 0.0]];
 
-      Width : constant B.Byte_Count :=
-        B.Byte_Count (G.Block_Bytes (G.Type_Q8_0));
    begin
       Taken := False;
 
@@ -488,12 +534,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
             for Block in 0 .. Blocks - 1 loop
                for Row in Element_Count range 0 .. Panel_Rows - 1 loop
                   declare
-                     At_Byte : constant B.Byte_Index :=
-                       Base + Row_Bytes * B.Byte_Count (Row)
-                       + Width * B.Byte_Count (Block);
-
                      Scale : constant N.Real :=
-                       Scale_At (Data, At_Byte);
+                       Weights (Weights'First
+                                + (At_Row + Row) * Blocks + Block);
 
                      At_Vec : constant Natural := Natural (Block) * Strip;
                      At_Out : constant Natural :=
@@ -671,6 +714,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
+      Ups       : Model_Runner.Numerics.Real_Array;
+      Downs     : Model_Runner.Numerics.Real_Array;
       Totals    : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
@@ -717,46 +762,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
       type Strip_Lanes is array (0 .. Panel_Rows * Strip - 1) of Lanes_8;
       Landed : Strip_Lanes;
-
-      Width : constant B.Byte_Count :=
-        B.Byte_Count (G.Block_Bytes (G.Type_Q4_K));
-
-      --  The six-bit scale and minimum of one sub-block, as the format
-      --  packs them: four of each in the low six bits of the first eight
-      --  bytes, and the remaining four split across the top two bits of
-      --  those and the two halves of the last four. Written out here rather
-      --  than called for, because the decoder that has it keeps it to
-      --  itself and a second reader of twelve bytes is smaller than a
-      --  reason to make it public.
-      procedure Sub_Scale
-        (Base    : B.Byte_Index;
-         Index   : Natural;
-         Factor  : out Interfaces.Unsigned_8;
-         Minimum : out Interfaces.Unsigned_8);
-
-      procedure Sub_Scale
-        (Base    : B.Byte_Index;
-         Index   : Natural;
-         Factor  : out Interfaces.Unsigned_8;
-         Minimum : out Interfaces.Unsigned_8)
-      is
-         function Byte_At (Position : Natural) return Interfaces.Unsigned_8
-         is (Data (Base + B.Byte_Count (Position)));
-      begin
-         if Index < 4 then
-            Factor := Byte_At (Index) and 63;
-            Minimum := Byte_At (Index + 4) and 63;
-         else
-            Factor :=
-              (Byte_At (Index + 4) and 16#0F#)
-              or Interfaces.Shift_Left
-                   (Interfaces.Shift_Right (Byte_At (Index - 4), 6), 4);
-            Minimum :=
-              Interfaces.Shift_Right (Byte_At (Index + 4), 4)
-              or Interfaces.Shift_Left
-                   (Interfaces.Shift_Right (Byte_At (Index), 6), 4);
-         end if;
-      end Sub_Scale;
 
       --  The vector a lane of the strip reads: its own where the batch
       --  reaches that far, and the last real one where it does not.
@@ -807,19 +812,16 @@ package body Model_Runner.Quantization.Integers.Kernels is
             for Block in 0 .. Blocks - 1 loop
                for Row in Element_Count range 0 .. Panel_Rows - 1 loop
                   declare
-                     At_Byte : constant B.Byte_Index :=
-                       Base + Row_Bytes * B.Byte_Count (Row)
-                       + Width * B.Byte_Count (Block);
-
-                     Whole : constant N.Real := Scale_At (Data, At_Byte);
-                     Least : constant N.Real := Scale_At (Data, At_Byte + 2);
+                     --  Where this row's scales were worked out, once
+                     --  for the whole call rather than once for each of
+                     --  the batch's strips.
+                     At_Scale : constant Element_Count :=
+                       ((At_Row + Row) * Blocks + Block) * Deep;
 
                      At_Undo : constant Natural := Natural (Row) * Strip;
                   begin
                      for Sub in 0 .. Deep - 1 loop
                         declare
-                           Factor, Minimum : Interfaces.Unsigned_8;
-
                            At_Vec : constant Natural :=
                              (Natural (Block) * Deep + Sub) * Strip;
                            At_Out : constant Natural :=
@@ -827,13 +829,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                              * (Panel_Rows * Strip)
                              + Natural (Row) * Strip;
                         begin
-                           Sub_Scale (At_Byte + 4, Sub, Factor, Minimum);
-
                            declare
                               Up   : constant N.Real :=
-                                Whole * N.Real (Natural (Factor));
+                                Ups (Ups'First + At_Scale
+                                     + Element_Count (Sub));
                               Down : constant N.Real :=
-                                Least * N.Real (Natural (Minimum));
+                                Downs (Downs'First + At_Scale
+                                       + Element_Count (Sub));
                            begin
                               for K in 0 .. Strip - 1 loop
                                  Scaling (At_Out + K) :=
@@ -1241,6 +1243,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
+      Ups       : Model_Runner.Numerics.Real_Array;
+      Downs     : Model_Runner.Numerics.Real_Array;
       Totals    : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
@@ -1287,46 +1291,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
       type Strip_Lanes is array (0 .. Panel_Rows * Strip - 1) of Lanes_8;
       Landed : Strip_Lanes;
-
-      Width : constant B.Byte_Count :=
-        B.Byte_Count (G.Block_Bytes (G.Type_Q5_K));
-
-      --  The six-bit scale and minimum of one sub-block, as the format
-      --  packs them: four of each in the low six bits of the first eight
-      --  bytes, and the remaining four split across the top two bits of
-      --  those and the two halves of the last four. Written out here rather
-      --  than called for, because the decoder that has it keeps it to
-      --  itself and a second reader of twelve bytes is smaller than a
-      --  reason to make it public.
-      procedure Sub_Scale
-        (Base    : B.Byte_Index;
-         Index   : Natural;
-         Factor  : out Interfaces.Unsigned_8;
-         Minimum : out Interfaces.Unsigned_8);
-
-      procedure Sub_Scale
-        (Base    : B.Byte_Index;
-         Index   : Natural;
-         Factor  : out Interfaces.Unsigned_8;
-         Minimum : out Interfaces.Unsigned_8)
-      is
-         function Byte_At (Position : Natural) return Interfaces.Unsigned_8
-         is (Data (Base + B.Byte_Count (Position)));
-      begin
-         if Index < 4 then
-            Factor := Byte_At (Index) and 63;
-            Minimum := Byte_At (Index + 4) and 63;
-         else
-            Factor :=
-              (Byte_At (Index + 4) and 16#0F#)
-              or Interfaces.Shift_Left
-                   (Interfaces.Shift_Right (Byte_At (Index - 4), 6), 4);
-            Minimum :=
-              Interfaces.Shift_Right (Byte_At (Index + 4), 4)
-              or Interfaces.Shift_Left
-                   (Interfaces.Shift_Right (Byte_At (Index), 6), 4);
-         end if;
-      end Sub_Scale;
 
       --  The vector a lane of the strip reads: its own where the batch
       --  reaches that far, and the last real one where it does not.
@@ -1377,19 +1341,16 @@ package body Model_Runner.Quantization.Integers.Kernels is
             for Block in 0 .. Blocks - 1 loop
                for Row in Element_Count range 0 .. Panel_Rows - 1 loop
                   declare
-                     At_Byte : constant B.Byte_Index :=
-                       Base + Row_Bytes * B.Byte_Count (Row)
-                       + Width * B.Byte_Count (Block);
-
-                     Whole : constant N.Real := Scale_At (Data, At_Byte);
-                     Least : constant N.Real := Scale_At (Data, At_Byte + 2);
+                     --  Where this row's scales were worked out, once
+                     --  for the whole call rather than once for each of
+                     --  the batch's strips.
+                     At_Scale : constant Element_Count :=
+                       ((At_Row + Row) * Blocks + Block) * Deep;
 
                      At_Undo : constant Natural := Natural (Row) * Strip;
                   begin
                      for Sub in 0 .. Deep - 1 loop
                         declare
-                           Factor, Minimum : Interfaces.Unsigned_8;
-
                            At_Vec : constant Natural :=
                              (Natural (Block) * Deep + Sub) * Strip;
                            At_Out : constant Natural :=
@@ -1397,13 +1358,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                              * (Panel_Rows * Strip)
                              + Natural (Row) * Strip;
                         begin
-                           Sub_Scale (At_Byte + 4, Sub, Factor, Minimum);
-
                            declare
                               Up   : constant N.Real :=
-                                Whole * N.Real (Natural (Factor));
+                                Ups (Ups'First + At_Scale
+                                     + Element_Count (Sub));
                               Down : constant N.Real :=
-                                Least * N.Real (Natural (Minimum));
+                                Downs (Downs'First + At_Scale
+                                       + Element_Count (Sub));
                            begin
                               for K in 0 .. Strip - 1 loop
                                  Scaling (At_Out + K) :=
@@ -1881,6 +1842,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
+      Steps     : Model_Runner.Numerics.Real_Array;
       First     : Element_Count;
       Stride    : Element_Count;
       Count     : Element_Count;
@@ -1928,8 +1890,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
       type Strip_Lanes is array (0 .. Panel_Rows * Strip - 1) of Lanes_8;
       Landed : Strip_Lanes;
 
-      Width : constant B.Byte_Count :=
-        B.Byte_Count (G.Block_Bytes (G.Type_Q6_K));
 
       --  The vector a lane of the strip reads: its own where the batch
       --  reaches that far, and the last real one where it does not.
@@ -1989,24 +1949,17 @@ package body Model_Runner.Quantization.Integers.Kernels is
             for Block in 0 .. Blocks - 1 loop
                for Row in Element_Count range 0 .. Panel_Rows - 1 loop
                   declare
-                     At_Byte : constant B.Byte_Index :=
-                       Base + Row_Bytes * B.Byte_Count (Row)
-                       + Width * B.Byte_Count (Block);
-
-                     Whole : constant N.Real :=
-                       Scale_At (Data, At_Byte + 208);
+                     --  Where this row's sixteen sub-block scales were
+                     --  worked out, once for the whole call rather than
+                     --  once for each of the batch's strips.
+                     At_Step : constant Element_Count :=
+                       ((At_Row + Row) * Blocks + Block) * Halves;
                   begin
                      for Half in 0 .. Halves - 1 loop
                         declare
-                           Raw : constant Interfaces.Unsigned_8 :=
-                             Data (At_Byte + 192 + B.Byte_Count (Half));
-
-                           Signed : constant Integer :=
-                             (if Raw < 128 then Integer (Raw)
-                              else Integer (Raw) - 256);
-
                            Sub : constant N.Real :=
-                             Whole * N.Real (Signed);
+                             Steps (Steps'First + At_Step
+                                    + Element_Count (Half));
 
                            At_Vec : constant Natural :=
                              (Natural (Block) * Deep + Half / 2) * Strip;
@@ -3392,16 +3345,58 @@ package body Model_Runner.Quantization.Integers.Kernels is
                return;
             end if;
 
-            for At_Strip in Element_Count range 0 .. (Count + 3) / 4 - 1 loop
-               Rows_By_Strips_Q6K
-                 (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-                  First, Stride, Count, At_Strip * 4,
-                  Element_Count'Min (4, Count - At_Strip * 4), Sums, Done);
+            --  Every sub-block scale of the tile, worked out once for the
+            --  whole call: sixteen a block, and a batch has a quarter of
+            --  its length of strips that each wanted the same ones.
+            declare
+               Room : constant Element_Count := Rows * Blocks * 16;
 
-               if not Done then
-                  return;
-               end if;
-            end loop;
+               Held : N.Real_Array (0 .. Room - 1);
+            begin
+               for Row in 0 .. Rows - 1 loop
+                  for Block in 0 .. Blocks - 1 loop
+                     declare
+                        At_Byte : constant B.Byte_Index :=
+                          Data'First + Offset
+                          + Row_Bytes * B.Byte_Count (Row)
+                          + Width * B.Byte_Count (Block);
+
+                        Whole : constant N.Real :=
+                          Scale_At (Data, At_Byte + 208);
+
+                        At_Step : constant Element_Count :=
+                          (Row * Blocks + Block) * 16;
+                     begin
+                        for Half in 0 .. 15 loop
+                           declare
+                              Raw : constant Interfaces.Unsigned_8 :=
+                                Data (At_Byte + 192 + B.Byte_Count (Half));
+
+                              Signed : constant Integer :=
+                                (if Raw < 128 then Integer (Raw)
+                                 else Integer (Raw) - 256);
+                           begin
+                              Held (At_Step + Element_Count (Half)) :=
+                                Whole * N.Real (Signed);
+                           end;
+                        end loop;
+                     end;
+                  end loop;
+               end loop;
+
+               for At_Strip in Element_Count range 0 .. (Count + 3) / 4 - 1
+               loop
+                  Rows_By_Strips_Q6K
+                    (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                     Held, First, Stride, Count, At_Strip * 4,
+                     Element_Count'Min (4, Count - At_Strip * 4), Sums,
+                     Done);
+
+                  if not Done then
+                     return;
+                  end if;
+               end loop;
+            end;
          end;
 
          Ok := True;
@@ -3487,16 +3482,59 @@ package body Model_Runner.Quantization.Integers.Kernels is
                return;
             end if;
 
+            --  Both sides of every sub-block's scale, worked out once for
+            --  the whole call. Every strip wants the same numbers, and a
+            --  batch has a quarter of its length of strips: reading them
+            --  in the strip meant unpacking twelve bytes of six-bit fields
+            --  twenty-eight times over on a 110-token prompt.
+            declare
+               Room : constant Element_Count := Rows * Blocks * 8;
+
+               Held_Up   : N.Real_Array (0 .. Room - 1);
+               Held_Down : N.Real_Array (0 .. Room - 1);
+            begin
+               for Row in 0 .. Rows - 1 loop
+                  for Block in 0 .. Blocks - 1 loop
+                     declare
+                        At_Byte : constant B.Byte_Index :=
+                          Data'First + Offset
+                          + Row_Bytes * B.Byte_Count (Row)
+                          + Width * B.Byte_Count (Block);
+
+                        Whole : constant N.Real := Scale_At (Data, At_Byte);
+                        Least : constant N.Real :=
+                          Scale_At (Data, At_Byte + 2);
+
+                        At_Scale : constant Element_Count :=
+                          (Row * Blocks + Block) * 8;
+
+                        Factor, Minimum : Interfaces.Unsigned_8;
+                     begin
+                        for Sub in 0 .. 7 loop
+                           Sub_Block_Scale
+                             (Data, At_Byte + 4, Sub, Factor, Minimum);
+
+                           Held_Up (At_Scale + Element_Count (Sub)) :=
+                             Whole * N.Real (Natural (Factor));
+                           Held_Down (At_Scale + Element_Count (Sub)) :=
+                             Least * N.Real (Natural (Minimum));
+                        end loop;
+                     end;
+                  end loop;
+               end loop;
+
             for At_Strip in Element_Count range 0 .. (Count + 3) / 4 - 1 loop
                if Format = G.Type_Q4_K then
                   Rows_By_Strips_Q4K
                     (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                     Held_Up, Held_Down,
                      Totals, First, Stride, Count, At_Strip * 4,
                      Element_Count'Min (4, Count - At_Strip * 4), Sums,
                      Done);
                else
                   Rows_By_Strips_Q5K
                     (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                     Held_Up, Held_Down,
                      Totals, First, Stride, Count, At_Strip * 4,
                      Element_Count'Min (4, Count - At_Strip * 4), Sums,
                      Done);
@@ -3506,6 +3544,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   return;
                end if;
             end loop;
+            end;
          end;
 
          Ok := True;
@@ -3570,11 +3609,32 @@ package body Model_Runner.Quantization.Integers.Kernels is
          declare
             Full : constant Element_Count := (Count / 4) * 4;
             Done : Boolean;
+
+            --  The weight side of every scale, worked out once for the
+            --  whole call. Every strip wants the same numbers, and there
+            --  are a quarter of the batch's length of them.
+            Held : N.Real_Array (0 .. Rows * Blocks - 1);
          begin
+            for Row in 0 .. Rows - 1 loop
+               declare
+                  Base : constant B.Byte_Index :=
+                    Data'First + Offset + Row_Bytes * B.Byte_Count (Row);
+               begin
+                  for Block in 0 .. Blocks - 1 loop
+                     Held (Row * Blocks + Block) :=
+                       Scale_At
+                         (Data,
+                          Base + B.Byte_Count (G.Block_Bytes (Format))
+                                 * B.Byte_Count (Block));
+                  end loop;
+               end;
+            end loop;
+
             for At_Strip in Element_Count range 0 .. Full / 4 - 1 loop
                Rows_By_Strips
                  (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-                  Totals, First, Stride, Count, At_Strip * 4, Sums, Done);
+                  Held, Totals, First, Stride, Count, At_Strip * 4, Sums,
+                  Done);
 
                if not Done then
                   return;
