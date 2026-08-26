@@ -5090,7 +5090,7 @@ reference 7CBEEA08E2FF4CFA src/library/model_runner-backend-reference.adb src/li
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-device 82DBE1608BAB0657 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device E086066DF86D2FE7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -6195,4 +6195,48 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # hundredths, which leaves room for a device that rounds a tile differently
 # without leaving room for a misread layout.
 
-outside 82DBE1608BAB0657 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, the six-bit k-quant through the device's matrix instruction.
+#
+# What changed: matrix_product.comp decodes Q6_K as well as Q8_0 and Q4_K,
+# which between them are what a "_M" file is made of. A step of thirty-two
+# columns is exactly one of the eight runs the format is read in, and an
+# invocation's sixteen values share one sub-block scale, so the scale is
+# read once rather than per element.
+#
+# Three alternated rounds in one sitting, one binary with Q6_K refused by
+# the kernel against the same binary with it allowed:
+#
+#   Q4_K_M, 110-token device prompt   0.408 s  ->  0.300 s
+#   Q8_0,   110-token device prompt   0.286 s  ->  0.282 s
+#   Q5_K_M, 110-token device prompt   1.515 s  ->  1.419 s
+#
+# better in every round on the two k-quant files and inside the floor on the
+# eight-bit one, which it has to be. Digest cbf29ce484222325 throughout.
+#
+# The four-bit file's day, on the one figure, since all three steps were
+# taken on it: 0.891 s on the row product, 0.402 with its four-bit tensors
+# tiled, 0.300 with its six-bit ones as well. That is level with the larger
+# eight-bit file's 0.280, where it began three times slower.
+#
+# The five-bit file is the one left out and its number says why: 1.419 s
+# against the four-bit file's 0.300, because five sixths of a Q5_K_M file is
+# a format the tile does not decode. Tiling its six-bit sixth was worth
+# 1.515 to 1.419 and no more.
+#
+# The shader's own rate, from the same scratch harness, 2048 x 2048 against
+# a hundred and twenty-eight vectors with the half-precision copy counted
+# against it: 1749 GFLOP/s for Q6_K, 1757 for Q4_K and 1921 for Q8_0 in the
+# same run.
+#
+# The device format test's tiled bound now covers three formats, and what
+# they measure against the processor is 7.1e-3, 7.4e-3 and 8.1e-3 -- much
+# the same figure for all three, which is what says the difference is the
+# half-precision operand rather than any one decode. The row product's is
+# still at most 2.1e-5 over every format and both shapes.
+#
+# The device table under "The device backend" and the llama.cpp comparison
+# were NOT re-taken, for the reason the entry above gives and with the same
+# control: both are Q8_0, and 0.286 s against 0.282 is the very figure they
+# are built from.
+
+outside E086066DF86D2FE7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

@@ -20,16 +20,22 @@
 //  are read once for the whole batch and the activations once for the
 //  whole tile of rows.
 //
-//  Two formats -- eight-bit blocks and the four-bit k-quant -- and only
-//  where the device offers VK_KHR_cooperative_matrix with a
+//  Three formats -- eight-bit blocks, the four-bit k-quant and the six-bit
+//  one -- and only where the device offers VK_KHR_cooperative_matrix with a
 //  sixteen-by-sixteen-by-sixteen half-precision shape at subgroup scope.
 //  Everything else goes to row_product.comp, which reads all fifteen
 //  formats and needs nothing of the device beyond Vulkan 1.0.
 //
-//  The two are here rather than in two shaders because only the decode
+//  The three are here rather than in three shaders because only the decode
 //  differs: the tile, the accumulators, the operand loads and the store are
 //  the same instructions in the same order. The branch is on a push
 //  constant, so it is uniform across a workgroup and taken once a step.
+//
+//  Those three are what a published model is made of. A "_M" file is a
+//  mixture by construction -- four-bit for most of it, six-bit for the
+//  output projection and a handful of others -- so a shader that took only
+//  one of them left the other on the row product and the file no faster
+//  than the sum of its slower half.
 //
 //  The activations are read as half precision, from a copy half_batch.comp
 //  made before this ran. That is not an optimization, it is the only way
@@ -95,11 +101,40 @@ shared float16_t wt[TILE_R * KCH];
 //  them, which is the same numbering row_product.comp is given.
 const uint FMT_Q8_0 = 7u;
 const uint FMT_Q4_K = 11u;
+const uint FMT_Q6_K = 13u;
 
 uint byte_at(uint at) { return (w[at >> 2u] >> ((at & 3u) * 8u)) & 255u; }
 
 float half_at(uint at) {
     return unpackHalf2x16(byte_at(at) | (byte_at(at + 1u) << 8u)).x;
+}
+
+//  One byte read as a signed number, which is how Q6_K keeps a sub-block
+//  scale.
+int signed_at(uint at) {
+    int value = int(byte_at(at));
+    return value > 127 ? value - 256 : value;
+}
+
+//  Sixteen bytes as four words. A block of any of these formats begins on a
+//  four-byte boundary for every other block and two bytes into one for the
+//  rest -- thirty-four and two hundred and ten are both two more than a
+//  multiple of four -- so the odd case is shifted into place. Four loads
+//  where a byte at a time is sixteen loads and sixteen shifts.
+void four_words (uint at, out uint p0, out uint p1, out uint p2, out uint p3)
+{
+    uint i = at >> 2u;
+
+    if ((at & 3u) == 0u) {
+        p0 = w[i]; p1 = w[i + 1u]; p2 = w[i + 2u]; p3 = w[i + 3u];
+    } else {
+        uint a0 = w[i], a1 = w[i + 1u], a2 = w[i + 2u];
+        uint a3 = w[i + 3u], a4 = w[i + 4u];
+        p0 = (a0 >> 16u) | (a1 << 16u);
+        p1 = (a1 >> 16u) | (a2 << 16u);
+        p2 = (a2 >> 16u) | (a3 << 16u);
+        p3 = (a3 >> 16u) | (a4 << 16u);
+    }
 }
 
 //  The six-bit scale and minimum a Q4_K sub-block carries, as
@@ -149,7 +184,9 @@ void main() {
     //  formats differ in this, in the decode below, and in nothing else.
     uint rb = shape.format == FMT_Q8_0
               ? (shape.columns / 32u) * 34u
-              : (shape.columns / 256u) * 144u;
+              : (shape.format == FMT_Q4_K
+                 ? (shape.columns / 256u) * 144u
+                 : (shape.columns / 256u) * 210u);
 
     for (uint k0 = 0u; k0 < shape.columns; k0 += KCH) {
         barrier();
@@ -168,31 +205,9 @@ void main() {
                 float16_t d = float16_t(half_at(at));
 
                 uint q = at + 2u + half_of * 16u;
-
-                //  A block is thirty-four bytes, so its quants start on a
-                //  word boundary for every other block and two bytes into
-                //  one for the rest. Both are read as words and the odd
-                //  case is shifted into place, which is four loads where a
-                //  byte at a time is sixteen loads and sixteen shifts.
-                uint i = q >> 2u;
                 uint p0, p1, p2, p3;
+                four_words (q, p0, p1, p2, p3);
 
-                if ((q & 3u) == 0u) {
-                    p0 = w[i]; p1 = w[i + 1u];
-                    p2 = w[i + 2u]; p3 = w[i + 3u];
-                } else {
-                    uint a0 = w[i], a1 = w[i + 1u], a2 = w[i + 2u];
-                    uint a3 = w[i + 3u], a4 = w[i + 4u];
-                    p0 = (a0 >> 16u) | (a1 << 16u);
-                    p1 = (a1 >> 16u) | (a2 << 16u);
-                    p2 = (a2 >> 16u) | (a3 << 16u);
-                    p3 = (a3 >> 16u) | (a4 << 16u);
-                }
-
-                //  Written out rather than looped over an array of four
-                //  words: an array indexed by a loop variable is an array
-                //  the compiler may put in scratch memory, and doing that
-                //  here measured a quarter of this shader's speed.
                 int q0 = int(p0), q1 = int(p1);
                 int q2 = int(p2), q3 = int(p3);
 
@@ -212,7 +227,7 @@ void main() {
                 wt[into + 13u] = d * float16_t(bitfieldExtract(q3,  8, 8));
                 wt[into + 14u] = d * float16_t(bitfieldExtract(q3, 16, 8));
                 wt[into + 15u] = d * float16_t(bitfieldExtract(q3, 24, 8));
-            } else {
+            } else if (shape.format == FMT_Q4_K) {
                 //  Q4_K. A super-block is two hundred and fifty-six
                 //  elements in a hundred and forty-four bytes, and a step
                 //  of thirty-two columns is one of its eight sub-blocks:
@@ -248,9 +263,8 @@ void main() {
                 //  whose length is a multiple of four, so this read is
                 //  always on a word boundary and needs no shifting.
                 uint q = at + 16u + (sub >> 1u) * 32u + half_of * 16u;
-                uint i = q >> 2u;
-                uint p0 = w[i], p1 = w[i + 1u];
-                uint p2 = w[i + 2u], p3 = w[i + 3u];
+                uint p0, p1, p2, p3;
+                four_words (q, p0, p1, p2, p3);
                 uint turn = (sub & 1u) * 4u;
 
                 wt[into +  0u] = float16_t(
@@ -301,6 +315,91 @@ void main() {
                 wt[into + 15u] = float16_t(
                     scale * float((p3 >> (turn + 24u)) & 15u)
                     - offset);
+            } else {
+                //  Q6_K. Two hundred and fifty-six elements in two hundred
+                //  and ten bytes: a hundred and twenty-eight low nibbles,
+                //  sixty-four bytes of the two high bits, sixteen signed
+                //  sub-block scales, then the block's own scale.
+                //
+                //  A step of thirty-two columns is exactly one of the eight
+                //  runs the format is read in, and an invocation's sixteen
+                //  of them share one sub-block scale, so the scale is read
+                //  once rather than per element.
+                uint at   = row + (k0 / 256u) * 210u;
+                uint here = (k0 / 32u) & 7u;
+                uint side = here >> 2u;
+                uint run  = here & 3u;
+
+                float d = half_at(at + 208u);
+                float step = d * float
+                  (signed_at (at + 192u + side * 8u + run * 2u + half_of));
+
+                //  The low nibbles of this run, and the byte holding two
+                //  high bits for each of the four runs the same nibble
+                //  byte serves.
+                uint low  = at + side * 64u + (run & 1u) * 32u
+                            + half_of * 16u;
+                uint high = at + 128u + side * 32u + half_of * 16u;
+
+                uint l0, l1, l2, l3;
+                uint h0, h1, h2, h3;
+                four_words (low, l0, l1, l2, l3);
+                four_words (high, h0, h1, h2, h3);
+
+                //  Which nibble of the low byte, and which pair of bits of
+                //  the high one. The first two runs take the low nibble and
+                //  the last two the high; each takes its own pair.
+                uint nib = (run >> 1u) * 4u;
+                uint top = run * 2u;
+
+                wt[into +  0u] = float16_t(step * (float(
+                    ((l0 >> (nib)) & 15u)
+                    | (((h0 >> (top)) & 3u) << 4u)) - 32.0));
+                wt[into +  1u] = float16_t(step * (float(
+                    ((l0 >> (nib +  8u)) & 15u)
+                    | (((h0 >> (top +  8u)) & 3u) << 4u)) - 32.0));
+                wt[into +  2u] = float16_t(step * (float(
+                    ((l0 >> (nib + 16u)) & 15u)
+                    | (((h0 >> (top + 16u)) & 3u) << 4u)) - 32.0));
+                wt[into +  3u] = float16_t(step * (float(
+                    ((l0 >> (nib + 24u)) & 15u)
+                    | (((h0 >> (top + 24u)) & 3u) << 4u)) - 32.0));
+                wt[into +  4u] = float16_t(step * (float(
+                    ((l1 >> (nib)) & 15u)
+                    | (((h1 >> (top)) & 3u) << 4u)) - 32.0));
+                wt[into +  5u] = float16_t(step * (float(
+                    ((l1 >> (nib +  8u)) & 15u)
+                    | (((h1 >> (top +  8u)) & 3u) << 4u)) - 32.0));
+                wt[into +  6u] = float16_t(step * (float(
+                    ((l1 >> (nib + 16u)) & 15u)
+                    | (((h1 >> (top + 16u)) & 3u) << 4u)) - 32.0));
+                wt[into +  7u] = float16_t(step * (float(
+                    ((l1 >> (nib + 24u)) & 15u)
+                    | (((h1 >> (top + 24u)) & 3u) << 4u)) - 32.0));
+                wt[into +  8u] = float16_t(step * (float(
+                    ((l2 >> (nib)) & 15u)
+                    | (((h2 >> (top)) & 3u) << 4u)) - 32.0));
+                wt[into +  9u] = float16_t(step * (float(
+                    ((l2 >> (nib +  8u)) & 15u)
+                    | (((h2 >> (top +  8u)) & 3u) << 4u)) - 32.0));
+                wt[into + 10u] = float16_t(step * (float(
+                    ((l2 >> (nib + 16u)) & 15u)
+                    | (((h2 >> (top + 16u)) & 3u) << 4u)) - 32.0));
+                wt[into + 11u] = float16_t(step * (float(
+                    ((l2 >> (nib + 24u)) & 15u)
+                    | (((h2 >> (top + 24u)) & 3u) << 4u)) - 32.0));
+                wt[into + 12u] = float16_t(step * (float(
+                    ((l3 >> (nib)) & 15u)
+                    | (((h3 >> (top)) & 3u) << 4u)) - 32.0));
+                wt[into + 13u] = float16_t(step * (float(
+                    ((l3 >> (nib +  8u)) & 15u)
+                    | (((h3 >> (top +  8u)) & 3u) << 4u)) - 32.0));
+                wt[into + 14u] = float16_t(step * (float(
+                    ((l3 >> (nib + 16u)) & 15u)
+                    | (((h3 >> (top + 16u)) & 3u) << 4u)) - 32.0));
+                wt[into + 15u] = float16_t(step * (float(
+                    ((l3 >> (nib + 24u)) & 15u)
+                    | (((h3 >> (top + 24u)) & 3u) << 4u)) - 32.0));
             }
         }
 

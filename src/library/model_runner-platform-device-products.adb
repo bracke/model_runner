@@ -268,14 +268,14 @@ package body Model_Runner.Platform.Device.Products is
    --
    --  Four questions, and each of them is a promise the shader relies on
    --  rather than a preference. The device has to have said it offers the
-   --  instruction; the weights have to be in one of the two formats
+   --  instruction; the weights have to be in one of the three formats
    --  matrix_product.comp decodes, at a width that is a whole number of
    --  their blocks; the rows have to divide by the tile, because a
    --  workgroup writes a whole tile and a partial one would write into the
    --  next vector's answers; and the batch has to be long enough to be
    --  worth rounding up to a tile.
    --
-   --  Everything else -- thirteen formats, a generated token, a row count
+   --  Everything else -- twelve formats, a generated token, a row count
    --  the tile does not divide, and every device that has not got the
    --  instruction -- goes where it always went.
    function Uses_Matrix
@@ -289,7 +289,7 @@ package body Model_Runner.Platform.Device.Products is
        and then Rows mod Tile_Rows = 0
        and then Count >= Tile_Least
        and then ((Packing = Packed_Q8_0 and then Columns mod 32 = 0)
-                 or else (Packing = Packed_Q4_K
+                 or else (Packing in Packed_Q4_K | Packed_Q6_K
                           and then Columns mod 256 = 0)));
 
    function Half_Descriptor (Item : Engine) return Buffer_Info

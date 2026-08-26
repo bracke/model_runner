@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The six-bit k-quant reaches the device's matrix instruction too, and a
+  `Q4_K_M` prompt reads 0.300 s against 0.408.** A "_M" file is a mixture by
+  construction: the four-bit format alone took it from 0.891 s to 0.402 and
+  stopped, because a sixth of its weights are six-bit -- the output
+  projection among them -- and a sixth left on the row product cost more
+  than a quarter of what remained. With both it is level with the larger
+  eight-bit file, 0.300 s against 0.280, where this morning it was three
+  times slower.
+
+  A step of thirty-two columns is exactly one of the eight runs the format
+  is read in, and an invocation's sixteen values share one sub-block scale,
+  so the scale is read once rather than per element. The word reader the
+  eight-bit decode used is now shared by all three: a block of any of them
+  begins two bytes into a word for every other block, and the odd case is
+  shifted into place rather than read a byte at a time.
+
+  Medians of three alternated rounds, better in every one, every digest
+  unchanged, and the eight-bit path unmoved at 0.286 s against 0.282. The
+  device format test's tiled bound now covers three formats, and they differ
+  from the processor by 7.1e-3, 7.4e-3 and 8.1e-3 -- much the same figure,
+  which is what says it is the half-precision operand rather than any one
+  decode.
+
+  What is left outside is `Q5_K`. A `Q5_K_M` file reads 1.419 s against the
+  four-bit file's 0.300, because five sixths of it is a format the tile does
+  not decode; tiling its six-bit sixth was worth 1.515 s to 1.419 and no
+  more, which is the same arithmetic from the other end.
+
 - **The four-bit k-quant reaches the device's matrix instruction, and a
   `Q4_K_M` prompt reads 0.402 s against 0.891.** It is the format most
   published models are shipped in, and until now none of the tile's work
