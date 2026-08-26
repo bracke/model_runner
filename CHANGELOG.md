@@ -44,6 +44,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A tile is written the way the target is laid out.** `Mat_Mul_Range_Packed`
+  copied each tile of answers back in the order the tile is laid out -- a row
+  at a time, the vectors inside -- where the target keeps a whole vector's
+  answers together. Every step of the inner loop moved a row count along:
+  eight kilobytes between consecutive writes on a two-thousand-row tensor.
+  Turning the two loops about takes that procedure from **5.1 per cent of a
+  prompt to 2.1** and the prompt from **0.777 s to 0.744**, three rounds
+  alternated. Two lines, and no digest moves.
+
+- **Unrolling the strip kernel's block loop, measured and not taken.** Four
+  instructions of overhead a block serve eight row-vector pairs, and a
+  profile put them at twenty-one per cent of that kernel's samples. Two
+  blocks a turn halves them and the instruction count agrees -- 54.03
+  thousand million against 54.79 -- but the alternated rounds say it is
+  **slower**, 0.756 s against 0.738, better in none of three. The twenty-one
+  per cent was skid onto the branch from the loads it waits for.
+
 - **Attention had never been told its bounds were proved.** `Blend_Exact`
   and the two blends beside it were the only loops in the engine's own
   arithmetic without the suppressions the row kernels carry, and a profile

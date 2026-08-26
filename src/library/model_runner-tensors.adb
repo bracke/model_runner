@@ -530,8 +530,25 @@ package body Model_Runner.Tensors is
                   return;
                end if;
 
-               for Row in 0 .. Here - 1 loop
-                  for Which in 0 .. Count - 1 loop
+               --  The vector outside and the row inside, which is the
+               --  order the target is laid out in and not the order the
+               --  tile is.
+               --
+               --  A target keeps a whole vector's answers together, so
+               --  consecutive rows of one vector are consecutive words;
+               --  written the other way round, every step of the inner
+               --  loop moved Item.Rows words along -- eight kilobytes for
+               --  a two-thousand-row tensor, a cache line touched and
+               --  abandoned for each of eight hundred and eighty writes a
+               --  tile. Turned about, the writes are contiguous and it is
+               --  the reads that stride, inside a seven-kilobyte tile that
+               --  is in the nearest cache whichever way it is walked.
+               --
+               --  The same values reach the same places; a profile put
+               --  this procedure at five per cent of a prompt and this
+               --  loop at most of it.
+               for Which in 0 .. Count - 1 loop
+                  for Row in 0 .. Here - 1 loop
                      Target (Target'First + Which * Item.Rows + At_Row + Row)
                        := Real (Tiled (Row * Count + Which));
                   end loop;

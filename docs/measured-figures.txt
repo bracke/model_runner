@@ -1791,7 +1791,24 @@
 # unchanged. That is the half-precision widening leaving the single-vector
 # kernel, where it was a larger share.
 
-kernels 834C85B983834DA3 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after a tile of answers was written back in the
+# order the target keeps them rather than the order the tile does.
+#
+# Almost nothing here moves, and that is the finding worth recording. The
+# change is worth about four per cent of a prompt -- 0.777 s against 0.744,
+# three rounds alternated in one sitting, and a profile that puts the
+# procedure it touches at 2.1 per cent where it was 5.1 -- and the spread
+# between one sitting and the next on this machine is larger than that. The
+# 110-token prompt reads 0.782 s here against 0.784 published. **Alternated
+# rounds are the instrument; a table taken a day apart is not.**
+#
+# Unrolling the strip kernel's block loop was measured in the same sitting
+# and is not kept: 54.03 thousand million instructions against 54.79, and
+# 0.756 s against 0.738 over three alternated rounds, better in none of
+# them. The twenty-one per cent of samples a profile charged to that loop's
+# branch and cursor advances was skid from the loads they wait for.
+
+kernels F5BFF06A7FC0615A src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
@@ -2588,7 +2605,24 @@ kernels 834C85B983834DA3 src/library/model_runner-quantization.adb src/library/m
 # third slower. The team is now chosen after Prepare_Packed has said which
 # arithmetic the job carries.
 
-engine 1260DE2FE96F0C6D src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after a tile of answers was written back in the
+# order the target keeps them rather than the order the tile does.
+#
+# Almost nothing here moves, and that is the finding worth recording. The
+# change is worth about four per cent of a prompt -- 0.777 s against 0.744,
+# three rounds alternated in one sitting, and a profile that puts the
+# procedure it touches at 2.1 per cent where it was 5.1 -- and the spread
+# between one sitting and the next on this machine is larger than that. The
+# 110-token prompt reads 0.782 s here against 0.784 published. **Alternated
+# rounds are the instrument; a table taken a day apart is not.**
+#
+# Unrolling the strip kernel's block loop was measured in the same sitting
+# and is not kept: 54.03 thousand million instructions against 54.79, and
+# 0.756 s against 0.738 over three alternated rounds, better in none of
+# them. The twenty-one per cent of samples a profile charged to that loop's
+# branch and cursor advances was skid from the loads they wait for.
+
+engine 494762643B53CB2A src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -2717,7 +2751,24 @@ engine 1260DE2FE96F0C6D src/library/model_runner-llama.adb src/library/model_run
 # `tests benchmark` on synthetic tensors, serial against serial, reads 2.3x
 # for q8_0, 2.3x for q4_k and 3.1x for f32, unchanged across four sittings.
 
-reference FD85CBC6049255DF src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after a tile of answers was written back in the
+# order the target keeps them rather than the order the tile does.
+#
+# Almost nothing here moves, and that is the finding worth recording. The
+# change is worth about four per cent of a prompt -- 0.777 s against 0.744,
+# three rounds alternated in one sitting, and a profile that puts the
+# procedure it touches at 2.1 per cent where it was 5.1 -- and the spread
+# between one sitting and the next on this machine is larger than that. The
+# 110-token prompt reads 0.782 s here against 0.784 published. **Alternated
+# rounds are the instrument; a table taken a day apart is not.**
+#
+# Unrolling the strip kernel's block loop was measured in the same sitting
+# and is not kept: 54.03 thousand million instructions against 54.79, and
+# 0.756 s against 0.738 over three alternated rounds, better in none of
+# them. The twenty-one per cent of samples a profile charged to that loop's
+# branch and cursor advances was skid from the loads they wait for.
+
+reference D5B4EFDA87D7DB0C src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -4257,7 +4308,35 @@ reference FD85CBC6049255DF src/library/model_runner-backend-reference.adb src/li
 # The cpu column's processor time is the share count, and its 110-token row
 # has come 1.111 to 0.800 to 0.784 across three sittings.
 
-device 24350B3094BF81DD src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after a tile of answers was written back in the
+# order the target keeps them rather than the order the tile does.
+#
+# Almost nothing here moves, and that is the finding worth recording. The
+# change is worth about four per cent of a prompt -- 0.777 s against 0.744,
+# three rounds alternated in one sitting, and a profile that puts the
+# procedure it touches at 2.1 per cent where it was 5.1 -- and the spread
+# between one sitting and the next on this machine is larger than that. The
+# 110-token prompt reads 0.782 s here against 0.784 published. **Alternated
+# rounds are the instrument; a table taken a day apart is not.**
+#
+# Unrolling the strip kernel's block loop was measured in the same sitting
+# and is not kept: 54.03 thousand million instructions against 54.79, and
+# 0.756 s against 0.738 over three alternated rounds, better in none of
+# them. The twenty-one per cent of samples a profile charged to that loop's
+# branch and cursor advances was skid from the loads they wait for.
+#
+# The six cells of the device table, taken in this sitting:
+#
+#                                   cpu, 7 workers    device
+#   6-token prompt, 12 generated       0.450 s        0.427 s
+#     evaluating the prompt            0.070 s        0.051 s
+#     generating                       0.379 s        0.375 s
+#     processor time                   1.61 s         0.04 s
+#   110-token prompt, nothing gen.     0.782 s        0.521 s
+#     processor time                   3.69 s         0.11 s
+
+
+device 6DC9E5A88711D4D0 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -4421,7 +4500,24 @@ device 24350B3094BF81DD src/shaders/row_product.comp src/library/model_runner-sh
 # path and keeps every share; the eight-bit one now asks for four. That the
 # gap between them widened again is the share count and the kernel together.
 
-drafting 1AD17175811D5DFE src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after a tile of answers was written back in the
+# order the target keeps them rather than the order the tile does.
+#
+# Almost nothing here moves, and that is the finding worth recording. The
+# change is worth about four per cent of a prompt -- 0.777 s against 0.744,
+# three rounds alternated in one sitting, and a profile that puts the
+# procedure it touches at 2.1 per cent where it was 5.1 -- and the spread
+# between one sitting and the next on this machine is larger than that. The
+# 110-token prompt reads 0.782 s here against 0.784 published. **Alternated
+# rounds are the instrument; a table taken a day apart is not.**
+#
+# Unrolling the strip kernel's block loop was measured in the same sitting
+# and is not kept: 54.03 thousand million instructions against 54.79, and
+# 0.756 s against 0.738 over three alternated rounds, better in none of
+# them. The twenty-one per cent of samples a profile charged to that loop's
+# branch and cursor advances was skid from the loads they wait for.
+
+drafting 00F980F5D07031E7 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -4487,7 +4583,24 @@ drafting 1AD17175811D5DFE src/library/model_runner-generation.adb src/library/mo
 # half-precision widening: a generated token reads one scale per row and the
 # insertion is a larger share of that than of a batch's.
 
-scaling 47341F55766AAC7F src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after a tile of answers was written back in the
+# order the target keeps them rather than the order the tile does.
+#
+# Almost nothing here moves, and that is the finding worth recording. The
+# change is worth about four per cent of a prompt -- 0.777 s against 0.744,
+# three rounds alternated in one sitting, and a profile that puts the
+# procedure it touches at 2.1 per cent where it was 5.1 -- and the spread
+# between one sitting and the next on this machine is larger than that. The
+# 110-token prompt reads 0.782 s here against 0.784 published. **Alternated
+# rounds are the instrument; a table taken a day apart is not.**
+#
+# Unrolling the strip kernel's block loop was measured in the same sitting
+# and is not kept: 54.03 thousand million instructions against 54.79, and
+# 0.756 s against 0.738 over three alternated rounds, better in none of
+# them. The twenty-one per cent of samples a profile charged to that loop's
+# branch and cursor advances was skid from the loads they wait for.
+
+scaling 5EEF0C402BD86AE4 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker
@@ -4552,7 +4665,7 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # having llama.cpp built, which nothing here checks and nobody should have
 # to install to run the suite.
 
-# covers: the four rows of the llama.cpp comparison table and the seconds quoted under it, and the 761.3 t/s that says why the command names --device none
+# covers: the four rows of the llama.cpp comparison table and the seconds quoted under it, and the 774.6 t/s that says why the command names --device none
 # load: 0.16 to 1.69 and 0.87 to 2.70 for the processor rows, 0.75 to 0.69 and 0.69 to 0.68 for the device ones, and 0.68 and 0.97 at the start of the two llama-bench runs, 2026-08-24
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes -- read by both runtimes.
 # load: 1.39 to 1.89 and 1.47 to 2.92 for the processor rows, 1.50 to 1.46 and 1.46 to 1.39 for the device ones, and 1.39 and 2.40 at the start of the two llama-bench runs, 2026-08-24
@@ -4628,4 +4741,21 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # that did not change between most of them. llama.cpp is at 95b8e33e1, three
 # rounds, as before.
 
-outside 24350B3094BF81DD src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after a tile of answers was written back in the
+# order the target keeps them rather than the order the tile does.
+#
+# Almost nothing here moves, and that is the finding worth recording. The
+# change is worth about four per cent of a prompt -- 0.777 s against 0.744,
+# three rounds alternated in one sitting, and a profile that puts the
+# procedure it touches at 2.1 per cent where it was 5.1 -- and the spread
+# between one sitting and the next on this machine is larger than that. The
+# 110-token prompt reads 0.782 s here against 0.784 published. **Alternated
+# rounds are the instrument; a table taken a day apart is not.**
+#
+# Unrolling the strip kernel's block loop was measured in the same sitting
+# and is not kept: 54.03 thousand million instructions against 54.79, and
+# 0.756 s against 0.738 over three alternated rounds, better in none of
+# them. The twenty-one per cent of samples a profile charged to that loop's
+# branch and cursor advances was skid from the loads they wait for.
+
+outside 6DC9E5A88711D4D0 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
