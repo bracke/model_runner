@@ -2883,8 +2883,76 @@ package body Model_Runner.Llama is
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
+
+      --  Overflow checking off here, and bounds checking left alone.
+      --
+      --  A profile of a prompt put the exact blend at eleven per cent of it
+      --  and said what the eleven per cent was: fifty-four per cent of the
+      --  samples on 64-bit moves and twenty per cent on `jo`, the overflow
+      --  branch after every index it computes. Not one of the ten hottest
+      --  instructions was a multiply. These three blends are the only loops
+      --  in the engine's own arithmetic that were never given the
+      --  suppressions the integer kernels carry, and it shows.
+      --
+      --  Overflow rather than bounds, on purpose, and the two are not the
+      --  same guard. What is dropped is the check that an index computation
+      --  does not wrap: every value in one is an element count of a model
+      --  this program has already validated, and wrapping needs numbers far
+      --  larger than the widest tensor a file may declare. What is kept is
+      --  the check that the index it produces is inside the array -- so a
+      --  wrap that somehow happened would still be refused rather than
+      --  read, and the note at the top of this unit that says bounds and
+      --  range checking are untouched stays true.
+      pragma Suppress (Overflow_Check);
+
+      --  And bounds checking, once the ranges below are proved.
+      --
+      --  With the overflow branch gone a second profile said the same thing
+      --  again: forty-six per cent of this procedure was `cmpq` and fifteen
+      --  more the address arithmetic feeding it, against twenty-nine per
+      --  cent doing the multiply-adds it exists for. Six index checks an
+      --  element, on indices that differ from the last by a constant.
+      --
+      --  So they are proved once instead, which is what the integer kernels
+      --  do and say: every index this procedure forms is a fixed function
+      --  of the loop bounds, so the largest of each is computed below and
+      --  compared against the array it will index. A call that would step
+      --  outside is refused through Ok, which is a path the caller already
+      --  handles because the softmax further down can refuse too.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+
+      --  The largest head's group, which is what fixes the reach into the
+      --  keys and the values.
+      Group_Top : constant Element_Count :=
+        (if Group_Size = 0 then 0 else To_Head / Group_Size);
    begin
       Ok := True;
+
+      --  Nothing to do is not a refusal.
+      if To_Head < From_Head or else Last < First then
+         return;
+      end if;
+
+      --  Every index the loops below will form, at its largest. The
+      --  products are of dimensions a model file declared and this program
+      --  validated when it read them, which is the same footing the row
+      --  kernels' own reach check stands on.
+      if Group_Size = 0
+        or else Head_Size = 0
+        or else Scores'Length < To_Head * Score_Room + Last + 1
+        or else Query'Length < To_Head * Head_Size + Head_Size
+        or else Keys'Length
+                  < K_Base + Last * KV_Width + Group_Top * Head_Size
+                    + Head_Size
+        or else Values'Length
+                  < V_Base + Last * V_Width + Group_Top * Value_Size
+                    + Value_Size
+        or else Target'Length < To_Head * Value_Size + Value_Size
+      then
+         Ok := False;
+         return;
+      end if;
 
       for Head in From_Head .. To_Head loop
          declare
@@ -3270,6 +3338,11 @@ package body Model_Runner.Llama is
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
+
+      --  As in Blend_Exact above, and for the reason written there: the
+      --  overflow branch after every computed index, with the bounds check
+      --  that catches a wrap left in place.
+      pragma Suppress (Overflow_Check);
    begin
       Ok := True;
 
@@ -3422,6 +3495,11 @@ package body Model_Runner.Llama is
       Scores     : in out Real_Array;
       Target     : out Real_Array;
       Ok         : out Boolean) is
+
+      --  As in Blend_Exact above, and for the reason written there: the
+      --  overflow branch after every computed index, with the bounds check
+      --  that catches a wrap left in place.
+      pragma Suppress (Overflow_Check);
    begin
       Ok := True;
 

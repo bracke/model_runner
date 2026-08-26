@@ -8,10 +8,65 @@ package body Model_Runner.Quantization.Integers.Kernels is
    package N renames Model_Runner.Numerics;
 
    use type Interfaces.Unsigned_8;
-   use type Interfaces.Unsigned_16;
    use type B.Byte_Count;
    use type N.Real;
    use type N.Wide_Real;
+   use type Interfaces.Unsigned_32;
+
+   --  One block's scale, widened from the two bytes the file holds it in.
+   --
+   --  The portable widening in Model_Runner.Numerics computes the normal
+   --  case and the subnormal case and selects between them -- about sixteen
+   --  instructions of shifting, masking and two multiplies, and it has to
+   --  be, because Ada has no half-precision type and the source is bit
+   --  arithmetic rather than a conversion the compiler can recognise.
+   --
+   --  Both wider compilations are built for instruction sets that have
+   --  F16C, whose VCVTPH2PS does the whole of it in one instruction and
+   --  exactly -- subnormals, infinities and not-a-number included, which is
+   --  what lets the test comparing the compilations still ask for the same
+   --  bits. Two instructions here against sixteen, on a scale read once for
+   --  every row and block of every strip: a profile put that widening at
+   --  most of the quarter of the strip kernel that was neither the byte dot
+   --  product nor the arithmetic around it.
+   --
+   --  The baseline compilation keeps the portable form, because it is the
+   --  one that runs where the host said it had none of this. Wider is a
+   --  static generic formal, so the test below is not a test at run time.
+   function Scale_At
+     (Data : B.Byte_Array;
+      Here : B.Byte_Index) return N.Real
+     with Inline;
+
+   function Scale_At
+     (Data : B.Byte_Array;
+      Here : B.Byte_Index) return N.Real
+   is
+      Bits : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32 (Data (Here))
+        or Interfaces.Shift_Left
+             (Interfaces.Unsigned_32 (Data (Here + 1)), 8);
+   begin
+      if Wider then
+         declare
+            LF     : constant Character := ASCII.LF;
+            Result : N.Real;
+         begin
+            --  Not volatile: it reads its operand and writes its answer and
+            --  does nothing else, so the compiler may hoist it, fold two of
+            --  them together, or drop one whose answer goes unread.
+            System.Machine_Code.Asm
+              ("vmovd %1, %0" & LF
+               & "vcvtph2ps %0, %0",
+               Outputs => N.Real'Asm_Output ("=x", Result),
+               Inputs  => Interfaces.Unsigned_32'Asm_Input ("r", Bits));
+
+            return Result;
+         end;
+      else
+         return N.To_Real (N.Half (Interfaces.Unsigned_16 (Bits)));
+      end if;
+   end Scale_At;
 
    --  One vector against a tile of rows, with the block loop inside.
    --
@@ -131,12 +186,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                     Scales (Scales'First + First / Activation_Block + Block);
 
                   Weighted : constant N.Real :=
-                    N.To_Real
-                      (N.Half
-                         (Interfaces.Unsigned_16 (Data (At_Byte))
-                          or Interfaces.Shift_Left
-                               (Interfaces.Unsigned_16
-                                  (Data (At_Byte + 1)), 8)));
+                    Scale_At (Data, At_Byte);
                begin
                   Row_Scale (Natural (Block)) := Weighted * Scaled;
                   Undo := Undo
@@ -347,12 +397,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                        + Width * B.Byte_Count (Block);
 
                      Scale : constant N.Real :=
-                       N.To_Real
-                         (N.Half
-                            (Interfaces.Unsigned_16 (Data (At_Byte))
-                             or Interfaces.Shift_Left
-                                  (Interfaces.Unsigned_16
-                                     (Data (At_Byte + 1)), 8)));
+                       Scale_At (Data, At_Byte);
 
                      At_Vec : constant Natural := Natural (Block) * Strip;
                      At_Out : constant Natural :=
@@ -705,12 +750,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                     + Width * B.Byte_Count (Block);
                begin
                   Scaling (Row) :=
-                    N.To_Real
-                      (N.Half
-                         (Interfaces.Unsigned_16 (Data (At_Byte))
-                          or Interfaces.Shift_Left
-                               (Interfaces.Unsigned_16
-                                  (Data (At_Byte + 1)), 8)));
+                    Scale_At (Data, At_Byte);
 
                   if Deep then
                      --  No widening at all: the byte the file holds, with

@@ -44,6 +44,70 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Attention had never been told its bounds were proved.** `Blend_Exact`
+  and the two blends beside it were the only loops in the engine's own
+  arithmetic without the suppressions the row kernels carry, and a profile
+  said what that cost: fifty-four per cent of the procedure on 64-bit moves,
+  twenty on `jo` -- the overflow branch after every index -- and not one
+  multiply among its ten hottest instructions.
+
+  Overflow checking is off in all three now, which drops the check that an
+  index computation wraps and keeps the check that the index is inside the
+  array. And in `Blend_Exact`, bounds checking too, after proving the ranges
+  the way the row kernels prove theirs: every index it forms is a fixed
+  function of the loop bounds, so the largest of each is computed at entry
+  and compared against the array it will index, and a call that would step
+  outside is refused through `Ok`.
+
+  Attending falls from **0.074 s of a 110-token prompt to 0.039**, 8.9 per
+  cent of it to 5.3, and the instruction count from 62.0 thousand million to
+  **54.7**. No answer changes.
+
+- **The weight scale is widened by the instruction that widens it.** Ada has
+  no half-precision type, so the portable widening reads the two bytes as
+  bits and computes both the normal and the subnormal answer before
+  selecting -- about sixteen instructions, and unrecognisable to the
+  compiler as a conversion. Both wider compilations are built for
+  instruction sets with F16C, whose `VCVTPH2PS` does it in one instruction
+  and exactly. A two-instruction insertion where the kernel reads a scale
+  took the prompt from 64.8 thousand million instructions to **62.0**, and
+  the quantized path from 4.44 times the floating-point one to 4.71 with a
+  vector a pass. The baseline compilation keeps the portable form.
+
+- **A product of one vector asks for four shares, and only those wake.**
+  A generated token reads every weight once and multiplies it once, so it is
+  the memory path that answers: measured over three rounds, sixty-four
+  tokens take 2.303 s at three shares, 2.123 at four, 2.144 at five and
+  2.187 at eight, for 6.3, 7.3, 8.7 and 12.7 seconds of processor time.
+  Eight is both the slowest and the dearest. A prompt is the opposite and
+  keeps every share.
+
+  Cutting the team alone was not enough: `Coordinator.Post` bumped a
+  generation counter that opened every worker's barrier whatever the job
+  asked for, so the idle four still cost the wake -- a quarter less
+  processor time for three per cent more wall. The barrier now tests the
+  team, and `Post` counts only the workers it opens for.
+
+  Sixty-four generated tokens go from **2.196 s to 2.102** and from **12.64
+  seconds of processor time to 7.17**, three rounds alternated, better in
+  every one. Against llama.cpp the processor's generating row goes from 27.6
+  to **29.8 tokens a second**, the first thing to move it since the
+  arithmetic changed. No digest moves.
+
+  **The arithmetic decides this, not the vector count**, and a second
+  measurement found it: asked before `Prepare_Packed`, the smaller team
+  reaches the floating-point path too, which does four times the arithmetic
+  on the same bytes and is not memory-bound -- twelve tokens at `--arith
+  f32` measured 1.806 s against 1.365. The team is chosen after the
+  arithmetic is known.
+
+- **Four accumulators in the attention score loop, measured and not taken.**
+  The loop is a floating-point sum reduction, which GNAT will not vectorise
+  without fast-math; four partial sums would let it. Written and measured at
+  **55.1 thousand million instructions against 54.7** -- worse, because GNAT
+  kept the four in memory rather than a register -- and it would have moved
+  a digest for the privilege.
+
 - **A prompt runs the kernel a generated token already had.** The
   single-vector path keeps a row's accumulator in a register from its first
   block to its last, reads the weight bytes where the file holds them and

@@ -79,6 +79,24 @@ package body Model_Runner.Backend.CPU is
 
    function Integer_Activations return Boolean is (Quantizing);
 
+   --  Shares for a product of one vector, which is what a generated token
+   --  is. Fewer than the machine has, on purpose.
+   --
+   --  A generated token reads every weight of the model once and multiplies
+   --  each of them once, so it is the memory path that answers rather than
+   --  the arithmetic -- and that path is saturated well before the cores
+   --  are. Measured over three rounds on sixty-four tokens: 2.303 s at
+   --  three shares, 2.123 at four, 2.144 at five and 2.187 at eight, for
+   --  6.3, 7.3, 8.7 and 12.7 seconds of processor time. Eight is both the
+   --  slowest of those and by far the dearest.
+   --
+   --  A prompt is the other case and keeps every share: the same sweep
+   --  reads 1.377 s at three against 0.815 at eight, because a batch shares
+   --  one reading of the weights between its tokens and is bound by the
+   --  arithmetic instead. So the share count follows the batch, as the row
+   --  tile beside it already does.
+   Vector_Team : constant Share_Count := 4;
+
    procedure Partition
      (Rows    : Element_Count;
       Workers : Share_Count;
@@ -96,7 +114,12 @@ package body Model_Runner.Backend.CPU is
       First := 1;
       Last := 0;
 
-      if Rows = 0 then
+      --  A worker numbered past the end of the team has nothing to do.
+      --  That used to be impossible, because every job was cut into one
+      --  share for every worker there was; a job that asks for fewer makes
+      --  it ordinary, and without this the arithmetic below would hand such
+      --  a worker a range past the last row rather than an empty one.
+      if Rows = 0 or else Index > Workers then
          return;
       end if;
 
@@ -118,9 +141,20 @@ package body Model_Runner.Backend.CPU is
 
    protected body Coordinator is
 
+      --  Opened for the workers this job asked for and no others.
+      --
+      --  A worker outside the team leaves Seen (Index) where it was and
+      --  takes the next job instead, which is what makes a smaller team
+      --  cost nothing rather than costing a wake. Posting a job used to
+      --  open every worker's barrier whatever the team, so cutting a job's
+      --  team saved the memory traffic and paid for it in wake-ups: a
+      --  quarter less processor time for three per cent more wall, which is
+      --  the wrong side of the trade and is why this is here.
       entry Wait_For_Work (for Index in Worker_Count)
         (Current_Job : out Job; Is_Closing : out Boolean)
-        when Closing or else Generation /= Seen (Index) is
+        when Closing
+             or else (Generation /= Seen (Index)
+                      and then Share_Count (Index) < Current.Team) is
       begin
          Seen (Index) := Generation;
          Current_Job := Current;
@@ -137,7 +171,14 @@ package body Model_Runner.Backend.CPU is
 
          Current := Item;
          Any_Failed := False;
-         Remaining := Natural (Team);
+
+         --  How many workers will report, which is how many the barrier
+         --  above will open for: the job's team less the share the
+         --  submitting task takes itself, and never more than there are.
+         --  Team here is the pool's, the discriminant; Item.Team is the
+         --  job's, and before a job could ask for fewer the two agreed.
+         Remaining :=
+           Natural (Share_Count'Min (Share_Count (Team), Item.Team - 1));
          Generation := Generation + 1;
          Accepted := True;
       end Post;
@@ -582,6 +623,19 @@ package body Model_Runner.Backend.CPU is
          Work.Values := Item.Values;
          Work.Scales := Item.Scales;
          Work.Totals := Item.Totals;
+
+         --  And now, and only now, the smaller team.
+         --
+         --  The share count is asked after the arithmetic is known because
+         --  the two cases want different answers and asking before gets one
+         --  of them wrong. The byte path reads every weight once and
+         --  multiplies it once, so it is the memory that answers and four
+         --  shares saturate it; the floating-point path does four times the
+         --  arithmetic on the same bytes and is not memory-bound at all --
+         --  cutting its team measured twelve tokens at 1.806 s against
+         --  1.365, a third slower, which is what said this test belongs
+         --  here rather than above.
+         Work.Team := Share_Count'Min (Item.Workers + 1, Vector_Team);
       end if;
 
       --  Exactly one job is outstanding at a time, so the queue is bounded by
