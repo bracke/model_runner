@@ -83,6 +83,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The five-bit k-quant has both kernels, which completes what a "_M" file
+  is made of.** `Q5_K` is `Q4_K` with a bit taken out of every quant and
+  kept apart -- the same two scales, the same twelve packed six-bit scale
+  and minimum pairs, then thirty-two bytes carrying the fifth bit of all two
+  hundred and fifty-six elements, then the nibbles -- so both of the
+  four-bit format's insertions applied as they stood and the only question
+  was the cost of putting that bit back.
+
+  Three instructions a sub-block and one constant register. A word shift
+  brings the wanted bit to bit four of its own byte, a mask of one in
+  sixteen per byte drops what the shift dragged in from the neighbour, and
+  an or puts it on the nibble; the quant is then zero to thirty-one, which
+  is still what the byte dot product's unsigned operand wants, so nothing
+  around the instruction changes. Forty-eight instructions a block against
+  the two hundred and fifty-six the multiply-adds spend.
+
+  TinyLlama Q5_K_M, medians of three alternated rounds, better in every
+  round: the 110-token prompt **4.193 s to 1.061** (29.09 s of processor
+  time to 5.73), thirty-two generated **3.330 s to 1.241** (19.45 s to
+  4.32). The digest is the same in all twelve runs -- `cbf29ce484222325` for
+  the prompt and `0a1a63f0305d35d6` for the generated tokens -- because as
+  with the four-bit format the integer sums are exact either way and the
+  rounding falls in the same places.
+
+  The conformance sweep is unchanged at 28344 sequences, none outside
+  tolerance. Four of the fifteen formats have an integer kernel now.
+
 - **A generated token of the six-bit k-quant has a kernel, and that was the
   last floating-point path in a "_M" file.** A profile put the unpacking and
   the floating-point dot product together at forty-one per cent of a Q4_K_M

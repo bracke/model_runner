@@ -74,12 +74,12 @@ package Model_Runner.Quantization.Integers is
    --
    --  Has_Integer_Kernel is a pure function of the format and says what a
    --  format could be multiplied as; this says what it will be, and the two
-   --  differ for the four-bit k-quant, which has a kernel for a batch and
-   --  none for a single vector. The difference matters to exactly one
-   --  caller and matters a great deal to it: quantizing the activations for
-   --  a product that then declines to use them is the whole cost of the
-   --  packing and none of its benefit, and it measured forty per cent of a
-   --  generated token before this was asked.
+   --  differ for the k-quants, which have a kernel for one vector and a
+   --  kernel for a strip of four and nothing between. The difference
+   --  matters to exactly one caller and matters a great deal to it:
+   --  quantizing the activations for a product that then declines to use
+   --  them is the whole cost of the packing and none of its benefit, and it
+   --  measured forty per cent of a generated token before this was asked.
    --
    --  @param Format Weight format.
    --  @param Count Vectors in the product.

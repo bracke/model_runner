@@ -47,6 +47,7 @@ package body Model_Runner.Quantization.Integers is
      (Format : Model_Runner.GGUF.Tensor_Type) return Boolean
    is (Format = G.Type_Q8_0
        or else Format = G.Type_Q4_K
+       or else Format = G.Type_Q5_K
        or else Format = G.Type_Q6_K);
 
    --------------------

@@ -2640,8 +2640,8 @@ because three pointer advances became two.
 
 Not every product takes it. A weight format with no integer kernel, and a
 width that is not a whole number of thirty-two, are computed the other way
-whatever is asked for -- Q8_0, Q4_K and Q6_K are what have one today, and the
-twelve others are still decoded into binary32 first. The refusal is per product and it is
+whatever is asked for -- Q8_0, Q4_K, Q5_K and Q6_K are what have one today,
+and the eleven others are still decoded into binary32 first. The refusal is per product and it is
 all or nothing over a worker's share, so no row is computed twice and none is
 left at zero. `--backend reference` never quantizes anything: it exists to be
 a second opinion with none of the fast path's shortcuts, and this is one of
@@ -2674,6 +2674,46 @@ over the batch rather than outside it, so each vector re-read the whole block
 and a batch stopped being a batch. That is the same lesson the note above
 `Accumulate_Dot` records from the other direction, and it took a measurement
 to see either time.
+
+### And the five-bit one, which is the same kernel and one more bit
+
+`Q5_K` is `Q4_K` with a bit taken out of every quant and kept apart: the same
+two scales, the same twelve bytes of packed six-bit scale and minimum pairs,
+then thirty-two bytes carrying the fifth bit of all two hundred and fifty-six
+elements, then the nibbles. Both of the four-bit format's kernels therefore
+applied as they stood, and the only question was what putting that bit back
+costs.
+
+**Three instructions a sub-block and one constant register.** The bit a
+sub-block wants is bit *s* of its byte, so a word shift brings it to bit four
+-- left by four for the first sub-block of a block, right by three for the
+eighth -- a mask of one in sixteen per byte drops whatever the shift dragged
+in from the neighbouring byte, and an or puts it on the nibble. The quant is
+then zero to thirty-one, which is still what the byte dot product's unsigned
+operand wants, so everything around the instruction is the four-bit kernel's
+unchanged: no bias, and the minimum's term taken out once a row against the
+sub-block's activation total. Counted in the strip kernel's block:
+**forty-eight instructions against the two hundred and fifty-six the
+multiply-adds spend**, beside the thirty-two nibble masks and shifts the
+four-bit kernel already paid.
+
+| TinyLlama Q5_K_M | | |
+|---|---:|---:|
+| 110-token prompt, floating-point path | 4.193 s | 29.09 s of processor time |
+| 110-token prompt, byte dot product | **1.061 s** | **5.73 s** |
+| thirty-two generated, floating-point path | 3.330 s | 19.45 s |
+| thirty-two generated, byte dot product | **1.241 s** | **4.32 s** |
+
+Medians of three alternated rounds, better in every round, and the digest is
+the same in all twelve runs -- `cbf29ce484222325` for the prompt and
+`0a1a63f0305d35d6` for the generated tokens. As with the four-bit format the
+integer sums are exact either way and the rounding falls in the same places,
+which is not true of the eight-bit one.
+
+A `Q5_K_M` file is the same mixture a `Q4_K_M` file is, so its six-bit
+tensors were already covered and its five-bit ones were the whole of what
+was left. Four of the fifteen formats have a kernel now, and between them
+they are what a `Q4_K_M` or a `Q5_K_M` file is made of.
 
 ### Attention had never been told the bounds were proved
 
