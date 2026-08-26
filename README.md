@@ -2016,18 +2016,48 @@ the doubt: the twelve-token run answers `5abff916f9d83ca6`, which is what
 every other path in this program answers, in half precision. Then the
 110-token device prompt at 1.210 s against 0.515.
 
-**Why is the useful part.** A workgroup here computes sixteen rows, so the
-hundred and twenty-eight workgroups that cover a two-thousand-row matrix each
-convert the *whole batch of activations* into half precision for themselves
--- a hundred and twenty-eight times over, where the shader it replaces reads
-each activation once for the eight vectors an invocation carries. The
-instruction was never the problem and the barriers were not either. What a
-matrix product needs is for the operand it does not own to be converted once,
-before any of it runs, and that is a pass over the activations into a buffer
-of their own rather than anything to do with cooperative matrices.
+**Then three things were measured, and the interesting part is that two of
+them were nothing.**
 
-That is where the next attempt starts, and it is a smaller question than the
-one this section used to end on.
+A workgroup computes sixteen rows, so the hundred and twenty-eight covering a
+two-thousand-row matrix each converted the whole batch into half precision
+for themselves -- thirty-three million conversions where the batch holds two
+hundred and twenty-five thousand values. So a second shader was written to do
+it once, before any product runs, into the half of the vector buffer the
+binary32 copy does not use, with the instruction then loading its operand
+straight out of memory: no shared array for it and no conversion in the loop
+at all.
+
+| | 110-token device prompt |
+|---|---:|
+| the row product | **0.515 s** |
+| the matrix product, converting per workgroup | 1.210 s |
+| the same, converted once beforehand | 1.037 s |
+| and decoding four quants a word rather than one a byte | 1.024 s |
+| and with the operand read ablated to one address | 1.018 s |
+
+**Converting once was worth fourteen per cent and the other two were worth
+nothing at all.** The decode was already what this file had learned to write
+elsewhere and it changed a thousandth; replacing the operand load with a
+single address -- every workgroup reading the same sixteen values, which
+makes the batch traffic perfectly cached and wrong -- changed less than that.
+So it is not the conversion, not the decode, and not the hundred and
+twenty-eight-fold re-reading of the batch that the first of those was meant
+to be a proxy for.
+
+What is left is the shape of the work rather than any of its parts. A
+hundred and twenty-eight workgroups of one subgroup each is a hundred and
+twenty-eight waves on a part that runs five hundred for the shader this would
+replace, and a sixteen-row output tile is what forces that: the instruction's
+smallest tile is sixteen, so the only way to have more waves is more of the
+batch per workgroup, and the only way to have more work per wave is a square
+tile with several accumulators to a side. That is a real matrix-multiply
+kernel and not this one, and it is the thing to write if this is picked up
+again.
+
+The negotiation, the shape query, the pre-pass and the shader are all
+reverted. What is kept is the measurement, which now says which three things
+are *not* the answer.
 
 ### Against llama.cpp
 

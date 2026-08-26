@@ -4355,15 +4355,41 @@ reference D5B4EFDA87D7DB0C src/library/model_runner-backend-reference.adb src/li
 # At its proper threshold the 110-token device prompt reads 1.210 s against
 # 0.515 for the shader it would replace: 2.4 times slower.
 #
-# Why, which is the part worth keeping. A workgroup computes sixteen rows,
-# so the hundred and twenty-eight workgroups covering a two-thousand-row
-# matrix each convert the whole batch of activations into half precision for
-# themselves -- a hundred and twenty-eight times over. The shader it
-# replaces reads each activation once for the eight vectors an invocation
-# carries. Neither the instruction nor the barriers are what cost: a matrix
-# product needs the operand it does not own converted once, before any of it
-# runs, which is a pass over the activations into a buffer of their own.
-# That is where a second attempt starts.
+# Then three things were measured, 2026-08-26, and two of them were nothing.
+#
+#   the row product it would replace                          0.515 s
+#   the matrix product, converting the batch per workgroup    1.210 s
+#   the same, with the batch converted once beforehand        1.037 s
+#   and decoding four quants a word rather than one a byte    1.024 s
+#   and with the operand read ablated to a single address     1.018 s
+#
+# The conversion was worth fourteen per cent and was worth writing a second
+# shader for: vectors_half.comp turned the batch into half-precision once,
+# into the half of the vector buffer the binary32 copy does not use, with
+# the vector buffer made half again as large and a pipeline barrier between
+# that dispatch and the products. The matrix shader then loaded its second
+# operand straight out of memory as a column-major view -- no shared array
+# for it, no conversion in the loop.
+#
+# The decode was worth nothing, which is the surprise: reading four quants
+# out of a word rather than one out of a byte was sixteen per cent in
+# row_product.comp and is a thousandth here. And the ablation is the one
+# that settles it -- replacing the operand's address with a constant, so
+# every workgroup reads the same sixteen values and the batch traffic is
+# perfectly cached and perfectly wrong, changes nothing measurable. The
+# hundred-and-twenty-eight-fold re-reading of the batch is not what costs.
+#
+# What is left is the shape rather than any part. A sixteen-row output tile
+# is a hundred and twenty-eight workgroups of one subgroup each, which is a
+# hundred and twenty-eight waves on a part that runs five hundred for the
+# row product; the instruction's smallest tile is sixteen, so more waves
+# means more of the batch per workgroup and more work per wave means a
+# square tile with several accumulators to a side. That is a real
+# matrix-multiply kernel and not this one.
+#
+# Everything is reverted. Anyone picking it up starts from a shader that was
+# correct, from the knowledge that the extension and the 1.0 floor are not
+# obstacles, and from three things that are not the answer.
 
 # The six cells of the device table, taken in this sitting:
 #

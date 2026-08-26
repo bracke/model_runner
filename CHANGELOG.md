@@ -53,15 +53,27 @@ Keep a Changelog and the project uses semantic versioning.
   before. The negotiation, the feature through the `pNext` chain, the shape
   read back and checked, and a matrix-product shader were all written.
 
-  **Correct, and 2.4 times slower**: the twelve-token run answers
+  **Correct, and twice as slow**: the twelve-token run answers
   `5abff916f9d83ca6` like every other path in this program, and the
-  110-token device prompt reads 1.210 s against 0.515. A workgroup computes
-  sixteen rows, so the hundred and twenty-eight of them that cover a
-  two-thousand-row matrix each convert the whole batch of activations into
-  half precision for themselves. The instruction was not the problem and
-  neither were the barriers; converting the activations once, before any of
-  it runs, is what a matrix product needs and is a smaller question than the
-  one this replaces.
+  110-token device prompt reads 1.210 s against 0.515 for the shader it
+  would replace.
+
+  Three things were then measured and two of them were nothing. Converting
+  the batch once, in a pass of its own before any product runs -- rather
+  than in each of the hundred and twenty-eight workgroups that cover a
+  two-thousand-row matrix -- takes it to **1.037 s**, fourteen per cent.
+  Decoding four quants out of a word rather than one out of a byte, which
+  was worth sixteen per cent in the shader beside it, takes it to 1.024.
+  Ablating the operand read to a single address, so the batch traffic is
+  perfectly cached and wrong, takes it to 1.018.
+
+  So it is not the conversion, not the decode, and not the re-reading of the
+  batch. What is left is the shape: a sixteen-row output tile means a
+  hundred and twenty-eight workgroups of one subgroup on a part that runs
+  five hundred waves for the row product. A square tile with several
+  accumulators to a side is a real matrix-multiply kernel and not this one.
+  All of it is reverted; the measurement is what is kept, and it now says
+  which three things are not the answer.
 
 - **A tile is written the way the target is laid out.** `Mat_Mul_Range_Packed`
   copied each tile of answers back in the order the tile is laid out -- a row
