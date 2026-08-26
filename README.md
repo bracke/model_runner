@@ -3036,15 +3036,43 @@ exact where a difference of two runs is not, and that is the second time
 today an ablation has quietly measured something other than what it was
 pointed at.
 
-**What the mix says to do next.** One five-hundred-and-twelve-bit dot product
-covers two blocks in a single instruction, and one convert and one
-multiply-add can then serve both, if the scale table is built sixteen wide
-with the two blocks' scales side by side. That is four instructions per
-sixty-four elements where there are now four per thirty-two: the ratio this
-whole section is about, halved. It is a rewrite of the insertion, of the
-table beside it and of the reduction that ends it -- and it is the first time
-this file has had a reason to expect something from the wider registers
-rather than a hope.
+**The next step this suggested was the wider registers, and its premise is
+false on this part.** One five-hundred-and-twelve-bit dot product covers two
+blocks in a single instruction, so the loop would fall from eighty
+instructions per two blocks to about fifty-two. The premise is that a wide
+instruction does the work of two narrow ones in the time of one. Measured, in
+a loop of eight independent dot products with nothing else in it:
+
+| | |
+|---|---:|
+| 256-bit byte dot product | 279 G multiply-adds a second |
+| 512-bit byte dot product | 292 G |
+| one wide instruction is worth | 1.04 to 1.13 narrow ones |
+
+and the multiply-add, which this kernel issues as often as the dot product,
+answers the same: 1.03 to 1.16. **The wide instruction takes twice as long
+and does twice as much** -- the datapath behind it is two hundred and
+fifty-six bits and the wide form is issued over two passes. That is a fact
+about this processor, a Zen 4, and not about the instruction set; a part with
+full-width datapaths would answer two, which is why it is written down.
+
+So the rewrite would leave the floating-point work exactly as it is, cut a
+third of the instructions, and the hoist above already proved this kernel is
+not issue-bound -- a fifth of its instructions removed bought two per cent of
+its time. It is not done. Two blocks are not contiguous either: a Q8_0 block
+is thirty-four bytes, so a wide load would need two narrow ones and an
+insert.
+
+**What the accounting does point at.** The floating-point floor here is three
+operations per thirty-two multiply-adds per row and vector -- 9.7 thousand
+million operations, 4.9 thousand million cycles at two a cycle, against 13.4
+measured. The difference is instructions that are not the arithmetic, and the
+largest block of those is the **fifteen thousand million in the Ada around
+the insertion**, which is more than the insertion's own sixteen. That Ada
+works four floats at a time, because a strip is four vectors, on pipes two
+hundred and fifty-six bits wide: it uses a quarter of what it is issued on. A
+strip of eight would put it in full-width registers and still keep the
+accumulators at sixteen of the thirty-two there are.
 
 ### Attention had never been told the bounds were proved
 

@@ -154,6 +154,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The wider-register rewrite this file asked for one commit ago has a
+  false premise, and the claim is withdrawn.** It said a
+  five-hundred-and-twelve-bit dot product covers two blocks in one
+  instruction and called that a reason rather than a hope. The premise is
+  that a wide instruction does the work of two narrow ones in the time of
+  one. Measured on this part, in a loop of eight independent dot products:
+  279 G multiply-adds a second at 256 bits against 292 at 512, so one wide
+  instruction is worth 1.04 to 1.13 narrow ones, and the multiply-add
+  answers the same at 1.03 to 1.16. The datapath is 256 bits and the wide
+  form is issued over two passes.
+
+  The rewrite would therefore cut a third of the kernel's instructions and
+  leave its floating-point work identical, on a kernel already shown not to
+  be issue-bound. Not done. Two Q8_0 blocks are not contiguous either --
+  thirty-four bytes apiece -- so the wide load would need two narrow ones
+  and an insert.
+
+  What the accounting points at instead is the fifteen thousand million
+  instructions in the Ada around the insertion, more than the insertion's
+  own sixteen, which works four floats at a time on pipes that are eight
+  wide. `docs/measured-figures.txt` has the numbers and the reason it is a
+  fact about this processor rather than about the instruction set.
+
 - **The processor kernel's tenth of its own instruction's peak is explained,
   and it is arithmetic rather than a stall.** A 110-token prompt is 103.6
   thousand million multiply-adds through the strip kernel -- counted, not

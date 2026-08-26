@@ -6644,4 +6644,63 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # had a reason to expect something from the wider registers rather than a
 # hope.
 
+# 2026-08-26, the five-hundred-and-twelve-bit rewrite: its premise tested
+# and false, and the entry above corrected.
+#
+# The entry above said one wide dot product covers two blocks in one
+# instruction and called that "the first time this file has had a reason to
+# expect something from the wider registers rather than a hope". It was a
+# hope. The premise is that a wide instruction does the work of two narrow
+# ones in the time of one, and on this part it does not.
+#
+# A loop of eight independent byte dot products, nothing else in it, three
+# runs each:
+#
+#   256-bit                   279 G multiply-adds a second
+#   512-bit                   292 G
+#   one 512-bit instruction is worth 1.04, 1.07, 1.10, 1.13 narrow ones
+#
+# and the same question of the multiply-add, which the kernel issues as
+# often as the dot product:
+#
+#   one 512-bit vfmadd231ps is worth 1.03, 1.15, 1.16 narrow ones
+#
+# So a wide instruction takes twice as long and does twice as much: the
+# datapath behind it is 256 bits and the wide form is issued over two
+# passes. That is a fact about this processor -- a Zen 4 -- and not about
+# the instruction set: a part with full-width datapaths would answer two,
+# and the reason to write this down is that the next machine may.
+#
+# What that does to the rewrite. It would have cut the loop from eighty
+# instructions per two blocks to about fifty-two, but the floating-point
+# work is what it was: eight dot products, eight converts and eight
+# multiply-adds per two blocks, at twice the cycles each. The kernel is
+# already only about half occupied on those pipes and the hoist above
+# proved it is not issue-bound either -- a fifth of its instructions
+# removed bought two per cent of its time. A third fewer instructions for
+# identical pipe work would buy about nothing, and it would cost a rewrite
+# of the insertion, of the scale table beside it and of the reduction that
+# ends it. It is not done.
+#
+# Two blocks are not even contiguous, which would have made the load worse
+# rather than better: a Q8_0 block is thirty-four bytes, so the second
+# block's quants begin two bytes after the first block's end and a wide
+# load would need two narrow loads and an insert.
+#
+# What the accounting does point at, since it is not the registers. The
+# floating-point floor for this kernel is three operations per thirty-two
+# multiply-adds per row and vector -- 9.7 thousand million operations for
+# this prompt, 4.9 thousand million cycles at two a cycle -- against 13.4
+# measured. The difference is instructions that are not the arithmetic, and
+# the largest block of those is the fifteen thousand million in the Ada
+# around the insertion, which is more than the insertion's own sixteen.
+#
+# And that Ada works four floats at a time, because a strip is four
+# vectors, on pipes that are two hundred and fifty-six bits wide. It uses a
+# quarter of what it is issued on. A strip of eight vectors would put it in
+# full-width registers and keep the accumulators at sixteen of the
+# thirty-two there are. That is the next thing this file has a reason for,
+# and it is about the arithmetic around the instruction rather than the
+# instruction.
+
 outside 1725B5F993CE517F src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
