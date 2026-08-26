@@ -1,0 +1,217 @@
+#version 450
+
+//  A tile of the answer at a time, through the device's matrix instruction.
+//
+//  This computes the same thing row_product.comp computes -- y[v][row] over
+//  a batch of vectors -- and computes it as a matrix product rather than as
+//  a row product repeated. The difference is not the instruction. It is the
+//  shape of the work:
+//
+//  The row product carries GROUP vectors per invocation, so a batch longer
+//  than GROUP is several dispatches and the weights are read once for each
+//  of them. A hundred and twenty-eight vectors at eight a dispatch is
+//  sixteen passes over the whole model. Raising GROUP does not fix it and
+//  was measured not to: sixteen reads 1.219 s against eight's 1.054,
+//  because what an invocation re-reads is the activations rather than the
+//  weights.
+//
+//  A tile reads both once. One workgroup takes thirty-two rows and a
+//  hundred and twenty-eight vectors and walks the columns, so the weights
+//  are read once for the whole batch and the activations once for the
+//  whole tile of rows.
+//
+//  Only Q8_0, and only where the device offers VK_KHR_cooperative_matrix
+//  with a sixteen-by-sixteen-by-sixteen half-precision shape at subgroup
+//  scope. Everything else goes to row_product.comp, which reads all
+//  fifteen formats and needs nothing of the device beyond Vulkan 1.0.
+//
+//  The activations are read as half precision, from a copy half_batch.comp
+//  made before this ran. That is not an optimization, it is the only way
+//  the instruction will take them: loading binary32 into a half-precision
+//  matrix does not convert, it reinterprets, and the answers come back as
+//  not-a-number. The copy is made once for a product rather than once for
+//  a workgroup, which an earlier attempt at this measured as a seventh of
+//  its time when each workgroup made its own.
+//
+//  The weights are decoded into shared memory, because the instruction
+//  loads a matrix from an array and a Q8_0 block is a scale and thirty-two
+//  bytes rather than an array of numbers. Thirty-two rows by thirty-two
+//  columns of half precision is two kilobytes, which is small enough that
+//  the tile is not what bounds how many of these a part will run.
+
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_cooperative_matrix : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+
+//  One subgroup, and the host has established that a subgroup here is
+//  sixty-four invocations. The instruction is at subgroup scope, so a
+//  workgroup of more than one would need each of them told which part of
+//  the tile it owns; one is simpler and measured faster than two or four
+//  at every tile shape tried.
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly  buffer Weights { uint      w[]; };
+layout(std430, binding = 2) writeonly buffer Result  { float     y[]; };
+
+//  The batch in half precision, as half_batch.comp left it: the same
+//  vector-major layout the binary32 copy has, padded up to a multiple of
+//  sixteen vectors with zeros.
+layout(std430, binding = 3) readonly  buffer Halves  { float16_t x[]; };
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+    uint count;
+    uint first;
+    uint format;
+    uint base;
+} shape;
+
+//  Rows and vectors of the answer one workgroup computes, and how much of
+//  the columns it takes at a time. The step is one Q8_0 block deep, which
+//  is what makes the decode below a whole number of blocks; sixty-four and
+//  a hundred and twenty-eight were measured and are slower.
+const uint TILE_R = 32u;
+const uint TILE_V = 128u;
+const uint KCH    = 32u;
+
+//  Which is two matrices of weights and eight of vectors, so sixteen
+//  accumulators. Eight against two is the way round that measured fastest
+//  -- 1709 against 328 gigaflops for two against eight -- because a
+//  weight matrix comes from shared memory and is used eight times, where
+//  a vector matrix comes from memory and is used twice.
+const uint AR = TILE_R / 16u;
+const uint AV = TILE_V / 16u;
+
+shared float16_t wt[TILE_R * KCH];
+
+void main() {
+    uint row0 = gl_WorkGroupID.x * TILE_R;
+    uint vec0 = gl_WorkGroupID.y * TILE_V;
+
+    //  Nothing here asks how long the batch is. The host rounds it up to a
+    //  whole tile and zeroes what the rounding invents, so every workgroup
+    //  has all eight vector matrices and the loops below have constant
+    //  bounds.
+    //
+    //  That is not tidiness either. Bounding them by what is real instead
+    //  -- a count worked out from the batch length -- costs a fifth of this
+    //  shader's speed, 1647 against 2031 gigaflops, because a loop whose
+    //  length is not known when it is compiled is a loop whose accumulators
+    //  cannot stay in registers.
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+        acc[AR][AV];
+
+    for (uint i = 0u; i < AR; ++i) {
+        for (uint j = 0u; j < AV; ++j) {
+            acc[i][j] =
+                coopmat<float, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseAccumulator>(0.0);
+        }
+    }
+
+    uint rb = (shape.columns / 32u) * 34u;
+
+    for (uint k0 = 0u; k0 < shape.columns; k0 += KCH) {
+        barrier();
+
+        //  Sixty-four invocations decode thirty-two blocks, half a block
+        //  each: a scale, then sixteen quants taken four to a word.
+        {
+            uint half_of = gl_LocalInvocationID.x & 1u;
+            uint r       = gl_LocalInvocationID.x >> 1u;
+
+            uint at = shape.base + (row0 + r) * rb + (k0 / 32u) * 34u;
+            float16_t d = float16_t(unpackHalf2x16(
+                (((w[at >> 2u] >> ((at & 3u) * 8u)) & 255u))
+                | (((w[(at + 1u) >> 2u] >> (((at + 1u) & 3u) * 8u)) & 255u)
+                   << 8u)).x);
+
+            uint q    = at + 2u + half_of * 16u;
+            uint into = r * KCH + half_of * 16u;
+
+            //  A block is thirty-four bytes, so its quants start on a word
+            //  boundary for every other block and two bytes into one for
+            //  the rest. Both are read as words and the odd case is shifted
+            //  into place, which is four loads where a byte at a time is
+            //  sixteen loads and sixteen shifts.
+            uint i = q >> 2u;
+            uint p0, p1, p2, p3;
+
+            if ((q & 3u) == 0u) {
+                p0 = w[i]; p1 = w[i + 1u]; p2 = w[i + 2u]; p3 = w[i + 3u];
+            } else {
+                uint a0 = w[i], a1 = w[i + 1u], a2 = w[i + 2u];
+                uint a3 = w[i + 3u], a4 = w[i + 4u];
+                p0 = (a0 >> 16u) | (a1 << 16u);
+                p1 = (a1 >> 16u) | (a2 << 16u);
+                p2 = (a2 >> 16u) | (a3 << 16u);
+                p3 = (a3 >> 16u) | (a4 << 16u);
+            }
+
+            //  Written out rather than looped over an array of four
+            //  words: an array indexed by a loop variable is an array the
+            //  compiler may put in scratch memory, and doing that here
+            //  measured a quarter of this shader's speed.
+            wt[into +  0u] = d * float16_t(bitfieldExtract(int(p0),  0, 8));
+            wt[into +  1u] = d * float16_t(bitfieldExtract(int(p0),  8, 8));
+            wt[into +  2u] = d * float16_t(bitfieldExtract(int(p0), 16, 8));
+            wt[into +  3u] = d * float16_t(bitfieldExtract(int(p0), 24, 8));
+            wt[into +  4u] = d * float16_t(bitfieldExtract(int(p1),  0, 8));
+            wt[into +  5u] = d * float16_t(bitfieldExtract(int(p1),  8, 8));
+            wt[into +  6u] = d * float16_t(bitfieldExtract(int(p1), 16, 8));
+            wt[into +  7u] = d * float16_t(bitfieldExtract(int(p1), 24, 8));
+            wt[into +  8u] = d * float16_t(bitfieldExtract(int(p2),  0, 8));
+            wt[into +  9u] = d * float16_t(bitfieldExtract(int(p2),  8, 8));
+            wt[into + 10u] = d * float16_t(bitfieldExtract(int(p2), 16, 8));
+            wt[into + 11u] = d * float16_t(bitfieldExtract(int(p2), 24, 8));
+            wt[into + 12u] = d * float16_t(bitfieldExtract(int(p3),  0, 8));
+            wt[into + 13u] = d * float16_t(bitfieldExtract(int(p3),  8, 8));
+            wt[into + 14u] = d * float16_t(bitfieldExtract(int(p3), 16, 8));
+            wt[into + 15u] = d * float16_t(bitfieldExtract(int(p3), 24, 8));
+        }
+
+        barrier();
+
+        for (uint kk = 0u; kk < KCH; kk += 16u) {
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+                a[AR];
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
+                b[AV];
+
+            for (uint i = 0u; i < AR; ++i) {
+                coopMatLoad(a[i], wt, i * 16u * KCH + kk, KCH,
+                            gl_CooperativeMatrixLayoutRowMajor);
+            }
+
+            //  Column major with the batch's own stride is the transpose
+            //  the product wants, so nothing is turned round on the way in:
+            //  element (k, n) of the operand is column k of vector n, which
+            //  is where the batch already keeps it.
+            for (uint j = 0u; j < AV; ++j) {
+                coopMatLoad(b[j], x,
+                            (vec0 + j * 16u) * shape.columns + k0 + kk,
+                            shape.columns,
+                            gl_CooperativeMatrixLayoutColumnMajor);
+            }
+
+            for (uint i = 0u; i < AR; ++i) {
+                for (uint j = 0u; j < AV; ++j) {
+                    acc[i][j] = coopMatMulAdd(a[i], b[j], acc[i][j]);
+                }
+            }
+        }
+    }
+
+    //  And out the same way: the answers of one vector are contiguous, so
+    //  the tile is stored column major with the row count as its stride.
+    for (uint i = 0u; i < AR; ++i) {
+        for (uint j = 0u; j < AV; ++j) {
+            coopMatStore(acc[i][j], y,
+                         (vec0 + j * 16u) * shape.rows + row0 + i * 16u,
+                         shape.rows,
+                         gl_CooperativeMatrixLayoutColumnMajor);
+        }
+    }
+}

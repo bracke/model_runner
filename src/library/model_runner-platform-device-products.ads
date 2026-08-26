@@ -807,11 +807,26 @@ private
       --  holds. It shares the layout too -- three storage buffers, with the
       --  keys and values in one of them, and the same push-constant range.
       Attender   : System.Address := System.Null_Address;
+
+      --  The fourth and fifth kernels, which go together and are made only
+      --  where the device offers the matrix instruction: a tile of the
+      --  answer at a time, and the copy of the batch in half precision that
+      --  its operand has to be. Null everywhere else, and every product
+      --  then goes to the first kernel as it always did.
+      Matrix     : System.Address := System.Null_Address;
+      Halver     : System.Address := System.Null_Address;
+
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
       Blend_Line : System.Address := System.Null_Address;
       Attend_Line : System.Address := System.Null_Address;
+      Matrix_Line : System.Address := System.Null_Address;
+      Halve_Line  : System.Address := System.Null_Address;
+
+      --  Whether this engine may dispatch the matrix product at all, which
+      --  is what the device said when it was opened.
+      Matrices    : Boolean := False;
       Pool       : System.Address := System.Null_Address;
       Descriptor : System.Address := System.Null_Address;
 
@@ -881,6 +896,13 @@ private
       --  Where that memory is mapped, kept from one call to the next, for
       --  the reason written against Result_At below.
       Vector_At     : System.Address := System.Null_Address;
+
+      --  The batch in half precision, which the matrix product reads and
+      --  nothing else does. Grown with the batch, like the two below, and
+      --  never allocated on a device without the instruction.
+      Half_Buffer : System.Address := System.Null_Address;
+      Half_Memory : System.Address := System.Null_Address;
+      Half_Bytes  : Interfaces.Unsigned_64 := 0;
 
       Result_Buffer : System.Address := System.Null_Address;
       Result_Memory : System.Address := System.Null_Address;

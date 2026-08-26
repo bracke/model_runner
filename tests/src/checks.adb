@@ -5386,6 +5386,48 @@ package body Checks is
                   & "every shader named");
          end if;
       end;
+
+      --  And the fourth, which only some devices run: the matrix product.
+      --  A shader nothing on this host can enter is still a shader that
+      --  must not go stale, and this is the only thing that would notice.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/matrix_product.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/matrix_product.comp is missing, and the "
+                  & "words compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Matrix_Product_Digest then
+            Fail ("src/shaders/matrix_product.comp has changed since it "
+                  & "was compiled; compile it with --target-env vulkan1.3 "
+                  & "and run 'tests shader' again with every shader named");
+         end if;
+      end;
+
+      --  And the fifth, which goes with it.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/half_batch.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/half_batch.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Half_Batch_Digest then
+            Fail ("src/shaders/half_batch.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
       --  Every figure the device table publishes has to appear in the
       --  record that says how it was taken.
       --

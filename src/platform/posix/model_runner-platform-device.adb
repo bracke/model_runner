@@ -199,6 +199,141 @@ package body Model_Runner.Platform.Device is
    end record
      with Convention => C;
 
+   --  Interface versions, as the interface encodes them: the major number
+   --  in the top ten bits and the minor in the next ten.
+   --
+   --  This program asked for 1.0 for as long as it had asked for anything,
+   --  and that was deliberate: 1.0 is what every loader has, and nothing
+   --  here needed more. The matrix instruction needs more -- a shader using
+   --  it is SPIR-V 1.6, which a 1.0 instance may not accept -- so the floor
+   --  moves without the promise changing. What is asked for is the best the
+   --  loader answers, up to 1.3; a loader that answers nothing is a 1.0
+   --  loader, because vkEnumerateInstanceVersion is itself a 1.1 function
+   --  and a loader without it has no way to say it is anything else.
+   Api_1_0 : constant := 16#0040_0000#;
+   Api_1_1 : constant := 16#0040_1000#;
+   Api_1_3 : constant := 16#0040_3000#;
+
+   --  The version the instance was made with, which decides whether the
+   --  calls that arrived after 1.0 may be made at all. Package state
+   --  because the instance is: it is made once, before any device is
+   --  opened, and read by every device opened afterwards.
+   Instance_Api : C.unsigned := Api_1_0;
+
+   type Version_Call is access
+     function (Version : access C.unsigned) return C.int
+     with Convention => C;
+
+   function To_Version is
+     new Ada.Unchecked_Conversion (System.Address, Version_Call);
+
+   --  The cooperative matrix, and the two things a shader using one needs
+   --  besides: half precision in a shader at all, and half precision in a
+   --  storage buffer. All three are asked for together and refused
+   --  together, because a device with one and not the others cannot run the
+   --  shader and there is nothing to fall back to but the row product,
+   --  which is what a device without any of them runs.
+   Structure_Matrix_Features  : constant := 1000506000;
+   Structure_Matrix_Shape     : constant := 1000506001;
+   Structure_Half_Features    : constant := 1000082000;
+   Structure_Storage_16       : constant := 1000083000;
+   Structure_Subgroup         : constant := 1000094000;
+   Structure_Properties_2     : constant := 1000059001;
+
+   --  What the interface calls the component types this asks about, and the
+   --  scope a shape is offered at. Half precision is nought and binary32 is
+   --  one; a subgroup is three.
+   Component_Half   : constant := 0;
+   Component_Single : constant := 1;
+   Scope_Subgroup   : constant := 3;
+
+   type Matrix_Features is record
+      Kind     : C.unsigned := Structure_Matrix_Features;
+      Next     : System.Address := System.Null_Address;
+      Matrices : C.unsigned := 0;
+      Robust   : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   type Half_Features is record
+      Kind : C.unsigned := Structure_Half_Features;
+      Next : System.Address := System.Null_Address;
+      Half : C.unsigned := 0;
+      Byte : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   type Storage_Features is record
+      Kind    : C.unsigned := Structure_Storage_16;
+      Next    : System.Address := System.Null_Address;
+      Buffer  : C.unsigned := 0;
+      Uniform : C.unsigned := 0;
+      Pushed  : C.unsigned := 0;
+      Staged  : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   --  One shape the device will multiply: how large, what the three
+   --  operands and the result are made of, and what agrees on it.
+   type Matrix_Shape is record
+      Kind        : C.unsigned := Structure_Matrix_Shape;
+      Next        : System.Address := System.Null_Address;
+      M_Size      : C.unsigned := 0;
+      N_Size      : C.unsigned := 0;
+      K_Size      : C.unsigned := 0;
+      A_Kind      : C.unsigned := 0;
+      B_Kind      : C.unsigned := 0;
+      C_Kind      : C.unsigned := 0;
+      Result_Kind : C.unsigned := 0;
+      Saturating  : C.unsigned := 0;
+      Scope       : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   Max_Shapes : constant := 64;
+
+   type Shape_Array is array (1 .. Max_Shapes) of aliased Matrix_Shape;
+
+   type Shape_Query_Call is access
+     function (Device : System.Address;
+               Count  : access C.unsigned;
+               Room   : System.Address) return C.int
+     with Convention => C;
+
+   function To_Shape_Query is
+     new Ada.Unchecked_Conversion (System.Address, Shape_Query_Call);
+
+   --  How wide a subgroup is here, which the matrix instruction's shapes
+   --  are stated for. The shader is written for sixty-four and says so;
+   --  a device whose subgroups are another width is left on the row
+   --  product rather than given a shader whose arithmetic would be
+   --  arranged for a subgroup it has not got.
+   type Subgroup_Properties is record
+      Kind       : C.unsigned := Structure_Subgroup;
+      Next       : System.Address := System.Null_Address;
+      Width      : C.unsigned := 0;
+      Stages     : C.unsigned := 0;
+      Operations : C.unsigned := 0;
+      Quads      : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   --  Room for the whole of the 1.1 properties structure, whose tail this
+   --  does not read, for the reason Properties_Buffer states.
+   type Properties_2 is record
+      Kind : C.unsigned := Structure_Properties_2;
+      Next : System.Address := System.Null_Address;
+      Room : Properties_Buffer := [others => 0];
+   end record
+     with Convention => C;
+
+   type Properties_2_Call is access
+     procedure (Device : System.Address; Properties : System.Address)
+     with Convention => C;
+
+   function To_Properties_2 is
+     new Ada.Unchecked_Conversion (System.Address, Properties_2_Call);
+
    --  What an extension is called, as the interface reports it: a fixed
    --  name field and a revision. Read to find out whether this device will
    --  take a pointer to the host's own memory.
@@ -388,6 +523,16 @@ package body Model_Runner.Platform.Device is
          Create : constant Create_Instance_Call :=
            To_Create (Entry_Point (System.Null_Address, "vkCreateInstance"));
 
+         --  A 1.1 function, asked for through the one entry point that
+         --  needs no instance. A loader that does not export it is a 1.0
+         --  loader by definition, which is the whole of the test.
+         Ask : constant Version_Call :=
+           To_Version
+             (Entry_Point (System.Null_Address,
+                           "vkEnumerateInstanceVersion"));
+
+         Offered : aliased C.unsigned := Api_1_0;
+
          Described : aliased Application_Info;
          Request   : aliased Instance_Create_Info;
       begin
@@ -395,14 +540,30 @@ package body Model_Runner.Platform.Device is
             return;
          end if;
 
+         Instance_Api := Api_1_0;
+
+         if Ask /= null and then Ask (Offered'Access) = 0 then
+            Instance_Api := C.unsigned'Min (Offered, Api_1_3);
+         end if;
+
          Described.Name := C.Strings.New_String ("model_runner");
-         Described.Api := 16#0040_0000#;   --  1.0, which is all this uses
+         Described.Api := Instance_Api;
          Request.Application := Described'Address;
 
          if Create (Request'Address, System.Null_Address, Instance'Access) /= 0
          then
-            C.Strings.Free (Described.Name);
-            return;
+            --  A loader that answered and then refused what it answered.
+            --  Asking for 1.0 is what this did before any of this was here,
+            --  and it is what a host that cannot give more still runs.
+            Instance_Api := Api_1_0;
+            Described.Api := Api_1_0;
+
+            if Create (Request'Address, System.Null_Address,
+                       Instance'Access) /= 0
+            then
+               C.Strings.Free (Described.Name);
+               return;
+            end if;
          end if;
 
          C.Strings.Free (Described.Name);
@@ -769,8 +930,16 @@ package body Model_Runner.Platform.Device is
             Wanted_External : constant String := "VK_KHR_external_memory";
             Wanted_Host     : constant String :=
               "VK_EXT_external_memory_host";
+            Wanted_Matrix   : constant String :=
+              "VK_KHR_cooperative_matrix";
 
-            Has_External, Has_Host : Boolean := False;
+            Has_External, Has_Host, Has_Matrix : Boolean := False;
+
+            --  Whether the device offers a shape this program can use, at a
+            --  subgroup width the shader was written for. Both are asked
+            --  before the extension is enabled, because both are questions
+            --  about the physical device and neither needs a logical one.
+            Usable : Boolean := False;
 
             List  : constant Extension_List_Call :=
               To_Extension_List
@@ -780,8 +949,16 @@ package body Model_Runner.Platform.Device is
             Count : aliased C.unsigned := 0;
             Room  : aliased Extension_Array;
 
-            Names : aliased array (1 .. 2) of C.Strings.chars_ptr :=
+            Names : aliased array (1 .. 3) of C.Strings.chars_ptr :=
               [others => C.Strings.Null_Ptr];
+
+            --  The chain the device is asked for the matrix instruction
+            --  through: the instruction itself, half precision in a shader,
+            --  and half precision in a storage buffer. Declared here so
+            --  they outlive the call that reads them.
+            Matrices : aliased Matrix_Features;
+            Halves   : aliased Half_Features;
+            Stored   : aliased Storage_Features;
          begin
             if List /= null
               and then List (Physical, C.Strings.Null_Ptr, Count'Access,
@@ -804,10 +981,70 @@ package body Model_Runner.Platform.Device is
                            Has_External := True;
                         elsif Text = Wanted_Host then
                            Has_Host := True;
+                        elsif Text = Wanted_Matrix then
+                           Has_Matrix := True;
                         end if;
                      end;
                   end loop;
                end if;
+            end if;
+
+            --  What the device will multiply, and how wide its subgroups
+            --  are. Both calls arrived after 1.0, so both are asked only
+            --  where the instance was made with more than that.
+            if Has_Matrix and then Instance_Api >= Api_1_1 then
+               declare
+                  Widths : constant Properties_2_Call :=
+                    To_Properties_2
+                      (Entry_Point (From.Handle,
+                                    "vkGetPhysicalDeviceProperties2"));
+                  Shapes : constant Shape_Query_Call :=
+                    To_Shape_Query
+                      (Entry_Point
+                         (From.Handle,
+                          "vkGetPhysicalDeviceCooperativeMatrixProperties"
+                          & "KHR"));
+
+                  Wide     : aliased Subgroup_Properties;
+                  Reported : aliased Properties_2;
+                  Held     : aliased C.unsigned := Max_Shapes;
+                  Offered  : aliased Shape_Array;
+
+                  Right_Width : Boolean := False;
+               begin
+                  if Widths /= null and then Shapes /= null then
+                     Reported.Next := Wide'Address;
+                     Widths (Physical, Reported'Address);
+                     Right_Width := Wide.Width = 64;
+
+                     if Right_Width
+                       and then Shapes (Physical, Held'Access,
+                                        Offered'Address) in 0 | 5
+                     then
+                        for Index in 1 .. Natural
+                          (C.unsigned'Min (Held, Max_Shapes))
+                        loop
+                           --  Sixteen by sixteen by sixteen, half precision
+                           --  in and binary32 out, agreed on by a subgroup:
+                           --  the one shape matrix_product.comp is written
+                           --  for.
+                           if Offered (Index).M_Size = 16
+                             and then Offered (Index).N_Size = 16
+                             and then Offered (Index).K_Size = 16
+                             and then Offered (Index).A_Kind = Component_Half
+                             and then Offered (Index).B_Kind = Component_Half
+                             and then Offered (Index).C_Kind
+                                        = Component_Single
+                             and then Offered (Index).Result_Kind
+                                        = Component_Single
+                             and then Offered (Index).Scope = Scope_Subgroup
+                           then
+                              Usable := True;
+                           end if;
+                        end loop;
+                     end if;
+                  end if;
+               end;
             end if;
 
             if Has_External and then Has_Host then
@@ -817,26 +1054,58 @@ package body Model_Runner.Platform.Device is
                Request.Extensions := Names'Address;
             end if;
 
+            if Usable then
+               Names (Natural (Request.Extension_Count) + 1) :=
+                 C.Strings.New_String (Wanted_Matrix);
+               Request.Extension_Count := Request.Extension_Count + 1;
+               Request.Extensions := Names'Address;
+
+               Matrices.Matrices := 1;
+               Halves.Half := 1;
+               Halves.Next := Matrices'Address;
+               Stored.Buffer := 1;
+               Stored.Next := Halves'Address;
+               Request.Next := Stored'Address;
+            end if;
+
             if Create (Physical, Request'Address, System.Null_Address,
                        Logical'Access) /= 0
             then
-               --  Again with nothing asked for, because a device that
-               --  refused the extensions is still a device.
-               Request.Extension_Count := 0;
-               Request.Extensions := System.Null_Address;
-               Has_External := False;
-               Has_Host := False;
+               --  Again without the matrix instruction, which is the one
+               --  of the three that asks the device for features as well
+               --  as for a name. A device that refused it still has the
+               --  memory extensions and still runs the row product.
+               if Usable then
+                  Usable := False;
+                  Request.Next := System.Null_Address;
+                  Request.Extension_Count := Request.Extension_Count - 1;
+
+                  if Request.Extension_Count = 0 then
+                     Request.Extensions := System.Null_Address;
+                  end if;
+               end if;
 
                if Create (Physical, Request'Address, System.Null_Address,
                           Logical'Access) /= 0
                then
-                  for Held of Names loop
-                     if C.Strings."/=" (Held, C.Strings.Null_Ptr) then
-                        C.Strings.Free (Held);
-                     end if;
-                  end loop;
-                  Item.Family := 0;
-                  return;
+                  --  And again with nothing asked for, because a device
+                  --  that refused the extensions is still a device.
+                  Request.Extension_Count := 0;
+                  Request.Extensions := System.Null_Address;
+                  Has_External := False;
+                  Has_Host := False;
+
+                  if Create (Physical, Request'Address, System.Null_Address,
+                             Logical'Access) /= 0
+                  then
+                     for Held of Names loop
+                        if C.Strings."/=" (Held, C.Strings.Null_Ptr) then
+                           C.Strings.Free (Held);
+                        end if;
+                     end loop;
+                     Item.Family := 0;
+                     return;
+                  end if;
                end if;
             end if;
 
@@ -845,6 +1114,8 @@ package body Model_Runner.Platform.Device is
                   C.Strings.Free (Held);
                end if;
             end loop;
+
+            Item.Matrices := Usable;
 
             --  The alignment a host pointer needs is a property this build
             --  does not ask for -- it arrives through an interface version
@@ -927,6 +1198,13 @@ package body Model_Runner.Platform.Device is
    --  around it would leave an operation nothing calls.
    function Takes_Host_Memory (Item : Context) return Boolean
    is (Item.Imports and then Shares_Memory (Item));
+
+   ------------------------------
+   -- Has_Matrix_Instruction --
+   ------------------------------
+
+   function Has_Matrix_Instruction (Item : Context) return Boolean
+   is (Item.Matrices);
 
    ---------------------
    -- Host_Alignment --

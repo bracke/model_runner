@@ -103,6 +103,25 @@ package body Model_Runner.Platform.Device.Products is
    --  invocations per row rather than one.
    Row_Lanes : constant := 8;
 
+   --  Rows of the answer one workgroup of the matrix product computes, and
+   --  vectors of it. The shader states both and this has to agree: the
+   --  first says how many workgroups a matrix needs, the second says how
+   --  far the batch is rounded up before it is handed over.
+   Tile_Rows    : constant := 32;
+   Tile_Vectors : constant := 128;
+
+   --  The batch, rounded up to a whole tile. The shader has no test for a
+   --  tile that is not full, on purpose and at a fifth of its speed if it
+   --  had; what the rounding invents is zeroed by the copying kernel and
+   --  written to room the result buffer is given for it.
+   function Whole_Tiles (Count : Natural) return Natural
+   is ((Count + Tile_Vectors - 1) / Tile_Vectors * Tile_Vectors);
+
+   --  Below this the row product is the better shape and the matrix one is
+   --  a tile mostly full of the zeros the rounding invented. A generated
+   --  token is one vector and is the case this is really keeping out.
+   Tile_Least : constant := 32;
+
    ---------------------------------------------------------------------------
    --  Structures
    ---------------------------------------------------------------------------
@@ -186,13 +205,19 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   type Binding_Array is array (1 .. 3) of Set_Layout_Binding;
+   --  Four storage buffers: the weights, the vectors, the results, and the
+   --  half-precision copy of the vectors the matrix product reads. Three
+   --  of the four kernels use three of them and never name the fourth; a
+   --  descriptor that is written and not read costs nothing, and a second
+   --  layout for the sake of one binding would cost a second pool, a second
+   --  set of sets and a second of everything that names one.
+   type Binding_Array is array (1 .. 4) of Set_Layout_Binding;
 
    type Set_Layout_Create_Info is record
       Kind     : C.unsigned := Structure_Set_Layout;
       Next     : Address := Null_Handle;
       Flags    : C.unsigned := 0;
-      Count    : C.unsigned := 3;
+      Count    : C.unsigned := 4;
       Bindings : Address := Null_Handle;
    end record
      with Convention => C;
@@ -229,7 +254,48 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   type Buffer_Info_Array is array (1 .. 3) of aliased Buffer_Info;
+   type Buffer_Info_Array is array (1 .. 4) of aliased Buffer_Info;
+
+   --  The fourth descriptor of every set: the half-precision copy of the
+   --  batch where the engine has one, and the vectors again where it has
+   --  not.
+   --
+   --  Written for every set whether or not the kernel about to run names
+   --  it, because the layout declares it and the interface wants every
+   --  declared binding pointed at something real. Three of the five kernels
+   --  never read it.
+   --  Whether a product goes to the matrix kernel rather than the row one.
+   --
+   --  Four questions, and each of them is a promise the shader relies on
+   --  rather than a preference. The device has to have said it offers the
+   --  instruction; the weights have to be eight-bit blocks, which is the
+   --  one format matrix_product.comp decodes; the rows have to divide by
+   --  the tile, because a workgroup writes a whole tile and a partial one
+   --  would write into the next vector's answers; and the batch has to be
+   --  long enough to be worth rounding up to a tile.
+   --
+   --  Everything else -- fourteen formats, a generated token, a row count
+   --  the tile does not divide, and every device that has not got the
+   --  instruction -- goes where it always went.
+   function Uses_Matrix
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Count   : Natural) return Boolean
+   is (Item.Matrices
+       and then Item.Matrix_Line /= Null_Handle
+       and then Packing = Packed_Q8_0
+       and then Rows mod Tile_Rows = 0
+       and then Count >= Tile_Least);
+
+   function Half_Descriptor (Item : Engine) return Buffer_Info
+   is (if Item.Half_Buffer /= Null_Handle
+       then (Buffer => Item.Half_Buffer,
+             Offset => 0,
+             Extent => Item.Half_Bytes)
+       else (Buffer => Item.Vector_Buffer,
+             Offset => 0,
+             Extent => Item.Vector_Bytes));
 
    type Write_Descriptor is record
       Kind        : C.unsigned := Structure_Write_Descriptor;
@@ -245,7 +311,7 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   type Write_Array is array (1 .. 3) of aliased Write_Descriptor;
+   type Write_Array is array (1 .. 4) of aliased Write_Descriptor;
 
    --  Bytes of push constants, which the layout declares and every dispatch
    --  writes. One number in two places is one number that can differ, so it
@@ -1066,7 +1132,58 @@ package body Model_Runner.Platform.Device.Products is
          Item.Attender := Made;
       end;
 
-      --  Three storage buffers, and what a set of them looks like.
+      --  And the two that only some devices get: the matrix product and
+      --  the half-precision copy its operand needs. Made together, because
+      --  neither is any use without the other, and made at all only where
+      --  the device said it offers the instruction at the shape the shader
+      --  is written for.
+      Item.Matrices := Has_Matrix_Instruction (On);
+
+      if Item.Matrices then
+         declare
+            Create : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Tiles  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Matrix_Product;
+            Copy   : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Half_Batch;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create = null then
+               Close (Item);
+               return;
+            end if;
+
+            Request.Size := Interfaces.C.size_t (Tiles'Length * 4);
+            Request.Code := Tiles'Address;
+
+            --  A module the device refuses is not a fault. The shader is
+            --  SPIR-V 1.6 and names an extension; a device that took the
+            --  extension and will not take the module is a device this
+            --  leaves on the row product, which is what every device
+            --  without the instruction runs anyway.
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) /= 0
+            then
+               Item.Matrices := False;
+            else
+               Item.Matrix := Made;
+
+               Request.Size := Interfaces.C.size_t (Copy'Length * 4);
+               Request.Code := Copy'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) /= 0
+               then
+                  Item.Matrices := False;
+               else
+                  Item.Halver := Made;
+               end if;
+            end if;
+         end;
+      end if;
+
+      --  Four storage buffers, and what a set of them looks like.
       declare
          Create : constant Create_Call :=
            To_Create (Point ("vkCreateDescriptorSetLayout"));
@@ -1213,6 +1330,50 @@ package body Model_Runner.Platform.Device.Products is
          Item.Attend_Line := Made;
       end;
 
+      --  And the two pipelines the matrix product needs, against the same
+      --  layout as the other three. A device that takes the module and
+      --  refuses the pipeline is left on the row product for the same
+      --  reason.
+      if Item.Matrices then
+         declare
+            Create : constant Create_Pipelines_Call :=
+              To_Create_Pipelines (Point ("vkCreateComputePipelines"));
+
+            Name    : C.Strings.chars_ptr := C.Strings.New_String ("main");
+            Request : aliased Compute_Pipeline_Info;
+         begin
+            if Create = null then
+               C.Strings.Free (Name);
+               Close (Item);
+               return;
+            end if;
+
+            Request.Stage.Module := Item.Matrix;
+            Request.Stage.Name := Name;
+            Request.Layout := Item.Layout;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) /= 0
+            then
+               Item.Matrices := False;
+            else
+               Item.Matrix_Line := Made;
+
+               Request.Stage.Module := Item.Halver;
+
+               if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                          Null_Handle, Made'Access) /= 0
+               then
+                  Item.Matrices := False;
+               else
+                  Item.Halve_Line := Made;
+               end if;
+            end if;
+
+            C.Strings.Free (Name);
+         end;
+      end if;
+
       --  Somewhere to keep one set of descriptors, and the set itself.
       declare
          Create : constant Create_Call :=
@@ -1222,7 +1383,7 @@ package body Model_Runner.Platform.Device.Products is
          --  longest sequence, in one pool: three storage descriptors each.
          Sizes   : aliased Pool_Size :=
            (Kind  => Descriptor_Storage,
-            Count => C.unsigned (3 * (1 + Sequence_Limit)));
+            Count => C.unsigned (4 * (1 + Sequence_Limit)));
          Request : aliased Descriptor_Pool_Info;
       begin
          if Create = null then
@@ -1471,8 +1632,10 @@ package body Model_Runner.Platform.Device.Products is
       Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
       Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
       Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+      Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
       Item.Vector_Bytes := 0;
       Item.Result_Bytes := 0;
+      Item.Half_Bytes := 0;
 
       --  In the reverse of the order they were made, and each only if it
       --  was. The command buffer goes with its pool and the descriptor set
@@ -1482,14 +1645,19 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Commands, "vkDestroyCommandPool");
       Item.Descriptor := Null_Handle;
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
+      Give_Back (Item.Halve_Line, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Line, "vkDestroyPipeline");
       Give_Back (Item.Attend_Line, "vkDestroyPipeline");
       Give_Back (Item.Blend_Line, "vkDestroyPipeline");
       Give_Back (Item.Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Layout, "vkDestroyPipelineLayout");
       Give_Back (Item.Set_Layout, "vkDestroyDescriptorSetLayout");
+      Give_Back (Item.Halver, "vkDestroyShaderModule");
+      Give_Back (Item.Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
+      Item.Matrices := False;
 
       Item.Logical := Null_Handle;
       Item.Queue := Null_Handle;
@@ -2002,6 +2170,95 @@ package body Model_Runner.Platform.Device.Products is
 
    end Submit_And_Wait;
 
+   ------------------
+   -- Tile_Product --
+   ------------------
+
+   --  The two dispatches a tiled product is: the batch into half precision,
+   --  a wall so that the copy is finished before it is read, and then the
+   --  tiles.
+   --
+   --  Recorded into a command buffer the caller has already begun, and
+   --  leaving the row product's pipeline bound behind it, because a
+   --  sequence's next step may be a kernel that expects to find it there.
+   procedure Tile_Product
+     (Item    : in out Engine;
+      Rows    : Natural;
+      Columns : Natural;
+      Count   : Natural;
+      Room    : Natural;
+      Packing : Weight_Packing;
+      Base    : Interfaces.Unsigned_64;
+      Good    : out Boolean)
+   is
+      Bind_Pipeline : constant Bind_Pipeline_Call :=
+        To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
+      Push     : constant Push_Call := To_Push (Point ("vkCmdPushConstants"));
+      Dispatch : constant Dispatch_Call :=
+        To_Dispatch (Point ("vkCmdDispatch"));
+      Barrier  : constant Barrier_Call :=
+        To_Barrier (Point ("vkCmdPipelineBarrier"));
+
+      Wall : aliased Memory_Barrier;
+
+      Held : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Count);
+      Made : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Room);
+   begin
+      Good := False;
+
+      if Bind_Pipeline = null or else Push = null or else Dispatch = null
+        or else Barrier = null
+      then
+         return;
+      end if;
+
+      Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Halve_Line);
+
+      declare
+         --  The copying kernel reads the first two words as how many
+         --  values the batch really holds and how many the copy is to
+         --  hold. The rest of the block is nothing to it.
+         Shape : aliased Shape_Constants :=
+           (Rows    => C.unsigned (Held),
+            Columns => C.unsigned (Made),
+            others  => 0);
+      begin
+         Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+               Product_Bytes, Shape'Address);
+         Dispatch
+           (Item.Buffer,
+            C.unsigned ((Made / 2 + Group_Size - 1) / Group_Size), 1, 1);
+      end;
+
+      Barrier
+        (Item.Buffer, Pipeline_Stage_Compute, Pipeline_Stage_Compute,
+         0, 1, Wall'Address, 0, Null_Handle, 0, Null_Handle);
+
+      Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Matrix_Line);
+
+      declare
+         Shape : aliased Shape_Constants :=
+           (Rows    => C.unsigned (Rows),
+            Columns => C.unsigned (Columns),
+            Count   => C.unsigned (Count),
+            First   => 0,
+            Packing => C.unsigned (Weight_Packing'Pos (Packing)),
+            Base    => C.unsigned (Base));
+      begin
+         Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+               Product_Bytes, Shape'Address);
+         Dispatch
+           (Item.Buffer,
+            C.unsigned (Rows / Tile_Rows),
+            C.unsigned (Room / Tile_Vectors), 1);
+      end;
+
+      Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+      Good := True;
+   end Tile_Product;
+
    -----------------
    -- One_Product --
    -----------------
@@ -2039,8 +2296,42 @@ package body Model_Runner.Platform.Device.Products is
         Interfaces.Unsigned_64 (Rows) * Wide;
       Vector_Bytes : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Count) * 4;
+
+      --  What the matrix kernel would need: the batch rounded up to a whole
+      --  tile, the room its answers take, and the half-precision copy of
+      --  it. Worked out before the kernel is chosen because two of them
+      --  are part of choosing -- a buffer larger than the device will bind
+      --  is a refusal, and a refusal here should be the row product rather
+      --  than a product that does not happen.
+      Tiled_Room   : constant Natural := Whole_Tiles (Count);
+      Tiled_Result : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Rows)
+        * Interfaces.Unsigned_64 (Tiled_Room) * 4;
+      Tiled_Half   : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Columns)
+        * Interfaces.Unsigned_64 (Tiled_Room) * 2;
+
+      --  Which kernel, decided once: it changes how much room the answers
+      --  need as well as which pipeline is bound.
+      Tiled : constant Boolean :=
+        Uses_Matrix (Item, Packing, Rows, Count)
+        and then not Over_Limit (Item, Tiled_Result)
+        and then not Over_Limit (Item, Tiled_Half);
+
+      --  The batch as the kernel that will run wants it.
+      Vectors_Room : constant Natural :=
+        (if Tiled then Tiled_Room else Count);
+
       Result_Bytes : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Rows) * Interfaces.Unsigned_64 (Count) * 4;
+        Interfaces.Unsigned_64 (Rows)
+        * Interfaces.Unsigned_64 (Vectors_Room) * 4;
+
+      --  And the half-precision copy, which only the matrix kernel reads.
+      Half_Bytes : constant Interfaces.Unsigned_64 :=
+        (if Tiled
+         then Interfaces.Unsigned_64 (Columns)
+              * Interfaces.Unsigned_64 (Vectors_Room) * 2
+         else 0);
 
       --  The matrix, kept when it has a key and made afresh when it has not.
       Weight_Buffer : Address := Null_Handle;
@@ -2129,6 +2420,16 @@ package body Model_Runner.Platform.Device.Products is
          Item.Result_Bytes := Result_Bytes;
       end if;
 
+      if Item.Half_Bytes < Half_Bytes then
+         Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
+         Take (Item, Half_Bytes, Item.Half_Buffer, Item.Half_Memory, Good);
+         if not Good then
+            Release_Borrowed;
+            return;
+         end if;
+         Item.Half_Bytes := Half_Bytes;
+      end if;
+
       --  Still a map and an unmap of its own, unlike the read-back below.
       --  Keeping this one standing as well was written and measured and is
       --  not here: the results it produced were wrong -- the drafted device
@@ -2183,16 +2484,20 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
+         Told (4) := Half_Descriptor (Item);
+
          for Index in Told'Range loop
-            Told (Index).Buffer := Buffers (Index);
-            Told (Index).Extent := Extent (Index);
+            if Index in Buffers'Range then
+               Told (Index).Buffer := Buffers (Index);
+               Told (Index).Extent := Extent (Index);
+            end if;
 
             Notes (Index).Target := Item.Descriptor;
             Notes (Index).Binding := C.unsigned (Index - 1);
             Notes (Index).Buffers := Told (Index)'Address;
          end loop;
 
-         Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+         Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
       end;
 
       --  The work: one group per sixty-four rows, which is what the shader
@@ -2237,30 +2542,42 @@ package body Model_Runner.Platform.Device.Products is
          Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                     Sets'Address, 0, Null_Handle);
 
-         declare
-            First : Natural := 0;
-         begin
-            while First < Count loop
-               declare
-                  Shape : aliased Shape_Constants :=
-                    (Rows    => C.unsigned (Rows),
-                     Columns => C.unsigned (Columns),
-                     Count   => C.unsigned (Count),
-                     First   => C.unsigned (First),
-                     Packing => C.unsigned (Weight_Packing'Pos (Packing)),
-                     Base    => C.unsigned (Weight_Base));
-               begin
-                  Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
-                        Product_Bytes, Shape'Address);
-                  Dispatch
-                    (Item.Buffer,
-                     C.unsigned ((Rows * Row_Lanes + Group_Size - 1)
-                                 / Group_Size), 1, 1);
-               end;
+         if Tiled then
+            Tile_Product
+              (Item, Rows, Columns, Count, Vectors_Room, Packing,
+               Weight_Base, Good);
 
-               First := First + Batch_Group;
-            end loop;
-         end;
+            if not Good then
+               Release_Borrowed;
+               return;
+            end if;
+         else
+            declare
+               First : Natural := 0;
+            begin
+               while First < Count loop
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (Rows),
+                        Columns => C.unsigned (Columns),
+                        Count   => C.unsigned (Count),
+                        First   => C.unsigned (First),
+                        Packing =>
+                          C.unsigned (Weight_Packing'Pos (Packing)),
+                        Base    => C.unsigned (Weight_Base));
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned ((Rows * Row_Lanes + Group_Size - 1)
+                                    / Group_Size), 1, 1);
+                  end;
+
+                  First := First + Batch_Group;
+               end loop;
+            end;
+         end if;
 
          if Stop (Item.Buffer) /= 0 then
             Release_Borrowed;
@@ -2542,6 +2859,7 @@ package body Model_Runner.Platform.Device.Products is
          Told (1) := (Item.Cache_Buffer, 0, Kept_Bytes);
          Told (2) := (Item.Vector_Buffer, 0, Query_Bytes);
          Told (3) := (Item.Result_Buffer, 0, Blend_Bytes);
+         Told (4) := Half_Descriptor (Item);
 
          for Binding in Told'Range loop
             Notes (Binding).Target := Item.Descriptor;
@@ -2549,7 +2867,7 @@ package body Model_Runner.Platform.Device.Products is
             Notes (Binding).Buffers := Told (Binding)'Address;
          end loop;
 
-         Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+         Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
       end;
 
       declare
@@ -2946,6 +3264,12 @@ package body Model_Runner.Platform.Device.Products is
         * Interfaces.Unsigned_64 (Count) * 4;
 
       Result_Bytes : Interfaces.Unsigned_64 := 0;
+
+      --  The largest half-precision copy any step of this sequence wants,
+      --  which is what the one buffer holding it has to be. Zero when no
+      --  step goes to the matrix kernel, and then no buffer is made.
+      Half_Bytes   : Interfaces.Unsigned_64 := 0;
+
       Wanted       : Model_Runner.Numerics.Element_Count := 0;
       Good         : Boolean;
 
@@ -2980,10 +3304,26 @@ package body Model_Runner.Platform.Device.Products is
             Wide : constant Interfaces.Unsigned_64 :=
               Row_Bytes (This.Packing, This.Columns);
 
+            --  Vectors this step's answers are given room for: the batch
+            --  rounded up to a whole tile where the matrix kernel will run,
+            --  and the batch itself everywhere else. The rounding is room
+            --  the kernel writes and nothing reads; the read-back below
+            --  takes the batch's own share from the front of it.
+            Room : constant Natural :=
+              (if Uses_Matrix (Item, This.Packing, This.Rows, Count)
+               then Whole_Tiles (Count) else Count);
+
             Mine : constant Interfaces.Unsigned_64 :=
               Interfaces.Unsigned_64 (This.Rows)
-              * Interfaces.Unsigned_64 (Count) * 4;
+              * Interfaces.Unsigned_64 (Room) * 4;
          begin
+            if Uses_Matrix (Item, This.Packing, This.Rows, Count) then
+               Half_Bytes := Interfaces.Unsigned_64'Max
+                 (Half_Bytes,
+                  Interfaces.Unsigned_64 (This.Columns)
+                  * Interfaces.Unsigned_64 (Room) * 2);
+            end if;
+
             --  A combining step carries no matrix: it reads the two
             --  results before it and writes its own. Everything the shape
             --  checks below say about a matrix is beside the point for it.
@@ -3120,6 +3460,16 @@ package body Model_Runner.Platform.Device.Products is
          Item.Result_Bytes := Result_Bytes;
       end if;
 
+      if Item.Half_Bytes < Half_Bytes then
+         Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
+         Take (Item, Half_Bytes, Item.Half_Buffer, Item.Half_Memory, Good);
+         if not Good then
+            Release_All;
+            return;
+         end if;
+         Item.Half_Bytes := Half_Bytes;
+      end if;
+
       --  The activation goes over once, however many products read it.
       declare
          Wanted : Model_Runner.Numerics.Real_Array
@@ -3188,6 +3538,7 @@ package body Model_Runner.Platform.Device.Products is
                  (Buffer => Item.Result_Buffer,
                   Offset => Places (Index).At_Byte,
                   Extent => Places (Index).Bytes);
+               Told (4) := Half_Descriptor (Item);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -3195,7 +3546,7 @@ package body Model_Runner.Platform.Device.Products is
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -3214,6 +3565,7 @@ package body Model_Runner.Platform.Device.Products is
                  (Buffer => Item.Result_Buffer,
                   Offset => Places (Index).At_Byte,
                   Extent => Places (Index).Bytes);
+               Told (4) := Half_Descriptor (Item);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -3221,7 +3573,7 @@ package body Model_Runner.Platform.Device.Products is
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -3245,6 +3597,7 @@ package body Model_Runner.Platform.Device.Products is
               (Buffer => Item.Result_Buffer,
                Offset => Places (Index).At_Byte,
                Extent => Places (Index).Bytes);
+            Told (4) := Half_Descriptor (Item);
 
             for Binding in Told'Range loop
                Notes (Binding).Target := Item.Sets (Index);
@@ -3252,7 +3605,7 @@ package body Model_Runner.Platform.Device.Products is
                Notes (Binding).Buffers := Told (Binding)'Address;
             end loop;
 
-            Update (Item.Logical, 3, Notes'Address, 0, Null_Handle);
+            Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
 
             <<Next_Set>>
          end loop;
@@ -3407,6 +3760,24 @@ package body Model_Runner.Platform.Device.Products is
 
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+                  goto Next_Dispatch;
+               end if;
+
+               if Uses_Matrix (Item, This.Packing, This.Rows, Count) then
+                  declare
+                     Done : Boolean;
+                  begin
+                     Tile_Product
+                       (Item, This.Rows, This.Columns, Count,
+                        Whole_Tiles (Count), This.Packing,
+                        Places (Index).Base, Done);
+
+                     if not Done then
+                        Release_All;
+                        return;
+                     end if;
+                  end;
+
                   goto Next_Dispatch;
                end if;
 

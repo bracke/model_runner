@@ -93,6 +93,14 @@ package body Model_Runner.Platform.Device is
    function Takes_Host_Memory (Item : Context) return Boolean
    is (Item.Imports and then Shares_Memory (Item));
 
+   ------------------------------
+   -- Has_Matrix_Instruction --
+   ------------------------------
+
+   --  No device here, so no instruction on one either.
+   function Has_Matrix_Instruction (Item : Context) return Boolean
+   is (Item.Matrices);
+
    ---------------------
    -- Host_Alignment --
    ---------------------

@@ -1,0 +1,54 @@
+#version 450
+
+//  The batch, copied into half precision for the matrix instruction.
+//
+//  matrix_product.comp reads its vectors as half precision because that is
+//  what the instruction's operand is. Loading binary32 into a
+//  half-precision matrix does not convert it, it reinterprets it, so the
+//  copy is not an optimization -- it is the only correct way in.
+//
+//  Once per product rather than once per workgroup, which is the whole
+//  reason this is a shader of its own: an earlier attempt had every
+//  workgroup convert the batch for itself, and the hundred and twenty-eight
+//  of them covering a two-thousand-row matrix converted thirty-three
+//  million values where the batch holds two hundred and twenty-five
+//  thousand. Doing it once measured a seventh of that attempt's time.
+//
+//  The tail is zeroed rather than left alone. A batch is rounded up to the
+//  sixteen a matrix is wide, and the vectors that rounding invents have to
+//  contribute nothing rather than whatever the buffer held.
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 1) readonly  buffer Vectors { uint v[]; };
+layout(std430, binding = 3) writeonly buffer Halves  { uint h[]; };
+
+layout(push_constant) uniform Shape {
+    //  Values the batch really holds, and values the copy is to hold. The
+    //  second is the first rounded up, and the difference is the padding
+    //  this zeroes.
+    uint held;
+    uint room;
+    uint count;
+    uint first;
+    uint format;
+    uint base;
+} shape;
+
+void main() {
+    //  Two values to a word, because that is how half precision is packed
+    //  and it halves the invocations.
+    uint at = gl_GlobalInvocationID.x;
+    uint words = shape.room >> 1u;
+
+    if (at >= words) {
+        return;
+    }
+
+    uint i = at * 2u;
+
+    float low  = i < shape.held ? uintBitsToFloat(v[i]) : 0.0;
+    float high = i + 1u < shape.held ? uintBitsToFloat(v[i + 1u]) : 0.0;
+
+    h[at] = packHalf2x16(vec2(low, high));
+}

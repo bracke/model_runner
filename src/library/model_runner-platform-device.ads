@@ -163,6 +163,21 @@ package Model_Runner.Platform.Device is
    function Plain_Memory_Kinds
      (Item : Context) return Interfaces.Unsigned_32;
 
+   --  Whether this device will multiply a tile of a matrix in one
+   --  instruction, at the shape the batched product is written for.
+   --
+   --  True only where the device offers VK_KHR_cooperative_matrix with a
+   --  sixteen-by-sixteen-by-sixteen half-precision shape agreed on by a
+   --  subgroup, where a subgroup here is sixty-four wide, and where the
+   --  loader let the instance be made at more than Vulkan 1.0 -- a shader
+   --  using the instruction is SPIR-V 1.6, which a 1.0 instance may refuse.
+   --  Every other host answers False and runs the row product, which is
+   --  what this program did everywhere until there was something else.
+   --
+   --  @param Item Open device.
+   --  @return True when the matrix product may be dispatched here.
+   function Has_Matrix_Instruction (Item : Context) return Boolean;
+
    --  What a host pointer must be aligned to before this device will take
    --  it.
    --
@@ -249,6 +264,10 @@ private
       --  model is a gigabyte of it.
       Imports  : Boolean := False;
       Import_To : Interfaces.Unsigned_64 := 0;
+
+      --  Whether the device took the cooperative matrix extension and
+      --  offers the shape the batched product is written for.
+      Matrices : Boolean := False;
 
       --  Which memory kinds the processor can both write and see without
       --  being told to flush, as a mask over the device's list. An imported

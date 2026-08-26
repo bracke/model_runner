@@ -388,7 +388,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Localization | Every application-authored string through `messages`; 174 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
-| Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
+| Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch of eight-bit weights as a matrix product instead, through `VK_KHR_cooperative_matrix`, where the device offers it -- 413.5 tokens a second on a prompt against 207.9 -- and every device without it runs what it ran before. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
 | Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests render`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
@@ -483,8 +483,16 @@ cd tests && ./bin/tests conformance        # engine vs independent reference
 cd tests && ./bin/tests benchmark          # row kernels and parsing, synthetic
 cd tests && ./bin/tests benchmark --wait 30 # the same, once the machine is quiet
 cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
-cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv
-                                           # after recompiling a shader
+cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv \
+                             [SOURCE.comp OUT.spv ...] [ROOT]
+                                           # after recompiling a shader, and
+                                           # naming every one of the five:
+                                           # the package is written whole.
+                                           # Four compile with
+                                           # `glslangValidator -V`; the
+                                           # matrix product needs
+                                           # `--target-env vulkan1.3`,
+                                           # because it is SPIR-V 1.6.
 cd tests && ./bin/tests fuzz --seed 1 --cases 2000
 cd tests && ./bin/tests fixtures           # write tests/fixtures/tiny-model.gguf
 cd tests && ./bin/tests package .. .       # write model_runner-<version>.tar
@@ -1489,25 +1497,29 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.459 s | **0.435 s** |
-| -- evaluating the prompt | 0.071 s | 0.052 s |
-| -- generating | 0.386 s | 0.383 s |
+| 6-token prompt, 12 generated | 0.450 s | **0.431 s** |
+| -- evaluating the prompt | 0.069 s | 0.053 s |
+| -- generating | 0.381 s | 0.378 s |
 | -- processor time | 1.61 s | **0.04 s** |
-| 110-token prompt, nothing generated | 0.763 s | **0.529 s** |
-| -- processor time | 3.65 s | **0.11 s** |
+| 110-token prompt, nothing generated | 0.763 s | **0.280 s** |
+| -- processor time | 3.66 s | **0.10 s** |
 
-All six cells were taken in one sitting on 2026-08-25, back to back, each
+All six cells were taken in one sitting on 2026-08-26, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
 columns are comparable, which they were not in the version of this table
 before last.
 
-**The device wins both runs now, and spends a fiftieth of the processor's
-time doing it.** Five changes took its 110-token prompt from 1.951 s to
-0.529 s -- the default batch, the results a product reads back, the
-activation it writes, the kind of memory those results are read out of, and
-the width of a workgroup. The sixth is the one that finally moved the short
-run, and it is the only one of the six inside the shader: a row is computed
-by eight invocations rather than one.
+**The device wins both runs now, and spends a fortieth of the processor's
+time doing it.** Six changes took its 110-token prompt from 1.951 s to
+0.280 s -- the default batch, the results a product reads back, the
+activation it writes, the kind of memory those results are read out of, the
+width of a workgroup, and -- last and largest -- the batch computed as a
+matrix product through the device's own matrix instruction rather than as a
+row product repeated, which `### The matrix instruction` below is about and
+which is worth 0.527 s against 0.280 on its own. The workgroup width is the
+one that finally moved the short run, and it is the only one inside the
+shader that a generated token feels: a row is computed by eight invocations
+rather than one.
 
 That last one is worth reading twice, because it was nearly thrown away. On
 a prompt it is a wash -- 0.531 s at one lane a row against 0.537 at eight,
@@ -1989,75 +2001,98 @@ replace**:
   removing seven eighths of the loads, and reading it as the scatter is the
   mistake this file keeps making in new clothes.
 
-### The matrix instruction, built and not kept
+### The matrix instruction, and the shape that pays for it
 
-`VK_KHR_cooperative_matrix` is what the other runtime's 1672 tokens a second
+`VK_KHR_cooperative_matrix` is what the other runtime's 1673 tokens a second
 is, and this device has it: **revision 2, sixteen by sixteen by sixteen at
 subgroup scope**, offered for half-precision into binary32 and -- which
 matters, because the weights already are bytes -- for signed bytes into a
 thirty-two bit sum.
 
-The Vulkan 1.0 floor is not what stands in the way, and finding that out was
-worth the asking. `vkEnumerateInstanceVersion` is itself a 1.1 function, so a
-loader that does not have it is a 1.0 loader by definition; ask for it
-through `vkGetInstanceProcAddr` with no instance, request the best it
-answers, and fall back when `vkCreateInstance` refuses. A host with a 1.0
-loader then runs exactly what it ran before and a host with a newer one
-reaches the instruction.
+**Two things had to be true before any of it could run.**
 
-So it was built: the negotiation, the device extension and its feature
-through the `pNext` chain, the shape read back and checked, and a second
-shader -- a real matrix product, sixteen rows by sixteen vectors of the
-answer at a time, the weights decoded into shared memory and the whole
-sixteen-deep step done in one operation.
+The first was a promise this program had kept since it had a device at all:
+it asked the loader for Vulkan 1.0, because 1.0 is what every loader has. A
+shader using the instruction is SPIR-V 1.6, which a 1.0 instance may refuse.
+**The floor moved without the promise changing.**
+`vkEnumerateInstanceVersion` is itself a 1.1 function, so a loader that does
+not export it is a 1.0 loader by definition; ask for it through
+`vkGetInstanceProcAddr` with no instance, request the best it answers up to
+1.3, and fall back when `vkCreateInstance` refuses. A host with a 1.0 loader
+runs exactly what it ran before.
 
-**It is correct and it is 2.4 times slower.** Correct first, because that was
-the doubt: the twelve-token run answers `5abff916f9d83ca6`, which is what
-every other path in this program answers, in half precision. Then the
-110-token device prompt at 1.210 s against 0.515.
+The second is that the instruction's operand is half precision and does not
+convert on the way in. Loading binary32 into a half-precision matrix
+*reinterprets* it, and the answers come back as not-a-number -- which is
+worth stating plainly because it looks like a conversion and compiles like
+one. A fifth shader makes the copy, once per product.
 
-**Then three things were measured, and the interesting part is that two of
-them were nothing.**
+**This was built once before and thrown away.** That attempt was correct and
+2.4 times slower, and three ablations said which parts were not to blame:
+converting the batch once rather than once per workgroup was worth fourteen
+per cent, decoding four quants a word was worth a thousandth, and replacing
+the operand load with a single address -- perfectly cached and wrong -- was
+worth less than that. What was left was the shape of the work: a sixteen-row
+output tile is a hundred and twenty-eight workgroups of one subgroup each,
+on a part that runs five hundred waves for the shader it would replace.
 
-A workgroup computes sixteen rows, so the hundred and twenty-eight covering a
-two-thousand-row matrix each converted the whole batch into half precision
-for themselves -- thirty-three million conversions where the batch holds two
-hundred and twenty-five thousand values. So a second shader was written to do
-it once, before any product runs, into the half of the vector buffer the
-binary32 copy does not use, with the instruction then loading its operand
-straight out of memory: no shared array for it and no conversion in the loop
-at all.
+**The shape is the whole of what changed.** A workgroup now takes
+thirty-two rows and a hundred and twenty-eight vectors of the answer -- two
+weight matrices against eight vector ones, sixteen accumulators held in
+registers by a single subgroup from a row's first column to its last, and
+the weights decoded into two kilobytes of shared memory a block at a time.
+Measured on the matrices this model is made of, in a harness that does
+nothing else and counts the half-precision copy against itself:
 
-| | 110-token device prompt |
+| product | |
 |---|---:|
-| the row product | **0.515 s** |
-| the matrix product, converting per workgroup | 1.210 s |
-| the same, converted once beforehand | 1.037 s |
-| and decoding four quants a word rather than one a byte | 1.024 s |
-| and with the operand read ablated to one address | 1.018 s |
+| 2048 × 2048, 128 vectors | 1845 GFLOP/s |
+| 5632 × 2048, 128 vectors | 2249 GFLOP/s |
+| 2048 × 5632, 128 vectors | 2039 GFLOP/s |
+| 32000 × 2048, 128 vectors | 3842 GFLOP/s |
 
-**Converting once was worth fourteen per cent and the other two were worth
-nothing at all.** The decode was already what this file had learned to write
-elsewhere and it changed a thousandth; replacing the operand load with a
-single address -- every workgroup reading the same sixteen values, which
-makes the batch traffic perfectly cached and wrong -- changed less than that.
-So it is not the conversion, not the decode, and not the hundred and
-twenty-eight-fold re-reading of the batch that the first of those was meant
-to be a proxy for.
+Four things decided that shape and three of them were the other way round
+from the guess:
 
-What is left is the shape of the work rather than any of its parts. A
-hundred and twenty-eight workgroups of one subgroup each is a hundred and
-twenty-eight waves on a part that runs five hundred for the shader this would
-replace, and a sixteen-row output tile is what forces that: the instruction's
-smallest tile is sixteen, so the only way to have more waves is more of the
-batch per workgroup, and the only way to have more work per wave is a square
-tile with several accumulators to a side. That is a real matrix-multiply
-kernel and not this one, and it is the thing to write if this is picked up
-again.
+- **More vector matrices than weight ones.** Four vector matrices against
+  one weight matrix read 957 gigaflops; one against four, the same four
+  accumulators turned round, read 328. A weight matrix comes from shared
+  memory and is used by all of them; a vector matrix comes from memory and
+  is used once each.
+- **One subgroup to a workgroup.** Two read 1709 and four read 1512 against
+  one's 2005, at the tile shapes that suited each.
+- **A step of thirty-two columns, which is one Q8_0 block deep.** Sixty-four
+  reads 1634 against thirty-two's 2012 -- a deeper step is fewer barriers
+  and more shared memory, and the shared memory is what a part decides its
+  occupancy by.
+- **No test for a partial tile.** Bounding the loops by what the batch
+  really holds costs a fifth of the speed, 1647 against 2031, because a loop
+  whose length is not known when it is compiled is a loop whose accumulators
+  cannot stay in registers. The host rounds the batch up to a whole tile
+  instead and the copying shader zeroes what the rounding invents.
 
-The negotiation, the shape query, the pre-pass and the shader are all
-reverted. What is kept is the measurement, which now says which three things
-are *not* the answer.
+End to end, on the same 110-token prompt every other figure here uses:
+
+| 110-token prompt on the device | |
+|---|---:|
+| the row product | 0.527 s |
+| the matrix product | **0.280 s** |
+
+Medians of three alternated rounds, better in every one, and both digests
+unchanged -- `cbf29ce484222325` and `448c2ed68ec342ee`. Generating is
+untouched at 2.363 s against 2.383, and has to be: a generated token is one
+vector, and sixteen is the narrowest matrix the instruction has.
+
+**Where it does not run**, which is most places. Fourteen of the fifteen
+formats, because `matrix_product.comp` decodes eight-bit blocks and nothing
+else. Every row count the thirty-two-row tile does not divide, because a
+workgroup writes a whole tile and a partial one would write into the next
+vector's answers. Every batch shorter than thirty-two. Every device without
+the extension, and every device whose subgroups are not sixty-four wide,
+because the shader's arithmetic is arranged for a subgroup of that width and
+is asked about rather than assumed. All of them go to `row_product.comp`,
+which reads all fifteen formats and needs nothing of the device beyond
+Vulkan 1.0 -- and which is what this program did everywhere until now.
 
 ### Against llama.cpp
 
@@ -2071,19 +2106,19 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 144.2 t/s | 29.6 t/s |
-| llama.cpp, processor | 372.8 t/s | 39.9 t/s |
-| model_runner, device | 207.9 t/s | 30.9 t/s |
-| llama.cpp, device | 1667.5 t/s | 57.7 t/s |
+| model_runner, processor | 146.9 t/s | 30.5 t/s |
+| llama.cpp, processor | 355.1 t/s | 39.8 t/s |
+| model_runner, device | **413.5 t/s** | 28.1 t/s |
+| llama.cpp, device | 1672.9 t/s | 57.5 t/s |
 
-On the processor: **1.4 times slower generating and 2.7 times slower reading
-a prompt** -- the generating figure has read 1.3 and 1.4 across two sittings
-of code that did not change between them, which is what a ratio does when
-both of its sides sit within a per cent of a rounding boundary -- where the first reading of this table said 3.3 and 16. On the
-device, 2.1 and 8.0, where it said 3.8 and 10.1 -- and where the sitting
-before this one said 3.1 and 25, because the device rows were being measured
-with a second of uncached memory reads in them. `### The device backend`
-says what that was.
+On the processor: **1.3 times slower generating and 2.4 times slower reading
+a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
+code that did not change between them, which is what a ratio does when both
+of its sides sit within a per cent of a rounding boundary -- where the first
+reading of this table said 3.3 and 16. On the device, 2.0 and **4.0**, where
+the sitting before this one said 2.1 and 8.0 and the first said 3.8 and
+10.1. The device's prompt row is the one that moved, and
+`### The matrix instruction` says why: the batch is a matrix product now.
 
 The two halves of that are not the same finding. Generating reads every
 weight once a token and does one multiply with each, so it is the bus rather
@@ -2094,17 +2129,19 @@ is left is a gap in the kernels -- they are ordinary Ada compiled for
 baseline x86-64, which `## Not implemented` says and this measures -- rather
 than a gap in what the program is doing.
 
-The prompt is the other kind. A batch here shares one reading of the weights
-between the tokens in it, which is what `### Batched prefill` is about and
-what took the device from 1.5 tokens a second to what the table says; what it
-does not share is the arithmetic, which stays a row product per token. The
-other runtime turns the same batch into a matrix-matrix product against
+The prompt is the other kind, and the device row has just stopped being an
+example of it. A batch here shares one reading of the weights between the
+tokens in it, which is what `### Batched prefill` is about; what it did not
+share was the arithmetic, which stayed a row product per token. The other
+runtime turns the same batch into a matrix-matrix product against
 hand-written kernels -- AVX-512 with integer dot products on this processor,
-cooperative matrices on this device -- so its prompt figure is not eighteen
-times a better loop, it is a different shape of work. Closing that needs
-either wider instructions than this build allows or the batch written as a
-product of two matrices, and neither is a loop nobody has got round to
-tightening.
+cooperative matrices on this device -- so its prompt figure was never
+eighteen times a better loop, it was a different shape of work.
+
+**On the device that shape is now this program's shape too**, and the gap
+went from eight times to four. On the processor it is not: a prompt there is
+still a row product per token, against the other runtime's matrix kernels,
+and closing that needs the same change made in a different place.
 
 The runs are
 
@@ -2118,29 +2155,30 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.763 s
-and 64 in 2.159 s on the processor, 0.529 s and 2.072 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.749 s
+and 64 in 2.095 s on the processor, 0.266 s and 2.279 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 875.7 t/s rather
-than 372.8 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 883.8 t/s rather
+than 355.1 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The noisiest row is the device generating, and it has just stopped being
-the slow one: 30.9 t/s here, against 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1, 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in ten
+The noisiest row is the device generating: 28.1 t/s here, against 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1, 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in eleven
 earlier sittings at comparable loads -- though the last of those is the only
-one measured with the results read back out of cached memory. The processor rows and
+one measured with the results read back out of cached memory. Nothing in
+this change touches it: a generated token is one vector and takes the row
+product, as it did. The processor rows and
 both prompt rows repeat to a few per cent. Every figure in the table is one
 model, one file, one host and two prompt lengths, and a model that is not a
 small dense llama may sit anywhere with respect to it.
 
 The processor rows have moved six times since the first reading -- 21.5 to
 24.1 to 48.2 to 53.5 to about 62 to 79.9 to 87.4 to 92.2 to 99.0 to 137.5 to
-140.3 to 140.7 to 136.5 to 149.1 to 153.0 to 144.2 on the prompt, and 11.0 to 12.2 to about 23 to 28.6 to 29.0 to 27.9 to 27.6 to
-29.8 to 29.6 generating, where the four before the last are one path read in four
+140.3 to 140.7 to 136.5 to 149.1 to 153.0 to 144.2 to 146.9 on the prompt, and 11.0 to 12.2 to about 23 to 28.6 to 29.0 to 27.9 to 27.6 to
+29.8 to 29.6 to 30.5 generating, where the four before the last are one path read in four
 sittings rather than four changes, and the last is the first thing to move
 that row since the arithmetic did -- and the moves are different kinds of thing. One of
 them is the machine rather than the program, and is quoted loosely for that

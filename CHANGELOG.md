@@ -5,6 +5,61 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **The device computes a batch as a matrix product now, through its own
+  matrix instruction, and its 110-token prompt reads 0.280 s against
+  0.527.** `VK_KHR_cooperative_matrix` at sixteen by sixteen by sixteen,
+  subgroup scope, half precision in and binary32 out. A workgroup takes
+  thirty-two rows and a hundred and twenty-eight vectors of the answer --
+  two weight matrices against eight vector ones, sixteen accumulators held
+  in registers by one subgroup from a row's first column to its last, and
+  the weights decoded into two kilobytes of shared memory a block at a
+  time. It replaces a row product repeated once per eight vectors, which
+  read the whole matrix sixteen times for a batch of a hundred and
+  twenty-eight.
+
+  **The same instruction was built and reverted twice before**, at a
+  sixteen-row output tile, where it was correct and 2.4 times slower. Three
+  ablations then said what was not to blame -- the conversion was worth a
+  seventh, the decode a thousandth, the batch traffic less than that -- and
+  what was left was the shape of the work. This is that shape, and the four
+  measurements that chose it are in `docs/measured-figures.txt`; three of
+  them went the other way from the guess. The one worth repeating: bounding
+  the loops by what the batch really holds costs a fifth of the speed,
+  because a loop whose length is not known when it is compiled is a loop
+  whose accumulators cannot stay in registers. The host rounds the batch up
+  to a whole tile instead, and a fifth shader zeroes what the rounding
+  invents.
+
+  **Two things had to be true first.** The instance had asked for Vulkan
+  1.0 since this program had a device at all, and a shader using the
+  instruction is SPIR-V 1.6. The floor moved without the promise changing:
+  `vkEnumerateInstanceVersion` is itself a 1.1 function, so a loader that
+  does not export it is a 1.0 loader by definition; ask through
+  `vkGetInstanceProcAddr` with no instance, request the best it answers up
+  to 1.3, and fall back when `vkCreateInstance` refuses. And the
+  instruction's operand is half precision and does not convert on the way
+  in -- loading binary32 into a half-precision matrix reinterprets it, and
+  the answers come back as not-a-number -- so the batch is copied once per
+  product by a shader of its own.
+
+  Three alternated rounds in one sitting, better in every one: **0.527 s to
+  0.280** on the device's 110-token prompt, with every digest unchanged.
+  Generating is untouched at 2.363 s against 2.383, and has to be: a
+  generated token is one vector and the narrowest matrix the instruction
+  has is sixteen. Against llama.cpp on the same host the device's prompt
+  gap goes from eight times to **four**.
+
+  Where it does not run, which is most places: fourteen of the fifteen
+  formats, every row count the thirty-two-row tile does not divide, every
+  batch shorter than thirty-two, every device without the extension, and
+  every device whose subgroups are not sixty-four wide -- asked about
+  rather than assumed. All of them go to `row_product.comp`, which reads
+  all fifteen formats and needs nothing beyond Vulkan 1.0.
+
+  Gate: 280 tests, conformance 28344 sequences with none outside tolerance.
+
 ### Fixed
 
 - **A test was intermittent because it let the sampler decide how much work
