@@ -44,6 +44,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A generated token of the six-bit k-quant has a kernel, and that was the
+  last floating-point path in a "_M" file.** A profile put the unpacking and
+  the floating-point dot product together at forty-one per cent of a Q4_K_M
+  token. Thirty-two generated tokens go from **0.505 s to 0.356**, medians
+  of three alternated rounds, with the same digest and the prompt unmoved:
+  thirty-five milliseconds a token where the eight-bit file takes
+  thirty-three, so a file two thirds the size now generates at the same
+  rate.
+
+- **Fixed, in the two single-vector kernels written today: an insertion must
+  not advance the operands it is given.** They did -- an `addq` on a
+  register the compiler was told is an input -- which says nothing to it and
+  happens to work while it has no other use for the register. With eleven
+  operands it stopped happening to work: the six-bit kernel raised inside a
+  worker, and adding an exception handler and nothing else made it run,
+  which is the signature of code generation rather than arithmetic. Both now
+  keep their cursors in registers of their own, named in the clobber list.
+  The four-bit one had the same latent fault and had passed a gate.
+
 - **The six-bit k-quant has one too, because a file is a mixture.** Giving
   Q4_K a kernel stopped short of what it should have been worth, and a
   profile said why: `accumulate_dot`, the floating-point row product, was
