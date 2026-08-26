@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The four-bit k-quant reaches the device's matrix instruction, and a
+  `Q4_K_M` prompt reads 0.402 s against 0.891.** It is the format most
+  published models are shipped in, and until now none of the tile's work
+  reached it. Only the decode differs from the eight-bit one -- a value is
+  the scale times a nibble less a minimum, worked out in binary32 and
+  rounded once into the tile -- so the two share a shader and the branch is
+  on a push constant, uniform across a workgroup and taken once a step.
+
+  Medians of three alternated rounds, better in every one, every digest
+  unchanged. It costs the eight-bit path nothing (0.287 s against 0.286) and
+  a generated token nothing (0.731 s against 0.725), which it has to: a
+  generated token is one vector and the kernel refuses a batch shorter than
+  thirty-two.
+
+  A `Q4_K_M` file still reads its prompt slower than the larger `Q8_0` one,
+  0.402 s against 0.280, because a "_M" file is a mixture and its six-bit
+  tensors -- a sixth of the weights -- are still on the row product. That is
+  the same shape of finding the processor's kernels reached one format
+  later, and it has the same answer.
+
 - **The device computes a batch as a matrix product now, through its own
   matrix instruction, and its 110-token prompt reads 0.280 s against
   0.527.** `VK_KHR_cooperative_matrix` at sixteen by sixteen by sixteen,
@@ -61,6 +81,23 @@ Keep a Changelog and the project uses semantic versioning.
   Gate: 280 tests, conformance 28344 sequences with none outside tolerance.
 
 ### Fixed
+
+- **The matrix product had been committed with a gate that could not enter
+  it.** The conformance sweep's longest sequence is eight tokens, and the
+  device format test multiplied twelve rows against a batch of ten; the
+  kernel refuses a row count its thirty-two-row tile does not divide and a
+  batch shorter than thirty-two, so it refused both. Every check it passed
+  was a check of the shader beside it.
+
+  The device format test now runs its fifteen formats twice, the second time
+  at sixty-four rows and a batch of forty: the two tiled formats go through
+  the matrix product and the other thirteen go through the row product at a
+  larger shape than they had. The two are held to different bounds because
+  they differ by different amounts, and both are measured rather than
+  guessed -- at most 2.1e-5 between the row product and the processor,
+  against 7.1e-3 for the eight-bit tile and 7.4e-3 for the four-bit one,
+  which is three hundred times as much and is the price of a half-precision
+  operand.
 
 - **A test was intermittent because it let the sampler decide how much work
   the run did.** `Device_Memory_Reaches_The_Device` gives the device a four

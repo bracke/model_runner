@@ -268,25 +268,29 @@ package body Model_Runner.Platform.Device.Products is
    --
    --  Four questions, and each of them is a promise the shader relies on
    --  rather than a preference. The device has to have said it offers the
-   --  instruction; the weights have to be eight-bit blocks, which is the
-   --  one format matrix_product.comp decodes; the rows have to divide by
-   --  the tile, because a workgroup writes a whole tile and a partial one
-   --  would write into the next vector's answers; and the batch has to be
-   --  long enough to be worth rounding up to a tile.
+   --  instruction; the weights have to be in one of the two formats
+   --  matrix_product.comp decodes, at a width that is a whole number of
+   --  their blocks; the rows have to divide by the tile, because a
+   --  workgroup writes a whole tile and a partial one would write into the
+   --  next vector's answers; and the batch has to be long enough to be
+   --  worth rounding up to a tile.
    --
-   --  Everything else -- fourteen formats, a generated token, a row count
+   --  Everything else -- thirteen formats, a generated token, a row count
    --  the tile does not divide, and every device that has not got the
    --  instruction -- goes where it always went.
    function Uses_Matrix
      (Item    : Engine;
       Packing : Weight_Packing;
       Rows    : Natural;
+      Columns : Natural;
       Count   : Natural) return Boolean
    is (Item.Matrices
        and then Item.Matrix_Line /= Null_Handle
-       and then Packing = Packed_Q8_0
        and then Rows mod Tile_Rows = 0
-       and then Count >= Tile_Least);
+       and then Count >= Tile_Least
+       and then ((Packing = Packed_Q8_0 and then Columns mod 32 = 0)
+                 or else (Packing = Packed_Q4_K
+                          and then Columns mod 256 = 0)));
 
    function Half_Descriptor (Item : Engine) return Buffer_Info
    is (if Item.Half_Buffer /= Null_Handle
@@ -2314,7 +2318,7 @@ package body Model_Runner.Platform.Device.Products is
       --  Which kernel, decided once: it changes how much room the answers
       --  need as well as which pipeline is bound.
       Tiled : constant Boolean :=
-        Uses_Matrix (Item, Packing, Rows, Count)
+        Uses_Matrix (Item, Packing, Rows, Columns, Count)
         and then not Over_Limit (Item, Tiled_Result)
         and then not Over_Limit (Item, Tiled_Half);
 
@@ -3310,14 +3314,17 @@ package body Model_Runner.Platform.Device.Products is
             --  the kernel writes and nothing reads; the read-back below
             --  takes the batch's own share from the front of it.
             Room : constant Natural :=
-              (if Uses_Matrix (Item, This.Packing, This.Rows, Count)
+              (if Uses_Matrix (Item, This.Packing, This.Rows,
+                               This.Columns, Count)
                then Whole_Tiles (Count) else Count);
 
             Mine : constant Interfaces.Unsigned_64 :=
               Interfaces.Unsigned_64 (This.Rows)
               * Interfaces.Unsigned_64 (Room) * 4;
          begin
-            if Uses_Matrix (Item, This.Packing, This.Rows, Count) then
+            if Uses_Matrix (Item, This.Packing, This.Rows,
+                            This.Columns, Count)
+            then
                Half_Bytes := Interfaces.Unsigned_64'Max
                  (Half_Bytes,
                   Interfaces.Unsigned_64 (This.Columns)
@@ -3763,7 +3770,9 @@ package body Model_Runner.Platform.Device.Products is
                   goto Next_Dispatch;
                end if;
 
-               if Uses_Matrix (Item, This.Packing, This.Rows, Count) then
+               if Uses_Matrix (Item, This.Packing, This.Rows,
+                               This.Columns, Count)
+               then
                   declare
                      Done : Boolean;
                   begin
