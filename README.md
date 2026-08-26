@@ -388,7 +388,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Localization | Every application-authored string through `messages`; 174 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
-| Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, for eight-bit blocks and the four-, five- and six-bit k-quants, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
+| Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, for half precision, brain floating point, eight-bit blocks and the four-, five- and six-bit k-quants, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
 | Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests render`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
@@ -2112,9 +2112,31 @@ the device in the same tenth of a second**: 0.286 for the eight-bit file,
 morning they were 0.527, 0.891 and 1.368. The smaller file is no longer the
 slower one, which it had been since the device could read k-quants at all.
 
-**Where it does not run**, which is still most places. Eleven of the fifteen
-formats, because `matrix_product.comp` decodes eight-bit blocks and the
-four-, five- and six-bit k-quants, and nothing else. Every row count the thirty-two-row tile
+**And the two sixteen-bit formats, which cost nothing to add.** Half
+precision is already what the tile holds, and brain floating point has fewer
+mantissa bits than half precision has, so both reach the operand exactly and
+the decode is a copy or a shift. A `--repack bf16` prompt on the device reads
+**0.302 s against 1.164** -- medians of three alternated rounds, better in
+every one, digest unchanged -- which puts a sixteen-bit model level with the
+eight-bit one's 0.286.
+
+They also settle what the difference between the tile and the processor is
+made of. Measured on the same fixtures, half precision differs by 7.9e-3 and
+brain floating point by 7.9e-3, against 7.1e-3 for the eight-bit format and
+7.4, 9.5 and 8.1 for the k-quants. **Two formats whose weights arrive exact
+differ by as much as the ones that are unpacked**, so what is being measured
+is the half-precision operand and not any decode.
+
+**Binary32 is deliberately not among them.** The tile's operand is half
+precision, so a binary32 weight would lose thirteen bits of mantissa on the
+way in, and a caller who has kept a model at binary32 has asked for exactly
+those bits. It stays on the row product, which multiplies in binary32, and
+the device format test holds it to the tight bound to prove it still does.
+
+**Where it does not run**, which is still most places. Nine of the fifteen
+formats, because `matrix_product.comp` decodes half precision, brain
+floating point, eight-bit blocks and the four-, five- and six-bit k-quants,
+and nothing else. Every row count the thirty-two-row tile
 does not divide, because a workgroup writes a whole tile and a partial one
 would write into the next vector's answers. Every batch shorter than
 thirty-two. Every device without the extension, and every device whose
@@ -2260,14 +2282,14 @@ conformance sweep's longest sequence is eight tokens and the device format
 test used a batch of ten against twelve rows, and the kernel refuses both.
 Every check it passed was a check of the shader beside it. The device format
 test now runs its fifteen formats twice, the second time at sixty-four rows
-and a batch of forty, which the four tiled formats go through and the other
-eleven take through the row product at a larger shape than they had. The two
+and a batch of forty, which the six tiled formats go through and the other
+nine take through the row product at a larger shape than they had. The two
 paths are held to different bounds because they differ by different amounts,
 and both are measured rather than guessed: at most 2.1e-5 between the row
-product and the processor, against 7.1e-3, 7.4e-3, 9.5e-3 and 8.1e-3 for the
-eight-bit, four-bit, five-bit and six-bit tiles -- three hundred times as
-much, and within a third of each other for all four, which is what says it
-is the half-precision operand rather than any one decode.
+product and the processor, against 7.1e-3 to 9.5e-3 for the six tiled
+formats -- three hundred times as much, and within a third of each other for
+all of them, which is what says it is the half-precision operand rather than
+any one decode.
 
 ### Against llama.cpp
 

@@ -627,8 +627,8 @@ package body Tests.Backend_Cases is
       --  nothing about, and this one had been committed before anything
       --  here noticed.
       --
-      --  The second is sixty-four rows and a batch of forty: the four
-      --  formats that have a tile go through it, and the other eleven go
+      --  The second is sixty-four rows and a batch of forty: the six
+      --  formats that have a tile go through it, and the other nine go
       --  through the row product at a larger shape than they had.
       type Shape is record
          Tall  : N.Element_Count;
@@ -649,11 +649,14 @@ package body Tests.Backend_Cases is
       --
       --  The matrix product's operands are half precision, which is a
       --  coarser weight by construction rather than by mistake, and the
-      --  same fixtures measure 7.1e-3 for the eight-bit format and 7.4e-3,
+      --  same fixtures measure 7.9e-3 for half precision and for brain
+      --  floating point, 7.1e-3 for the eight-bit format, and 7.4e-3,
       --  9.5e-3 and 8.1e-3 for the four-, five- and six-bit k-quants --
       --  three hundred times the row product's difference, and within a
-      --  third of each other for all four, which is what says it is the
-      --  operand rather than any one decode. Their bound is set from that
+      --  third of each other for all six. The two sixteen-bit formats say
+      --  it plainly: their weights reach the tile exactly, and they differ
+      --  by as much as the k-quants do, so what is measured here is the
+      --  half-precision operand and not any decode. Their bound is set from that
       --  with room for a device that rounds a tile differently, and is
       --  stated separately so that the other eleven stay held to the tight
       --  one at both shapes.
@@ -780,7 +783,8 @@ package body Tests.Backend_Cases is
                      Bound : constant N.Real :=
                        (if Chosen.Tiled
                           and then Format_Of (Which)
-                                     in G.Type_Q8_0 | G.Type_Q4_K
+                                     in G.Type_F16 | G.Type_BF16
+                                        | G.Type_Q8_0 | G.Type_Q4_K
                                         | G.Type_Q5_K | G.Type_Q6_K
                         then Tiled_Bound else Row_Bound);
                   begin

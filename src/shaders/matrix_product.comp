@@ -20,14 +20,22 @@
 //  are read once for the whole batch and the activations once for the
 //  whole tile of rows.
 //
-//  Four formats -- eight-bit blocks and the four-, five- and six-bit
-//  k-quants -- and only where the device offers VK_KHR_cooperative_matrix
-//  with a sixteen-by-sixteen-by-sixteen half-precision shape at subgroup
-//  scope.
+//  Six formats -- half precision, brain floating point, eight-bit blocks
+//  and the four-, five- and six-bit k-quants -- and only where the device
+//  offers VK_KHR_cooperative_matrix with a sixteen-by-sixteen-by-sixteen
+//  half-precision shape at subgroup scope.
+//
+//  Binary32 weights are deliberately not among them. The tile's operand is
+//  half precision, so a binary32 weight would lose thirteen bits of
+//  mantissa on the way in, and a caller who has chosen to keep a model at
+//  binary32 has asked for exactly those bits. The two sixteen-bit formats
+//  lose nothing: half precision is already what the tile holds, and brain
+//  floating point has fewer mantissa bits than half precision has, so the
+//  widening is exact for every value inside half precision's range.
 //  Everything else goes to row_product.comp, which reads all fifteen
 //  formats and needs nothing of the device beyond Vulkan 1.0.
 //
-//  The four are here rather than in four shaders because only the decode
+//  They are here rather than in six shaders because only the decode
 //  differs: the tile, the accumulators, the operand loads and the store are
 //  the same instructions in the same order. The branch is on a push
 //  constant, so it is uniform across a workgroup and taken once a step.
@@ -100,6 +108,8 @@ shared float16_t wt[TILE_R * KCH];
 
 //  The two formats this decodes, numbered as Weight_Packing'Pos numbers
 //  them, which is the same numbering row_product.comp is given.
+const uint FMT_F16  = 1u;
+const uint FMT_BF16 = 2u;
 const uint FMT_Q8_0 = 7u;
 const uint FMT_Q4_K = 11u;
 const uint FMT_Q5_K = 12u;
@@ -187,9 +197,11 @@ void main() {
     uint block_bytes = shape.format == FMT_Q4_K ? 144u
                        : (shape.format == FMT_Q5_K ? 176u : 210u);
 
-    uint rb = shape.format == FMT_Q8_0
-              ? (shape.columns / 32u) * 34u
-              : (shape.columns / 256u) * block_bytes;
+    uint rb = shape.format <= FMT_BF16
+              ? shape.columns * 2u
+              : (shape.format == FMT_Q8_0
+                 ? (shape.columns / 32u) * 34u
+                 : (shape.columns / 256u) * block_bytes);
 
     for (uint k0 = 0u; k0 < shape.columns; k0 += KCH) {
         barrier();
@@ -203,7 +215,33 @@ void main() {
             uint into    = r * KCH + half_of * 16u;
             uint row     = shape.base + (row0 + r) * rb;
 
-            if (shape.format == FMT_Q8_0) {
+            if (shape.format <= FMT_BF16) {
+                //  Sixteen bits a weight and no blocks: the sixteen an
+                //  invocation wants are eight words, and they always start
+                //  on a word boundary because a row is a whole number of
+                //  them.
+                //
+                //  Half precision is copied and brain floating point is
+                //  shifted into the top of a binary32 and rounded once.
+                //  Neither loses anything the tile could have held.
+                uint at = row + (k0 + half_of * 16u) * 2u;
+                uint i  = at >> 2u;
+
+                for (uint j = 0u; j < 8u; ++j) {
+                    uint held = w[i + j];
+
+                    if (shape.format == FMT_F16) {
+                        vec2 pair = unpackHalf2x16(held);
+                        wt[into + j * 2u]      = float16_t(pair.x);
+                        wt[into + j * 2u + 1u] = float16_t(pair.y);
+                    } else {
+                        wt[into + j * 2u] =
+                            float16_t(uintBitsToFloat(held << 16u));
+                        wt[into + j * 2u + 1u] =
+                            float16_t(uintBitsToFloat(held & 0xFFFF0000u));
+                    }
+                }
+            } else if (shape.format == FMT_Q8_0) {
                 uint at = row + (k0 / 32u) * 34u;
                 float16_t d = float16_t(half_at(at));
 

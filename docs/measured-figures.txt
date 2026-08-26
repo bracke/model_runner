@@ -5090,7 +5090,7 @@ reference 541E9ABD66FAA7E8 src/library/model_runner-backend-reference.adb src/li
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-device EF4E0797E2F888AC src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 4C27E79DFE432503 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -6523,4 +6523,57 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # path changed. Their fingerprints went stale because the kernels file is
 # in every group's source list.
 
-outside EF4E0797E2F888AC src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, half precision and brain floating point on the device's tile.
+#
+# What changed: matrix_product.comp decodes F16 and BF16 as well as the four
+# block formats. Neither is really a decode -- half precision is already
+# what the tile holds, and brain floating point has fewer mantissa bits than
+# half precision has, so the widening is exact for every value inside half
+# precision's range.
+#
+# Three alternated rounds in one sitting, one binary with the two formats
+# refused by the kernel against the same binary with them allowed:
+#
+#   --repack bf16, 110-token device prompt   1.164 s  ->  0.302 s
+#   Q8_0,          110-token device prompt   0.286 s  ->  0.287 s
+#
+# better in every round on the sixteen-bit one and inside the floor on the
+# control. Digest cbf29ce484222325 throughout. A sixteen-bit model now reads
+# a prompt level with the eight-bit one.
+#
+# Measured through --repack bf16 rather than on a sixteen-bit model file,
+# and that is worth saying. There are three half-precision models on this
+# machine and all of them are embedding models, which `tests speed` cannot
+# run: it wants a model that generates. So the format's own path is
+# exercised by the device format test at sixty-four rows and a batch of
+# forty, and by the conformance sweep, while the figure above is the
+# brain-floating-point path on a model the tool can run. The two share
+# every line of the kernel but the four that widen a weight.
+#
+# What the two formats settle, which is worth more than the figure. On the
+# device format test's fixtures the six tiled formats differ from the
+# processor by:
+#
+#   half precision            7.9e-3
+#   brain floating point      7.9e-3
+#   eight-bit blocks          7.1e-3
+#   four-bit k-quant          7.4e-3
+#   five-bit k-quant          9.5e-3
+#   six-bit k-quant           8.1e-3
+#
+# The first two arrive at the tile exactly -- there is nothing to lose in
+# the widening -- and they differ by as much as the ones that are unpacked
+# from six-bit fields. So the difference is the half-precision operand and
+# not any one decode, which is what three separate entries above had guessed
+# and none had shown.
+#
+# Binary32 is not tiled and will not be. The operand is half precision and a
+# binary32 weight would lose thirteen bits of mantissa reaching it; a caller
+# who kept a model at binary32 asked for those bits. It stays on the row
+# product, and the device format test holds it to the tight bound -- 3.8e-6
+# -- so that a change which quietly tiled it would fail.
+#
+# The device table and the llama.cpp comparison were NOT re-taken: both are
+# Q8_0, and the control above is the figure they are built from.
+
+outside 4C27E79DFE432503 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

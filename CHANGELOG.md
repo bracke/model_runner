@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Half precision and brain floating point reach the device's matrix
+  instruction too, and a `--repack bf16` prompt reads 0.302 s against
+  1.164.** They cost nothing to add: half precision is already what the tile
+  holds, and brain floating point has fewer mantissa bits than half
+  precision has, so both reach the operand exactly and the decode is a copy
+  or a shift. Medians of three alternated rounds, better in every one, digest
+  unchanged, and the eight-bit control unmoved at 0.287 s against 0.286. A
+  sixteen-bit model now reads a prompt level with the eight-bit one.
+
+  They also settle what the tile's difference from the processor is made of.
+  On the same fixtures half precision differs by 7.9e-3 and brain floating
+  point by 7.9e-3, against 7.1e-3 for the eight-bit format and 7.4, 9.5 and
+  8.1 for the k-quants: two formats whose weights arrive exact differ by as
+  much as the ones that are unpacked, so what is measured is the
+  half-precision operand and not any decode.
+
+  **Binary32 is deliberately left out.** The tile's operand is half
+  precision, so a binary32 weight would lose thirteen bits of mantissa on
+  the way in, and a caller who kept a model at binary32 asked for exactly
+  those bits. It stays on the row product, and the device format test holds
+  it to the tight bound to prove it.
+
 - **The five-bit k-quant reaches the device's matrix instruction too, and a
   `Q5_K_M` prompt reads 0.305 s against 1.368.** It is the four-bit decode
   with a fifth bit held in an array of its own: a byte of that array serves

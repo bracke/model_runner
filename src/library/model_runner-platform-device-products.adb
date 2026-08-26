@@ -268,14 +268,16 @@ package body Model_Runner.Platform.Device.Products is
    --
    --  Four questions, and each of them is a promise the shader relies on
    --  rather than a preference. The device has to have said it offers the
-   --  instruction; the weights have to be in one of the four formats
+   --  instruction; the weights have to be in one of the six formats
    --  matrix_product.comp decodes, at a width that is a whole number of
-   --  their blocks; the rows have to divide by the tile, because a
+   --  their blocks -- and binary32 is deliberately not one of them, because
+   --  the tile's operand is half precision and a caller who kept a model at
+   --  binary32 asked for the mantissa that would be lost; the rows have to divide by the tile, because a
    --  workgroup writes a whole tile and a partial one would write into the
    --  next vector's answers; and the batch has to be long enough to be
    --  worth rounding up to a tile.
    --
-   --  Everything else -- eleven formats, a generated token, a row count
+   --  Everything else -- nine formats, a generated token, a row count
    --  the tile does not divide, and every device that has not got the
    --  instruction -- goes where it always went.
    function Uses_Matrix
@@ -288,7 +290,9 @@ package body Model_Runner.Platform.Device.Products is
        and then Item.Matrix_Line /= Null_Handle
        and then Rows mod Tile_Rows = 0
        and then Count >= Tile_Least
-       and then ((Packing = Packed_Q8_0 and then Columns mod 32 = 0)
+       and then ((Packing in Values_F16 | Values_BF16
+                  and then Columns mod 32 = 0)
+                 or else (Packing = Packed_Q8_0 and then Columns mod 32 = 0)
                  or else (Packing in Packed_Q4_K | Packed_Q5_K
                                      | Packed_Q6_K
                           and then Columns mod 256 = 0)));
