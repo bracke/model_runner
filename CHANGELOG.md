@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A test was intermittent because it let the sampler decide how much work
+  the run did.** `Device_Memory_Reaches_The_Device` gives the device a four
+  kilobyte budget, a model far larger than that, and asserts that at least
+  one matrix was given back. It failed twice during this work's gate runs
+  and passed on re-run both times, on binaries that were correct.
+
+  The command it ran named no seed and no temperature, so sampling was
+  random. About one run in fourteen the first token drawn was the
+  end-of-sequence token: generation stopped before it began, the run did
+  only the prompt, no matrix was ever evicted, and the assertion was right
+  about what it read and wrong about what it meant. The failing run says so
+  in its own statistics -- `generated tokens 0`, `stopped because the model
+  produced its end-of-sequence token` -- two fields nothing was reading.
+
+  The run is now greedy and from a fixed seed, and the test asserts that two
+  tokens were generated before it reads how many matrices came back, so a
+  future change that shortens the run is caught as itself rather than
+  quietly making the eviction assertion vacuous. Measured: eleven of a
+  hundred and fifty unpinned runs gave nothing back; eighty of eighty pinned
+  ones gave two tokens and two matrices back, and three gate runs are clean
+  at 280 tests. Nothing outside the test changed, so no measured figure can
+  have moved.
+
 - **No insertion advances an operand any more.** Yesterday's six-bit kernel
   raised inside a worker because it did, and adding an exception handler and
   nothing else made it run -- the signature of code generation rather than

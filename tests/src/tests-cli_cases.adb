@@ -3191,6 +3191,24 @@ package body Tests.CLI_Cases is
          --  and is not what this is about.
          Add (Source, "--mmap");
 
+         --  Greedy, and from a seed, because this test is about what
+         --  the device does with its memory and not about what the
+         --  model says.
+         --
+         --  Without them the sampler is random, and about one run in
+         --  fourteen drew the end-of-sequence token first: generation
+         --  stopped before it began, the run did too little work to
+         --  give any matrix back, and the assertion below failed on a
+         --  binary that was correct. It passed again on the next run,
+         --  twice, and a gate that is re-run until it passes is not a
+         --  gate. This fixture's weights are random, so which token
+         --  that was is arbitrary; greedy makes it the same one every
+         --  time.
+         Add (Source, "--seed");
+         Add (Source, "1");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+
          if Budget /= "" then
             Add (Source, "--device-memory");
             Add (Source, Budget);
@@ -3282,6 +3300,17 @@ package body Tests.CLI_Cases is
          --  them, so that the run has to give one back and fetch it again.
          Tight : constant String := Ran_With ("4K");
       begin
+         --  That the run did the work the assertion below reads.
+         --  Asserted rather than assumed, because assuming it is
+         --  what made this test intermittent: a run that generates
+         --  nothing gives nothing back, and said so in a field
+         --  nothing was reading.
+         Assert (Number_After (Tight, "generated tokens") = 2,
+                 "the run did not generate the two tokens it was "
+                 & "asked for, so what it says about giving matrices "
+                 & "back is about a shorter run than this test "
+                 & "means to measure");
+
          Assert (Number_After (Tight, "matrices given back") > 0,
                  "a budget smaller than the model gave nothing back, so "
                  & "either the budget did not reach the device or the "
