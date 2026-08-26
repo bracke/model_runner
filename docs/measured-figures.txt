@@ -6703,4 +6703,58 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # and it is about the arithmetic around the instruction rather than the
 # instruction.
 
+# 2026-08-26, the strip of eight: built, measured, thirteen per cent slower,
+# and not kept.
+#
+# The entry above said the arithmetic around the insertion is fifteen
+# thousand million instructions -- more than the insertion's own sixteen --
+# and that it works four floats at a time, because a strip is four vectors,
+# on pipes that are eight wide. A strip of eight would put it in full-width
+# registers. That was the change.
+#
+# Built the cheap way, so that only the thing being tested changed: the
+# strip carries eight vectors and the table beside it is built eight at a
+# time, while the insertion still takes four and is run twice. The table's
+# blocks are twice as far apart, so the insertion indexes it with a scale of
+# two and the second row's four displacements move from sixteen to
+# thirty-two bytes in. Three lines of assembly and one constant.
+#
+# Three alternated rounds, better in none:
+#
+#   110-token processor prompt, strip of four    0.776 s   3.82 s of processor
+#   110-token processor prompt, strip of eight   0.881 s   4.45 s
+#
+# The stack frame it doubled is not the reason. The tables are sized for the
+# widest row this kernel accepts -- a thousand and twenty-four blocks --
+# which at eight vectors is a hundred and twenty-eight kilobytes of frame
+# against sixty-four. Shrinking that room to two hundred and fifty-six
+# blocks, a quarter of the frame, changed nothing: 0.748 and 0.780 s against
+# a baseline of 0.776. So it is not the frame, and it is not worth shrinking
+# the room either.
+#
+# What is left as the explanation is the shape of the read: the insertion
+# now walks the table twice, each pass taking half of every sixty-four byte
+# entry, where before each pass had a table of its own laid out contiguously.
+# That is a guess, and it is written as one.
+#
+# A second thing the change did, which would have needed answering even if
+# it had been faster. A batch of four to seven vectors no longer reaches a
+# strip at all -- eight is the step now -- so it goes through the
+# single-vector kernel instead, and the two agree to the sweep's bound
+# rather than bit for bit. The twelve-token run's digest moved from
+# 5abff916f9d83ca6 to 7d3e2df2d776ba62 on a six-token prompt. Nothing was
+# wrong; the batching was different. It is recorded because a performance
+# change that moves a published digest has to be noticed rather than
+# discovered later.
+#
+# Where this leaves the processor kernel, after three attempts in a row that
+# measured and were not kept. The hoist above removed a fifth of its
+# instructions and bought two per cent of its time. The wide registers do
+# not make an instruction worth two. The strip of eight halves the width of
+# the arithmetic around the insertion and is slower. Taken together they say
+# the same thing: this kernel's time is not set by the number of
+# instructions it issues, and every lever reachable from the instruction mix
+# has now been tried. Whatever the two-and-a-half times to the other runtime
+# is, it is not that.
+
 outside 1725B5F993CE517F src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

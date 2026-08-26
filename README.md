@@ -3070,9 +3070,35 @@ measured. The difference is instructions that are not the arithmetic, and the
 largest block of those is the **fifteen thousand million in the Ada around
 the insertion**, which is more than the insertion's own sixteen. That Ada
 works four floats at a time, because a strip is four vectors, on pipes two
-hundred and fifty-six bits wide: it uses a quarter of what it is issued on. A
-strip of eight would put it in full-width registers and still keep the
-accumulators at sixteen of the thirty-two there are.
+hundred and fifty-six bits wide: it uses a quarter of what it is issued on.
+
+**So a strip of eight was built, and it is thirteen per cent slower.** Built
+the cheap way, so that only the thing being tested changed: the strip carries
+eight vectors and the table beside it is built eight at a time, while the
+insertion still takes four and is run twice. Three alternated rounds, better
+in none -- 0.776 s against 0.881, and 3.82 s of processor time against 4.45.
+
+The stack frame it doubled is not the reason. Shrinking the tables' room from
+a thousand and twenty-four blocks to two hundred and fifty-six, a quarter of
+the frame, changed nothing. What is left is the shape of the read -- the
+insertion now walks the table twice, each pass taking half of every
+sixty-four byte entry, where before each pass had a contiguous table of its
+own -- and that is a guess, written as one.
+
+It did one other thing worth recording. A batch of four to seven vectors no
+longer reaches a strip, so it goes through the single-vector kernel, and the
+two agree to the sweep's bound rather than bit for bit: the twelve-token
+run's digest moved on a six-token prompt. Nothing was wrong; the batching was
+different. A performance change that moves a published digest has to be
+noticed rather than discovered later.
+
+**Three attempts in a row now, measured and not kept**, and together they say
+one thing. The hoist removed a fifth of this kernel's instructions and bought
+two per cent of its time. The wider registers do not make one instruction
+worth two. Widening the arithmetic around the insertion is slower. **This
+kernel's time is not set by the number of instructions it issues**, every
+lever reachable from the instruction mix has now been tried, and whatever the
+two-and-a-half times to the other runtime is, it is not that.
 
 ### Attention had never been told the bounds were proved
 

@@ -154,6 +154,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A strip of eight was built and is thirteen per cent slower, so it is not
+  kept.** The entry below said the arithmetic around the insertion works four
+  floats at a time on pipes that are eight wide. Widening the strip puts it
+  in full-width registers; measured over three alternated rounds it reads
+  0.881 s against 0.776, and 4.45 s of processor time against 3.82, better in
+  none.
+
+  The stack frame it doubled is not the reason -- shrinking the tables' room
+  to a quarter changed nothing. What is left is that the insertion then walks
+  the table twice, each pass taking half of every entry, and that is a guess
+  rather than a measurement.
+
+  It also moved a published digest: a batch of four to seven vectors no
+  longer reaches a strip, goes through the single-vector kernel instead, and
+  the two agree to the sweep's bound rather than bit for bit. Nothing was
+  wrong; the batching was different.
+
+  Three attempts in a row on this kernel have now measured and not been kept
+  -- a fifth of its instructions removed bought two per cent of its time, the
+  wider registers do not make one instruction worth two, and widening the
+  arithmetic around it is slower. Its time is not set by the number of
+  instructions it issues, and every lever reachable from the instruction mix
+  has been tried.
+
 - **The wider-register rewrite this file asked for one commit ago has a
   false premise, and the claim is withdrawn.** It said a
   five-hundred-and-twelve-bit dot product covers two blocks in one
