@@ -132,6 +132,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Four attempts at the device's matrix kernel, and the measurement is all
+  that is kept.** The product is fifty-eight per cent of a device prompt, so
+  it is where a gain has to come from. Ablations that halve an operand's
+  loads or remove fifteen of sixteen multiply-adds put the operands at about
+  half the kernel's time and the arithmetic at the other half.
+
+  What it is short of is workgroups. The same kernel against row counts that
+  change nothing else reads 890 GFLOP/s at sixteen workgroups, 2694 at
+  sixty-four, 3238 at two hundred and fifty-six and 3723 at a thousand -- and
+  a two-thousand-row matrix, which is most of this model, is sixty-four of
+  them on twelve compute units.
+
+  Tried and all worse than the 0.564 ms it stands at: pinning either operand
+  to one address, a squarer sixty-four by sixty-four tile that halves the
+  loads per multiply-add (0.850 ms), four smaller tiles for more workgroups
+  (0.670 to 1.081), and staging the batch tile in shared memory (1.499). The
+  last is the standard shape of a matrix kernel and is two and a half times
+  worse here, because with one wave to a workgroup there is nobody to share
+  the staged tile with.
+
+  The one thing that did measure better is not worth taking: a
+  sixteen-by-sixty-four tile reads 0.241 ms against 0.358 on the narrow K and
+  V projections, about three per cent of a prompt for a second pipeline. What
+  is left is named and not built -- splitting the columns across workgroups,
+  priced by the scan at about 1.2 times on the products.
+
 - **Where a device prompt's time goes was a guess, and one of the two
   guesses was wrong.** The scratch harness says this model's matrix products
   are about 0.124 s in isolation and the prompt reads 0.28, so this file had

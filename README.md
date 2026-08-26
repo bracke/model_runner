@@ -2171,6 +2171,56 @@ less than the number that made them look interesting: K and V together are
 0.66 ms of the 5.63 ms a layer's products take, so a fourfold gain on them
 is five per cent of a prompt.
 
+**Then the kernel itself, four ways, and none of them kept.** The product is
+fifty-eight per cent of a prompt, so it is where the next gain has to come
+from. Two ablations that keep the arithmetic and halve an operand's loads,
+and one that keeps the loads and removes fifteen of sixteen multiply-adds,
+say what it is made of: the operands are about half the time and the
+arithmetic the other half, which means neither can be ignored and neither is
+the answer on its own.
+
+**What it is short of is workgroups.** The same kernel, the same tile,
+against row counts that change nothing but how many there are:
+
+| | workgroups | |
+|---|---:|---:|
+| 512 rows | 16 | 890 GFLOP/s |
+| 2048 rows | 64 | 2694 |
+| 8192 rows | 256 | 3238 |
+| 32000 rows | 1000 | 3723 |
+
+A two-thousand-row matrix -- which is most of this model -- is sixty-four
+workgroups on twelve compute units, and reaches seventy-two per cent of what
+the same kernel reaches with a thousand. The multiply-adds alone run at about
+3850 GFLOP/s, which is what the whole kernel reaches once there are enough
+workgroups to hide the loads behind each other.
+
+So the four attempts, all measured against 0.564 ms and all worse: pinning
+either operand to a single address (1918 and 1555 gigaflops against 2182); a
+squarer sixty-four by sixty-four tile, which halves the loads per
+multiply-add and reads **0.850 ms**; four smaller tiles for more workgroups,
+0.670 to 1.081 ms; and **staging the batch tile in shared memory, 1.499 ms**.
+
+That last is the most interesting failure, because it is the standard shape
+of a matrix kernel -- stream both operands into shared memory and read them
+from there -- and it is two and a half times worse. With one wave to a
+workgroup there is nobody to share the staged tile with, so the copy is pure
+added cost. It agrees with the two pinning results: the path this part
+already has from its cache to the instruction is better than anything built
+on top of it by hand.
+
+One thing did measure better and is not worth taking: the narrow K and V
+projections read 0.241 ms at a sixteen-by-sixty-four tile against 0.358 at
+the one in use, which over twenty-two layers is about three per cent of a
+prompt for a second pipeline and a second tile shape to keep in step.
+
+**What is left is named and not built.** Splitting the columns across
+workgroups would make a two-thousand-row product two hundred and fifty-six
+workgroups rather than sixty-four, with a second pass to add the partial
+sums; the scan above prices that at about 1.2 times on the products, which
+is a tenth of a prompt, against an extra buffer, an extra dispatch and a
+reduction. It is the only lever these measurements leave.
+
 **One thing had to be fixed before any of that could be believed.** The
 matrix product was committed with a gate that could not enter it: the
 conformance sweep's longest sequence is eight tokens and the device format

@@ -6339,4 +6339,78 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # ms of the 5.63 ms a layer's products take, so a fourfold gain on them is
 # five per cent of a prompt.
 
+# 2026-08-26, four attempts at the matrix kernel, none of them kept.
+#
+# The entry above says the matrix product is fifty-eight per cent of a
+# device prompt, so this went after the kernel. All of it is measured in the
+# scratch harness at a load below 0.60, minimum of three, on 2048 x 2048
+# against a hundred and twenty-eight vectors unless another shape is named.
+# The kernel as it stands reads 0.564 ms there.
+#
+# First, where the kernel's own time goes. Two ablations that keep the
+# arithmetic and halve an operand's loads, and one that keeps the loads and
+# removes fifteen of sixteen multiply-adds:
+#
+#   as it is                              0.576 ms
+#   four vector matrices loaded, not eight 0.519      the loads are 20 %
+#   one weight matrix loaded, not two      0.514      the loads are 22 %
+#   one multiply-add, not sixteen          0.314      they are 46 %
+#
+# which accounts for about ninety per cent; the rest is the decode, the
+# barriers and the loop. So the arithmetic is about half and the operands
+# about half, and neither is small enough to be ignored or large enough to
+# be the answer on its own.
+#
+# Second, and this is the finding: the wide products of this model are
+# short of workgroups rather than short of instructions. The same kernel,
+# same tile, against row counts that change nothing but how many workgroups
+# there are:
+#
+#     512 rows,   16 workgroups     890 GFLOP/s
+#    2048 rows,   64 workgroups    2694
+#    4096 rows,  128 workgroups    2641
+#    8192 rows,  256 workgroups    3238
+#   16384 rows,  512 workgroups    3462
+#   32000 rows, 1000 workgroups    3723
+#
+# A two-thousand-row matrix is sixty-four workgroups on twelve compute
+# units, and it reaches seventy-two per cent of what the same kernel reaches
+# with a thousand. The multiply-adds alone, taken from the ablation above,
+# run at about 3850 GFLOP/s -- which is what the whole kernel reaches once
+# there are enough workgroups to hide the loads behind each other.
+#
+# Then four things tried, and none of them kept:
+#
+#   pinning the vector operand to one address    1918 GFLOP/s against 2182
+#   pinning the weight operand to one address    1555
+#   a squarer tile, 64 x 64, which halves the
+#     loads per multiply-add                     0.850 ms against 0.564
+#   smaller tiles for more workgroups
+#     32 x 64                                    0.670
+#     32 x 32                                    1.081
+#     16 x 128                                   0.709
+#     16 x 64                                    0.715
+#   staging the batch tile in shared memory      1.499 ms against 0.580
+#
+# The last is the most interesting failure. It is the standard shape of a
+# matrix kernel -- stream both operands into shared memory, read them from
+# there -- and here it is two and a half times worse, because with one wave
+# to a workgroup there is nobody to share the staged tile with and the copy
+# is pure added cost. It is also consistent with the two pinning results:
+# the path this part already has from its cache to the instruction is
+# better than anything that can be built on top of it by hand.
+#
+# One thing did measure better and is not worth taking. The narrow K and V
+# projections, 256 rows, read 0.241 ms at a sixteen-by-sixty-four tile
+# against 0.358 at the one in use -- a third off. Two of them a layer over
+# twenty-two layers is 5.1 ms of a 177 ms prompt, about three per cent, for
+# a second pipeline and a second tile shape to keep in step.
+#
+# What is left, named and not built: splitting the columns across
+# workgroups, so a two-thousand-row product is two hundred and fifty-six
+# workgroups rather than sixty-four, with a second pass to add the partial
+# sums. The scan above says that is worth about 1.2 times on the products,
+# which is ten per cent of a prompt, against an extra buffer, an extra
+# dispatch and a reduction. It is the only lever the measurements leave.
+
 outside 166654C3AEC3F60E src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
