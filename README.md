@@ -2616,16 +2616,27 @@ Thirty-five milliseconds a token, where the eight-bit file takes thirty-three
 prompt beside it is unmoved.
 
 **One of these two kernels did not work at first, and why is worth keeping.**
-The single-vector kernels written before it advance the pointers they are
-handed -- an `addq` on an operand the compiler was told is an input -- which
-says nothing to the compiler and happens to work while it has no other use
-for the register. With eleven operands it stopped happening to work: the
-procedure raised inside a worker, and *adding an exception handler and
-nothing else made it run*. That is the signature of code generation rather
-than arithmetic, and the fix is not a handler: the cursors are registers of
-its own now, named in the clobber list, and no operand is advanced. The
-four-bit kernel beside it, which had the same latent fault and had passed a
-gate, was changed with it.
+Every insertion in this file advanced the pointers it was handed -- an `addq`
+on an operand the compiler was told is an *input* -- which says nothing to
+the compiler and works only while it has no other use for that register. With
+eleven operands it stopped working: the procedure raised inside a worker, and
+*adding an exception handler and nothing else made it run*. That is the
+signature of code generation rather than arithmetic, and a handler is not a
+fix.
+
+**So none of them do it any more.** All six insertions keep their cursors in
+registers of their own, named in the clobber list, and advance nothing they
+were given; where a counter was decremented in place it is copied first. Four
+of the six were working at the time and had passed gates -- including the one
+every generated eight-bit token runs, which advanced four operands, more than
+the kernel that failed. They were correct by luck rather than by
+construction, and the luck was observed running out once already.
+
+Three alternated rounds on both models say the change costs nothing: 2.086 s
+against 2.085 generating the eight-bit file, 0.765 against 0.767 on its
+prompt, 0.362 against 0.357 generating the four-bit one, every digest
+unchanged. `Rows_Singly` is one instruction a block shorter than it was,
+because three pointer advances became two.
 
 Not every product takes it. A weight format with no integer kernel, and a
 width that is not a whole number of thirty-two, are computed the other way

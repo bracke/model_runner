@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **No insertion advances an operand any more.** Yesterday's six-bit kernel
+  raised inside a worker because it did, and adding an exception handler and
+  nothing else made it run -- the signature of code generation rather than
+  arithmetic. Two kernels were fixed then; four were left, all of them
+  working at the time and all of them having passed gates, including
+  `Rows_Singly`, which every generated eight-bit token runs and which
+  advanced *four* operands -- more than the one that failed.
+
+  All six now keep their cursors in registers of their own, named in the
+  clobber list, and copy a counter rather than decrementing it in place.
+  Three alternated rounds on both models say it costs nothing -- 2.086 s
+  against 2.085 generating the eight-bit file, 0.765 against 0.767 on its
+  prompt, 0.362 against 0.357 generating the four-bit one, every digest
+  unchanged -- and `Rows_Singly` is one instruction a block shorter, three
+  pointer advances having become two.
+
 - **Sixteen per cent of a prompt was `memset`.** The strip kernel's first
   working version gave three of its arrays `[others => 0.0]`, which is
   sixty-four kilobytes zeroed for every strip of four vectors and every

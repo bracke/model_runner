@@ -270,18 +270,19 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vmovd %%eax, %%xmm7"                 & LF &
                "vpbroadcastd %%xmm7, %%ymm7"         & LF &
                "xorq %%rcx, %%rcx"                   & LF &
+               "xorq %%rdx, %%rdx"                   & LF &
+               "movq %4, %%rax"                      & LF &
                "1:"                                  & LF &
-               "vmovdqu (%1,%%rcx,1), %%ymm0"        & LF &
+               "vmovdqu (%1,%%rdx,1), %%ymm0"        & LF &
                "vpxor %%ymm7, %%ymm0, %%ymm0"        & LF &
                "vpxor %%ymm1, %%ymm1, %%ymm1"        & LF &
-               "vpdpbusd (%2), %%ymm0, %%ymm1"       & LF &
+               "vpdpbusd (%2,%%rcx,8), %%ymm0, %%ymm1" & LF &
                "vcvtdq2ps %%ymm1, %%ymm1"            & LF &
-               "vbroadcastss (%3), %%ymm2"           & LF &
+               "vbroadcastss (%3,%%rcx,1), %%ymm2"   & LF &
                "vfmadd231ps %%ymm2, %%ymm1, %%ymm6"  & LF &
-               "addq $34, %1"                        & LF &
-               "addq $32, %2"                        & LF &
-               "addq $4, %3"                         & LF &
-               "decq %4"                             & LF &
+               "addq $4, %%rcx"                      & LF &
+               "addq $34, %%rdx"                     & LF &
+               "decq %%rax"                          & LF &
                "jnz 1b"                              & LF &
                "vmovaps %%ymm6, (%0)",
                Inputs =>
@@ -292,7 +293,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   System.Address'Asm_Input ("r", Row_Scale (0)'Address),
                   Element_Count'Asm_Input ("r", Blocks)],
                Clobber  =>
-                 "rax,rcx,ymm0,ymm1,ymm2,ymm6,ymm7,memory",
+                 "rax,rcx,rdx,ymm0,ymm1,ymm2,ymm6,ymm7,memory",
                Volatile => True);
 
             declare
@@ -500,6 +501,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpxord %%ymm23, %%ymm23, %%ymm23" & LF &
                "xorq %%rcx, %%rcx" & LF &
                "xorq %%rdx, %%rdx" & LF &
+               "movq %8, %%rax" & LF &
                "1:" & LF &
                "vmovdqu (%1,%%rcx,1), %%ymm0" & LF &
                "vpxor %%ymm3, %%ymm0, %%ymm0" & LF &
@@ -539,7 +541,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vfmadd231ps 28(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
                "addq $34, %%rcx" & LF &
                "addq $32, %%rdx" & LF &
-               "decq %8" & LF &
+               "decq %%rax" & LF &
                "jnz 1b" & LF &
                "vmovaps %%ymm16, 0(%0)" & LF &
                "vmovaps %%ymm17, 32(%0)" & LF &
@@ -832,6 +834,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpxord %%ymm23, %%ymm23, %%ymm23" & LF &
                "xorq %%rcx, %%rcx" & LF &
                "xorq %%rdx, %%rdx" & LF &
+               "movq %8, %%rax" & LF &
                "1:" & LF &
                "vmovdqu 16(%1,%%rcx,1), %%ymm0" & LF &
                "vpand %%ymm3, %%ymm0, %%ymm4" & LF &
@@ -1123,7 +1126,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vfmadd231ps 252(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
                "addq $144, %%rcx" & LF &
                "addq $256, %%rdx" & LF &
-               "decq %8" & LF &
+               "decq %%rax" & LF &
                "jnz 1b" & LF &
                "vmovaps %%ymm16, 0(%0)" & LF &
                "vmovaps %%ymm17, 32(%0)" & LF &
@@ -1399,6 +1402,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpxord %%ymm23, %%ymm23, %%ymm23" & LF &
                "xorq %%rcx, %%rcx" & LF &
                "xorq %%rdx, %%rdx" & LF &
+               "movq %8, %%rax" & LF &
                "1:" & LF &
                "vmovdqu 0(%1,%%rcx,1), %%ymm6" & LF &
                "vmovdqu 32(%1,%%rcx,1), %%ymm7" & LF &
@@ -1818,7 +1822,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vfmadd231ps 508(%7,%%rdx,2)%{1to8%}, %%ymm1, %%ymm23%{%%k2%}" & LF &
                "addq $210, %%rcx" & LF &
                "addq $256, %%rdx" & LF &
-               "decq %8" & LF &
+               "decq %%rax" & LF &
                "jnz 1b" & LF &
                "vmovaps %%ymm16, 0(%0)" & LF &
                "vmovaps %%ymm17, 32(%0)" & LF &

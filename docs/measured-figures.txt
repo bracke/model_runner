@@ -1935,7 +1935,42 @@
 # twelve-token runs and a twelve-token run is a third loading and warm-up;
 # the README says so and says to read the conclusion rather than the number.
 
-kernels 062E69B37899B9D5 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, and the figures above were NOT re-taken. This entry is the
+# other thing this file allows -- saying why a change cannot have moved
+# them -- and it is the first time that has been used rather than a sitting.
+#
+# What changed: every machine code insertion in the integer kernels stopped
+# advancing the pointers it was handed. They did it with an addq on a
+# register declared an input, which tells the compiler nothing and works
+# only while it has no other use for that register; the six-bit kernel
+# raised inside a worker when it stopped working, and an exception handler
+# and nothing else made it run again. Four insertions still did it, all of
+# them working and all of them having passed gates, including Rows_Singly,
+# which every generated eight-bit token runs and which advanced four
+# operands -- more than the one that failed. All six now keep cursors in
+# registers of their own and copy the counter rather than decrementing it in
+# place.
+#
+# Why it cannot have moved the figures, and the evidence rather than the
+# argument. Three alternated rounds on both models, in one sitting:
+#
+#                                     before      after
+#   eight-bit, sixty-four generated   2.085 s     2.086 s
+#   eight-bit, 110-token prompt       0.767 s     0.765 s
+#   four-bit, thirty-two generated    0.357 s     0.362 s
+#
+# and every digest identical -- 448c2ed68ec342ee, cbf29ce484222325,
+# 4b6e8e99ae285b2a. That is a better instrument than a fresh sitting would
+# be: alternated rounds in one sitting resolve four per cent, and the spread
+# between sittings on this machine is larger than that. Re-measuring
+# everything would have replaced numbers known not to have moved with
+# numbers differing by more than the change does.
+#
+# Rows_Singly is one instruction a block shorter than it was, three pointer
+# advances having become two, which is the only arithmetic difference and is
+# below what any figure here resolves.
+
+kernels 271C0AE58571835C src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
@@ -2876,7 +2911,42 @@ kernels 062E69B37899B9D5 src/library/model_runner-quantization.adb src/library/m
 # twelve-token runs and a twelve-token run is a third loading and warm-up;
 # the README says so and says to read the conclusion rather than the number.
 
-engine EF30B5A928C092AD src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, and the figures above were NOT re-taken. This entry is the
+# other thing this file allows -- saying why a change cannot have moved
+# them -- and it is the first time that has been used rather than a sitting.
+#
+# What changed: every machine code insertion in the integer kernels stopped
+# advancing the pointers it was handed. They did it with an addq on a
+# register declared an input, which tells the compiler nothing and works
+# only while it has no other use for that register; the six-bit kernel
+# raised inside a worker when it stopped working, and an exception handler
+# and nothing else made it run again. Four insertions still did it, all of
+# them working and all of them having passed gates, including Rows_Singly,
+# which every generated eight-bit token runs and which advanced four
+# operands -- more than the one that failed. All six now keep cursors in
+# registers of their own and copy the counter rather than decrementing it in
+# place.
+#
+# Why it cannot have moved the figures, and the evidence rather than the
+# argument. Three alternated rounds on both models, in one sitting:
+#
+#                                     before      after
+#   eight-bit, sixty-four generated   2.085 s     2.086 s
+#   eight-bit, 110-token prompt       0.767 s     0.765 s
+#   four-bit, thirty-two generated    0.357 s     0.362 s
+#
+# and every digest identical -- 448c2ed68ec342ee, cbf29ce484222325,
+# 4b6e8e99ae285b2a. That is a better instrument than a fresh sitting would
+# be: alternated rounds in one sitting resolve four per cent, and the spread
+# between sittings on this machine is larger than that. Re-measuring
+# everything would have replaced numbers known not to have moved with
+# numbers differing by more than the change does.
+#
+# Rows_Singly is one instruction a block shorter than it was, three pointer
+# advances having become two, which is the only arithmetic difference and is
+# below what any figure here resolves.
+
+engine C4BB83447753A464 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -3149,7 +3219,42 @@ engine EF30B5A928C092AD src/library/model_runner-llama.adb src/library/model_run
 # twelve-token runs and a twelve-token run is a third loading and warm-up;
 # the README says so and says to read the conclusion rather than the number.
 
-reference 8D6243EA2FD0A3AF src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, and the figures above were NOT re-taken. This entry is the
+# other thing this file allows -- saying why a change cannot have moved
+# them -- and it is the first time that has been used rather than a sitting.
+#
+# What changed: every machine code insertion in the integer kernels stopped
+# advancing the pointers it was handed. They did it with an addq on a
+# register declared an input, which tells the compiler nothing and works
+# only while it has no other use for that register; the six-bit kernel
+# raised inside a worker when it stopped working, and an exception handler
+# and nothing else made it run again. Four insertions still did it, all of
+# them working and all of them having passed gates, including Rows_Singly,
+# which every generated eight-bit token runs and which advanced four
+# operands -- more than the one that failed. All six now keep cursors in
+# registers of their own and copy the counter rather than decrementing it in
+# place.
+#
+# Why it cannot have moved the figures, and the evidence rather than the
+# argument. Three alternated rounds on both models, in one sitting:
+#
+#                                     before      after
+#   eight-bit, sixty-four generated   2.085 s     2.086 s
+#   eight-bit, 110-token prompt       0.767 s     0.765 s
+#   four-bit, thirty-two generated    0.357 s     0.362 s
+#
+# and every digest identical -- 448c2ed68ec342ee, cbf29ce484222325,
+# 4b6e8e99ae285b2a. That is a better instrument than a fresh sitting would
+# be: alternated rounds in one sitting resolve four per cent, and the spread
+# between sittings on this machine is larger than that. Re-measuring
+# everything would have replaced numbers known not to have moved with
+# numbers differing by more than the change does.
+#
+# Rows_Singly is one instruction a block shorter than it was, three pointer
+# advances having become two, which is the only arithmetic difference and is
+# below what any figure here resolves.
+
+reference D4F88ADEA6312AD2 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -4950,7 +5055,42 @@ reference 8D6243EA2FD0A3AF src/library/model_runner-backend-reference.adb src/li
 #   110-token prompt, nothing gen.     0.763 s        0.529 s
 #     processor time                   3.65 s         0.11 s
 
-device 65B8F61424F86103 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, and the figures above were NOT re-taken. This entry is the
+# other thing this file allows -- saying why a change cannot have moved
+# them -- and it is the first time that has been used rather than a sitting.
+#
+# What changed: every machine code insertion in the integer kernels stopped
+# advancing the pointers it was handed. They did it with an addq on a
+# register declared an input, which tells the compiler nothing and works
+# only while it has no other use for that register; the six-bit kernel
+# raised inside a worker when it stopped working, and an exception handler
+# and nothing else made it run again. Four insertions still did it, all of
+# them working and all of them having passed gates, including Rows_Singly,
+# which every generated eight-bit token runs and which advanced four
+# operands -- more than the one that failed. All six now keep cursors in
+# registers of their own and copy the counter rather than decrementing it in
+# place.
+#
+# Why it cannot have moved the figures, and the evidence rather than the
+# argument. Three alternated rounds on both models, in one sitting:
+#
+#                                     before      after
+#   eight-bit, sixty-four generated   2.085 s     2.086 s
+#   eight-bit, 110-token prompt       0.767 s     0.765 s
+#   four-bit, thirty-two generated    0.357 s     0.362 s
+#
+# and every digest identical -- 448c2ed68ec342ee, cbf29ce484222325,
+# 4b6e8e99ae285b2a. That is a better instrument than a fresh sitting would
+# be: alternated rounds in one sitting resolve four per cent, and the spread
+# between sittings on this machine is larger than that. Re-measuring
+# everything would have replaced numbers known not to have moved with
+# numbers differing by more than the change does.
+#
+# Rows_Singly is one instruction a block shorter than it was, three pointer
+# advances having become two, which is the only arithmetic difference and is
+# below what any figure here resolves.
+
+device 2DB37BA5BCE274BE src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -5258,7 +5398,42 @@ device 65B8F61424F86103 src/shaders/row_product.comp src/library/model_runner-sh
 # twelve-token runs and a twelve-token run is a third loading and warm-up;
 # the README says so and says to read the conclusion rather than the number.
 
-drafting 187BD1E8C7313EDC src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, and the figures above were NOT re-taken. This entry is the
+# other thing this file allows -- saying why a change cannot have moved
+# them -- and it is the first time that has been used rather than a sitting.
+#
+# What changed: every machine code insertion in the integer kernels stopped
+# advancing the pointers it was handed. They did it with an addq on a
+# register declared an input, which tells the compiler nothing and works
+# only while it has no other use for that register; the six-bit kernel
+# raised inside a worker when it stopped working, and an exception handler
+# and nothing else made it run again. Four insertions still did it, all of
+# them working and all of them having passed gates, including Rows_Singly,
+# which every generated eight-bit token runs and which advanced four
+# operands -- more than the one that failed. All six now keep cursors in
+# registers of their own and copy the counter rather than decrementing it in
+# place.
+#
+# Why it cannot have moved the figures, and the evidence rather than the
+# argument. Three alternated rounds on both models, in one sitting:
+#
+#                                     before      after
+#   eight-bit, sixty-four generated   2.085 s     2.086 s
+#   eight-bit, 110-token prompt       0.767 s     0.765 s
+#   four-bit, thirty-two generated    0.357 s     0.362 s
+#
+# and every digest identical -- 448c2ed68ec342ee, cbf29ce484222325,
+# 4b6e8e99ae285b2a. That is a better instrument than a fresh sitting would
+# be: alternated rounds in one sitting resolve four per cent, and the spread
+# between sittings on this machine is larger than that. Re-measuring
+# everything would have replaced numbers known not to have moved with
+# numbers differing by more than the change does.
+#
+# Rows_Singly is one instruction a block shorter than it was, three pointer
+# advances having become two, which is the only arithmetic difference and is
+# below what any figure here resolves.
+
+drafting 7B3322B1168204A5 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -5468,7 +5643,42 @@ drafting 187BD1E8C7313EDC src/library/model_runner-generation.adb src/library/mo
 # twelve-token runs and a twelve-token run is a third loading and warm-up;
 # the README says so and says to read the conclusion rather than the number.
 
-scaling BABED4C5E8FD97AF src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, and the figures above were NOT re-taken. This entry is the
+# other thing this file allows -- saying why a change cannot have moved
+# them -- and it is the first time that has been used rather than a sitting.
+#
+# What changed: every machine code insertion in the integer kernels stopped
+# advancing the pointers it was handed. They did it with an addq on a
+# register declared an input, which tells the compiler nothing and works
+# only while it has no other use for that register; the six-bit kernel
+# raised inside a worker when it stopped working, and an exception handler
+# and nothing else made it run again. Four insertions still did it, all of
+# them working and all of them having passed gates, including Rows_Singly,
+# which every generated eight-bit token runs and which advanced four
+# operands -- more than the one that failed. All six now keep cursors in
+# registers of their own and copy the counter rather than decrementing it in
+# place.
+#
+# Why it cannot have moved the figures, and the evidence rather than the
+# argument. Three alternated rounds on both models, in one sitting:
+#
+#                                     before      after
+#   eight-bit, sixty-four generated   2.085 s     2.086 s
+#   eight-bit, 110-token prompt       0.767 s     0.765 s
+#   four-bit, thirty-two generated    0.357 s     0.362 s
+#
+# and every digest identical -- 448c2ed68ec342ee, cbf29ce484222325,
+# 4b6e8e99ae285b2a. That is a better instrument than a fresh sitting would
+# be: alternated rounds in one sitting resolve four per cent, and the spread
+# between sittings on this machine is larger than that. Re-measuring
+# everything would have replaced numbers known not to have moved with
+# numbers differing by more than the change does.
+#
+# Rows_Singly is one instruction a block shorter than it was, three pointer
+# advances having become two, which is the only arithmetic difference and is
+# below what any figure here resolves.
+
+scaling 48E11F2DB73A1ED2 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker
@@ -5753,4 +5963,39 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # twelve-token runs and a twelve-token run is a third loading and warm-up;
 # the README says so and says to read the conclusion rather than the number.
 
-outside 65B8F61424F86103 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, and the figures above were NOT re-taken. This entry is the
+# other thing this file allows -- saying why a change cannot have moved
+# them -- and it is the first time that has been used rather than a sitting.
+#
+# What changed: every machine code insertion in the integer kernels stopped
+# advancing the pointers it was handed. They did it with an addq on a
+# register declared an input, which tells the compiler nothing and works
+# only while it has no other use for that register; the six-bit kernel
+# raised inside a worker when it stopped working, and an exception handler
+# and nothing else made it run again. Four insertions still did it, all of
+# them working and all of them having passed gates, including Rows_Singly,
+# which every generated eight-bit token runs and which advanced four
+# operands -- more than the one that failed. All six now keep cursors in
+# registers of their own and copy the counter rather than decrementing it in
+# place.
+#
+# Why it cannot have moved the figures, and the evidence rather than the
+# argument. Three alternated rounds on both models, in one sitting:
+#
+#                                     before      after
+#   eight-bit, sixty-four generated   2.085 s     2.086 s
+#   eight-bit, 110-token prompt       0.767 s     0.765 s
+#   four-bit, thirty-two generated    0.357 s     0.362 s
+#
+# and every digest identical -- 448c2ed68ec342ee, cbf29ce484222325,
+# 4b6e8e99ae285b2a. That is a better instrument than a fresh sitting would
+# be: alternated rounds in one sitting resolve four per cent, and the spread
+# between sittings on this machine is larger than that. Re-measuring
+# everything would have replaced numbers known not to have moved with
+# numbers differing by more than the change does.
+#
+# Rows_Singly is one instruction a block shorter than it was, three pointer
+# advances having become two, which is the only arithmetic difference and is
+# below what any figure here resolves.
+
+outside 2DB37BA5BCE274BE src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
