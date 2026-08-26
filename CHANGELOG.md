@@ -44,6 +44,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The four-bit k-quant has an integer kernel.** Every kernel of the last
+  three days served Q8_0 and Q8_0 alone, and `Q4_K` -- which is what most
+  published models are actually stored in -- took the floating-point path
+  for every product it ever did. The same model in the smaller file read a
+  prompt seven and a half times slower than in the larger one.
+
+  It needed no new idea. A four-bit quant is zero to fifteen, which is
+  already the unsigned operand `VPDPBUSD` wants, so unlike the eight-bit
+  format it needs no bias and no bias correction. One thirty-two byte read
+  serves two sub-blocks, the low nibbles and the high, which is the pairing
+  the decoder beside it already uses. And the correction it does need -- a
+  value is a scale times the quant less a minimum -- is the sub-block's
+  activation total, which is the `Totals` table this kernel has been handed
+  since the byte product was written and which its own note says was "put
+  there for the formats that carry a minimum and unread for this one".
+
+  The 110-token prompt goes from **4.598 s to 1.317 s** and from 31.67
+  seconds of processor time to 8.19, medians of three alternated rounds,
+  better in every one. **The digest is identical in all six runs**: the
+  integer sums are exact either way and the rounding falls in the same
+  places.
+
+  A strip of four vectors and nothing else: a generated token and a host
+  without the byte dot product both go back where they went before. What had
+  to be added for them is a question the caller asks first -- whether a
+  product of this format and this many vectors will actually use the
+  quantized activations -- because quantizing for a product that then
+  declines is the whole cost of the packing and none of its benefit, and it
+  measured forty per cent of a generated token before the question existed.
+
 - **The device's matrix instruction, built and not kept.** This device
   offers `VK_KHR_cooperative_matrix` at sixteen by sixteen by sixteen,
   subgroup scope, for half-precision and for signed bytes. The Vulkan 1.0

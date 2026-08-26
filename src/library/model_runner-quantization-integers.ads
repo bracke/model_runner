@@ -69,6 +69,25 @@ package Model_Runner.Quantization.Integers is
    function Is_Packable (Columns : Element_Count) return Boolean
    is (Columns > 0 and then Columns mod Activation_Block = 0);
 
+   --  Whether a product of this format, with this many vectors, will
+   --  actually reach the integer path.
+   --
+   --  Has_Integer_Kernel is a pure function of the format and says what a
+   --  format could be multiplied as; this says what it will be, and the two
+   --  differ for the four-bit k-quant, which has a kernel for a batch and
+   --  none for a single vector. The difference matters to exactly one
+   --  caller and matters a great deal to it: quantizing the activations for
+   --  a product that then declines to use them is the whole cost of the
+   --  packing and none of its benefit, and it measured forty per cent of a
+   --  generated token before this was asked.
+   --
+   --  @param Format Weight format.
+   --  @param Count Vectors in the product.
+   --  @return Whether to quantize the activations for it.
+   function Packs_Vectors
+     (Format : Model_Runner.GGUF.Tensor_Type;
+      Count  : Element_Count) return Boolean;
+
    --  Whether this package multiplies a weight format without decoding it
    --  into binary32 first.
    --

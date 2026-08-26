@@ -1808,7 +1808,35 @@
 # them. The twenty-one per cent of samples a profile charged to that loop's
 # branch and cursor advances was skid from the loads they wait for.
 
-kernels F5BFF06A7FC0615A src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after the four-bit k-quant was given an integer
+# kernel. Every figure in this file is Q8_0 and the Q8_0 path did not change,
+# which is what these say: the 110-token prompt reads 0.806 s against 0.782,
+# twelve tokens 0.458 s against 0.448, sixty-four generated 2.160 s against
+# 2.165, and every digest is what it was. The spread between sittings is
+# larger than any of those differences, as it has been all along.
+#
+# Q4_K, which is the change. Medians of three alternated rounds:
+#
+#   110-token prompt, floating-point path   4.598 s   31.67 s of processor
+#   110-token prompt, byte dot product      1.317 s    8.19 s
+#   thirty-two generated, either way        0.949 s / 0.930 s
+#
+# and the digest is 4b6e8e99ae285b2a in all six runs. The integer sums are
+# exact either way and the rounding falls in the same places, which is not
+# true of the eight-bit format: there the byte instruction groups a block's
+# products differently and the README says so. Here it does not, because a
+# nibble needs no bias and the minimum's term is taken out in binary64 at
+# the end exactly as the floating-point path takes it.
+#
+# The same sitting, unalternated: 1.375 s for the prompt and 0.844 s
+# generating, at a load rising through 1.7.
+#
+# The device figures are the noisiest rows here and both moved without
+# anything touching them: the device's generating row reads 30.9 t/s against
+# 27.3 last sitting, and llama.cpp at -ngl 0 reads 872.1 t/s against 774.6.
+# Neither is a change to either program.
+
+kernels A935E6E51BAC43CA src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
@@ -2622,7 +2650,35 @@ kernels F5BFF06A7FC0615A src/library/model_runner-quantization.adb src/library/m
 # them. The twenty-one per cent of samples a profile charged to that loop's
 # branch and cursor advances was skid from the loads they wait for.
 
-engine 494762643B53CB2A src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after the four-bit k-quant was given an integer
+# kernel. Every figure in this file is Q8_0 and the Q8_0 path did not change,
+# which is what these say: the 110-token prompt reads 0.806 s against 0.782,
+# twelve tokens 0.458 s against 0.448, sixty-four generated 2.160 s against
+# 2.165, and every digest is what it was. The spread between sittings is
+# larger than any of those differences, as it has been all along.
+#
+# Q4_K, which is the change. Medians of three alternated rounds:
+#
+#   110-token prompt, floating-point path   4.598 s   31.67 s of processor
+#   110-token prompt, byte dot product      1.317 s    8.19 s
+#   thirty-two generated, either way        0.949 s / 0.930 s
+#
+# and the digest is 4b6e8e99ae285b2a in all six runs. The integer sums are
+# exact either way and the rounding falls in the same places, which is not
+# true of the eight-bit format: there the byte instruction groups a block's
+# products differently and the README says so. Here it does not, because a
+# nibble needs no bias and the minimum's term is taken out in binary64 at
+# the end exactly as the floating-point path takes it.
+#
+# The same sitting, unalternated: 1.375 s for the prompt and 0.844 s
+# generating, at a load rising through 1.7.
+#
+# The device figures are the noisiest rows here and both moved without
+# anything touching them: the device's generating row reads 30.9 t/s against
+# 27.3 last sitting, and llama.cpp at -ngl 0 reads 872.1 t/s against 774.6.
+# Neither is a change to either program.
+
+engine 53F29B68549AAD02 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -2768,7 +2824,35 @@ engine 494762643B53CB2A src/library/model_runner-llama.adb src/library/model_run
 # them. The twenty-one per cent of samples a profile charged to that loop's
 # branch and cursor advances was skid from the loads they wait for.
 
-reference D5B4EFDA87D7DB0C src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after the four-bit k-quant was given an integer
+# kernel. Every figure in this file is Q8_0 and the Q8_0 path did not change,
+# which is what these say: the 110-token prompt reads 0.806 s against 0.782,
+# twelve tokens 0.458 s against 0.448, sixty-four generated 2.160 s against
+# 2.165, and every digest is what it was. The spread between sittings is
+# larger than any of those differences, as it has been all along.
+#
+# Q4_K, which is the change. Medians of three alternated rounds:
+#
+#   110-token prompt, floating-point path   4.598 s   31.67 s of processor
+#   110-token prompt, byte dot product      1.317 s    8.19 s
+#   thirty-two generated, either way        0.949 s / 0.930 s
+#
+# and the digest is 4b6e8e99ae285b2a in all six runs. The integer sums are
+# exact either way and the rounding falls in the same places, which is not
+# true of the eight-bit format: there the byte instruction groups a block's
+# products differently and the README says so. Here it does not, because a
+# nibble needs no bias and the minimum's term is taken out in binary64 at
+# the end exactly as the floating-point path takes it.
+#
+# The same sitting, unalternated: 1.375 s for the prompt and 0.844 s
+# generating, at a load rising through 1.7.
+#
+# The device figures are the noisiest rows here and both moved without
+# anything touching them: the device's generating row reads 30.9 t/s against
+# 27.3 last sitting, and llama.cpp at -ngl 0 reads 872.1 t/s against 774.6.
+# Neither is a change to either program.
+
+reference 3EDC2033F89B9574 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -4402,7 +4486,45 @@ reference D5B4EFDA87D7DB0C src/library/model_runner-backend-reference.adb src/li
 #     processor time                   3.69 s         0.11 s
 
 
-device 6DC9E5A88711D4D0 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after the four-bit k-quant was given an integer
+# kernel. Every figure in this file is Q8_0 and the Q8_0 path did not change,
+# which is what these say: the 110-token prompt reads 0.806 s against 0.782,
+# twelve tokens 0.458 s against 0.448, sixty-four generated 2.160 s against
+# 2.165, and every digest is what it was. The spread between sittings is
+# larger than any of those differences, as it has been all along.
+#
+# Q4_K, which is the change. Medians of three alternated rounds:
+#
+#   110-token prompt, floating-point path   4.598 s   31.67 s of processor
+#   110-token prompt, byte dot product      1.317 s    8.19 s
+#   thirty-two generated, either way        0.949 s / 0.930 s
+#
+# and the digest is 4b6e8e99ae285b2a in all six runs. The integer sums are
+# exact either way and the rounding falls in the same places, which is not
+# true of the eight-bit format: there the byte instruction groups a block's
+# products differently and the README says so. Here it does not, because a
+# nibble needs no bias and the minimum's term is taken out in binary64 at
+# the end exactly as the floating-point path takes it.
+#
+# The same sitting, unalternated: 1.375 s for the prompt and 0.844 s
+# generating, at a load rising through 1.7.
+#
+# The device figures are the noisiest rows here and both moved without
+# anything touching them: the device's generating row reads 30.9 t/s against
+# 27.3 last sitting, and llama.cpp at -ngl 0 reads 872.1 t/s against 774.6.
+# Neither is a change to either program.
+#
+# The six cells of the device table, taken in this sitting:
+#
+#                                   cpu, 7 workers    device
+#   6-token prompt, 12 generated       0.448 s        0.434 s
+#     evaluating the prompt            0.071 s        0.053 s
+#     generating                       0.379 s        0.381 s
+#     processor time                   1.62 s         0.04 s
+#   110-token prompt, nothing gen.     0.806 s        0.542 s
+#     processor time                   3.77 s         0.12 s
+
+device CE46E0FC8B6293A8 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -4583,7 +4705,35 @@ device 6DC9E5A88711D4D0 src/shaders/row_product.comp src/library/model_runner-sh
 # them. The twenty-one per cent of samples a profile charged to that loop's
 # branch and cursor advances was skid from the loads they wait for.
 
-drafting 00F980F5D07031E7 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after the four-bit k-quant was given an integer
+# kernel. Every figure in this file is Q8_0 and the Q8_0 path did not change,
+# which is what these say: the 110-token prompt reads 0.806 s against 0.782,
+# twelve tokens 0.458 s against 0.448, sixty-four generated 2.160 s against
+# 2.165, and every digest is what it was. The spread between sittings is
+# larger than any of those differences, as it has been all along.
+#
+# Q4_K, which is the change. Medians of three alternated rounds:
+#
+#   110-token prompt, floating-point path   4.598 s   31.67 s of processor
+#   110-token prompt, byte dot product      1.317 s    8.19 s
+#   thirty-two generated, either way        0.949 s / 0.930 s
+#
+# and the digest is 4b6e8e99ae285b2a in all six runs. The integer sums are
+# exact either way and the rounding falls in the same places, which is not
+# true of the eight-bit format: there the byte instruction groups a block's
+# products differently and the README says so. Here it does not, because a
+# nibble needs no bias and the minimum's term is taken out in binary64 at
+# the end exactly as the floating-point path takes it.
+#
+# The same sitting, unalternated: 1.375 s for the prompt and 0.844 s
+# generating, at a load rising through 1.7.
+#
+# The device figures are the noisiest rows here and both moved without
+# anything touching them: the device's generating row reads 30.9 t/s against
+# 27.3 last sitting, and llama.cpp at -ngl 0 reads 872.1 t/s against 774.6.
+# Neither is a change to either program.
+
+drafting D09F07A95ACA06EB src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -4666,7 +4816,35 @@ drafting 00F980F5D07031E7 src/library/model_runner-generation.adb src/library/mo
 # them. The twenty-one per cent of samples a profile charged to that loop's
 # branch and cursor advances was skid from the loads they wait for.
 
-scaling 5EEF0C402BD86AE4 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after the four-bit k-quant was given an integer
+# kernel. Every figure in this file is Q8_0 and the Q8_0 path did not change,
+# which is what these say: the 110-token prompt reads 0.806 s against 0.782,
+# twelve tokens 0.458 s against 0.448, sixty-four generated 2.160 s against
+# 2.165, and every digest is what it was. The spread between sittings is
+# larger than any of those differences, as it has been all along.
+#
+# Q4_K, which is the change. Medians of three alternated rounds:
+#
+#   110-token prompt, floating-point path   4.598 s   31.67 s of processor
+#   110-token prompt, byte dot product      1.317 s    8.19 s
+#   thirty-two generated, either way        0.949 s / 0.930 s
+#
+# and the digest is 4b6e8e99ae285b2a in all six runs. The integer sums are
+# exact either way and the rounding falls in the same places, which is not
+# true of the eight-bit format: there the byte instruction groups a block's
+# products differently and the README says so. Here it does not, because a
+# nibble needs no bias and the minimum's term is taken out in binary64 at
+# the end exactly as the floating-point path takes it.
+#
+# The same sitting, unalternated: 1.375 s for the prompt and 0.844 s
+# generating, at a load rising through 1.7.
+#
+# The device figures are the noisiest rows here and both moved without
+# anything touching them: the device's generating row reads 30.9 t/s against
+# 27.3 last sitting, and llama.cpp at -ngl 0 reads 872.1 t/s against 774.6.
+# Neither is a change to either program.
+
+scaling 54DB6F2C30350974 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker
@@ -4731,7 +4909,7 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # having llama.cpp built, which nothing here checks and nobody should have
 # to install to run the suite.
 
-# covers: the four rows of the llama.cpp comparison table and the seconds quoted under it, and the 774.6 t/s that says why the command names --device none
+# covers: the four rows of the llama.cpp comparison table and the seconds quoted under it, and the 872.1 t/s that says why the command names --device none
 # load: 0.16 to 1.69 and 0.87 to 2.70 for the processor rows, 0.75 to 0.69 and 0.69 to 0.68 for the device ones, and 0.68 and 0.97 at the start of the two llama-bench runs, 2026-08-24
 # model: TinyLlama-1.1B-Chat v1.0 Q8_0, as TheBloke published it -- tinyllama-1.1b-chat-v1.0.Q8_0.gguf, 1170781568 bytes -- read by both runtimes.
 # load: 1.39 to 1.89 and 1.47 to 2.92 for the processor rows, 1.50 to 1.46 and 1.46 to 1.39 for the device ones, and 1.39 and 2.40 at the start of the two llama-bench runs, 2026-08-24
@@ -4824,4 +5002,32 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # them. The twenty-one per cent of samples a profile charged to that loop's
 # branch and cursor advances was skid from the loads they wait for.
 
-outside 6DC9E5A88711D4D0 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-26, taken again after the four-bit k-quant was given an integer
+# kernel. Every figure in this file is Q8_0 and the Q8_0 path did not change,
+# which is what these say: the 110-token prompt reads 0.806 s against 0.782,
+# twelve tokens 0.458 s against 0.448, sixty-four generated 2.160 s against
+# 2.165, and every digest is what it was. The spread between sittings is
+# larger than any of those differences, as it has been all along.
+#
+# Q4_K, which is the change. Medians of three alternated rounds:
+#
+#   110-token prompt, floating-point path   4.598 s   31.67 s of processor
+#   110-token prompt, byte dot product      1.317 s    8.19 s
+#   thirty-two generated, either way        0.949 s / 0.930 s
+#
+# and the digest is 4b6e8e99ae285b2a in all six runs. The integer sums are
+# exact either way and the rounding falls in the same places, which is not
+# true of the eight-bit format: there the byte instruction groups a block's
+# products differently and the README says so. Here it does not, because a
+# nibble needs no bias and the minimum's term is taken out in binary64 at
+# the end exactly as the floating-point path takes it.
+#
+# The same sitting, unalternated: 1.375 s for the prompt and 0.844 s
+# generating, at a load rising through 1.7.
+#
+# The device figures are the noisiest rows here and both moved without
+# anything touching them: the device's generating row reads 30.9 t/s against
+# 27.3 last sitting, and llama.cpp at -ngl 0 reads 872.1 t/s against 774.6.
+# Neither is a change to either program.
+
+outside CE46E0FC8B6293A8 src/shaders/row_product.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

@@ -9,6 +9,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
    use type Interfaces.Unsigned_8;
    use type B.Byte_Count;
+   use type G.Tensor_Type;
    use type N.Real;
    use type N.Wide_Real;
    use type Interfaces.Unsigned_32;
@@ -86,6 +87,24 @@ package body Model_Runner.Quantization.Integers.Kernels is
    --  once at the end of it. Thirty-two bytes, aligned to thirty-two,
    --  because they are stored with an aligned move.
    type Lanes_8 is array (0 .. 7) of N.Real with Alignment => 32;
+
+   --  Two rows against four vectors, for the four-bit k-quant.
+   procedure Rows_By_Strips_Q4K
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Stride    : Element_Count;
+      Count     : Element_Count;
+      At_Vector : Element_Count;
+      Live      : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean);
 
    --  Two rows against four vectors, with the block loop inside the
    --  insertion. Only for the byte dot product.
@@ -535,6 +554,590 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Taken := True;
    end Rows_By_Strips;
 
+   --------------------------
+   -- Rows_By_Strips_Q4K --
+   --------------------------
+
+   --  What Rows_By_Strips does for the eight-bit format, done for the
+   --  four-bit k-quant.
+   --
+   --  The two are the same shape and differ in three things, and none of
+   --  them changes the arithmetic around the instruction.
+   --
+   --  A quant is a nibble rather than a byte, so one thirty-two byte read
+   --  serves two sub-blocks: the low nibbles are the first and the high
+   --  nibbles the second, which is the order the format stores them in and
+   --  the same pairing the decoder beside this reads them in. Masking gives
+   --  the one and a shift with the same mask gives the other, which is four
+   --  instructions where the eight-bit format needs two -- and they serve
+   --  twice as many sub-blocks, so it is the same cost per multiply.
+   --
+   --  A nibble is *already* what the instruction's unsigned operand wants.
+   --  The eight-bit format has to be biased by a hundred and twenty-eight
+   --  and the bias taken back out of the answer; a four-bit quant is zero
+   --  to fifteen and goes in as it lies. The correction this format needs
+   --  instead is its own: a value is the scale times the quant less a
+   --  minimum, and the minimum's term is the sub-block's activation total
+   --  again -- the same Totals table, used for the format it was put there
+   --  for.
+   --
+   --  A block is two hundred and fifty-six elements rather than thirty-two,
+   --  so the insertion walks eight sub-blocks to a turn and the weights
+   --  advance by a hundred and forty-four bytes where the activations
+   --  advance by two hundred and fifty-six.
+   procedure Rows_By_Strips_Q4K
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Stride    : Element_Count;
+      Count     : Element_Count;
+      At_Vector : Element_Count;
+
+      --  How many of the strip's four vectors are real. A batch is not a
+      --  multiple of four and the instruction has no shorter form, so the
+      --  last strip recomputes a vector it has already done rather than
+      --  reading past the end of the batch, and drops the answer.
+      Live      : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      LF : constant Character := ASCII.LF;
+
+      Panel_Rows : constant := 2;
+      Strip      : constant := 4;
+
+      --  Sub-blocks to a block of this format.
+      Deep       : constant := 8;
+
+      --  The widest row this reads, in sub-blocks.
+      Scale_Room : constant := 1024;
+
+      type Strip_Scales is
+        array (0 .. Panel_Rows * Strip * Scale_Room - 1) of N.Real;
+      Scaling : Strip_Scales;
+
+      type Undo_Table is
+        array (0 .. Panel_Rows * Strip - 1) of N.Real;
+      Undo : Undo_Table;
+
+      type Vector_Places is array (0 .. Strip - 1) of Element_Count;
+      type Vector_Numbers is array (0 .. Strip * Scale_Room - 1) of N.Real;
+
+      Vector_At    : Vector_Places;
+      Vector_Scale : Vector_Numbers;
+      Vector_Total : Vector_Numbers;
+
+      type Strip_Lanes is array (0 .. Panel_Rows * Strip - 1) of Lanes_8;
+      Landed : Strip_Lanes;
+
+      Width : constant B.Byte_Count :=
+        B.Byte_Count (G.Block_Bytes (G.Type_Q4_K));
+
+      --  The six-bit scale and minimum of one sub-block, as the format
+      --  packs them: four of each in the low six bits of the first eight
+      --  bytes, and the remaining four split across the top two bits of
+      --  those and the two halves of the last four. Written out here rather
+      --  than called for, because the decoder that has it keeps it to
+      --  itself and a second reader of twelve bytes is smaller than a
+      --  reason to make it public.
+      procedure Sub_Scale
+        (Base    : B.Byte_Index;
+         Index   : Natural;
+         Factor  : out Interfaces.Unsigned_8;
+         Minimum : out Interfaces.Unsigned_8);
+
+      procedure Sub_Scale
+        (Base    : B.Byte_Index;
+         Index   : Natural;
+         Factor  : out Interfaces.Unsigned_8;
+         Minimum : out Interfaces.Unsigned_8)
+      is
+         function Byte_At (Position : Natural) return Interfaces.Unsigned_8
+         is (Data (Base + B.Byte_Count (Position)));
+      begin
+         if Index < 4 then
+            Factor := Byte_At (Index) and 63;
+            Minimum := Byte_At (Index + 4) and 63;
+         else
+            Factor :=
+              (Byte_At (Index + 4) and 16#0F#)
+              or Interfaces.Shift_Left
+                   (Interfaces.Shift_Right (Byte_At (Index - 4), 6), 4);
+            Minimum :=
+              Interfaces.Shift_Right (Byte_At (Index + 4), 4)
+              or Interfaces.Shift_Left
+                   (Interfaces.Shift_Right (Byte_At (Index), 6), 4);
+         end if;
+      end Sub_Scale;
+
+      --  The vector a lane of the strip reads: its own where the batch
+      --  reaches that far, and the last real one where it does not.
+      function Held (Vector : Element_Count) return Element_Count
+      is (Element_Count'Min (At_Vector + Vector, Count - 1));
+   begin
+      Taken := False;
+
+      if Blocks * Deep > Scale_Room
+        or else Rows mod Panel_Rows /= 0
+        or else Live = 0
+      then
+         return;
+      end if;
+
+      --  What the strip's four vectors contribute, once for the whole call:
+      --  where each begins, its scale for every sub-block, and that scale
+      --  against the sub-block's activation total, which is what the
+      --  minimum's term wants.
+      for Vector in Element_Count range 0 .. Strip - 1 loop
+         Vector_At (Natural (Vector)) :=
+           (First + Held (Vector) * Stride) / Activation_Block;
+      end loop;
+
+      for Vector in 0 .. Strip - 1 loop
+         for Sub in 0 .. Blocks * Deep - 1 loop
+            declare
+               At_Scale : constant Element_Count :=
+                 Vector_At (Vector) + Sub;
+
+               Held : constant N.Real := Scales (Scales'First + At_Scale);
+            begin
+               Vector_Scale (Natural (Sub) * Strip + Vector) := Held;
+               Vector_Total (Natural (Sub) * Strip + Vector) :=
+                 Held * N.Real (Totals (Totals'First + At_Scale));
+            end;
+         end loop;
+      end loop;
+
+      for Panel in Element_Count range 0 .. Rows / Panel_Rows - 1 loop
+         declare
+            At_Row : constant Element_Count := Panel * Panel_Rows;
+            Base   : constant B.Byte_Index :=
+              Data'First + Offset + Row_Bytes * B.Byte_Count (At_Row);
+         begin
+            Undo := [others => 0.0];
+
+            for Block in 0 .. Blocks - 1 loop
+               for Row in Element_Count range 0 .. Panel_Rows - 1 loop
+                  declare
+                     At_Byte : constant B.Byte_Index :=
+                       Base + Row_Bytes * B.Byte_Count (Row)
+                       + Width * B.Byte_Count (Block);
+
+                     Whole : constant N.Real := Scale_At (Data, At_Byte);
+                     Least : constant N.Real := Scale_At (Data, At_Byte + 2);
+
+                     At_Undo : constant Natural := Natural (Row) * Strip;
+                  begin
+                     for Sub in 0 .. Deep - 1 loop
+                        declare
+                           Factor, Minimum : Interfaces.Unsigned_8;
+
+                           At_Vec : constant Natural :=
+                             (Natural (Block) * Deep + Sub) * Strip;
+                           At_Out : constant Natural :=
+                             (Natural (Block) * Deep + Sub)
+                             * (Panel_Rows * Strip)
+                             + Natural (Row) * Strip;
+                        begin
+                           Sub_Scale (At_Byte + 4, Sub, Factor, Minimum);
+
+                           declare
+                              Up   : constant N.Real :=
+                                Whole * N.Real (Natural (Factor));
+                              Down : constant N.Real :=
+                                Least * N.Real (Natural (Minimum));
+                           begin
+                              for K in 0 .. Strip - 1 loop
+                                 Scaling (At_Out + K) :=
+                                   Up * Vector_Scale (At_Vec + K);
+
+                                 Undo (At_Undo + K) :=
+                                   Undo (At_Undo + K)
+                                   + Down * Vector_Total (At_Vec + K);
+                              end loop;
+                           end;
+                        end;
+                     end loop;
+                  end;
+               end loop;
+            end loop;
+
+            Landed := [others => [others => 0.0]];
+
+            System.Machine_Code.Asm
+              ("movl $0x0F0F0F0F, %%eax" & LF &
+               "vmovd %%eax, %%xmm3" & LF &
+               "vpbroadcastd %%xmm3, %%ymm3" & LF &
+               "vpxord %%ymm16, %%ymm16, %%ymm16" & LF &
+               "vpxord %%ymm17, %%ymm17, %%ymm17" & LF &
+               "vpxord %%ymm18, %%ymm18, %%ymm18" & LF &
+               "vpxord %%ymm19, %%ymm19, %%ymm19" & LF &
+               "vpxord %%ymm20, %%ymm20, %%ymm20" & LF &
+               "vpxord %%ymm21, %%ymm21, %%ymm21" & LF &
+               "vpxord %%ymm22, %%ymm22, %%ymm22" & LF &
+               "vpxord %%ymm23, %%ymm23, %%ymm23" & LF &
+               "xorq %%rcx, %%rcx" & LF &
+               "xorq %%rdx, %%rdx" & LF &
+               "1:" & LF &
+               "vmovdqu 16(%1,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm3, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm3, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 0(%3,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 0(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 0(%4,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 4(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 0(%5,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 8(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 0(%6,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 12(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 32(%3,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 32(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 32(%4,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 36(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 32(%5,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 40(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 32(%6,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 44(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vmovdqu 16(%2,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm3, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm3, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 0(%3,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 16(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 0(%4,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 20(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 0(%5,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 24(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 0(%6,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 28(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 32(%3,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 48(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 32(%4,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 52(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 32(%5,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 56(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 32(%6,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 60(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
+               "vmovdqu 48(%1,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm3, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm3, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 64(%3,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 64(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 64(%4,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 68(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 64(%5,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 72(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 64(%6,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 76(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 96(%3,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 96(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 96(%4,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 100(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 96(%5,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 104(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 96(%6,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 108(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vmovdqu 48(%2,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm3, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm3, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 64(%3,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 80(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 64(%4,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 84(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 64(%5,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 88(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 64(%6,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 92(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 96(%3,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 112(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 96(%4,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 116(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 96(%5,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 120(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 96(%6,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 124(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
+               "vmovdqu 80(%1,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm3, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm3, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 128(%3,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 128(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 128(%4,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 132(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 128(%5,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 136(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 128(%6,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 140(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 160(%3,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 160(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 160(%4,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 164(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 160(%5,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 168(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 160(%6,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 172(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vmovdqu 80(%2,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm3, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm3, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 128(%3,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 144(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 128(%4,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 148(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 128(%5,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 152(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 128(%6,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 156(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 160(%3,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 176(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 160(%4,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 180(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 160(%5,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 184(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 160(%6,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 188(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
+               "vmovdqu 112(%1,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm3, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm3, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 192(%3,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 192(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 192(%4,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 196(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 192(%5,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 200(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 192(%6,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 204(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 224(%3,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 224(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 224(%4,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 228(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 224(%5,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 232(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 224(%6,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 236(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vmovdqu 112(%2,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm3, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm3, %%ymm5, %%ymm5" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 192(%3,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 208(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 192(%4,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 212(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 192(%5,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 216(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 192(%6,%%rdx,1), %%ymm4, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 220(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 224(%3,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 240(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 224(%4,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 244(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 224(%5,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 248(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd 224(%6,%%rdx,1), %%ymm5, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 252(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
+               "addq $144, %%rcx" & LF &
+               "addq $256, %%rdx" & LF &
+               "decq %8" & LF &
+               "jnz 1b" & LF &
+               "vmovaps %%ymm16, 0(%0)" & LF &
+               "vmovaps %%ymm17, 32(%0)" & LF &
+               "vmovaps %%ymm18, 64(%0)" & LF &
+               "vmovaps %%ymm19, 96(%0)" & LF &
+               "vmovaps %%ymm20, 128(%0)" & LF &
+               "vmovaps %%ymm21, 160(%0)" & LF &
+               "vmovaps %%ymm22, 192(%0)" & LF &
+               "vmovaps %%ymm23, 224(%0)",
+               Inputs =>
+                 [System.Address'Asm_Input ("r", Landed'Address),
+                  System.Address'Asm_Input ("r", Data (Base)'Address),
+                  System.Address'Asm_Input
+                    ("r", Data (Base + Row_Bytes)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First
+                                  + Held (0) * Stride)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First
+                                  + Held (1) * Stride)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First
+                                  + Held (2) * Stride)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First
+                                  + Held (3) * Stride)'Address),
+                  System.Address'Asm_Input ("r", Scaling (0)'Address),
+                  Element_Count'Asm_Input ("r", Blocks)],
+               Clobber  =>
+                 "rax,rcx,rdx,ymm0,ymm2,ymm3,ymm4,ymm5,ymm16,ymm17,ymm18,"
+                 & "ymm19,ymm20,ymm21,ymm22,ymm23,memory",
+               Volatile => True);
+
+            for Row in Element_Count range 0 .. Panel_Rows - 1 loop
+               for Vector in Element_Count range 0 .. Live - 1 loop
+                  declare
+                     Which : constant Natural :=
+                       Natural (Row) * Strip + Natural (Vector);
+                     Total : N.Wide_Real := 0.0;
+                     At_It : constant Element_Count :=
+                       (At_Row + Row) * Count + At_Vector + Vector;
+                  begin
+                     for Lane in Landed (Which)'Range loop
+                        Total := Total + N.Wide_Real (Landed (Which) (Lane));
+                     end loop;
+
+                     Sums (Sums'First + At_It) :=
+                       Sums (Sums'First + At_It)
+                       + Total - N.Wide_Real (Undo (Which));
+                  end;
+               end loop;
+            end loop;
+         end;
+      end loop;
+
+      Taken := True;
+   end Rows_By_Strips_Q4K;
+
    ----------
    -- Rows --
    ----------
@@ -567,13 +1170,68 @@ package body Model_Runner.Quantization.Integers.Kernels is
         or else Count = 0
         or else Rows = 0
         or else Rows > Row_Tile
-        or else Per /= Activation_Block
+        or else Per mod Activation_Block /= 0
         or else Sums'Length < Rows * Count
         or else not B.Has_Room
                      (Data, Offset,
                       Row_Bytes * B.Byte_Count (Rows - 1)
                       + Width * B.Byte_Count (Blocks))
       then
+         return;
+      end if;
+
+      --  The four-bit k-quant, which has one shape here and not the other
+      --  two: a strip of four vectors and nothing else.
+      --
+      --  There is no single-vector kernel for it and no baseline one. A
+      --  generated token and a host without the byte dot product both go
+      --  back to the floating-point path, which is where every product of
+      --  this format went until now; what is claimed here is the batch,
+      --  which is where a prompt spends itself.
+      if Format = G.Type_Q4_K then
+         if not Deep
+           or else Count < 4
+           or else Rows mod 2 /= 0
+           or else Per /= 256
+         then
+            return;
+         end if;
+
+         declare
+            Reach : constant Element_Count :=
+              First + (Count - 1) * Stride + Blocks * Per;
+
+            --  Eight sub-blocks to a block, and a scale and a total for
+            --  each of them.
+            Blocks_Reach : constant Element_Count :=
+              (First + (Count - 1) * Stride) / Activation_Block + Blocks * 8;
+
+            Done : Boolean;
+         begin
+            if First < Values'First
+              or else First mod Activation_Block /= 0
+              or else Stride mod Activation_Block /= 0
+              or else Reach < First
+              or else Reach - 1 > Values'Last
+              or else Scales'Length < Blocks_Reach
+              or else Totals'Length < Blocks_Reach
+            then
+               return;
+            end if;
+
+            for At_Strip in Element_Count range 0 .. (Count + 3) / 4 - 1 loop
+               Rows_By_Strips_Q4K
+                 (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                  Totals, First, Stride, Count, At_Strip * 4,
+                  Element_Count'Min (4, Count - At_Strip * 4), Sums, Done);
+
+               if not Done then
+                  return;
+               end if;
+            end loop;
+         end;
+
+         Ok := True;
          return;
       end if;
 
