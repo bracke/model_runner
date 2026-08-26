@@ -44,6 +44,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The six-bit k-quant has one too, because a file is a mixture.** Giving
+  Q4_K a kernel stopped short of what it should have been worth, and a
+  profile said why: `accumulate_dot`, the floating-point row product, was
+  44.7 per cent of what remained, beside the new kernel's 43.6. Reading the
+  file's tensor table explains it -- a `_M` file keeps its output projection
+  and a few other tensors at six bits, so TinyLlama Q4_K_M is 21 tensors and
+  16.9 per cent of its weights Q6_K, and that sixth was costing half the
+  prompt.
+
+  Three things differ from the four-bit kernel. A quant is six bits in two
+  places, so assembling thirty-two is five instructions rather than two. A
+  scale covers sixteen elements where an activation block covers thirty-two
+  -- and the instruction makes that free, because it sums four bytes into
+  each of eight lanes, so the two halves are already apart when the sums
+  arrive: two masked multiply-adds, one per half of the register. And the
+  quants go in unsigned, without the thirty-two the format subtracts, which
+  needs the activation summed over each sixteen rather than each thirty-two
+  and so is summed here rather than read from `Totals`.
+
+  The 110-token prompt goes from **1.355 s to 0.990** and from 8.29 seconds
+  of processor time to 5.47, medians of three alternated rounds, with the
+  same digest and generating unmoved. End to end, this file read that prompt
+  in **4.598 s** before today: four and a half times.
+
 - **And a generated token of the four-bit k-quant has one too.** The
   eight-bit format's generated token is bound by the memory path -- it stops
   getting faster at four workers, and no kernel helps a token that is
