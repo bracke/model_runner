@@ -154,6 +154,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Attention's memory shape: the obvious fix built, measured and not kept,
+  and a pattern this project can now state three times over.** A lane
+  computes one score by walking a key in series, and a wave's sixty-four
+  lanes take keys a whole cached position apart, so every step lands on
+  sixty-four cache lines. Staging the tile's keys into shared memory the way
+  `row_product.comp` does is correct -- the suite passes and the digest does
+  not move -- and slower in every alternated pair, 0.678, 1.073, 0.771 and
+  0.752 s against 0.492, 0.589, 0.579 and 0.584.
+
+  The shared memory a workgroup takes went from two hundred and fifty-six
+  bytes to sixteen and a half kilobytes, so what a workgroup processor can
+  hold at once fell from dozens to three. Attention is not short of
+  bandwidth -- every line a lane fetches is used sixteen times -- it is
+  waiting, and what hides waiting is other workgroups.
+
+  Three attempts now: the row product's shared window (1.399 s against
+  0.516), the matrix product's staged operand (1.499 ms against 0.580), and
+  this. On this part the path from the cache to the instruction beats
+  anything built on top of it, and shared memory pays only where something
+  is genuinely shared -- the matrix product's weight tile, read by four
+  multiply-adds apiece, is the one staging here that does.
+
 - **A strip of eight was built and is thirteen per cent slower, so it is not
   kept.** The entry below said the arithmetic around the insertion works four
   floats at a time on pipes that are eight wide. Widening the strip puts it

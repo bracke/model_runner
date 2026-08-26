@@ -6793,4 +6793,54 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # sixty-four cache lines at every step. That is the shape row_product.comp
 # was rewritten to avoid, and it is the next thing to try here.
 
+# 2026-08-26, attention's memory shape: the obvious fix built and lost, and
+# a pattern this file can now state three times over.
+#
+# The entry above named the shape: a lane computes one score by walking a
+# key in series, and the sixty-four lanes of a wave take sixty-four keys a
+# whole cached position apart, so every step lands on sixty-four cache
+# lines. The fix is the one row_product.comp uses -- read the tile the way
+# the wave wants it, a position at a time with a lane to each component,
+# into shared memory, and let every lane find its key there. Sixty-five
+# floats to a row rather than sixty-four, so that no two lanes share a bank.
+#
+# It is correct: the suite passes and the twelve-token digest does not move.
+# It is also slower, in every alternated pair:
+#
+#   110-token device prompt, keys read where they lie   0.492  0.589  0.579  0.584
+#   110-token device prompt, keys staged in shared      0.678  1.073  0.771  0.752
+#
+# The machine carried a load of three to four from something else while
+# these were taken, so the absolute numbers are inflated by about a
+# half against the 0.29 s this prompt reads quiet. The pairs are alternated
+# and the direction is the same in all four, at a ratio of 1.3 to 1.8, which
+# is far outside anything the load explains.
+#
+# Why, and it is the same reason each time. The shared memory a workgroup
+# takes went from two hundred and fifty-six bytes to sixteen and a half
+# kilobytes. A workgroup processor has sixty-four kilobytes of it, so what
+# it can hold at once fell from dozens of workgroups to three. Attention is
+# not short of bandwidth -- a lane's own walk along a key is contiguous and
+# every line it fetches is used sixteen times -- it is waiting, and what
+# hides waiting is other workgroups. The staging bought locality the cache
+# was already providing and paid for it in the only currency that mattered.
+#
+# That is the third time this project has staged something into shared
+# memory by hand and measured a loss. The row product's shared window read
+# 1.399 s against 0.516. The matrix product's staged operand read 1.499 ms
+# against 0.580. Attention's staged keys read as above. Three different
+# kernels, three different operands, one answer: on this part the path from
+# the cache to the instruction is better than anything built on top of it,
+# and shared memory is worth taking only where something is shared -- which
+# is why the matrix product's weight tile, which four multiply-adds read,
+# is the one staging in this program that pays.
+#
+# What is left for attention, and why it is not next. The other shape is to
+# give a lane a component rather than a position, read the keys coalesced,
+# and reduce across the lanes. The reduction wants subgroup operations,
+# which this shader deliberately does not require -- it runs on a Vulkan 1.0
+# device and row_product.comp records the same refusal for the same reason
+# -- and without them it is a barrier a position, which is sixty-four
+# barriers a tile against the two it has now.
+
 outside 86D1890F46B8061C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

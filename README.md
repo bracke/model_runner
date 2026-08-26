@@ -2323,6 +2323,55 @@ traffic is wasted, but a wave's worth of it lands on sixty-four cache lines
 at every step. That is the shape `row_product.comp` was rewritten to avoid,
 and it is the next thing to try here.
 
+### The memory shape, and a pattern three times over
+
+The section above named attention's shape: a lane computes one score by
+walking a key in series, and the sixty-four lanes of a wave take sixty-four
+keys a whole cached position apart, so every step lands on sixty-four cache
+lines. The fix is the one `row_product.comp` uses -- read the tile the way the
+wave wants it, a position at a time with a lane to each component, into
+shared memory, and let every lane find its key there, sixty-five floats to a
+row so that no two lanes share a bank.
+
+It is correct: the suite passes and the twelve-token digest does not move. It
+is also slower, in every alternated pair.
+
+| 110-token device prompt | | | | |
+|---|---:|---:|---:|---:|
+| keys read where they lie | 0.492 s | 0.589 | 0.579 | 0.584 |
+| keys staged in shared memory | 0.678 s | 1.073 | 0.771 | 0.752 |
+
+The machine carried a load of three to four from something else while these
+were taken, so the absolute numbers are half again what this prompt reads
+quiet. The pairs are alternated and the direction is the same in all four, at
+a ratio of 1.3 to 1.8, which is far outside anything the load explains.
+
+**Why, and it is the same reason each time.** The shared memory a workgroup
+takes went from two hundred and fifty-six bytes to sixteen and a half
+kilobytes, and a workgroup processor has sixty-four: what it can hold at once
+fell from dozens of workgroups to three. Attention is not short of bandwidth
+-- a lane's own walk along a key is contiguous and every line it fetches is
+used sixteen times -- it is *waiting*, and what hides waiting is other
+workgroups. The staging bought locality the cache was already providing and
+paid for it in the only currency that mattered.
+
+**That is the third time this program has staged something into shared memory
+by hand and measured a loss.** The row product's shared window read 1.399 s
+against 0.516. The matrix product's staged operand read 1.499 ms against
+0.580. Attention's staged keys read as above. Three kernels, three operands,
+one answer: on this part the path from the cache to the instruction is better
+than anything built on top of it, and shared memory is worth taking only
+where something is genuinely shared -- which is why the matrix product's
+weight tile, read by four multiply-adds apiece, is the one staging here that
+pays.
+
+What is left for attention is to give a lane a component rather than a
+position, read the keys coalesced, and reduce across the lanes. That wants
+subgroup operations, which this shader deliberately does not require -- it
+runs on a Vulkan 1.0 device, and `row_product.comp` records the same refusal
+for the same reason -- and without them it is a barrier a position, which is
+sixty-four a tile against the two it has now.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has
