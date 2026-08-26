@@ -627,8 +627,8 @@ package body Tests.Backend_Cases is
       --  nothing about, and this one had been committed before anything
       --  here noticed.
       --
-      --  The second is sixty-four rows and a batch of forty: the three
-      --  formats that have a tile go through it, and the other twelve go
+      --  The second is sixty-four rows and a batch of forty: the four
+      --  formats that have a tile go through it, and the other eleven go
       --  through the row product at a larger shape than they had.
       type Shape is record
          Tall  : N.Element_Count;
@@ -649,13 +649,14 @@ package body Tests.Backend_Cases is
       --
       --  The matrix product's operands are half precision, which is a
       --  coarser weight by construction rather than by mistake, and the
-      --  same fixtures measure 7.1e-3 for the eight-bit format, 7.4e-3 for
-      --  the four-bit k-quant and 8.1e-3 for the six-bit one -- three
-      --  hundred times the row product's difference, and much the same
-      --  figure for all three, which is what says it is the operand rather
-      --  than any one decode. Their bound is set from that with room for a
-      --  device that rounds a tile differently, and is stated separately so
-      --  that the other twelve stay held to the tight one at both shapes.
+      --  same fixtures measure 7.1e-3 for the eight-bit format and 7.4e-3,
+      --  9.5e-3 and 8.1e-3 for the four-, five- and six-bit k-quants --
+      --  three hundred times the row product's difference, and within a
+      --  third of each other for all four, which is what says it is the
+      --  operand rather than any one decode. Their bound is set from that
+      --  with room for a device that rounds a tile differently, and is
+      --  stated separately so that the other eleven stay held to the tight
+      --  one at both shapes.
       Row_Bound   : constant N.Real := 1.0E-3;
       Tiled_Bound : constant N.Real := 5.0E-2;
 
@@ -780,7 +781,7 @@ package body Tests.Backend_Cases is
                        (if Chosen.Tiled
                           and then Format_Of (Which)
                                      in G.Type_Q8_0 | G.Type_Q4_K
-                                        | G.Type_Q6_K
+                                        | G.Type_Q5_K | G.Type_Q6_K
                         then Tiled_Bound else Row_Bound);
                   begin
                      if Many = 1 then

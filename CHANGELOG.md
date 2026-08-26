@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The five-bit k-quant reaches the device's matrix instruction too, and a
+  `Q5_K_M` prompt reads 0.305 s against 1.368.** It is the four-bit decode
+  with a fifth bit held in an array of its own: a byte of that array serves
+  all eight sub-blocks at one position, one bit each, so the sixteen bytes
+  an invocation reads are the same sixteen whichever sub-block the step is
+  and only which bit changes.
+
+  Medians of three alternated rounds, better in every one, every digest
+  unchanged, and both formats already there unmoved -- 0.299 s against 0.301
+  for the four-bit file and 0.286 against 0.282 for the eight-bit one.
+
+  **The three published quantizations of this model now read a prompt on the
+  device in the same tenth of a second**: 0.286 s for `Q8_0`, 0.299 for
+  `Q4_K_M`, 0.305 for `Q5_K_M`, where this morning they were 0.527, 0.891
+  and 1.368. The smaller file is no longer the slower one, which it had been
+  since the device could read a k-quant at all.
+
+  The device format test's tiled bound now covers four formats, which differ
+  from the processor by 7.1e-3, 7.4e-3, 9.5e-3 and 8.1e-3 -- within a third
+  of each other, which is what says the difference is the half-precision
+  operand rather than any one decode.
+
 - **The six-bit k-quant reaches the device's matrix instruction too, and a
   `Q4_K_M` prompt reads 0.300 s against 0.408.** A "_M" file is a mixture by
   construction: the four-bit format alone took it from 0.891 s to 0.402 and

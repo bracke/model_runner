@@ -20,19 +20,20 @@
 //  are read once for the whole batch and the activations once for the
 //  whole tile of rows.
 //
-//  Three formats -- eight-bit blocks, the four-bit k-quant and the six-bit
-//  one -- and only where the device offers VK_KHR_cooperative_matrix with a
-//  sixteen-by-sixteen-by-sixteen half-precision shape at subgroup scope.
+//  Four formats -- eight-bit blocks and the four-, five- and six-bit
+//  k-quants -- and only where the device offers VK_KHR_cooperative_matrix
+//  with a sixteen-by-sixteen-by-sixteen half-precision shape at subgroup
+//  scope.
 //  Everything else goes to row_product.comp, which reads all fifteen
 //  formats and needs nothing of the device beyond Vulkan 1.0.
 //
-//  The three are here rather than in three shaders because only the decode
+//  The four are here rather than in four shaders because only the decode
 //  differs: the tile, the accumulators, the operand loads and the store are
 //  the same instructions in the same order. The branch is on a push
 //  constant, so it is uniform across a workgroup and taken once a step.
 //
-//  Those three are what a published model is made of. A "_M" file is a
-//  mixture by construction -- four-bit for most of it, six-bit for the
+//  Those four are what a published model is made of. A "_M" file is a
+//  mixture by construction -- four or five bits for most of it, six for the
 //  output projection and a handful of others -- so a shader that took only
 //  one of them left the other on the row product and the file no faster
 //  than the sum of its slower half.
@@ -101,6 +102,7 @@ shared float16_t wt[TILE_R * KCH];
 //  them, which is the same numbering row_product.comp is given.
 const uint FMT_Q8_0 = 7u;
 const uint FMT_Q4_K = 11u;
+const uint FMT_Q5_K = 12u;
 const uint FMT_Q6_K = 13u;
 
 uint byte_at(uint at) { return (w[at >> 2u] >> ((at & 3u) * 8u)) & 255u; }
@@ -182,11 +184,12 @@ void main() {
 
     //  Bytes a row takes, which says where the next row starts. The two
     //  formats differ in this, in the decode below, and in nothing else.
+    uint block_bytes = shape.format == FMT_Q4_K ? 144u
+                       : (shape.format == FMT_Q5_K ? 176u : 210u);
+
     uint rb = shape.format == FMT_Q8_0
               ? (shape.columns / 32u) * 34u
-              : (shape.format == FMT_Q4_K
-                 ? (shape.columns / 256u) * 144u
-                 : (shape.columns / 256u) * 210u);
+              : (shape.columns / 256u) * block_bytes;
 
     for (uint k0 = 0u; k0 < shape.columns; k0 += KCH) {
         barrier();
@@ -315,6 +318,86 @@ void main() {
                 wt[into + 15u] = float16_t(
                     scale * float((p3 >> (turn + 24u)) & 15u)
                     - offset);
+            } else if (shape.format == FMT_Q5_K) {
+                //  Q5_K. The four-bit k-quant with a bit taken out of every
+                //  quant and kept apart: the same two scales and the same
+                //  twelve packed six-bit pairs, then thirty-two bytes
+                //  holding the fifth bit of all two hundred and fifty-six
+                //  elements, then the nibbles.
+                //
+                //  A byte of that array serves all eight sub-blocks at one
+                //  position, one bit each, so the bit a sub-block wants is
+                //  bit s of it and the sixteen bytes an invocation reads
+                //  are the same sixteen whichever sub-block the step is.
+                uint at  = row + (k0 / 256u) * 176u;
+                uint sub = (k0 / 32u) & 7u;
+
+                float d     = half_at(at);
+                float least = half_at(at + 2u);
+
+                uint factor, lowest;
+                sub_block_scale(at + 4u, sub, factor, lowest);
+
+                float scale  = d * float(factor);
+                float offset = least * float(lowest);
+
+                uint q = at + 48u + (sub >> 1u) * 32u + half_of * 16u;
+                uint p0, p1, p2, p3;
+                four_words (q, p0, p1, p2, p3);
+
+                uint f0, f1, f2, f3;
+                four_words (at + 16u + half_of * 16u, f0, f1, f2, f3);
+
+                uint turn = (sub & 1u) * 4u;
+
+                wt[into +  0u] = float16_t(scale * float(
+                    ((p0 >> (turn)) & 15u)
+                    + 16u * ((f0 >> (sub)) & 1u)) - offset);
+                wt[into +  1u] = float16_t(scale * float(
+                    ((p0 >> (turn +  8u)) & 15u)
+                    + 16u * ((f0 >> (sub +  8u)) & 1u)) - offset);
+                wt[into +  2u] = float16_t(scale * float(
+                    ((p0 >> (turn + 16u)) & 15u)
+                    + 16u * ((f0 >> (sub + 16u)) & 1u)) - offset);
+                wt[into +  3u] = float16_t(scale * float(
+                    ((p0 >> (turn + 24u)) & 15u)
+                    + 16u * ((f0 >> (sub + 24u)) & 1u)) - offset);
+                wt[into +  4u] = float16_t(scale * float(
+                    ((p1 >> (turn)) & 15u)
+                    + 16u * ((f1 >> (sub)) & 1u)) - offset);
+                wt[into +  5u] = float16_t(scale * float(
+                    ((p1 >> (turn +  8u)) & 15u)
+                    + 16u * ((f1 >> (sub +  8u)) & 1u)) - offset);
+                wt[into +  6u] = float16_t(scale * float(
+                    ((p1 >> (turn + 16u)) & 15u)
+                    + 16u * ((f1 >> (sub + 16u)) & 1u)) - offset);
+                wt[into +  7u] = float16_t(scale * float(
+                    ((p1 >> (turn + 24u)) & 15u)
+                    + 16u * ((f1 >> (sub + 24u)) & 1u)) - offset);
+                wt[into +  8u] = float16_t(scale * float(
+                    ((p2 >> (turn)) & 15u)
+                    + 16u * ((f2 >> (sub)) & 1u)) - offset);
+                wt[into +  9u] = float16_t(scale * float(
+                    ((p2 >> (turn +  8u)) & 15u)
+                    + 16u * ((f2 >> (sub +  8u)) & 1u)) - offset);
+                wt[into + 10u] = float16_t(scale * float(
+                    ((p2 >> (turn + 16u)) & 15u)
+                    + 16u * ((f2 >> (sub + 16u)) & 1u)) - offset);
+                wt[into + 11u] = float16_t(scale * float(
+                    ((p2 >> (turn + 24u)) & 15u)
+                    + 16u * ((f2 >> (sub + 24u)) & 1u)) - offset);
+                wt[into + 12u] = float16_t(scale * float(
+                    ((p3 >> (turn)) & 15u)
+                    + 16u * ((f3 >> (sub)) & 1u)) - offset);
+                wt[into + 13u] = float16_t(scale * float(
+                    ((p3 >> (turn +  8u)) & 15u)
+                    + 16u * ((f3 >> (sub +  8u)) & 1u)) - offset);
+                wt[into + 14u] = float16_t(scale * float(
+                    ((p3 >> (turn + 16u)) & 15u)
+                    + 16u * ((f3 >> (sub + 16u)) & 1u)) - offset);
+                wt[into + 15u] = float16_t(scale * float(
+                    ((p3 >> (turn + 24u)) & 15u)
+                    + 16u * ((f3 >> (sub + 24u)) & 1u)) - offset);
             } else {
                 //  Q6_K. Two hundred and fifty-six elements in two hundred
                 //  and ten bytes: a hundred and twenty-eight low nibbles,
