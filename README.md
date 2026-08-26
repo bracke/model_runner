@@ -2995,6 +2995,57 @@ finding was the profile, and what made it worth keeping is that the two
 figures disagree: the instruction count says a fifth and the clock says two
 per cent, and both are true of different formats.
 
+### A tenth of the instruction's peak, and why that is arithmetic
+
+A 110-token prompt is **103.6 thousand million multiply-adds** through the
+strip kernel -- counted by a counter in the panel loop rather than estimated
+-- in 13.4 thousand million cycles at one worker. That is 7.75 a cycle, where
+a byte dot product delivers thirty-two of them and this part issues two a
+cycle. Twelve per cent of the peak, and nothing here explained it.
+
+**It is the instruction mix, and there is no stall in it.** The insertion's
+loop body is forty instructions and eight of them are the byte dot product.
+The other thirty-two are the eight zeroed accumulators, the eight converts
+from integer to binary32, the eight multiply-adds that apply the scales, the
+two weight loads and four of loop control. One instruction in five -- and not
+one of the thirty-two is waste, because a format with a scale every
+thirty-two elements cannot convert or scale less often than that.
+
+| a 110-token prompt, one worker | instructions | |
+|---|---:|---:|
+| the whole run | 43.55 G | |
+| the strip kernel's symbol | 31.2 G | 71.6 % |
+| the insertion inside it | 16.2 G | 37 % |
+| the Ada around the insertion | 15.0 G | 34 % |
+| everything else | 12.4 G | 28 % |
+
+So one instruction in ten across the whole prompt is a byte dot product, each
+delivers thirty-two multiply-adds, and 3.26 instructions a cycle gives about
+ten multiply-adds a cycle before the rest of the program is counted. The 7.75
+measured is that. **The peak of sixty-four is a loop of nothing but the
+multiply, which no per-block-scaled format can have.**
+
+**An ablation that did not work, kept because it looked as though it had.**
+The insertion was replaced by a single `nop` and the run counted 42.6
+thousand million instructions against 43.55 -- which would have made the byte
+dot product two per cent of the program, and was wrong. With the insertion
+stubbed the model no longer answers the prompt with its end token, so that
+run generated twelve tokens the reference run did not, and the two counts are
+of different work. The counter in the panel loop replaced it. A counter is
+exact where a difference of two runs is not, and that is the second time
+today an ablation has quietly measured something other than what it was
+pointed at.
+
+**What the mix says to do next.** One five-hundred-and-twelve-bit dot product
+covers two blocks in a single instruction, and one convert and one
+multiply-add can then serve both, if the scale table is built sixteen wide
+with the two blocks' scales side by side. That is four instructions per
+sixty-four elements where there are now four per thirty-two: the ratio this
+whole section is about, halved. It is a rewrite of the insertion, of the
+table beside it and of the reduction that ends it -- and it is the first time
+this file has had a reason to expect something from the wider registers
+rather than a hope.
+
 ### Attention had never been told the bounds were proved
 
 `Blend_Exact` is the attention over the cache -- the scores, the softmax and

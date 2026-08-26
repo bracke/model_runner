@@ -6586,4 +6586,62 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # kernel and the rule is that a stale group is answered rather than
 # re-stamped in silence.
 
+# 2026-08-26, why the processor's kernel runs at a tenth of its own
+# instruction's peak. A measurement and no change.
+#
+# The question. A 110-token prompt is 103.6 thousand million multiply-adds
+# through the strip kernel -- counted by a counter in the panel loop, not
+# estimated -- in 13.4 thousand million cycles at one worker. That is 7.75 a
+# cycle where a byte dot product delivers thirty-two of them and this part
+# issues two a cycle, so twelve per cent of the peak, and nothing in this
+# file explained it.
+#
+# The answer is the instruction mix, and there is no stall in it.
+#
+# The insertion's loop body is forty instructions and eight of them are the
+# byte dot product. The other thirty-two are the eight zeroed accumulators,
+# the eight converts from integer to binary32, the eight multiply-adds that
+# apply the scales, the two weight loads and four of loop control. That is
+# one instruction in five, and it is not waste: a format with a scale every
+# thirty-two elements cannot convert or scale less often than that.
+#
+# Counted end to end at one worker:
+#
+#   the whole prompt                     43.55 G instructions
+#   the strip kernel's symbol            31.2  G   (71.6 %)
+#   the insertion inside it              16.2  G   (37 %)
+#   the Ada around the insertion         15.0  G   (34 %)
+#   everything else                      12.4  G   (28 %)
+#
+# and 404.8 million turns of the insertion's block loop at forty
+# instructions each is where the 16.2 comes from.
+#
+# So one instruction in ten across the prompt is a byte dot product, each
+# delivers thirty-two multiply-adds, and the measured 3.26 instructions a
+# cycle gives about ten multiply-adds a cycle before the rest of the program
+# is counted. The 7.75 measured is that. The peak of sixty-four is a loop of
+# nothing but the multiply, which no per-block-scaled format can have. The
+# tenth is arithmetic, not a stall.
+#
+# An ablation that did not work, kept because it looked as though it had.
+# The insertion was replaced by a single nop and the run counted 42.6
+# thousand million instructions against 43.55, which would have made the
+# byte dot product two per cent of the program. It is wrong: with the
+# insertion stubbed the model no longer answers the prompt with its end
+# token, so that run generated twelve tokens the reference run did not, and
+# the two counts are of different work. The counter in the panel loop is
+# what replaced it, and a counter is exact where a difference of two runs is
+# not.
+#
+# What the mix says to do next, named and not built. One five-hundred-and-
+# twelve-bit dot product covers two blocks in one instruction, and one
+# convert and one multiply-add can then serve both if the scale table is
+# built sixteen wide with the two blocks' scales side by side. That is four
+# instructions per sixty-four elements where there are now four per
+# thirty-two -- the ratio the accounting above says is the whole of the
+# problem, halved. It is a rewrite of the insertion, of the table beside it
+# and of the reduction that ends it, and it is the first time this file has
+# had a reason to expect something from the wider registers rather than a
+# hope.
+
 outside 1725B5F993CE517F src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

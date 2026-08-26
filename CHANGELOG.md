@@ -154,6 +154,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The processor kernel's tenth of its own instruction's peak is explained,
+  and it is arithmetic rather than a stall.** A 110-token prompt is 103.6
+  thousand million multiply-adds through the strip kernel -- counted, not
+  estimated -- in 13.4 thousand million cycles at one worker: 7.75 a cycle
+  where a byte dot product delivers thirty-two and the part issues two a
+  cycle.
+
+  The insertion's loop body is forty instructions and eight of them are the
+  byte dot product; the rest are the zeroed accumulators, the converts, the
+  multiply-adds that apply the scales, two weight loads and four of loop
+  control. None of it is waste: a format with a scale every thirty-two
+  elements cannot convert or scale less often than that. One instruction in
+  ten across the prompt is the multiply, each carries thirty-two
+  multiply-adds, and 3.26 instructions a cycle then gives about ten a cycle
+  before the rest of the program.
+
+  An ablation that stubbed the insertion out said it was two per cent of the
+  program, and was wrong: without it the model stops answering the prompt
+  with its end token, so that run generated twelve tokens the reference did
+  not. A counter in the panel loop replaced it. Nothing was changed; the
+  measurement is in `docs/measured-figures.txt` and under
+  `### A tenth of the instruction's peak`.
+
 - **Two comment lines that did not fit the width the rest of the file
   keeps.** No token of the program changed. It is recorded because the
   figure fingerprints name the file the comment is in and cannot tell a
