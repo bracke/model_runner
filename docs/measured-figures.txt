@@ -6285,4 +6285,58 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # were NOT re-taken. Both are Q8_0, and the control above is the figure they
 # are built from.
 
+# 2026-08-26, where a device prompt's time actually goes. A measurement and
+# no change: the instrument was built, read, and reverted.
+#
+# The question. After the matrix product the 110-token device prompt reads
+# about 0.28 s, and the scratch harness says this model's matrix products
+# are about 0.124 s of that in isolation. So more than half of it was
+# something else, and two suspects had been named here: the eighty-eight of
+# a prompt's hundred and fifty-four products that go one to a submission
+# with a fence wait each, and the narrow K and V projections, which run at
+# 403 GFLOP/s against 1845 for the wide ones because two hundred and
+# fifty-six rows at a thirty-two-row tile is eight workgroups.
+#
+# How it was measured, and the first instrument was wrong. Skipping a kernel
+# and taking the difference does not work here: the kernels feed each other,
+# so removing one changes the numbers the others see, and three of the six
+# ablations came out SLOWER than the run with everything in it. What works
+# is doubling instead of skipping -- these kernels all write rather than
+# accumulate, so dispatching one twice with the same inputs leaves the same
+# answers and costs exactly its own time again. The submission count does
+# not change either.
+#
+# Total time inside submit-and-wait, minimum of five runs at a load below
+# 1.00, against a baseline of 0.177 s:
+#
+#   the kernel doubled       run      its own cost     share
+#   matrix product          0.280 s      0.103 s        58 %
+#   attention               0.209 s      0.032 s        18 %
+#   half-precision copy     0.180 s      0.003 s         2 %
+#   blend                   0.179 s      0.002 s         1 %
+#   row product             0.179 s      0.002 s         1 %
+#   no dispatches at all    0.020 s      0.020 s        11 %
+#
+# which accounts for 0.162 of 0.177, and the nine per cent left over is the
+# activation going up and the answers coming back inside the same wait.
+#
+# What it says, and the suspect it kills. The submissions are not the
+# problem: two hundred empty ones cost 0.020 s, which is a tenth of a
+# millisecond each, against the 0.6 to 2.3 ms a round trip was bracketed at
+# when the figure was arithmetic rather than a measurement. Recording and
+# submitting the whole prompt is eleven per cent.
+#
+# The matrix product is fifty-eight per cent, which is where a program that
+# has just been given a matrix product ought to be. Its 0.103 s against the
+# harness's 0.124 s for the same products one at a time is the engine
+# already overlapping the ones it records into a single command buffer.
+#
+# So what is left to take is the kernel itself. It reads 1845 to 2249
+# GFLOP/s on this model's shapes where the other runtime's prompt figure
+# implies about 3.2 TFLOP/s, and attention -- eighteen per cent, untouched
+# since it was written -- is second. The narrow projections are worth less
+# than the number that made them look interesting: K and V together are 0.66
+# ms of the 5.63 ms a layer's products take, so a fourfold gain on them is
+# five per cent of a prompt.
+
 outside 166654C3AEC3F60E src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

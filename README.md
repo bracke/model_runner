@@ -2124,6 +2124,53 @@ assumed. All of them go to `row_product.comp`, which reads all fifteen
 formats and needs nothing of the device beyond Vulkan 1.0 -- and which is
 what this program did everywhere until now.
 
+**And where the rest of a device prompt goes, now that the products are a
+matrix product.** The scratch harness says this model's products are about
+0.124 s in isolation and the prompt reads 0.28, so more than half of it was
+something else. Two suspects were written down here: the eighty-eight of a
+prompt's hundred and fifty-four products that go one to a submission with a
+fence wait each, and the narrow K and V projections at 403 GFLOP/s against
+1845 for the wide ones.
+
+**The first instrument was wrong, and that is the part worth keeping.**
+Skipping a kernel and taking the difference does not work when the kernels
+feed each other: three of six ablations came out *slower* than the run with
+everything in it, because what the others then read was not what they read
+before. Doubling works instead. These kernels write rather than accumulate,
+so dispatching one twice with the same inputs leaves exactly the same
+answers and costs exactly its own time again, and the submission count does
+not move either.
+
+| the kernel doubled | its own cost | share |
+|---|---:|---:|
+| matrix product | 0.103 s | 58 % |
+| attention | 0.032 s | 18 % |
+| half-precision copy | 0.003 s | 2 % |
+| blend | 0.002 s | 1 % |
+| row product | 0.002 s | 1 % |
+| no dispatches at all | 0.020 s | 11 % |
+
+Minimum of five runs at a load below 1.00, against a baseline of 0.177 s
+inside submit-and-wait. They account for 0.162 of it; the rest is the
+activation going up and the answers coming back inside the same wait.
+
+**The submissions are not the problem, and that suspect is dead.** Two
+hundred empty ones cost 0.020 s -- a tenth of a millisecond each, against
+the 0.6 to 2.3 ms this file used to bracket a round trip at, which was
+arithmetic on a guess rather than a measurement. Recording and submitting a
+whole prompt is eleven per cent of it.
+
+**The matrix product is fifty-eight per cent**, which is where a program that
+has just been given one ought to be. Its 0.103 s against the harness's 0.124
+for the same products taken one at a time is the engine already overlapping
+the ones it records into a single command buffer. So what is left to take is
+the kernel itself -- 1845 to 2249 GFLOP/s where the other runtime's prompt
+figure implies about 3.2 TFLOP/s -- and attention behind it, eighteen per
+cent and untouched since it was written. The narrow projections are worth
+less than the number that made them look interesting: K and V together are
+0.66 ms of the 5.63 ms a layer's products take, so a fourfold gain on them
+is five per cent of a prompt.
+
 **One thing had to be fixed before any of that could be believed.** The
 matrix product was committed with a gate that could not enter it: the
 conformance sweep's longest sequence is eight tokens and the device format

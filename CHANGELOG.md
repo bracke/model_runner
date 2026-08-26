@@ -132,6 +132,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Where a device prompt's time goes was a guess, and one of the two
+  guesses was wrong.** The scratch harness says this model's matrix products
+  are about 0.124 s in isolation and the prompt reads 0.28, so this file had
+  written down two suspects for the rest: the eighty-eight of a prompt's
+  hundred and fifty-four products that go one to a submission with a fence
+  wait each, and the narrow K and V projections at 403 GFLOP/s against 1845
+  for the wide ones.
+
+  The instrument mattered more than the answer. Skipping a kernel and taking
+  the difference does not work when the kernels feed each other -- three of
+  six ablations came out *slower* than the run with everything in it.
+  Doubling works: these kernels write rather than accumulate, so dispatching
+  one twice with the same inputs leaves the same answers and costs exactly
+  its own time again, and the submission count does not move.
+
+  Against a baseline of 0.177 s inside submit-and-wait, minimum of five runs
+  at a load below 1.00: the matrix product is 0.103 s (58 %), attention
+  0.032 s (18 %), recording and submitting the whole prompt 0.020 s (11 %),
+  and the half-precision copy, the blend and the row product 0.007 s between
+  them. **Two hundred empty submissions cost 0.020 s** -- a tenth of a
+  millisecond each, against the 0.6 to 2.3 ms this file used to bracket a
+  round trip at, which was arithmetic on a guess. That suspect is dead, and
+  the second is worth five per cent rather than the share its rate implied.
+
+  Nothing was changed and the instrument is reverted; what is kept is the
+  measurement, in `docs/measured-figures.txt` and under
+  `### The matrix instruction`.
+
 - **The matrix product had been committed with a gate that could not enter
   it.** The conformance sweep's longest sequence is eight tokens, and the
   device format test multiplied twelve rows against a batch of ten; the
