@@ -154,6 +154,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Two comment lines that did not fit the width the rest of the file
+  keeps.** No token of the program changed. It is recorded because the
+  figure fingerprints name the file the comment is in and cannot tell a
+  comment from a kernel, so the stale groups are answered in
+  `docs/measured-figures.txt` rather than re-stamped in silence.
+
 - **The column split was built, priced and not kept -- and the estimate that
   led to it was wrong.** The entry below named it as the only lever left and
   put it at about 1.2 times on the products, a tenth of a prompt. Measured:
