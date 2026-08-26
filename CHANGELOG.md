@@ -44,6 +44,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The device's matrix instruction, built and not kept.** This device
+  offers `VK_KHR_cooperative_matrix` at sixteen by sixteen by sixteen,
+  subgroup scope, for half-precision and for signed bytes. The Vulkan 1.0
+  floor turned out not to stand in the way -- `vkEnumerateInstanceVersion`
+  is itself a 1.1 function, so a loader without it is a 1.0 loader by
+  definition, and asking for the best it answers keeps every host that ran
+  before. The negotiation, the feature through the `pNext` chain, the shape
+  read back and checked, and a matrix-product shader were all written.
+
+  **Correct, and 2.4 times slower**: the twelve-token run answers
+  `5abff916f9d83ca6` like every other path in this program, and the
+  110-token device prompt reads 1.210 s against 0.515. A workgroup computes
+  sixteen rows, so the hundred and twenty-eight of them that cover a
+  two-thousand-row matrix each convert the whole batch of activations into
+  half precision for themselves. The instruction was not the problem and
+  neither were the barriers; converting the activations once, before any of
+  it runs, is what a matrix product needs and is a smaller question than the
+  one this replaces.
+
 - **A tile is written the way the target is laid out.** `Mat_Mul_Range_Packed`
   copied each tile of answers back in the order the tile is laid out -- a row
   at a time, the vectors inside -- where the target keeps a whole vector's

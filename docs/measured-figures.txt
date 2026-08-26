@@ -4325,6 +4325,46 @@ reference D5B4EFDA87D7DB0C src/library/model_runner-backend-reference.adb src/li
 # them. The twenty-one per cent of samples a profile charged to that loop's
 # branch and cursor advances was skid from the loads they wait for.
 #
+# The matrix instruction, built and reverted, 2026-08-26.
+#
+# This device offers VK_KHR_cooperative_matrix revision 2: sixteen by
+# sixteen by sixteen at subgroup scope, for float16 x float16 -> float32 and
+# for signed byte x signed byte -> int32, with the unsigned and mixed
+# combinations beside them. Fourteen shapes in all and every one of them
+# sixteen cubed.
+#
+# The Vulkan 1.0 floor is not what stands in the way. vkEnumerateInstanceVersion
+# is a 1.1 function, so a loader that does not export it is a 1.0 loader by
+# definition; asked for through vkGetInstanceProcAddr with a null instance,
+# with a fall back to 1.0 when vkCreateInstance refuses, the floor is kept
+# and the instruction is still reached where it exists.
+#
+# Built: the negotiation, the device extension and its feature through the
+# pNext chain of the create record, the shapes read back with
+# vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR and the usable one kept,
+# a fourth shader module and pipeline, and a half-precision matrix-product
+# shader for Q8_0 -- sixteen rows by sixteen vectors of the answer at a
+# time, weights decoded into shared memory, one operation per sixteen-deep
+# step. Compiled with `glslangValidator --target-env vulkan1.3`, which is
+# SPIR-V 1.6 and a different invocation from the -V the other three take.
+#
+# Correct and slower. The whole suite passes with it enabled -- 280 tests,
+# conformance 28344 sequences and none outside tolerance -- and forcing it
+# on for every product, threshold and all, answers 5abff916f9d83ca6 on
+# twelve tokens, which is what the processor and the row shader both answer.
+# At its proper threshold the 110-token device prompt reads 1.210 s against
+# 0.515 for the shader it would replace: 2.4 times slower.
+#
+# Why, which is the part worth keeping. A workgroup computes sixteen rows,
+# so the hundred and twenty-eight workgroups covering a two-thousand-row
+# matrix each convert the whole batch of activations into half precision for
+# themselves -- a hundred and twenty-eight times over. The shader it
+# replaces reads each activation once for the eight vectors an invocation
+# carries. Neither the instruction nor the barriers are what cost: a matrix
+# product needs the operand it does not own converted once, before any of it
+# runs, which is a pass over the activations into a buffer of their own.
+# That is where a second attempt starts.
+
 # The six cells of the device table, taken in this sitting:
 #
 #                                   cpu, 7 workers    device

@@ -1989,10 +1989,45 @@ replace**:
   removing seven eighths of the loads, and reading it as the scatter is the
   mistake this file keeps making in new clothes.
 
-What is left is `VK_KHR_cooperative_matrix`, which is what the other
-runtime's 1681 tokens a second is and what this program's Vulkan 1.0 floor
-rules out. That is a decision about the floor rather than a loop to tighten,
-and it is stated here rather than attempted.
+### The matrix instruction, built and not kept
+
+`VK_KHR_cooperative_matrix` is what the other runtime's 1672 tokens a second
+is, and this device has it: **revision 2, sixteen by sixteen by sixteen at
+subgroup scope**, offered for half-precision into binary32 and -- which
+matters, because the weights already are bytes -- for signed bytes into a
+thirty-two bit sum.
+
+The Vulkan 1.0 floor is not what stands in the way, and finding that out was
+worth the asking. `vkEnumerateInstanceVersion` is itself a 1.1 function, so a
+loader that does not have it is a 1.0 loader by definition; ask for it
+through `vkGetInstanceProcAddr` with no instance, request the best it
+answers, and fall back when `vkCreateInstance` refuses. A host with a 1.0
+loader then runs exactly what it ran before and a host with a newer one
+reaches the instruction.
+
+So it was built: the negotiation, the device extension and its feature
+through the `pNext` chain, the shape read back and checked, and a second
+shader -- a real matrix product, sixteen rows by sixteen vectors of the
+answer at a time, the weights decoded into shared memory and the whole
+sixteen-deep step done in one operation.
+
+**It is correct and it is 2.4 times slower.** Correct first, because that was
+the doubt: the twelve-token run answers `5abff916f9d83ca6`, which is what
+every other path in this program answers, in half precision. Then the
+110-token device prompt at 1.210 s against 0.515.
+
+**Why is the useful part.** A workgroup here computes sixteen rows, so the
+hundred and twenty-eight workgroups that cover a two-thousand-row matrix each
+convert the *whole batch of activations* into half precision for themselves
+-- a hundred and twenty-eight times over, where the shader it replaces reads
+each activation once for the eight vectors an invocation carries. The
+instruction was never the problem and the barriers were not either. What a
+matrix product needs is for the operand it does not own to be converted once,
+before any of it runs, and that is a pass over the activations into a buffer
+of their own rather than anything to do with cooperative matrices.
+
+That is where the next attempt starts, and it is a smaller question than the
+one this section used to end on.
 
 ### Against llama.cpp
 
