@@ -2291,6 +2291,38 @@ formats -- three hundred times as much, and within a third of each other for
 all of them, which is what says it is the half-precision operand rather than
 any one decode.
 
+### Attention's exponentials, worked out once
+
+Attention is eighteen per cent of a device prompt -- 0.032 s of 0.177 by the
+doubling measurement above -- and had never been looked at. What it was
+doing, per tile of sixty-four cached positions: every lane worked out
+`exp(score - raised)` for every score of the tile in order to sum them, and
+then worked it out again for every score for every component of the value.
+**Eight thousand exponentials a tile where sixty-four are distinct.** Each
+lane now works out its own and puts it back in the shared tile, which costs
+two barriers.
+
+| | |
+|---|---:|
+| attention, the exponential per use | 0.0336 s |
+| attention, the exponential once | **0.0318 s** |
+
+Priced by dispatching attention twice and taking the difference, minimum of
+four runs. Five per cent of attention and one per cent of a prompt: the whole
+device prompt reads 0.293 s against 0.287 over three alternated rounds, which
+is inside the floor, and the digest did not move.
+
+**The five per cent is not the finding.** A hundred and twenty-eight-fold
+redundancy in a transcendental function was worth a twentieth of the kernel,
+which says the kernel is waiting for something else. What is left in it,
+named and not measured: a lane computes one score by walking sixty-four
+components of a key in series, and the sixty-four lanes of a wave then read
+sixty-four keys that are a whole cached position apart -- a thousand and
+twenty-four bytes for this model. Each lane's own walk is contiguous, so no
+traffic is wasted, but a wave's worth of it lands on sixty-four cache lines
+at every step. That is the shape `row_product.comp` was rewritten to avoid,
+and it is the next thing to try here.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has

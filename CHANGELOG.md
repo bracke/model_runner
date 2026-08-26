@@ -404,6 +404,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Attention works out each exponential once instead of a hundred and
+  twenty-eight times.** Per tile of sixty-four cached positions every lane
+  worked out `exp(score - raised)` for every score in order to sum them, and
+  again for every score for every component of the value: eight thousand
+  exponentials a tile where sixty-four are distinct. Each lane now works out
+  its own and puts it back in the shared tile, at the cost of two barriers.
+
+  Priced by dispatching attention twice and taking the difference, minimum of
+  four runs: 0.0318 s against 0.0336, so five per cent of attention and one
+  per cent of a prompt. The whole device prompt reads 0.287 s against 0.293
+  over three alternated rounds, inside the floor, and the digest did not
+  move.
+
+  The five per cent is not the finding. A hundred and twenty-eight-fold
+  redundancy in a transcendental function being worth a twentieth of the
+  kernel says the kernel is waiting for something else, and
+  `docs/measured-figures.txt` names what that probably is.
+
 - **The weight scales were decoded once for every strip of the batch, and
   are worked out once for the call now: a `Q4_K_M` prompt on the processor
   reads 0.875 s against 1.046.** A batch is swept four vectors at a time, so

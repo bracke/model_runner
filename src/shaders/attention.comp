@@ -208,9 +208,24 @@ void main() {
         float raised = max(top, highest);
         float carry = exp(top - raised);
 
+        //  The weight of this lane's own score, worked out once and put
+        //  back where every lane can read it.
+        //
+        //  It used to be worked out where it was wanted, which is once by
+        //  every lane for every score of the tile and then again for every
+        //  component of the value: eight thousand exponentials a tile where
+        //  there are sixty-four distinct ones. The two barriers below are
+        //  what that costs, and a barrier is cheaper than a hundred and
+        //  twenty-eight exponentials.
+        float mine = lane < span ? exp(tile[lane] - raised) : 0.0;
+
+        barrier();
+        tile[lane] = mine;
+        barrier();
+
         float added = 0.0;
         for (uint j = 0; j < span; j++) {
-            added += exp(tile[j] - raised);
+            added += tile[j];
         }
         sum = sum * carry + added;
 
@@ -224,7 +239,7 @@ void main() {
             for (uint j = 0; j < span; j++) {
                 uint v_at = shape.v_base + (base + j) * shape.v_width
                             + group * shape.value_size + c;
-                gathered += exp(tile[j] - raised) * kv[v_at];
+                gathered += tile[j] * kv[v_at];
             }
 
             held[k] = held[k] * carry + gathered;
