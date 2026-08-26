@@ -6413,4 +6413,62 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # which is ten per cent of a prompt, against an extra buffer, an extra
 # dispatch and a reduction. It is the only lever the measurements leave.
 
+# 2026-08-26, the column split: built as a prototype, priced, not kept. The
+# entry above named it as the only lever left and put it at about 1.2 times
+# on the products, a tenth of a prompt. That estimate was wrong and this is
+# what it should have said.
+#
+# What it is. Each workgroup takes a slice of the columns instead of all of
+# them, writes its partial sums to a slice of its own, and a second pass
+# adds the slices. A two-thousand-row product at split four is two hundred
+# and fifty-six workgroups where it was sixty-four. The partial sums are
+# summed in a fixed order by a pass rather than by atomics, because an
+# atomic add would make the answer depend on the order the workgroups
+# happened to finish in, and the digests here are meant to be a property of
+# the model rather than of the run.
+#
+# The matrix dispatch alone, minimum of three at a load below 0.60, no
+# summing pass counted:
+#
+#   split   2048x2048   5632x2048   2048x5632   256x2048
+#     1      0.5648      1.3044      1.4942      0.3232
+#     2      0.5507      1.2432      1.4381      0.2204
+#     4      0.5542      1.2602      1.4206      0.2623
+#     8      0.5896      1.4014      1.5120      0.1821
+#
+# Two and a half to five per cent on the three wide shapes, and forty-four
+# per cent on the narrow one, which is the shape that was eight workgroups
+# and is now sixty-four. The gain goes where the starvation was.
+#
+# And then the summing pass, which is what the estimate above left out. It
+# reads the slices and writes one of them, so the output traffic is
+# multiplied by the split: at split two a pair of five-thousand-row
+# projections is 17 MB a layer of reading and writing that did not exist
+# before. Measured on the narrow shape, where the slices are small enough
+# to be worth it, with the pass in the same submission:
+#
+#   256 x 2048, split 1, no pass    0.3232 ms
+#   256 x 2048, split 4, with pass  0.2052
+#   256 x 2048, split 8, with pass  0.2000
+#
+# So on a narrow product it is 1.6 times, and on a wide one the pass costs
+# what the split saves. Applying it only where it pays -- K and V, twice a
+# layer -- is 0.247 ms a layer, 5.4 ms over twenty-two layers, against a
+# prompt of 177 ms.
+#
+# Three per cent, which is below the five per cent a whole-prompt
+# measurement resolves on this machine. It cannot be demonstrated in place,
+# and it costs a result buffer sized by the split, a fifth pipeline, a
+# reduction shader, another barrier and a rule for choosing the split. So
+# the prototype is not kept.
+#
+# What would change that answer, and it is worth writing down because it is
+# a fact about the model rather than about the kernel: this one has two
+# narrow projections a layer out of seven products. A model with a smaller
+# key-value width, or more of them, has more of its time in the shape where
+# the split is worth 1.6 times, and the arithmetic above would come out
+# differently. The prototype is three lines in the shader -- a column range
+# from gl_WorkGroupID.z and a slice added to the store offset -- and the
+# pass is a dozen more.
+
 outside 166654C3AEC3F60E src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

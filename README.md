@@ -2214,12 +2214,45 @@ projections read 0.241 ms at a sixteen-by-sixty-four tile against 0.358 at
 the one in use, which over twenty-two layers is about three per cent of a
 prompt for a second pipeline and a second tile shape to keep in step.
 
-**What is left is named and not built.** Splitting the columns across
-workgroups would make a two-thousand-row product two hundred and fifty-six
-workgroups rather than sixty-four, with a second pass to add the partial
-sums; the scan above prices that at about 1.2 times on the products, which
-is a tenth of a prompt, against an extra buffer, an extra dispatch and a
-reduction. It is the only lever these measurements leave.
+**The column split was the one lever left, and it was built and priced.**
+Each workgroup takes a slice of the columns rather than all of them, writes
+its partial sums to a slice of its own, and a second pass adds them -- in a
+fixed order by a pass rather than by atomics, because an atomic add would
+make the answer depend on which workgroup finished first, and a digest here
+is meant to be a property of the model rather than of the run.
+
+| split | 2048 × 2048 | 5632 × 2048 | 2048 × 5632 | 256 × 2048 |
+|---|---:|---:|---:|---:|
+| 1 | 0.5648 ms | 1.3044 | 1.4942 | 0.3232 |
+| 2 | **0.5507** | **1.2432** | 1.4381 | 0.2204 |
+| 4 | 0.5542 | 1.2602 | **1.4206** | 0.2623 |
+| 8 | 0.5896 | 1.4014 | 1.5120 | **0.1821** |
+
+Two and a half to five per cent on the three wide shapes and **forty-four per
+cent on the narrow one** -- the projection that was eight workgroups and is
+now sixty-four. The gain goes exactly where the starvation was.
+
+**And then the summing pass, which the estimate that led here left out.** It
+reads the slices and writes one of them, so the output traffic is multiplied
+by the split: at split two a pair of five-thousand-row projections is
+seventeen megabytes a layer of reading and writing that did not exist
+before. On a wide product the pass costs what the split saves. On the narrow
+one, where the slices are small, split eight with the pass included reads
+**0.200 ms against 0.323** -- 1.6 times.
+
+So applying it only where it pays, which is K and V twice a layer, is 5.4 ms
+over twenty-two layers against a prompt of 177: **three per cent, below the
+five a whole-prompt measurement resolves here.** It cannot be demonstrated in
+place, and it costs a result buffer sized by the split, a fifth pipeline, a
+reduction shader, another barrier and a rule for choosing the split. The
+prototype is not kept.
+
+What would change that answer is the model rather than the kernel: this one
+has two narrow projections a layer out of seven products, and one with a
+smaller key-value width, or more of them, has more of its time in the shape
+where the split is worth 1.6 times. The prototype is three lines in the
+shader -- a column range from `gl_WorkGroupID.z` and a slice added to the
+store offset -- and the pass is a dozen more.
 
 **One thing had to be fixed before any of that could be believed.** The
 matrix product was committed with a gate that could not enter it: the

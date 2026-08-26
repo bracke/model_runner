@@ -132,6 +132,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The column split was built, priced and not kept -- and the estimate that
+  led to it was wrong.** The entry below named it as the only lever left and
+  put it at about 1.2 times on the products, a tenth of a prompt. Measured:
+  two and a half to five per cent on the three wide shapes and forty-four
+  per cent on the narrow one, which is the projection that was eight
+  workgroups and is now sixty-four.
+
+  What the estimate left out is the summing pass. Splitting multiplies the
+  output traffic, so at split two a pair of five-thousand-row projections is
+  seventeen megabytes a layer that did not exist before, and on a wide
+  product the pass costs what the split saves. On the narrow one, where the
+  slices are small, split eight with the pass included reads 0.200 ms
+  against 0.323 -- 1.6 times.
+
+  Applying it only where it pays is K and V twice a layer, 5.4 ms over
+  twenty-two layers against a prompt of 177: three per cent, below the five
+  a whole-prompt measurement resolves here, so it cannot be shown in place.
+  Against that: a result buffer sized by the split, a fifth pipeline, a
+  reduction shader, another barrier and a rule for choosing the split. The
+  prototype is not kept and the measurement is.
+
+  The partial sums are added by a pass in a fixed order rather than by
+  atomics, which is worth saying because atomics are the obvious way and the
+  wrong one here: an atomic add makes the answer depend on which workgroup
+  finished first, and a digest in this project is meant to be a property of
+  the model rather than of the run.
+
 - **Four attempts at the device's matrix kernel, and the measurement is all
   that is kept.** The product is fifty-eight per cent of a device prompt, so
   it is where a gain has to come from. Ablations that halve an operand's
