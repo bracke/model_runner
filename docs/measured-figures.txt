@@ -3077,6 +3077,74 @@ kernels 77EB0DAB62549D76 src/library/model_runner-quantization.adb src/library/m
 # are were not re-taken: neither benchmark opens a session, so neither
 # reaches a loop this changed.
 
+# 2026-08-27, the narrow projection was the instrument. The tile does 3.4
+# teraflops a second and the shape table was measuring a round trip.
+#
+# The item said the grouped keys and values run at 455 gigaflops a second
+# against 1900 to 3200 for every other shape, that workgroup starvation was
+# confirmed but not the whole story, and that what else bound it was
+# unestablished. What else bound it is that nothing did.
+#
+# `tests device-bench` times Products.Multiply, which uploads the
+# activation, records a command buffer, submits it, waits on a fence and
+# copies the answer back. That round trip costs the same whatever the matrix
+# is. Holding the batch and the columns still and sweeping only the rows --
+# one workgroup to sixty-four, so sixty-four times the arithmetic:
+#
+#   rows    workgroups   seconds     apparent Gflop/s
+#     32        1        0.000252            67
+#     64        2        0.000292           115
+#    128        4        0.000330           203
+#    256        8        0.000351           382
+#    512       16        0.000374           719
+#   1024       32        0.000456          1177
+#   2048       64        0.000595          1805
+#
+# **Sixty-four times the work for two and a third times the time.** A least
+# squares fit is 0.289 ms fixed plus 0.154 microseconds a row, and that
+# marginal slope is **3.41 teraflops a second**. Differencing adjacent pairs
+# from 128 rows up gives 3.19, 6.08, 3.25 and 3.87, so the fit is not an
+# artefact of the fit.
+#
+# The narrow projection does 0.13 gigaflop of arithmetic. At 3.4 Tflop/s
+# that is 0.038 ms, on top of 0.289 ms of round trip: **eighty-eight per
+# cent of its measured time was the instrument**. There is nothing wrong
+# with the shape, the sixfold spread across the table is the fixed cost
+# dividing into different amounts of work, and the number to hold about the
+# tile is 3.4 Tflop/s rather than anything in that table.
+#
+# Below four workgroups the device is genuinely starved -- the 32-to-64 and
+# 64-to-128 steps give 0.42 and 0.87 Tflop/s -- but no shape a layer asks
+# for is that small. The batch sweep that found 455 rising to 1103 as the
+# workgroups went 8 to 64 was reading the fixed cost thinning, not
+# starvation lifting.
+#
+# So the entry above is corrected: the narrow vector tile was measured and
+# rejected for a problem that was not there, and the twenty-six per cent it
+# bought on that shape was the fixed cost being divided among four times as
+# many dispatches rather than a starvation being relieved.
+#
+# The fixed cost is not only the instrument's. The floor entry measures the
+# whole surround of a 1419-token device prompt at 0.502 s, and that prompt
+# makes about seventeen hundred product calls: 0.29 ms apiece is 0.50 s. The
+# two measurements meet, which is the first time two of today's have.
+#
+# Whether a bigger batch would divide it was checked rather than assumed.
+# --batch-size at 64, 128, 256, 512 and 1024 reads 3.138, 2.490, 2.459,
+# 2.426 and 2.547 s on the long prompt, every one printing
+# 1a26d24d33b8957b. The default is within three per cent of the best and the
+# curve is flat between 128 and 512. It cannot help: the floor is host loops
+# over positions, and a batch does not divide positions.
+#
+# What this leaves. The tile is at 3.4 Tflop/s at the margin, the surround
+# is 0.5 s of 2.53, and llama.cpp would read the same prompt in about 0.86.
+# Neither the shape table nor the batch size nor the submissions are where
+# the remaining gap is. It is in what the tile does per flop, and this file
+# has no instrument that separates that from the memory it reads.
+#
+# The row sweep is kept in tests/src/device_bench.adb, which no figure group
+# names. No other source changed.
+
 # 2026-08-27, what surrounds the products is a fifth, not a half. The phase
 # counters said otherwise and the phase counters were wrong.
 #

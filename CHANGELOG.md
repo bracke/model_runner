@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The narrow projection that looked six times slow was the instrument, and
+  the tile does 3.4 teraflops a second.** `tests device-bench` times a whole
+  `Multiply` -- upload, record, submit, wait, copy back -- and that round trip
+  costs the same whatever the matrix is. Sweeping only the rows at a fixed
+  batch, one workgroup to sixty-four, gives **sixty-four times the work for
+  two and a third times the time**: 0.252 ms to 0.595 ms. A fit through the
+  seven points is 0.289 ms fixed plus 0.154 microseconds a row, and that
+  slope is 3.41 Tflop/s.
+
+  The grouped key and value projection does 0.13 Gflop, which at that rate is
+  0.038 ms on top of 0.289 ms of round trip: **88 per cent of its measured
+  time was the instrument**. There is nothing wrong with the shape, and the
+  narrow vector tile was measured and rejected earlier today for a problem
+  that was not there.
+
+  The fixed cost is not only the instrument's: a 1419-token prompt makes
+  about 1710 product calls and the measured floor of its whole surround is
+  0.502 s, which is 0.29 ms apiece. Whether a bigger batch divides it was
+  checked -- `--batch-size` 64 through 1024 reads 3.138, 2.490, 2.459, 2.426
+  and 2.547 s -- and it does not: the floor is host loops over positions.
+
+  `tests device-bench` keeps the row sweep, so the next reader of that table
+  sees what it is made of.
+
 - **What surrounds the device's products is a fifth of a prompt, not a half,
   and the phase counters that said otherwise were measuring the host waiting
   for the device.** With every `Dispatch` asking for zero workgroups -- every

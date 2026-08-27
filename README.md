@@ -2720,11 +2720,10 @@ times one, at the shapes a layer asks for and a batch of 128:
 | down | 2048 x 5632 | 0.000922 | 3204 | 64 |
 | vocabulary | 32000 x 2048 | 0.007440 | 2255 | 1000 |
 
-**The grouped keys and values run at a sixth of everything else**, and that
-shape is not a quirk of this model: grouped-query attention gives every
-modern model a projection an eighth the height of the query beside it. A
-workgroup takes 32 rows and 128 vectors, so 256 rows against a batch of 128
-is eight workgroups on twelve compute units.
+**The grouped keys and values appear to run at a sixth of everything else**,
+and `### What that table was really measuring` below shows that they do not:
+88 per cent of that figure is the instrument. What follows was written before
+that was known, and is kept because the correction is the point.
 
 Widening the batch and changing nothing else says it is the workgroup count:
 455, 706, 835 and 1103 Gflop/s at 8, 16, 32 and 64 workgroups.
@@ -2808,6 +2807,50 @@ Projecting not moving at all under the doubling is unexplained and is
 written down as unexplained: either those products do not take that path, or
 the phase counter attributes their wait to the phase after them, the phases
 being host-side wall around asynchronous submissions.
+
+### What that table was really measuring
+
+`Multiply` uploads the activation, records a command buffer, submits it,
+waits on a fence and copies the answer back. That round trip costs the same
+whatever the matrix is, and the sweep above times all of it. Holding the
+batch and the columns still and sweeping only the rows -- one workgroup to
+sixty-four, so sixty-four times the arithmetic -- says how much:
+
+| rows | workgroups | seconds | apparent Gflop/s |
+|---|---:|---:|---:|
+| 32 | 1 | 0.000252 | 67 |
+| 64 | 2 | 0.000292 | 115 |
+| 128 | 4 | 0.000330 | 203 |
+| 256 | 8 | 0.000351 | 382 |
+| 512 | 16 | 0.000374 | 719 |
+| 1024 | 32 | 0.000456 | 1177 |
+| 2048 | 64 | 0.000595 | 1805 |
+
+**Sixty-four times the work for two and a third times the time.** A least
+squares fit through those seven points is **0.29 ms fixed plus 0.154
+microseconds a row**, and that marginal slope is **3.4 Tflop/s** -- confirmed
+by differencing adjacent pairs from 128 rows upward, which give 3.19, 6.08,
+3.25 and 3.87.
+
+So the narrow key and value projection does 0.13 Gflop of arithmetic, which
+at 3.4 Tflop/s is 0.038 ms, on top of 0.29 ms of round trip. **Eighty-eight
+per cent of its measured time was the instrument, and there is nothing wrong
+with the shape.** The apparent sixfold spread across shapes is the fixed cost
+dividing into different amounts of work, and the number to hold about the
+tile is 3.4 Tflop/s, not 455.
+
+Below four workgroups the device really is starved -- the 32-to-64 and
+64-to-128 steps give 0.42 and 0.87 Tflop/s -- but no shape a layer asks for
+is that small.
+
+The fixed cost is not only the instrument's, though. `### The floor a device
+prompt cannot go below` measures the whole surround at 0.502 s for a
+1419-token prompt, and that prompt makes about 1710 product calls: 0.29 ms
+apiece is 0.50 s. The two measurements meet. **What a bigger batch would do
+about it is nothing**, and that was checked rather than assumed --
+`--batch-size` at 64, 128, 256, 512 and 1024 reads 3.138, 2.490, 2.459, 2.426
+and 2.547 seconds, so the default is within three per cent of the best. The
+floor is host loops over *positions*, which a batch does not divide.
 
 ### One core, and seven idle
 

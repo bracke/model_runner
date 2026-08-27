@@ -694,7 +694,7 @@ package body Device_Bench is
          --  TinyLlama's own, and the vocabulary projection that closes a
          --  run. The two narrow ones are the grouped keys and values: an
          --  eighth of the rows of the query beside them, at the same width.
-         Table : constant array (1 .. 10) of Shape :=
+         Table : constant array (1 .. 17) of Shape :=
            [("query     ",  2048, 2048, 128),
             ("keys      ",   256, 2048, 128),
             ("out proj  ",  2048, 2048, 128),
@@ -711,7 +711,20 @@ package body Device_Bench is
             ("keys   x2 ",   256, 2048, 256),
             ("keys   x4 ",   256, 2048, 512),
             ("keys   x8 ",   256, 2048, 1024),
-            ("query  x4 ",  2048, 2048, 512)];
+            ("query  x4 ",  2048, 2048, 512),
+
+            --  And the whole curve in rows, at one batch. A workgroup takes
+            --  thirty-two rows, so this is one workgroup to sixty-four, and
+            --  the same k for all of them. If what binds the narrow shape
+            --  is a cost a dispatch pays before it computes anything, the
+            --  time stops falling as the rows do and says where.
+            ("rows 32   ",    32, 2048, 128),
+            ("rows 64   ",    64, 2048, 128),
+            ("rows 128  ",   128, 2048, 128),
+            ("rows 256  ",   256, 2048, 128),
+            ("rows 512  ",   512, 2048, 128),
+            ("rows 1024 ",  1024, 2048, 128),
+            ("rows 2048 ",  2048, 2048, 128)];
       begin
          for Which of Table loop
             declare
