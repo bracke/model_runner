@@ -666,6 +666,133 @@ package body Device_Bench is
          end;
       end Prompt;
 
+      --  What the batched product reaches at the shapes a layer actually
+      --  asks for, rather than at a tidy square.
+      --
+      --  A prompt's budget says projecting runs at about 790 gigaflops a
+      --  second and feeding at 1662, on the same kernel and the same
+      --  format. Something about the shapes differs and the budget cannot
+      --  say what, because it times a phase and a phase is four products.
+      --  This times one.
+      procedure Tiles is
+         use type N.Element_Count;
+         use type Model_Runner.Bytes.Byte_Count;
+         use type Model_Runner.Bytes.Byte_Array_Access;
+
+         type Values is access N.Real_Array;
+
+         Vectors : constant := 128;
+         Seconds : constant Duration := 0.30;
+
+         type Shape is record
+            Name    : String (1 .. 10);
+            Rows    : Positive;
+            Columns : Positive;
+            Wide    : Positive := Vectors;
+         end record;
+
+         --  TinyLlama's own, and the vocabulary projection that closes a
+         --  run. The two narrow ones are the grouped keys and values: an
+         --  eighth of the rows of the query beside them, at the same width.
+         Table : constant array (1 .. 10) of Shape :=
+           [("query     ",  2048, 2048, 128),
+            ("keys      ",   256, 2048, 128),
+            ("out proj  ",  2048, 2048, 128),
+            ("gate, up  ",  5632, 2048, 128),
+            ("down      ",  2048, 5632, 128),
+            ("vocabulary", 32000, 2048, 128),
+
+            --  And the narrow one again at wider batches. A workgroup
+            --  takes thirty-two rows and a hundred and twenty-eight
+            --  vectors, so two hundred and fifty-six rows against a
+            --  hundred and twenty-eight vectors is eight workgroups on
+            --  twelve compute units. If that is what is wrong, a wider
+            --  batch is more workgroups and says so.
+            ("keys   x2 ",   256, 2048, 256),
+            ("keys   x4 ",   256, 2048, 512),
+            ("keys   x8 ",   256, 2048, 1024),
+            ("query  x4 ",  2048, 2048, 512)];
+      begin
+         for Which of Table loop
+            declare
+               Blocks : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count (Which.Columns / 32) * 34;
+
+               Room : constant Model_Runner.Bytes.Byte_Count :=
+                 Blocks * Model_Runner.Bytes.Byte_Count (Which.Rows);
+
+               Asked : constant Values :=
+                 new N.Real_Array
+                   (0 .. N.Element_Count (Which.Columns)
+                         * N.Element_Count (Which.Wide) - 1);
+               Got   : constant Values :=
+                 new N.Real_Array
+                   (0 .. N.Element_Count (Which.Rows)
+                         * N.Element_Count (Which.Wide) - 1);
+
+               Weights : Model_Runner.Bytes.Byte_Array_Access;
+               Started : Ada.Calendar.Time;
+               Calls   : Natural := 0;
+               Spent   : Duration := 0.0;
+               Ok      : Boolean := True;
+               Halted  : Boolean;
+            begin
+               Model_Runner.Bytes.Allocate (Room, Weights);
+               exit when Weights = null;
+
+               Asked.all := [others => 0.25];
+               --  A pattern, and one whose arithmetic stays inside a
+               --  machine integer for a seventy-megabyte matrix: the
+               --  vocabulary projection has more bytes than a Natural
+               --  multiplied by thirty-seven can hold.
+               for Index in Weights.all'Range loop
+                  Weights.all (Index) :=
+                    Model_Runner.Bytes.Byte (Natural (Index mod 251));
+               end loop;
+
+               Started := Ada.Calendar.Clock;
+
+               loop
+                  Products.Multiply
+                    (Engine, Weights.all, 0, Products.Packed_Q8_0,
+                     Which.Rows, Which.Columns, Asked.all, Which.Wide,
+                     Got.all, Ok, Halted,
+                     Key => Weights.all (Weights.all'First)'Address);
+                  exit when not Ok;
+                  Calls := Calls + 1;
+                  Spent := Ada.Calendar.Clock - Started;
+                  exit when Spent >= Seconds;
+               end loop;
+
+               if Ok and then Calls > 0 then
+                  declare
+                     Each : constant Long_Float :=
+                       Long_Float (Spent) / Long_Float (Calls);
+
+                     Rate : constant Long_Float :=
+                       2.0 * Long_Float (Which.Rows)
+                       * Long_Float (Which.Columns)
+                       * Long_Float (Which.Wide) / Each / 1.0E9;
+                  begin
+                     Ada.Text_IO.Put_Line
+                       ("    " & Which.Name
+                        & Duration'Image (Duration (Each)) & " s a product,"
+                        & Long_Float'Image (Rate) & " Gflop/s,"
+                        & Natural'Image (Which.Rows) & " by"
+                        & Natural'Image (Which.Columns) & ","
+                        & Natural'Image (Which.Wide) & " vectors");
+                  end;
+               else
+                  Ada.Text_IO.Put_Line
+                    ("    " & Which.Name & " the device would not take it");
+               end if;
+
+               Products.Forget_Matrices (Engine);
+               Model_Runner.Bytes.Free (Weights);
+            end;
+         end loop;
+      end Tiles;
+
       --  What a weight byte costs when exactly one vector reads it, format
       --  by format, on the row product.
       --
@@ -953,6 +1080,11 @@ package body Device_Bench is
       --  and amortized over nothing.
       Ada.Text_IO.Put_Line ("  one vector a product, by format:");
       Formats;
+
+      --  And a hundred and twenty-eight vectors a product, at the shapes a
+      --  layer asks for, which is what a prompt does.
+      Ada.Text_IO.Put_Line ("  a batch of 128, by shape:");
+      Tiles;
 
       Products.Close (Engine);
       Devices.Close (Opened);

@@ -7,6 +7,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests device-bench` reports the batched product's throughput at the
+  shapes a layer asks for, and the profile it produced moved the question
+  elsewhere.** No kernel change kept.
+
+  The budget said projecting runs at about 790 gigaflops a second and
+  feeding at 1662 on the same kernel. Timing one product rather than a phase
+  of four found why: the grouped keys and values, 256 rows by 2048, run at
+  **455 Gflop/s against 2031 to 3204 for every other shape**. A workgroup
+  takes 32 rows and 128 vectors, so that shape is eight workgroups on twelve
+  compute units -- and grouped-query attention gives every modern model such
+  a projection.
+
+  Widening the batch alone confirms the cause: 455, 706, 835 and 1103
+  Gflop/s at 8, 16, 32 and 64 workgroups. A narrower vector tile was built
+  to make more workgroups at the batch a prompt has, and **buys 26 per cent
+  on the narrow shape for 25 off the query and 41 off the vocabulary**. Not
+  kept.
+
+  The number that reframes it: dispatching every tile product twice with
+  unchanged data adds 0.552 s to a 1.294 s feeding phase, so **the
+  arithmetic is 43 per cent of it**. The other 57 -- three quarters of a
+  second on a four-second prompt -- is submissions, fences, and the
+  activation that returns to the host after every product and is uploaded
+  again for the next. The batched product is not what is left of the
+  device's prompt gap; what is left is around it.
+
 - **Attention through the cooperative matrix works once its operands are
   already half precision -- 1.43 times faster -- and the half-precision
   cache it needs puts 8107 of 28344 conformance sequences outside

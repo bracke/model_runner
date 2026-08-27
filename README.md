@@ -2696,6 +2696,76 @@ cent** -- 0.358, 0.372 and 0.362 s against 0.287, 0.285 and 0.283 for the
 same six formats and the same arithmetic. A function call is not free here
 either, and the preprocessor is the cheaper way to share a text.
 
+### The batched product, profiled
+
+Feeding and projecting are 48 per cent of a long device prompt and 64 of a
+short one, and four kernel attempts had already landed on a local optimum.
+So this began with a profile rather than a change, and the profile moved the
+question somewhere else.
+
+The budget says projecting runs at about **790 gigaflops a second** and
+feeding at **1662** -- same kernel, same format. A phase cannot say why,
+because a phase is four products, so `tests device-bench` grew a sweep that
+times one, at the shapes a layer asks for and a batch of 128:
+
+| | | seconds | Gflop/s | workgroups |
+|---|---|---:|---:|---:|
+| query | 2048 x 2048 | 0.000396 | 2714 | 64 |
+| **keys** | **256 x 2048** | 0.000295 | **455** | **8** |
+| out proj | 2048 x 2048 | 0.000529 | 2031 | 64 |
+| gate, up | 5632 x 2048 | 0.001110 | 2660 | 176 |
+| down | 2048 x 5632 | 0.000922 | 3204 | 64 |
+| vocabulary | 32000 x 2048 | 0.007440 | 2255 | 1000 |
+
+**The grouped keys and values run at a sixth of everything else**, and that
+shape is not a quirk of this model: grouped-query attention gives every
+modern model a projection an eighth the height of the query beside it. A
+workgroup takes 32 rows and 128 vectors, so 256 rows against a batch of 128
+is eight workgroups on twelve compute units.
+
+Widening the batch and changing nothing else says it is the workgroup count:
+455, 706, 835 and 1103 Gflop/s at 8, 16, 32 and 64 workgroups.
+
+So the fix would be a narrower vector tile, which makes more workgroups at
+the batch a prompt actually has. Built and measured:
+
+| vectors a tile | keys | query | gate, up | vocabulary |
+|---|---:|---:|---:|---:|
+| 128 | 455 | **2714** | 2660 | **2255** |
+| 64 | 514 | 2461 | **2778** | 1895 |
+| 32 | **575** | 2022 | 1984 | 1323 |
+
+**Twenty-six per cent on the narrow shape for twenty-five off the query and
+forty-one off the vocabulary.** Not kept -- and not worth a second pipeline
+either, because quadrupling the workgroups bought only a quarter, so the
+count is not the whole of what binds that shape.
+
+Then the number that reframes the whole item. Every tile product in a
+sequence dispatched twice, unchanged data, so the difference is the
+arithmetic and nothing around it:
+
+| | once | twice | the products |
+|---|---:|---:|---:|
+| feeding | 1.294 s | 1.846 s | **0.552 s** |
+| projecting | 0.678 s | 0.678 s | not this path |
+
+**The arithmetic is forty-three per cent of the feeding phase.** The other
+fifty-seven -- three quarters of a second on a four-second prompt -- is what
+surrounds it: submissions, fences, and the activation that returns to the
+host after every product and is uploaded again for the next.
+`model_runner-platform-device-products.ads` has said so in a comment since
+sequences were written -- *"a sequence of several still returns each result
+to the host today, and hoisting that is the next change rather than this
+one"* -- and that comment is now a measurement.
+
+The batched product is not what is left of the device's prompt gap. What is
+left is around it.
+
+Projecting not moving at all under the doubling is unexplained and is
+written down as unexplained: either those products do not take that path, or
+the phase counter attributes their wait to the phase after them, the phases
+being host-side wall around asynchronous submissions.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has

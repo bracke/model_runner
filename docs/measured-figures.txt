@@ -7555,4 +7555,85 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # wants. That is the figure to hold against any future device whose cache
 # can afford to be.
 
+# 2026-08-27, the batched product profiled, and it is not the batched
+# product. No kernel change kept; an instrument and four numbers.
+#
+# The item said feeding plus projecting is most of the device's remaining
+# 3.9 times on a prompt, that four kernel attempts had already landed on a
+# local optimum, and that this would start with a profile rather than a
+# change. It did.
+#
+# What the budget already said, at 1419 tokens: projecting 0.746 s for 9.44
+# million weights a layer, feeding 1.300 s for 34.60 million. Same kernel,
+# same format, and per weight the projections run at about 790 gigaflops a
+# second against feeding's 1662. A phase cannot say why, because a phase is
+# four products; so `tests device-bench` grew a sweep that times one, at the
+# shapes a layer actually asks for and at a batch of a hundred and
+# twenty-eight.
+#
+#   query      2048 by 2048   0.000396 s   2714 Gflop/s    64 workgroups
+#   keys        256 by 2048   0.000295 s    455 Gflop/s     8 workgroups
+#   out proj   2048 by 2048   0.000529 s   2031 Gflop/s    64
+#   gate, up   5632 by 2048   0.001110 s   2660 Gflop/s   176
+#   down       2048 by 5632   0.000922 s   3204 Gflop/s    64
+#   vocabulary 32000 by 2048  0.007440 s   2255 Gflop/s  1000
+#
+# **The grouped keys and values run at a sixth of everything else.** That
+# shape is not a quirk of this model: grouped-query attention gives every
+# modern model a projection an eighth the height of the query beside it, and
+# a workgroup here takes thirty-two rows and a hundred and twenty-eight
+# vectors, so two hundred and fifty-six rows against a batch of a hundred
+# and twenty-eight is eight workgroups on twelve compute units.
+#
+# That it is the workgroup count and not the shape, said by widening the
+# batch and nothing else:
+#
+#   256 by 2048, 128 vectors    8 workgroups    455 Gflop/s
+#   256 by 2048, 256 vectors   16 workgroups    706
+#   256 by 2048, 512 vectors   32 workgroups    835
+#   256 by 2048, 1024 vectors  64 workgroups   1103
+#
+# So the fix is more workgroups at the batch a prompt actually has, which
+# means a narrower vector tile. Built as two whole compilations and
+# measured:
+#
+#                    keys    query   gate, up   vocabulary
+#   128 vectors      455     2714      2660        2255
+#   64 vectors       514     2461      2778        1895
+#   32 vectors       575     2022      1984        1323
+#
+# **Twenty-six per cent on the narrow shape for twenty-five off the query
+# and forty-one off the vocabulary.** Not kept, and not worth a second
+# pipeline either: quadrupling the workgroups bought a quarter, so the
+# workgroup count is what the batch sweep says it is and not the whole of
+# what binds this shape. What else binds it is not established here.
+#
+# Then the number that reframes the item. Every tile product in a sequence
+# dispatched twice, unchanged data, so the difference is the arithmetic and
+# nothing around it:
+#
+#   FEEDING      1.294 s -> 1.846 s    the products are 0.552 s
+#   PROJECTING   0.678 s -> 0.678 s    not this path at all
+#
+# **The arithmetic is forty-three per cent of the feeding phase.** The other
+# fifty-seven -- three quarters of a second on a four-second prompt -- is
+# what surrounds it: submissions, fences, and the activation that goes back
+# to the host after every product and is uploaded again for the next, which
+# model_runner-platform-device-products.ads has said in a comment since
+# sequences were written: "a sequence of several still returns each result
+# to the host today, and hoisting that is the next change rather than this
+# one."
+#
+# That comment is now a measurement. The batched product is not what is left
+# of the device's prompt gap; what is left is around it.
+#
+# Projecting not moving at all under the doubling is unexplained and is
+# written down as unexplained. Either those products do not take that path,
+# or the phase counter attributes their wait to the phase after them --
+# the phases are host-side wall around asynchronous submissions, and this
+# file has already caught one figure moving between two of them today.
+#
+# No source changed outside tests/src/device_bench.adb, which no figure
+# group names.
+
 outside 3F9710DCA5D80D0C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
