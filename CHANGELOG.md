@@ -5,6 +5,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **The processor's attention scores in binary32 measured level, and the
+  reason is that GNAT will not vectorise a reduction however it is written.**
+  Not kept.
+
+  That loop is 27 per cent of a processor prompt and widens two binary32
+  operands to binary64 in one serial accumulator; the device has always
+  computed the same scores in binary32 and the sweep holds both at the same
+  tolerance, so the precision question was answered on the other side.
+  Changed to binary32 in eight accumulators it reads 14.783 s and 14.640
+  against 14.520 and 14.886 -- level -- and the answers do not move.
+
+  The object file says why: the score loop is `mulsd`/`addsd` in binary64 and
+  `mulss`/`addss` in binary32, both **scalar**, while the value blend twenty
+  lines below is `mulpd`/`addpd`, **packed**. The blend is a map, which `-O3`
+  vectorises unasked; the score is a reduction, and writing it as eight
+  independent lanes -- a map by construction -- still produced eight scalar
+  chains.
+
+  This explains three null results that looked unrelated: reassociating
+  `RMS_Norm` bought one per cent, four accumulators here seven, binary32
+  nothing. Every arrangement of scalar arithmetic is scalar arithmetic. What
+  would work is a machine-code insertion with a runtime capability check,
+  which is what this project's integer kernels already are.
+
 ### Changed
 
 - **The processor's attention read the whole key cache once for every head;

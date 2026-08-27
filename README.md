@@ -3196,6 +3196,57 @@ reuse fifteen, so between them a fifth. **The rest is the binary64 conversion
 and the arithmetic itself** -- the same answer the device gave, arrived at
 from the other side.
 
+### Scalar however it is written
+
+The score loop is 27 per cent of a processor prompt and converts two binary32
+operands to binary64 to multiply them, in one serial accumulator. **The device
+has always computed the same scores in binary32**, and the conformance sweep
+holds both backends against the same reference at the same tolerance -- the
+shader's binary32 differs from the processor's binary64 by 2.2e-05 at worst,
+under the sweep's floor. The history records no reason for the wider
+accumulator beyond accuracy.
+
+So it was changed to binary32 in eight accumulators, eight being what a
+register holds. Two alternated rounds on a 1419-token prompt read 14.783 s and
+14.640 against 14.520 and 14.886: **level**. The answers did not move either,
+which says something on its own about how little of a score's last bits
+reaches a token.
+
+The object file says why. In the procedure that holds both loops:
+
+| | instructions | |
+|---|---|---|
+| the committed score loop | 14 `mulsd`, 13 `addsd` | scalar binary64 |
+| the same loop in binary32 | 25 `mulss`, 72 `addss` | scalar binary32 |
+| the value blend beside it | 34 `mulpd`, 32 `addpd` | **packed** binary64 |
+
+**The score loop is scalar in both formats and the value blend twenty lines
+below it is packed.** The difference is neither the format nor the accumulator
+count: the blend is a *map* -- every component of its output independent, which
+GNAT vectorises at `-O3` unasked -- and the score is a *reduction*. Written as
+eight independent lanes, which is a map by construction, it still came out as
+eight scalar chains; hoisting the operands into renamed slices so the addresses
+are plainly contiguous did not change one instruction.
+
+So binary32 replaced one scalar chain with eight, and the loop is not
+latency-bound -- four accumulators bought seven per cent, which is what a loop
+says when the chain is not what holds it -- so eight scalar chains are no
+better than one.
+
+**This explains three other null results that looked unrelated.**
+Reassociating `RMS_Norm` bought one per cent; four accumulators here bought
+seven; binary32 bought nothing. Every arrangement of scalar arithmetic is
+scalar arithmetic. The loop issues about sixty-four scalar multiply-adds where
+a packed unit would issue eight, and no way of writing Ada found here makes
+GNAT emit the eight.
+
+What would: a machine-code insertion with a runtime capability check, which is
+the mechanism this project already uses for exactly this reason --
+`model_runner-quantization-integers-kernels.adb` is four thousand lines of it
+and `Platform.Instructions` is what asks the processor first. The score dot
+product is a fused multiply-add over sixty-four contiguous binary32 pairs and
+is a smaller insertion than any of those.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has

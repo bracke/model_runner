@@ -3077,6 +3077,72 @@ kernels 77EB0DAB62549D76 src/library/model_runner-quantization.adb src/library/m
 # are were not re-taken: neither benchmark opens a session, so neither
 # reaches a loop this changed.
 
+# 2026-08-27, the processor's scores in binary32: level, and the reason is
+# that the compiler will not vectorize a reduction however it is written.
+#
+# The item was that the score dot product -- twenty-seven per cent of a
+# processor prompt -- converts two binary32 operands to binary64, multiplies
+# in binary64 and accumulates in binary64, in one serial accumulator; that
+# the device has always computed the same scores in binary32; and that the
+# conformance sweep holds both backends at the same tolerance, so the
+# precision question was already answered on the other side.
+#
+# The history was checked first, as it should have been. The only reason
+# recorded for the wider accumulator is accuracy, and the size of what it
+# buys is written down: the shader's binary32 differs from the processor's
+# binary64 by 2.2e-05 at worst in absolute terms, under the sweep's floor.
+# Nothing said the processor needed it.
+#
+# So it was changed: binary32, in eight accumulators, eight being what a
+# register holds of them. Two alternated rounds on a 1419-token prompt:
+#
+#   binary64, one accumulator    14.520 s, 14.886 s
+#   binary32, eight accumulators 14.783 s, 14.640 s
+#
+# **Level.** And the answers did not move either -- 1a26d24d33b8957b both
+# ways -- which is worth noticing on its own about how little of a score's
+# last bits reaches a token.
+#
+# What the object file says, and this is the finding. In the procedure that
+# holds both loops:
+#
+#   the committed score loop     14 mulsd, 13 addsd    scalar binary64
+#   the same loop in binary32    25 mulss, 72 addss    scalar binary32
+#   the value blend beside it    34 mulpd, 32 addpd    packed binary64
+#
+# **The score loop is scalar in both formats and the value blend twenty
+# lines below it is packed.** The difference between them is not the format
+# and not the accumulator count: the blend is a map -- every component of
+# its output is independent, and GNAT vectorizes it at -O3 without being
+# asked -- and the score is a reduction. Written as eight independent lanes,
+# which is a map by construction, it still came out as eight scalar chains;
+# hoisting the operands into renamed slices so the addresses are plainly
+# contiguous did not change one instruction.
+#
+# So the binary32 version replaced one scalar chain with eight, and since
+# the loop is not latency-bound -- four accumulators bought seven per cent,
+# which is what a loop says when the chain is not what holds it -- eight
+# scalar chains are no better than one. Not kept.
+#
+# This also explains today's other three null results on this backend, which
+# looked unrelated and are the same thing: RMS_Norm reassociated bought one
+# per cent, four accumulators here bought seven, and binary32 bought
+# nothing. **Every arrangement of scalar arithmetic is scalar arithmetic.**
+# The loop issues about sixty-four scalar multiply-adds where a packed unit
+# would issue eight, and no way of writing Ada found today makes GNAT emit
+# the eight.
+#
+# What would. A machine-code insertion with a runtime capability check,
+# which is the mechanism this project already uses for exactly this reason:
+# model_runner-quantization-integers-kernels.adb is four thousand lines of
+# it and Platform.Instructions is what asks the processor first. The score
+# dot product is a fused multiply-add over sixty-four contiguous binary32
+# pairs and is a smaller insertion than any of those. That is the next
+# thing on this backend, and it is the only thing left that the measurements
+# have not already ruled out.
+#
+# No source changed.
+
 # 2026-08-27, the processor's attention read the key cache once a head. The
 # same loop swap, on the other backend.
 #
