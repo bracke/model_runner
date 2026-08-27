@@ -5090,7 +5090,7 @@ reference 541E9ABD66FAA7E8 src/library/model_runner-backend-reference.adb src/li
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-device 711621F5D6E5A660 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 3F9710DCA5D80D0C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -7297,4 +7297,116 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # llama.cpp rows, 0.41 to 0.85 for the attention rounds and the doublings,
 # 2026-08-27.
 
-outside 711621F5D6E5A660 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-27, a workgroup answers four queries instead of one: attention a
+# half faster and a device prompt a tenth.
+#
+# The item was that attention reads the keys once per query position, and
+# there are fourteen hundred of them. It was priced before anything was
+# built. Confining the key and value reads to eight cached positions -- the
+# same instructions, the same arithmetic, the same number of loads, but all
+# of them cache-resident -- read attention at 1.27 s against 2.06 on a
+# 1419-token prompt. So two fifths of attention was the traffic, and the
+# traffic was almost entirely re-reading: the keys a group of eight heads
+# shares are read by each of them, and every query position reads them
+# again.
+#
+# What was built. attention.comp gains a QUERIES constant and is compiled a
+# third time with QUERY_TILE, which sets it to four. A workgroup then holds
+# four queries, and the key component a lane reads for its cached position
+# is multiplied into all four instead of being read again by each. Everything
+# else is the same text: QUERIES is one in the other two compilations, the
+# per-query arrays are of length one there, and the loops over them have a
+# single turn.
+#
+# A block wants a maximum and a sum per query per tile, so the tiled
+# compilation requires the subgroup one -- which is why this could not have
+# been built before this morning. Without subgroup operations a block would
+# walk shared memory four times a tile, which is what the block exists to
+# avoid.
+#
+# The block width, three sizes at 1419 tokens, attention alone:
+#
+#   two queries a workgroup    1.709 s, 1.706 s
+#   four queries a workgroup   1.359 s, 1.352 s
+#   eight queries a workgroup  1.657 s, 1.612 s
+#
+# Four. Eight loses what it gains: a query costs four accumulators, a
+# running maximum, a running sum and four held components, and at eight the
+# register pressure takes back more occupancy than the extra reuse buys.
+# That is the fourth time occupancy has decided a device question here and
+# the first where it decided a width rather than a yes or no.
+#
+# At four, alternated rounds:
+#
+#   attention alone, 1419 tokens   2.030 s -> 1.356 s   1.50x
+#   110-token device prompt        0.267 s -> 0.245 s   1.09x, 3 of 3
+#   1419-token device prompt       4.211 s -> 3.922 s   1.07x
+#   64 generated, 6-token context  1.567 s -> 1.600 s   unchanged
+#   64 generated, 1419 context     2.285 s -> 2.299 s   unchanged
+#
+# Generating does not move and is not meant to: one position is fewer than a
+# block, so the engine binds the subgroup kernel there and the tiled one is
+# never reached. Attention lands at 1.36 s against the 1.27 s the ablation
+# said was the floor for this kernel's arithmetic, so the block recovered
+# nearly all of the traffic there was to recover.
+#
+# Bit-identical, which is worth saying because it was not obvious: the long
+# prompt prints 1a26d24d33b8957b either way. A block changes which
+# invocation computes a dot product and not the order it accumulates it in,
+# and the softmax sum is a subgroup add on both sides.
+#
+# A mistake worth recording, because a test suite did not catch it. Sweeping
+# the block width with sed set QUERIES in both arms of its own #ifdef, so
+# the untiled compilations were built with four as well -- a kernel that
+# answers four queries a workgroup, dispatched one workgroup a query. Every
+# one of the two hundred and eighty tests passed, because the suite's
+# batches are shorter than a block and the extra queries were clamped onto
+# the last real one. A repository check now reads the number out of the
+# shader and requires the engine's Query_Block to equal it.
+#
+# What is left, and it is the larger half. The ablation's 1.27 s is 182
+# Gflop of useful arithmetic in 1.27 s, which is about 145 gigaflops a
+# second on a part whose matrix tile reaches 2031. Attention is now bound by
+# instruction issue rather than by memory, and closing that wants the scores
+# computed as a matrix product through the cooperative matrix -- which is
+# what the other runtime does. That is a much larger change than this one
+# and it is the next thing to try on attention, not a variation on this.
+#
+# What was re-measured with it. The two-row table under "The device
+# backend", both columns, one sitting:
+#
+#   6-token prompt, 12 generated       cpu 0.449 s   device 0.354 s
+#     -- evaluating the prompt             0.075         0.064
+#     -- generating                        0.379         0.290
+#     -- processor time                    1.63          0.03
+#   110-token prompt, nothing generated    0.754         0.243
+#     -- processor time                    3.81          0.09
+#
+# The 110-token device row is the one that moves, 0.287 to 0.243, and it is
+# this change; the six-token run's prompt is six positions, which is more
+# than a block, so it moves a little too.
+#
+# The llama.cpp comparison, both programs in one sitting, llama.cpp at
+# 95b8e33e1 build 10597, three rounds. The engine's rows are 110 tokens in
+# 0.738 s and 64 generated in 2.069 s on the processor, 0.251 s and 1.544 s
+# on the device.
+#
+#   model_runner, processor    149.1 t/s prompt, 30.9 t/s generating
+#   llama.cpp, processor       353.1 t/s prompt, 39.9 t/s generating
+#   model_runner, device       438.2 t/s prompt, 41.5 t/s generating
+#   llama.cpp, device         1652.6 t/s prompt, 56.3 t/s generating
+#   llama.cpp at -ngl 0        769.2 t/s, which is the device answering
+#
+# The gap is 2.4 and 1.3 on the processor, 3.8 and 1.4 on the device. The
+# device prompt row has gone 412.0 to 424.7 to 438.2 across three sittings
+# and the last step is this change.
+#
+# The fifteen per-format ratios and the three-way table of where the weights
+# are were not re-taken, for the reasons given against the entry above:
+# neither benchmark makes an attention call, and neither touches what is
+# allocated or where.
+#
+# load: 0.93 to 1.26 for the device backend table and the llama.cpp rows,
+# 0.67 to 1.44 for the block sweep and the alternated rounds, 2026-08-27.
+
+outside 3F9710DCA5D80D0C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

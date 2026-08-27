@@ -1,7 +1,25 @@
 #version 450
 
-//  This source is compiled twice, and the second compilation defines
-//  SUBGROUPS. The two differ in one thing: how the sixty-four lanes of a
+//  This source is compiled three times. The second compilation defines
+//  SUBGROUPS and the third defines SUBGROUPS and QUERY_TILE, which sets
+//  QUERIES above one: a workgroup then answers a block of query positions
+//  rather than one, and the key it reads for a cached position is
+//  multiplied into every query of the block instead of being read again by
+//  each of them. Confining the key and value reads to a cache-resident
+//  window measured attention at 1.27 s against 2.06 on a 1419-token prompt,
+//  so two fifths of it was that traffic and the traffic was almost all
+//  re-reading.
+//
+//  QUERIES is one in the first two compilations, which makes them the same
+//  kernel they were: the per-query arrays are of length one and the loops
+//  over them have a single turn.
+//
+//  A block wants a reduction per query per tile, so the tiled compilation
+//  requires the subgroup one. Without subgroup operations a block would
+//  reduce by walking shared memory QUERIES times a tile, which is what the
+//  block exists to avoid.
+//
+//  On SUBGROUPS. The two differ in one thing: how the sixty-four lanes of a
 //  workgroup agree on the largest score in a tile and on the sum of the
 //  weights. Without subgroup operations every lane walks all sixty-four
 //  entries of the tile for each of those, twice, which is a hundred and
@@ -131,8 +149,15 @@ layout(push_constant) uniform Shape {
 //  kernel that quietly writes past the end of what it kept.
 const uint room = 256;
 
-//  One tile of scores, one per invocation.
-shared float tile[64];
+//  How many query positions a workgroup answers.
+#ifdef QUERY_TILE
+const uint QUERIES = 4u;
+#else
+const uint QUERIES = 1u;
+#endif
+
+//  One tile of scores per query of the block, one entry per invocation.
+shared float tile[QUERIES * 64u];
 
 #ifdef SUBGROUPS
 //  One partial per subgroup. Sixty-four of them, because a device may make
@@ -186,36 +211,47 @@ float whole_sum (float mine) {
     barrier ();
     return whole;
 }
+#else
+//  The same two, for a device that offers no subgroup operations. They
+//  reduce through the score tile itself, which is free at the moment they
+//  are called and is exactly sixty-four wide here -- QUERIES is one
+//  whenever this half is compiled, because the tiled compilation requires
+//  the subgroup one.
+float whole_max (float mine) {
+    barrier ();
+    tile[gl_LocalInvocationID.x] = mine;
+    barrier ();
+
+    float whole = tile[0];
+    for (uint i = 1u; i < 64u; i++) {
+        whole = max (whole, tile[i]);
+    }
+    return whole;
+}
+
+float whole_sum (float mine) {
+    barrier ();
+    tile[gl_LocalInvocationID.x] = mine;
+    barrier ();
+
+    float whole = 0.0;
+    for (uint i = 0u; i < 64u; i++) {
+        whole += tile[i];
+    }
+    return whole;
+}
 #endif
 
 void main() {
-    uint head = gl_WorkGroupID.x;
-    uint slot = gl_WorkGroupID.y;
-    uint lane = gl_LocalInvocationID.x;
+    uint head  = gl_WorkGroupID.x;
+    uint block = gl_WorkGroupID.y;
+    uint lane  = gl_LocalInvocationID.x;
 
-    if (head >= shape.heads || slot >= shape.positions) {
+    if (head >= shape.heads || block * QUERIES >= shape.positions) {
         return;
     }
 
-    //  This position's last, and the first it may look back to. A window
-    //  slides with the position; without one, first is what was pushed.
-    //  Attending both ways, every position shares the one that was pushed:
-    //  the end of the text is the end of the text for all of them.
-    uint last = shape.last + (shape.causal != 0u ? slot : 0u);
-    uint first = shape.first;
-    if (shape.window > 0u) {
-        first = last + 1u > shape.window ? last + 1u - shape.window : 0u;
-    }
-
     uint group = head / shape.group_size;
-    uint q_at = slot * shape.heads * shape.head_size + head * shape.head_size;
-
-    //  Where this workgroup's own query sits, which is not last for a model
-    //  that reads both ways: there every slot shares last and only this
-    //  differs between them.
-    uint asking = shape.causal != 0u
-                  ? last
-                  : shape.last - (shape.positions - 1u) + slot;
 
     //  This head's rung of the slope ladder. The heads below the largest
     //  power of two not above the head count take one ladder and the rest
@@ -236,49 +272,88 @@ void main() {
                 : pow(m1, float(2u * (head - rungs) + 1u));
     }
 
-    //  What this invocation carries out: every sixty-fourth component of
-    //  this head's value, so the private store is four floats and not a
-    //  head's width.
-    float held[room / 64];
-    for (uint k = 0; k < room / 64; k++) {
-        held[k] = 0.0;
+    //  Each query of the block: where it sits, how far back it may look and
+    //  how far forward, and where its own query vector is.
+    //
+    //  A block at the end of the batch may be partly empty. Its dead slots
+    //  are clamped onto the last real query rather than sent home -- they
+    //  compute an answer that is already being computed and the write at
+    //  the end drops it -- because every loop below has a constant trip
+    //  count and a workgroup some of whose invocations left early is a
+    //  workgroup whose barriers are undefined.
+    uint slot_of[QUERIES];
+    uint last_of[QUERIES];
+    uint first_of[QUERIES];
+    uint q_of[QUERIES];
+
+    uint last_max  = 0u;
+    uint first_min = 0xFFFFFFFFu;
+
+    for (uint i = 0u; i < QUERIES; i++) {
+        uint slot = min(block * QUERIES + i, shape.positions - 1u);
+        slot_of[i] = slot;
+
+        //  This position's last, and the first it may look back to. A
+        //  window slides with the position; without one, first is what was
+        //  pushed. Attending both ways, every position shares the one that
+        //  was pushed: the end of the text is the end of the text for all
+        //  of them.
+        uint last = shape.last + (shape.causal != 0u ? slot : 0u);
+        uint first = shape.first;
+        if (shape.window > 0u) {
+            first = last + 1u > shape.window ? last + 1u - shape.window : 0u;
+        }
+
+        last_of[i]  = last;
+        first_of[i] = first;
+        q_of[i] = slot * shape.heads * shape.head_size
+                  + head * shape.head_size;
+
+        last_max  = max(last_max, last);
+        first_min = min(first_min, first);
     }
 
-    float top = -1.0 / 0.0;
-    float sum = 0.0;
+    //  What this invocation carries out: every sixty-fourth component of
+    //  each query's value, so the private store is four floats a query and
+    //  not a head's width.
+    float held[QUERIES][room / 64];
+    float top[QUERIES];
+    float sum[QUERIES];
 
-    for (uint base = first; base <= last; base += 64) {
+    for (uint i = 0u; i < QUERIES; i++) {
+        for (uint k = 0; k < room / 64; k++) {
+            held[i][k] = 0.0;
+        }
+        top[i] = -1.0 / 0.0;
+        sum[i] = 0.0;
+    }
+
+    for (uint base = first_min; base <= last_max; base += 64) {
         uint step = base + lane;
 
-        float score = -1.0 / 0.0;
-        if (step <= last) {
+        //  The key at this lane's cached position, read once and multiplied
+        //  into every query of the block. That reuse is the whole of what a
+        //  block is for: a key component crosses the bus once and does
+        //  QUERIES multiply-adds rather than one.
+        float dot[QUERIES];
+        for (uint i = 0u; i < QUERIES; i++) {
+            dot[i] = 0.0;
+        }
+
+        if (step <= last_max) {
             uint k_at = shape.k_base + step * shape.kv_width
                         + group * shape.head_size;
 
-            float dot = 0.0;
             for (uint c = 0; c < shape.head_size; c++) {
-                dot += q[q_at + c] * kv[k_at + c];
-            }
-            score = dot * shape.scale;
-
-            //  The fall-off with distance, after the scale and before the
-            //  bound, which is the order the architecture's own runtime
-            //  takes them in. Unsigned: a position is as far from what
-            //  follows it as from what came before, which is what makes this
-            //  the bidirectional form and not the one causal models use.
-            if (slope > 0.0) {
-                score -= slope * float(abs(int(step) - int(asking)));
-            }
-
-            if (shape.cap > 0.0) {
-                score = shape.cap * tanh(score / shape.cap);
+                float kc = kv[k_at + c];
+                for (uint i = 0u; i < QUERIES; i++) {
+                    dot[i] += q[q_of[i] + c] * kc;
+                }
             }
         }
 
-        uint span = min(64u, last - base + 1);
-
-        //  The weight of this lane's own score, worked out once and put
-        //  back where every lane can read it.
+        //  The weight of this lane's score for each query, worked out once
+        //  and put back where every lane can read it.
         //
         //  It used to be worked out where it was wanted, which is once by
         //  every lane for every score of the tile and then again for every
@@ -286,43 +361,58 @@ void main() {
         //  there are sixty-four distinct ones. The barriers below are what
         //  that costs, and a barrier is cheaper than a hundred and
         //  twenty-eight exponentials.
-#ifdef SUBGROUPS
-        //  A lane past the end scored minus infinity, so it takes no part
-        //  in the largest and adds nothing to the sum, and neither
-        //  reduction has to know where the tile ends.
-        float raised = max (top, whole_max (score));
-        float carry = exp (top - raised);
-        float mine = lane < span ? exp (score - raised) : 0.0;
+        float mine[QUERIES];
+        float carry[QUERIES];
 
-        sum = sum * carry + whole_sum (mine);
+        for (uint i = 0u; i < QUERIES; i++) {
+            //  A step outside this query's own window scores minus
+            //  infinity, so it takes no part in the largest and adds
+            //  nothing to the sum. The loop is over the union of the
+            //  block's windows and only this says where each one ends.
+            float score = -1.0 / 0.0;
 
-        barrier();
-        tile[lane] = mine;
-        barrier();
-#else
-        tile[lane] = score;
-        barrier();
+            if (step >= first_of[i] && step <= last_of[i]) {
+                score = dot[i] * shape.scale;
 
-        float highest = tile[0];
-        for (uint j = 1; j < span; j++) {
-            highest = max(highest, tile[j]);
+                //  The fall-off with distance, after the scale and before
+                //  the bound, which is the order the architecture's own
+                //  runtime takes them in. Unsigned: a position is as far
+                //  from what follows it as from what came before, which is
+                //  what makes this the bidirectional form and not the one
+                //  causal models use.
+                if (slope > 0.0) {
+                    uint asking = shape.causal != 0u
+                                  ? last_of[i]
+                                  : shape.last - (shape.positions - 1u)
+                                    + slot_of[i];
+                    score -= slope * float(abs(int(step) - int(asking)));
+                }
+
+                if (shape.cap > 0.0) {
+                    score = shape.cap * tanh(score / shape.cap);
+                }
+            }
+
+            float raised = max(top[i], whole_max(score));
+
+            //  A tile in which this query sees nothing at all: every score
+            //  minus infinity and no running maximum yet. Subtracting one
+            //  infinity from another is what the guard is for.
+            bool empty = isinf(raised) && raised < 0.0;
+
+            carry[i] = empty ? 1.0 : exp(top[i] - raised);
+            mine[i]  = empty ? 0.0 : exp(score - raised);
+            sum[i]   = sum[i] * carry[i] + whole_sum(mine[i]);
+            top[i]   = raised;
         }
 
-        float raised = max(top, highest);
-        float carry = exp(top - raised);
-
-        float mine = lane < span ? exp(tile[lane] - raised) : 0.0;
-
         barrier();
-        tile[lane] = mine;
-        barrier();
-
-        float added = 0.0;
-        for (uint j = 0; j < span; j++) {
-            added += tile[j];
+        for (uint i = 0u; i < QUERIES; i++) {
+            tile[i * 64u + lane] = mine[i];
         }
-        sum = sum * carry + added;
-#endif
+        barrier();
+
+        uint span = min(64u, last_max - base + 1);
 
         for (uint k = 0; k < room / 64; k++) {
             uint c = lane + k * 64;
@@ -330,27 +420,37 @@ void main() {
                 break;
             }
 
-            float gathered = 0.0;
-            for (uint j = 0; j < span; j++) {
-                uint v_at = shape.v_base + (base + j) * shape.v_width
-                            + group * shape.value_size + c;
-                gathered += tile[j] * kv[v_at];
-            }
+            for (uint i = 0u; i < QUERIES; i++) {
+                float gathered = 0.0;
+                for (uint j = 0; j < span; j++) {
+                    uint v_at = shape.v_base + (base + j) * shape.v_width
+                                + group * shape.value_size + c;
+                    gathered += tile[i * 64u + j] * kv[v_at];
+                }
 
-            held[k] = held[k] * carry + gathered;
+                held[i][k] = held[i][k] * carry[i] + gathered;
+            }
         }
 
-        top = raised;
         barrier();
     }
 
-    uint out_at = slot * shape.heads * shape.value_size
-                  + head * shape.value_size;
-    for (uint k = 0; k < room / 64; k++) {
-        uint c = lane + k * 64;
-        if (c >= shape.value_size) {
+    for (uint i = 0u; i < QUERIES; i++) {
+        //  The dead slots of a partly empty block computed a copy of the
+        //  last real query and are dropped here.
+        if (block * QUERIES + i >= shape.positions) {
             break;
         }
-        y[out_at + c] = held[k] / sum;
+
+        uint out_at = slot_of[i] * shape.heads * shape.value_size
+                      + head * shape.value_size;
+
+        for (uint k = 0; k < room / 64; k++) {
+            uint c = lane + k * 64;
+            if (c >= shape.value_size) {
+                break;
+            }
+            y[out_at + c] = held[i][k] / sum[i];
+        }
     }
 }

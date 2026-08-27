@@ -298,10 +298,25 @@ package body Model_Runner.Platform.Device.Products is
    --  Which of the two attention kernels this device got. The subgroup one
    --  where it offered the operations, the shared-memory one everywhere
    --  else.
-   function Attend_Kernel (Item : Engine) return Address
-   is (if Item.Group_Line /= Null_Handle
+   function Attend_Kernel
+     (Item : Engine; Positions : Natural) return Address
+   is (if Item.Tile_Line /= Null_Handle
+         and then Positions >= Query_Block
+       then Item.Tile_Line
+       elsif Item.Group_Line /= Null_Handle
        then Item.Group_Line
        else Item.Attend_Line);
+
+   --  And how many workgroups that kernel wants down the second axis: one
+   --  per query position, or one per block of them where the tiled kernel
+   --  answers a block at a time. The two have to be decided together, which
+   --  is why neither is written out at a call site.
+   function Attend_Groups
+     (Item : Engine; Positions : Natural) return C.unsigned
+   is (if Item.Tile_Line /= Null_Handle
+         and then Positions >= Query_Block
+       then C.unsigned ((Positions + Query_Block - 1) / Query_Block)
+       else C.unsigned (Positions));
 
    function Row_Line (Item : Engine; Count : Natural) return Address
    is (if Count = 1 and then Item.Single_Line /= Null_Handle
@@ -1207,6 +1222,27 @@ package body Model_Runner.Platform.Device.Products is
                   Item.Grouped := Made;
                end if;
             end;
+
+            --  And once more with QUERY_TILE. It needs the subgroup one to
+            --  have been made, because a block reduces per query per tile
+            --  and that is what the subgroup operations are for.
+            if Item.Grouped /= Null_Handle then
+               declare
+                  Blocked : aliased constant
+                    Model_Runner.Shaders.Word_Array :=
+                      Model_Runner.Shaders.Attention_Tiled;
+               begin
+                  Request.Size :=
+                    Interfaces.C.size_t (Blocked'Length * 4);
+                  Request.Code := Blocked'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Query_Tile := Made;
+                  end if;
+               end;
+            end if;
          end if;
       end;
 
@@ -1443,6 +1479,18 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Group_Line := Made;
+            end if;
+         end if;
+
+         if Item.Group_Line /= Null_Handle
+           and then Item.Query_Tile /= Null_Handle
+         then
+            Request.Stage.Module := Item.Query_Tile;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Tile_Line := Made;
             end if;
          end if;
 
@@ -1777,6 +1825,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Commands, "vkDestroyCommandPool");
       Item.Descriptor := Null_Handle;
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
+      Give_Back (Item.Tile_Line, "vkDestroyPipeline");
       Give_Back (Item.Group_Line, "vkDestroyPipeline");
       Give_Back (Item.Single_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
@@ -1791,6 +1840,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
+      Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
@@ -3061,16 +3111,19 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Attend_Kernel (Item));
+         Bind_Pipeline
+           (Item.Buffer, Bind_Point_Compute, Attend_Kernel (Item, Slots));
          Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                     Sets'Address, 0, Null_Handle);
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                Attention_Bytes, Shape'Address);
-         --  A workgroup a head of a position, which is what the kernel's
-         --  source declares: its invocations divide the cached positions
-         --  between them, and the positions of a batch do not need each
-         --  other, so they go in one submission rather than one each.
-         Dispatch (Item.Buffer, C.unsigned (Heads), C.unsigned (Slots), 1);
+         --  A workgroup a head of a position, or of a block of them where
+         --  the tiled kernel is bound: its invocations divide the cached
+         --  positions between them, and the positions of a batch do not
+         --  need each other, so they go in one submission rather than one
+         --  each.
+         Dispatch (Item.Buffer, C.unsigned (Heads),
+                   Attend_Groups (Item, Slots), 1);
 
          if Stop (Item.Buffer) /= 0 then
             return;
@@ -3842,7 +3895,8 @@ package body Model_Runner.Platform.Device.Products is
                   --  The attention kernel, and back again afterwards, as
                   --  the combining step does.
                   Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Attend_Kernel (Item));
+                    (Item.Buffer, Bind_Point_Compute,
+                     Attend_Kernel (Item, Count));
 
                   declare
                      Shape : aliased Attention_Constants :=
@@ -3871,7 +3925,7 @@ package body Model_Runner.Platform.Device.Products is
                            Attention_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer, C.unsigned (This.Heads),
-                        C.unsigned (Count), 1);
+                        Attend_Groups (Item, Count), 1);
                   end;
 
                   Bind_Pipeline

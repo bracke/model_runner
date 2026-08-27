@@ -21,6 +21,7 @@ with Unreached_Codes;
 with Untested_Surface;
 with Template_Registry;
 with Tiny_Model;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Shaders;
 with Shader_Generation;
 with Tool_Commands;
@@ -5414,6 +5415,80 @@ package body Checks is
                   & "older than the source; compile it twice, the second "
                   & "with --target-env vulkan1.1 -DSUBGROUPS to "
                   & "attention_subgroups.spv, and run 'tests shader' again "
+                  & "with every shader named");
+         end if;
+
+         --  The tiled compilation's block width is stated twice: once in
+         --  the shader, which decides how many queries a workgroup answers,
+         --  and once in the engine, which decides how many workgroups are
+         --  asked for. Two hand-kept copies of a number drift, and this one
+         --  drifted inside an hour of being written -- a careless edit set
+         --  the shader's to four where the engine still said one, and every
+         --  test passed because the suite's batches are shorter than a
+         --  block. Read the shader's and require them to agree.
+         declare
+            Text : constant String :=
+              Contents ("src/shaders/attention.comp");
+
+            Marker : constant String := "#ifdef QUERY_TILE";
+            Named  : constant String := "const uint QUERIES = ";
+
+            Said : Natural := 0;
+            At_If : Natural := 0;
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            for Index in Text'First
+                         .. Text'Last - Marker'Length + 1
+            loop
+               if Text (Index .. Index + Marker'Length - 1) = Marker then
+                  At_If := Index;
+                  exit;
+               end if;
+            end loop;
+
+            if At_If = 0 then
+               Fail ("src/shaders/attention.comp no longer names "
+                     & "QUERY_TILE, and the engine still asks for blocks "
+                     & "of" & Natural'Image
+                       (Model_Runner.Platform.Device.Products.Query_Block));
+            else
+               for Index in At_If .. Text'Last - Named'Length + 1 loop
+                  if Text (Index .. Index + Named'Length - 1) = Named then
+                     for Digit in Index + Named'Length .. Text'Last loop
+                        exit when Text (Digit) not in '0' .. '9';
+                        Said := Said * 10
+                                + Character'Pos (Text (Digit))
+                                - Character'Pos ('0');
+                     end loop;
+                     exit;
+                  end if;
+               end loop;
+
+               if Said
+                  /= Model_Runner.Platform.Device.Products.Query_Block
+               then
+                  Fail ("src/shaders/attention.comp answers"
+                        & Natural'Image (Said) & " queries a workgroup and "
+                        & "the engine dispatches for blocks of"
+                        & Natural'Image
+                          (Model_Runner.Platform.Device.Products.Query_Block)
+                        & "; a batch longer than a block would be answered "
+                        & "in part");
+               end if;
+            end if;
+         end;
+
+         --  And the third, with QUERY_TILE beside it.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Attention_Tiled_Digest
+         then
+            Fail ("the third compilation of src/shaders/attention.comp is "
+                  & "older than the source; compile it with --target-env "
+                  & "vulkan1.1 -DSUBGROUPS -DQUERY_TILE to "
+                  & "attention_tiled.spv, and run 'tests shader' again "
                   & "with every shader named");
          end if;
       end;

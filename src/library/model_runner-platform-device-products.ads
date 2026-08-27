@@ -54,6 +54,12 @@ package Model_Runner.Platform.Device.Products is
    --  command buffer, not several submissions.
    Batch_Group : constant := 8;
 
+   --  Query positions one workgroup of the tiled attention kernel answers.
+   --  attention.comp declares the same number as QUERIES under QUERY_TILE
+   --  and the two have to agree: this decides how many workgroups the
+   --  dispatch asks for and that one decides how many each does.
+   Query_Block : constant := 4;
+
    --  How a matrix's bytes are packed. The device decodes every one of these
    --  itself, which is every format this program reads: nothing has to be
    --  repacked to reach a device any more, and repacking is what it always
@@ -815,6 +821,13 @@ private
       --  device said no, and the third kernel then answers every call.
       Grouped    : System.Address := System.Null_Address;
 
+      --  And the same source again with QUERY_TILE, where a workgroup
+      --  answers a block of query positions rather than one and the key it
+      --  reads is multiplied into every query of the block. Bound only
+      --  where there are at least Query_Block positions to answer; below
+      --  that a block is mostly padding and the kernel above is better.
+      Query_Tile : System.Address := System.Null_Address;
+
       --  The fourth and fifth kernels, which go together and are made only
       --  where the device offers the matrix instruction: a tile of the
       --  answer at a time, and the copy of the batch in half precision that
@@ -851,6 +864,7 @@ private
       Extra_Line  : System.Address := System.Null_Address;
       Single_Line : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
+      Tile_Line   : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
       --  is what the device said when it was opened.

@@ -7,6 +7,39 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A workgroup of the attention kernel answers four query positions instead
+  of one, and a device prompt is a tenth faster.** Attention itself goes
+  from 2.030 s to 1.356 s on a 1419-token prompt; the 110-token device
+  prompt reads 0.245 s against 0.267, better in each of three rounds, and
+  the 1419-token one 3.922 s against 4.211. The answers are bit-identical:
+  the long prompt prints `1a26d24d33b8957b` either way.
+
+  **It was priced before it was built.** Confining the key and value reads
+  to eight cached positions -- same instructions, same arithmetic, same
+  count of loads, all cache-resident -- read attention at 1.27 s against
+  2.06. Two fifths of attention was the traffic, and the traffic was almost
+  entirely re-reading: the keys a group of eight heads shares are read by
+  each of them, and every query position reads them again.
+
+  `attention.comp` gained a `QUERIES` constant and a third compilation with
+  `QUERY_TILE`, which sets it to four; the key component a lane reads is now
+  multiplied into four queries rather than read again by each. Everything
+  else is the same text -- `QUERIES` is one in the other two compilations.
+  A block wants a maximum and a sum per query per tile, so the tiled
+  compilation requires the subgroup one.
+
+  Four beats two and eight: at eight the register pressure takes back more
+  occupancy than the extra reuse buys. Generating does not move, and is not
+  meant to -- one position is fewer than a block, so the engine binds the
+  subgroup kernel there.
+
+  A repository check now reads `QUERIES` out of the shader and requires the
+  engine's `Query_Block` to equal it. That number is stated in two places,
+  and it drifted within an hour of being written: a careless sweep set the
+  shader's to four while the engine still dispatched one workgroup a query,
+  and all 280 tests passed because the suite's batches are shorter than a
+  block.
+
 - **Attention reduces across a subgroup where the device offers one: a fifth
   faster as a kernel, and four per cent on a generated token with a long
   context.** `attention.comp` is compiled twice, the second with

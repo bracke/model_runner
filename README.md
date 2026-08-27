@@ -486,25 +486,27 @@ cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
 cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv \
                              [SOURCE.comp OUT.spv ...] [ROOT]
                                            # after recompiling a shader, and
-                                           # naming every one of the eight:
+                                           # naming every one of the nine:
                                            # the package is written whole.
                                            # Five compile with
                                            # `glslangValidator -V`; the
                                            # matrix product needs
                                            # `--target-env vulkan1.3`,
                                            # because it is SPIR-V 1.6.
-                                           # Three sources are compiled
-                                           # twice: the matrix product again
-                                           # with `-DMORE_FORMATS`, the row
-                                           # product with `-DSINGLE`, and
-                                           # attention with `--target-env
-                                           # vulkan1.1 -DSUBGROUPS`. A
+                                           # The matrix product is compiled
+                                           # again with `-DMORE_FORMATS`,
+                                           # the row product with
+                                           # `-DSINGLE`, and attention twice
+                                           # more with `--target-env
+                                           # vulkan1.1 -DSUBGROUPS` and the
+                                           # same plus `-DQUERY_TILE`. A
                                            # constant is named for the
-                                           # compiled file, so the pairs
-                                           # arrive as Matrix_Product and
+                                           # compiled file, so they arrive
+                                           # as Matrix_Product and
                                            # Matrix_Extra, Row_Product and
-                                           # Row_Single, Attention and
-                                           # Attention_Subgroups.
+                                           # Row_Single, Attention,
+                                           # Attention_Subgroups and
+                                           # Attention_Tiled.
 cd tests && ./bin/tests fuzz --seed 1 --cases 2000
 cd tests && ./bin/tests fixtures           # write tests/fixtures/tiny-model.gguf
 cd tests && ./bin/tests package .. .       # write model_runner-<version>.tar
@@ -1511,12 +1513,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.446 s | **0.346 s** |
-| -- evaluating the prompt | 0.071 s | 0.058 s |
-| -- generating | 0.374 s | **0.288 s** |
-| -- processor time | 1.61 s | **0.03 s** |
-| 110-token prompt, nothing generated | 0.769 s | **0.287 s** |
-| -- processor time | 3.80 s | **0.11 s** |
+| 6-token prompt, 12 generated | 0.449 s | **0.354 s** |
+| -- evaluating the prompt | 0.075 s | 0.064 s |
+| -- generating | 0.379 s | **0.290 s** |
+| -- processor time | 1.63 s | **0.03 s** |
+| 110-token prompt, nothing generated | 0.754 s | **0.243 s** |
+| -- processor time | 3.81 s | **0.09 s** |
 
 All six cells were taken in one sitting on 2026-08-27, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -2451,11 +2453,72 @@ unchanged, and the one real shape it helps -- generating with a long context
 -- is where a chat session spends its time. It is not kept because of the
 nineteen per cent.
 
-What is still left in the kernel: the dot product reads the keys with the
-lanes a key-width apart, which is the uncoalesced direction, while the
-weighted sum reads the value rows with the lanes consecutive, which is the
-good one. Fixing the first wants the key block staged through shared memory,
-and that has now lost three times on this device.
+### A workgroup answers four queries, not one
+
+The keys are read once per query position, and a long prompt has fourteen
+hundred of them. That was priced before anything was built: confining the
+key and value reads to eight cached positions -- the same instructions, the
+same arithmetic, the same count of loads, all of them cache-resident -- read
+attention at **1.27 s against 2.06** on a 1419-token prompt. Two fifths of
+attention was the traffic, and the traffic was almost all re-reading.
+
+So `attention.comp` gained a `QUERIES` constant and a third compilation with
+`QUERY_TILE`, which sets it to four. A workgroup holds four queries, and the
+key component a lane reads for its cached position is multiplied into all
+four rather than read again by each. Everything else is the same text:
+`QUERIES` is one in the other two compilations, so the per-query arrays are
+of length one there and the loops over them have a single turn.
+
+A block wants a maximum and a sum **per query** per tile, so the tiled
+compilation requires the subgroup one -- which is why this could not have
+been built before the section above it.
+
+| attention alone, 1419 tokens | |
+|---|---:|
+| two queries a workgroup | 1.709 s |
+| **four queries a workgroup** | **1.356 s** |
+| eight queries a workgroup | 1.657 s |
+
+**Eight loses what it gains.** A query costs four accumulators, a running
+maximum, a running sum and four held components, and at eight the register
+pressure takes back more occupancy than the extra reuse buys. That is the
+fourth time occupancy has decided a device question here, and the first
+where it decided a width rather than a yes or a no.
+
+At four:
+
+| | before | after | |
+|---|---:|---:|---:|
+| attention alone, 1419 tokens | 2.030 s | **1.356 s** | 1.50x |
+| 110-token device prompt | 0.267 s | **0.245 s** | 1.09x |
+| 1419-token device prompt | 4.211 s | **3.922 s** | 1.07x |
+| 64 generated, 6-token context | 1.567 s | 1.600 s | unchanged |
+| 64 generated, 1419-token context | 2.285 s | 2.299 s | unchanged |
+
+Generating does not move and is not meant to: one position is fewer than a
+block, so the engine binds the subgroup kernel there and never reaches the
+tiled one. The answers are bit-identical -- the long prompt prints
+`1a26d24d33b8957b` either way -- because a block changes which invocation
+computes a dot product and not the order it accumulates it in.
+
+Attention lands at 1.36 s against the 1.27 s the ablation named as this
+kernel's floor, so the block recovered nearly all of the traffic there was
+to recover. **What is left is the larger half.** That 1.27 s is 182 Gflop of
+useful arithmetic, which is about 145 gigaflops a second on a part whose
+matrix tile reaches 2031. Attention is now bound by instruction issue rather
+than by memory, and closing that wants the scores computed as a matrix
+product through the cooperative matrix, which is what the other runtime
+does. That is a much larger change than this one rather than a variation on
+it.
+
+One mistake is worth recording because the suite did not catch it. Sweeping
+the block width with `sed` set `QUERIES` in both arms of its own `#ifdef`,
+so the untiled compilations were built with four as well: a kernel that
+answers four queries a workgroup, dispatched one workgroup a query. All two
+hundred and eighty tests passed, because the suite's batches are shorter
+than a block and the extra queries were clamped onto the last real one. A
+repository check now reads the number out of the shader and requires the
+engine's `Query_Block` to equal it.
 
 ### Eight more formats, and what a branch costs when it is never taken
 
@@ -2540,30 +2603,30 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 147.7 t/s | 31.0 t/s |
-| llama.cpp, processor | 344.4 t/s | 40.0 t/s |
-| model_runner, device | **424.7 t/s** | **41.2 t/s** |
-| llama.cpp, device | 1670.7 t/s | 56.4 t/s |
+| model_runner, processor | 149.1 t/s | 30.9 t/s |
+| llama.cpp, processor | 353.1 t/s | 39.9 t/s |
+| model_runner, device | **438.2 t/s** | **41.5 t/s** |
+| llama.cpp, device | 1652.6 t/s | 56.3 t/s |
 
-On the processor: **1.3 times slower generating and 2.3 times slower reading
+On the processor: **1.3 times slower generating and 2.4 times slower reading
 a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
 code that did not change between them, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
 reading of this table said 3.3 and 16. On the device, **1.4** and **4.0**,
-where the sitting before this one said 1.4 and 4.0, the one before that 2.0
-and 4.0, and the first 3.8 and 10.1. Both device rows have moved for a named
-reason:
+where the sitting before this one said 1.4 and 3.9, the ones before that 1.4
+and 4.0 then 2.0 and 4.0, and the first 3.8 and 10.1. Both device rows have
+moved for a named reason:
 `### The matrix instruction` for the prompt, `### The batch that was not
 there` for the generating one, which went 28.1 to 40.8 tokens a second.
 
 **The device row now generates faster than llama.cpp does on the
-processor** -- 41.2 against 40.0. What is left between it and llama.cpp's
+processor** -- 41.5 against 39.9. What is left between it and llama.cpp's
 own device figure is 1.4 times.
 
 The processor's generating row is the other kind of gap. It reads every
 weight once a token and does one multiply with each, so the bus answers
 rather than the arithmetic: llama.cpp's 40.2 t/s is about 45 GB/s of this
-model and 31.0 is about 35. What is left there is a gap in the kernels --
+model and 30.9 is about 35. What is left there is a gap in the kernels --
 ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
 and this measures -- rather than a gap in what the program is doing.
 
@@ -2593,19 +2656,19 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.745 s
-and 64 in 2.066 s on the processor, 0.259 s and 1.555 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.738 s
+and 64 in 2.069 s on the processor, 0.251 s and 1.544 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 762.4 t/s rather
-than 344.4 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 769.2 t/s rather
+than 353.1 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 41.2 t/s
-now, against 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 41.5 t/s
+now, against 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
