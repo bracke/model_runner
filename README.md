@@ -2764,6 +2764,9 @@ one"* -- and that comment is now a measurement.
 The batched product is not what is left of the device's prompt gap. What is
 left is around it -- and the section below took the first piece of that.
 
+**That last sentence is half right and the half that is wrong is instructive;
+`### The floor a device prompt cannot go below` settles it.**
+
 ### The answers nobody read
 
 `Run` copies every step's answer into the caller's target, and both callers
@@ -2957,6 +2960,49 @@ is right.
 used 2.98 s of processor time, which was asked because the phase counters
 did not add up to the wall clock. The figure that mattered most to a user
 was the one no published figure contained.
+
+### The floor a device prompt cannot go below
+
+The section above said the arithmetic is 43 per cent of the feeding phase, so
+the other 57 must be submissions and fences. **That reading is wrong**, and
+how it is wrong matters more than the reading did.
+
+The measurement that settles it: every `Dispatch` in the engine asks for zero
+workgroups. Every command buffer is still recorded, every descriptor set
+updated, every submission made and waited on, every activation uploaded and
+every kept answer copied back -- and no arithmetic is done on the device at
+all. What is left is the floor.
+
+| | whole | floor | arithmetic |
+|---|---:|---:|---:|
+| 1419-token device prompt | 2.530 s | **0.502 s** | 80 % |
+| 110-token device prompt | 0.208 s | **0.045 s** | 78 % |
+
+**The surround is a fifth of a device prompt**, and most of that fifth is the
+host loops that remain -- normalizing, joining and rotating are 0.526 s by the
+phase counters, which is the floor itself. Submissions, fences and transfers
+are what is left over from that, and it is not much.
+
+**Why the phase counters said otherwise is the part to keep.** A phase is host
+wall time around an asynchronous submission, so the "non-arithmetic" part of
+the feeding phase is the host *waiting for the device to finish the
+arithmetic*. It is not overhead; it is the work, seen from the side that is
+not doing it. Emptying feeding's dispatch takes the phase from 0.891 s to
+0.351; doubling it adds only 0.405 rather than 0.540, because two dispatches
+in one command buffer pipeline better than one does. Neither number is the
+arithmetic, and the difference between them is not overhead either.
+
+That is the third time on this page a phase counter has led somewhere false --
+feeding gaining time a change did not touch, projecting not moving under a
+doubling, and now this. **They are useful for saying which part of a layer
+grew and useless for saying what a part is made of.** What says that is a
+whole-run measurement with one thing removed.
+
+What it means for the gap: llama.cpp reads 110 tokens at 1657.8 a second, so
+this prompt would be about 0.86 s there against 2.53 here. Take the entire
+surround away -- every submission, every transfer, every host loop, all of it
+free -- and this is 2.03 s, still two and a half times behind. **The remaining
+gap is the arithmetic.**
 
 ### Against llama.cpp
 

@@ -3077,6 +3077,59 @@ kernels 77EB0DAB62549D76 src/library/model_runner-quantization.adb src/library/m
 # are were not re-taken: neither benchmark opens a session, so neither
 # reaches a loop this changed.
 
+# 2026-08-27, what surrounds the products is a fifth, not a half. The phase
+# counters said otherwise and the phase counters were wrong.
+#
+# The item said doubling put feeding's arithmetic at forty-three per cent of
+# its phase, so the other fifty-seven -- three quarters of a second -- was
+# submissions and fences, and that closing it was the next thing. That
+# reading is wrong, and the way it is wrong is worth more than the item was.
+#
+# The measurement that settles it. Every Dispatch in the engine asks for
+# zero workgroups: every command buffer is recorded, every descriptor set
+# updated, every submission made and waited on, every activation uploaded
+# and every kept answer copied back, and no arithmetic is done on the device
+# at all. What is left is the floor -- everything a device prompt costs
+# except the device.
+#
+#   1419-token device prompt   2.530 s   floor 0.502 s   80 per cent arithmetic
+#   110-token device prompt    0.208 s   floor 0.045 s   78 per cent arithmetic
+#
+# Four rounds of the long pair and one of the short, and the two lengths
+# agree to two points.
+#
+# So the surround is a fifth of a device prompt and most of that fifth is
+# the host loops that remain: normalizing, joining and rotating are 0.526 s
+# by the phase counters, which is the floor itself. Submissions, fences and
+# transfers are what is left over from that, and it is not much.
+#
+# Why the phase counters said otherwise, which is the part to keep. A phase
+# is host wall time around an asynchronous submission, so the "non-
+# arithmetic" part of the feeding phase is the host **waiting for the device
+# to finish the arithmetic**. It is not overhead; it is the work, seen from
+# the side that is not doing it. Emptying feeding's dispatch takes the phase
+# from 0.891 s to 0.351; doubling it adds only 0.405 rather than 0.540,
+# because two dispatches in one command buffer pipeline better than one
+# does. Neither number is the arithmetic and the difference between them is
+# not overhead either.
+#
+# That is the third time today a phase counter has led somewhere false --
+# feeding gaining time a change did not touch, projecting not moving under a
+# doubling, and now this. They are useful for saying which part of a layer
+# grew and useless for saying what a part is made of. What says that is a
+# whole-run measurement with one thing removed.
+#
+# What it means for the gap. llama.cpp reads 110 tokens at 1657.8 a second,
+# so this prompt would be about 0.86 s there against 2.53 here. Take the
+# entire surround away -- every submission, every transfer, every host loop,
+# all of it free -- and this is 2.03 s, still two and a half times behind.
+# **The remaining gap is the arithmetic**, and the batched product profiled
+# above at 455 to 3200 gigaflops a second against a part whose matrix
+# instruction should reach far more is where it lives.
+#
+# No source changed. The dispatch counts were zeroed in a scratch build and
+# put back.
+
 engine E0FA738C93331DA2 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted

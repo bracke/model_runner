@@ -5,6 +5,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **What surrounds the device's products is a fifth of a prompt, not a half,
+  and the phase counters that said otherwise were measuring the host waiting
+  for the device.** With every `Dispatch` asking for zero workgroups -- every
+  command buffer still recorded, every submission made and waited on, every
+  transfer done, no arithmetic -- a 1419-token device prompt reads 0.502 s
+  against 2.530, and a 110-token one 0.045 s against 0.208. **Eighty per cent
+  of a device prompt is device arithmetic.**
+
+  A phase is host wall time around an asynchronous submission, so the
+  "non-arithmetic" part of the feeding phase is the host waiting for the
+  arithmetic to finish. It is the work, seen from the side not doing it. That
+  is the third time a phase counter has pointed somewhere false here; they
+  say which part of a layer grew and not what a part is made of.
+
+  Taking the entire surround away -- submissions, transfers and host loops
+  all free -- would leave this prompt at 2.03 s against llama.cpp's 0.86, so
+  the remaining gap is the arithmetic.
+
 ### Changed
 
 - **A device run gets a worker pool, and the host loops it never had one for
