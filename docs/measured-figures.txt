@@ -9066,3 +9066,67 @@ outside CF67FD7CE316D01F src/shaders/row_product.comp src/shaders/matrix_product
 # and every edit in this sitting was applied and verified one at a time
 # rather than in a batch that can abort halfway.
 
+# 2026-08-28, later.  What the strip kernel is short of
+#
+# The entry before last said the strip kernel is not short of instruction
+# slots and that what it is short of is a different measurement. Here it is,
+# and then an attempt to act on it that did not survive. Nothing kept.
+#
+# THE COUNTERS, on the 1419-token processor prompt:
+#
+#   instructions              710,328,910,301
+#   cycles                    235,724,212,048     IPC 3.01
+#   stalled-cycles-frontend     3,247,003,680     1.4 % of cycles
+#   cache-misses                2,826,595,918     0.4 % of instructions
+#
+# The machine is not stalling. That is the explanation of the null in the
+# entry before last: at three instructions a cycle with slack to spare, the
+# shuffles removed there were filling slots something else had left idle.
+#
+# THE ABLATION. One extra vpdpbusd into the chain of eight -- the same
+# operand into the same accumulator, so the answers are wrong and the shape
+# is exactly right. Alternated:
+#
+#   eight dot products   224,715,403,239 cycles
+#   nine dot products    222,091,588,782
+#   eight again          221,821,034,125
+#
+# An eighth more byte products costs no measurable cycles: less than the
+# spread between two identical runs. Worth noting how nearly this was
+# missed -- the wall clock read better in two of four rounds and worse in
+# two, which is drift, and only the cycle counter resolved it.
+#
+# So the loop has slack and the binder is latency, not throughput: each
+# accumulator's chain is vpxor, vpdpbusd, vcvtdq2ps, vfmadd231ps -- four
+# deep -- and eight of them run independently.
+#
+# THE REMEDY, AND IT LOST. Two Q8_0 blocks a turn with sixteen accumulators
+# rather than eight, so the odd and even blocks stay independent to the
+# reduction, with the cursors advancing 68 and 64 instead of 34 and 32 --
+# which halves the loop's own overhead as well. Landed doubled, the
+# reduction summing both accumulators, and an odd block count sent to the
+# fallback.
+#
+#   round 1   10.426 -> 10.872
+#   round 2   10.538 -> 10.943
+#   round 3   10.516 -> 10.802
+#   round 4   10.686 -> 10.856
+#   round 5   10.594 -> 10.626
+#
+# Median 10.538 -> 10.856, three per cent worse, worse in five of five.
+# More independent chains and less loop overhead, and slower. Reverted.
+#
+# The likeliest reason, written down as a reason and not as a measurement:
+# the loop body went from about thirty-nine instructions to about
+# seventy-eight, and something that was holding the shorter one stops
+# holding the longer. The device side of this file has met that shape --
+# eight formats compiled but unreachable cost the six reachable ones
+# twenty-one per cent.
+#
+# So: the strip kernel has issue slack and cannot be given more independent
+# work without losing more than the slack is worth. What is left to try is a
+# shorter chain rather than more of them, and nothing here says whether one
+# exists.
+#
+# No source changed.
+

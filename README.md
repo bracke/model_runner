@@ -3642,6 +3642,70 @@ value is smaller than binary32 holds, and the exponent this builds would
 wrap rather than saturate, so a score far behind the leader would come back
 *ahead* of it.
 
+### What the strip kernel is short of, and what it is not
+
+`### The instructions that were free` ended by saying the strip kernel is
+not short of instruction slots and that what it *is* short of is a different
+measurement. This is that measurement, and then an attempt to act on it that
+did not survive.
+
+**First, the counters for a whole prompt.** 710.3 G instructions in 235.7 G
+cycles is an **IPC of 3.01**, with frontend stalls at 1.4 per cent of cycles
+and cache misses at 0.4 per cent of instructions. The machine is not
+stalling. That already explains the null in the section above: at three
+instructions a cycle with slack to spare, the shuffles removed there were
+filling slots something else had left idle.
+
+**Then, whether the byte dot product is the wall.** One extra `vpdpbusd` was
+added to the chain of eight -- the same operand into the same accumulator,
+so the answers are wrong and the shape is exactly right. Twelve and a half
+per cent more byte products, and:
+
+| | cycles |
+|---|---:|
+| eight dot products | 224.7 G |
+| **nine** dot products | **222.1 G** |
+| eight again | 221.8 G |
+
+**An eighth more byte products costs no measurable cycles** -- less than the
+spread between two identical runs. The wall clock could not resolve this at
+all (better in two of four rounds and worse in two, which is drift); cycles
+could.
+
+So the loop has slack, and the reason is latency rather than throughput:
+each accumulator's chain is `vpxor` into `vpdpbusd` into `vcvtdq2ps` into
+`vfmadd231ps`, four deep, and only eight of them run independently.
+
+**The obvious remedy, and it lost.** Two Q8_0 blocks a turn with sixteen
+accumulators instead of eight, so that the odd and even blocks stay
+independent all the way to the reduction -- which also halves the loop's own
+overhead, the cursors advancing 68 and 64 instead of 34 and 32.
+
+| | one block a turn | two |
+| --- | ---: | ---: |
+| round 1 | 10.426 s | 10.872 s |
+| round 2 | 10.538 s | 10.943 s |
+| round 3 | 10.516 s | 10.802 s |
+| round 4 | 10.686 s | 10.856 s |
+| round 5 | 10.594 s | 10.626 s |
+
+**Three per cent worse, in five of five.** More independent chains and less
+loop overhead, and it is slower.
+
+The likeliest reason, written down as a reason and not a measurement: the
+loop body went from about thirty-nine instructions to about seventy-eight,
+and something that was holding the shorter one -- an op cache, a loop
+buffer -- stops holding the longer. This page has met that shape before on
+the other side of the machine, where adding eight unreachable formats to a
+shader cost the six that were reachable twenty-one per cent.
+
+So the strip kernel has issue slack and cannot be given more independent
+work without losing more than the slack is worth. What is left to try is the
+other direction -- a *shorter* chain rather than more of them -- and this
+does not answer whether that exists.
+
+Nothing kept.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has

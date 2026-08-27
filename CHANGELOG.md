@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The strip kernel has issue slack, and filling it made things worse.**
+  Nothing kept; the two measurements are the point.
+
+  Counters for a whole prompt: 710.3 G instructions in 235.7 G cycles, an
+  **IPC of 3.01**, frontend stalls 1.4 % of cycles, cache misses 0.4 % of
+  instructions. The machine is not stalling — which explains the previous
+  entry's null, since the shuffles removed there were filling idle slots.
+
+  Then an ablation: one extra `vpdpbusd` added to the chain of eight, same
+  operand into the same accumulator, so wrong answers and the right shape.
+  **224.7 G cycles for eight, 222.1 G for nine, 221.8 G for eight again** —
+  an eighth more byte products costs nothing measurable. The wall clock
+  could not resolve it (better in two of four rounds, worse in two); cycles
+  could.
+
+  So the loop is latency-bound with slack: each chain is `vpxor` →
+  `vpdpbusd` → `vcvtdq2ps` → `vfmadd231ps`, four deep, eight independent.
+  The remedy — two blocks a turn with sixteen accumulators, which also
+  halves the loop overhead — measured **3 % worse in five of five**. Written
+  down as a reason and not a measurement: the loop body went from ~39
+  instructions to ~78, and something holding the shorter one stops holding
+  the longer, which is the shape the shader met when eight unreachable
+  formats cost the six reachable ones 21 %.
+
+  What is left to try is a *shorter* chain rather than more of them. This
+  does not answer whether one exists.
+
 - **The softmax's exponential is four lanes now instead of a library call:
   three and a half per cent of a processor prompt.** A profile put the
   exponential and the softmax around it at 8.5 % of the 1419-token prompt,
