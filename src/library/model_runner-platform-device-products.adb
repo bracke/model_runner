@@ -3269,7 +3269,8 @@ package body Model_Runner.Platform.Device.Products is
       Rows    : Natural;
       Columns : Natural;
       Added   : out Boolean;
-      Key     : System.Address := System.Null_Address)
+      Key     : System.Address := System.Null_Address;
+      Kept    : Boolean := True)
    is
    begin
       if Steps.Held = Sequence_Limit or else Base = System.Null_Address then
@@ -3281,6 +3282,7 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => False,
+         Kept => Kept,
          Blends => False, Unit => 0, Attends => False,
          others => <>);
       Added := True;
@@ -3299,7 +3301,8 @@ package body Model_Runner.Platform.Device.Products is
       Rows    : Natural;
       Columns : Natural;
       Added   : out Boolean;
-      Key     : System.Address := System.Null_Address)
+      Key     : System.Address := System.Null_Address;
+      Kept    : Boolean := True)
    is
    begin
       --  Nothing to chain to, no room, or a width that does not meet the
@@ -3319,6 +3322,7 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => True,
+         Kept => Kept,
          Blends => False, Unit => 0, Attends => False,
          others => <>);
       Added := True;
@@ -3331,7 +3335,8 @@ package body Model_Runner.Platform.Device.Products is
    procedure Add_Combination
      (Steps : in out Sequence;
       Unit  : Natural;
-      Added : out Boolean) is
+      Added : out Boolean;
+      Kept  : Boolean := True) is
    begin
       if Steps.Held < 2
         or else Steps.Held = Sequence_Limit
@@ -3348,7 +3353,7 @@ package body Model_Runner.Platform.Device.Products is
          Packing => Weight_Packing'First,
          Rows => Steps.Items (Steps.Held - 1).Rows,
          Columns => Steps.Items (Steps.Held - 1).Rows,
-         Key => System.Null_Address, Chained => True,
+         Key => System.Null_Address, Chained => True, Kept => Kept,
          Blends => True, Unit => Unit, Attends => False,
          others => <>);
       Added := True;
@@ -3376,7 +3381,8 @@ package body Model_Runner.Platform.Device.Products is
       Window     : Natural := 0;
       Chained    : Boolean := False;
       Causal     : Boolean := True;
-      Max_Bias   : Model_Runner.Numerics.Real := 0.0) is
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0;
+      Kept       : Boolean := True) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -3408,6 +3414,7 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Heads * Value_Size,
          Columns => Heads * Head_Size,
          Key => System.Null_Address, Chained => Chained, Blends => False,
+         Kept => Kept,
          Unit => 0, Attends => True,
          Heads => Heads, Head_Size => Head_Size, Value_Size => Value_Size,
          Group_Size => Group_Size, First => First, Last => Last,
@@ -4053,7 +4060,15 @@ package body Model_Runner.Platform.Device.Products is
                            + System.Storage_Elements.Integer_Address
                                (Places (Index).At_Byte));
             begin
-               Target (Slice'Range) := Slice;
+               --  A step whose answer nothing on the host reads is not
+               --  copied out. The room it would have taken is still stepped
+               --  over, so what a caller indexes does not depend on what it
+               --  kept -- and for a gated feed-forward that is three
+               --  answers of the four left where they were written.
+               if Steps.Items (Index).Kept then
+                  Target (Slice'Range) := Slice;
+               end if;
+
                Filled := Filled + Mine;
             end;
          end loop;

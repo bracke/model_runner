@@ -628,10 +628,14 @@ package body Model_Runner.Backend.Device is
 
       Products.Open_Sequence (Steps);
 
+      --  The blend is read by the projection chained to it and by nothing
+      --  here, so it is left on the device rather than copied back for the
+      --  slice below to step over.
       Products.Add_Attention
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
-         Window => Window, Causal => Causal, Max_Bias => Max_Bias);
+         Window => Window, Causal => Causal, Max_Bias => Max_Bias,
+         Kept => False);
       if not Added then
          return;
       end if;
@@ -876,8 +880,13 @@ package body Model_Runner.Backend.Device is
             --  The two arms read the supplied activation; the down
             --  projection reads what the combining step wrote, which is the
             --  whole point of sending them together.
+            --  Only the down projection's answer is read below. The two
+            --  arms and the combined value are the device's business and
+            --  now actually stay there: for a batch of a hundred and
+            --  twenty-eight that is nine megabytes a layer not copied to
+            --  the host to be stepped over.
             if Index = 3 then
-               Products.Add_Combination (Steps, Unit, Added);
+               Products.Add_Combination (Steps, Unit, Added, Kept => False);
                if not Added then
                   Status := E.Make (E.Tensor_Shape_Mismatch);
                   return;
@@ -893,7 +902,8 @@ package body Model_Runner.Backend.Device is
                Products.Add_Product
                  (Steps, This.Base, This.Span, This.Offset, Packing,
                   Natural (This.Rows), Natural (This.Columns), Added,
-                  Key => At_Offset (This.Base, This.Offset));
+                  Key => At_Offset (This.Base, This.Offset),
+                  Kept => False);
             end if;
 
             if not Added then

@@ -1513,12 +1513,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.449 s | **0.354 s** |
-| -- evaluating the prompt | 0.075 s | 0.064 s |
-| -- generating | 0.379 s | **0.290 s** |
+| 6-token prompt, 12 generated | 0.454 s | **0.348 s** |
+| -- evaluating the prompt | 0.075 s | 0.059 s |
+| -- generating | 0.379 s | **0.289 s** |
 | -- processor time | 1.63 s | **0.03 s** |
-| 110-token prompt, nothing generated | 0.754 s | **0.243 s** |
-| -- processor time | 3.81 s | **0.09 s** |
+| 110-token prompt, nothing generated | 0.750 s | **0.237 s** |
+| -- processor time | 3.74 s | **0.08 s** |
 
 All six cells were taken in one sitting on 2026-08-27, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -2759,7 +2759,44 @@ to the host today, and hoisting that is the next change rather than this
 one"* -- and that comment is now a measurement.
 
 The batched product is not what is left of the device's prompt gap. What is
-left is around it.
+left is around it -- and the section below took the first piece of that.
+
+### The answers nobody read
+
+`Run` copies every step's answer into the caller's target, and both callers
+that name several steps then read one. `Dispatch_Gated` said so in a comment
+of its own -- *"only the last of the four is wanted here. The arms and the
+combined value are the device's business and stay there"* -- **and they did
+not stay there.** For a batch of 128 that is the gate at 2.88 MB, the up at
+2.88 and the combined value at 2.88, copied to the host to be stepped over,
+against the 1.05 MB of the down projection that is read. `Attend_And_Project`
+copies the attention blend back with the projection, another 1.05 MB.
+
+Nine and a half megabytes a layer a batch: across 22 layers and the eleven
+batches of a 1419-token prompt, about **two and a third gigabytes of memcpy
+that nothing reads**.
+
+The change is a `Kept` flag on a step, false where nothing on the host reads
+that step's answer, and one test in `Run`'s download loop. The room is still
+stepped over, so what a caller indexes does not depend on what it keeps.
+
+| | before | after | |
+|---|---:|---:|---:|
+| 1419-token device prompt | 3.933 s | **3.538 s** | 1.11x |
+| 110-token device prompt | 0.260 s | **0.239 s** | 1.09x |
+| 64 generated | 1.594 s | 1.600 s | unchanged |
+
+Better in every round, and **bit-identical** -- nothing about what is
+computed changed. Generating does not move and cannot: one vector makes those
+answers a few kilobytes rather than a few megabytes.
+
+By phase it lands where the profile said it would: feeding loses 0.191 s,
+which is its three discarded answers, and attending 0.110, which is the
+blend. **About half of the fifty-seven per cent was this.** The rest is still
+submissions and fences, and is still unmeasured.
+
+This is the first change here that is pure subtraction -- no kernel, no
+shader, no arithmetic, just four copies that were being made for nobody.
 
 Projecting not moving at all under the doubling is unexplained and is
 written down as unexplained: either those products do not take that path, or
@@ -2778,30 +2815,30 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 149.1 t/s | 30.9 t/s |
-| llama.cpp, processor | 353.1 t/s | 39.9 t/s |
-| model_runner, device | **438.2 t/s** | **41.5 t/s** |
-| llama.cpp, device | 1652.6 t/s | 56.3 t/s |
+| model_runner, processor | 146.1 t/s | 30.8 t/s |
+| llama.cpp, processor | 340.1 t/s | 39.9 t/s |
+| model_runner, device | **464.1 t/s** | **41.0 t/s** |
+| llama.cpp, device | 1671.2 t/s | 56.3 t/s |
 
-On the processor: **1.3 times slower generating and 2.4 times slower reading
+On the processor: **1.3 times slower generating and 2.3 times slower reading
 a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
 code that did not change between them, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
 reading of this table said 3.3 and 16. On the device, **1.4** and **4.0**,
-where the sitting before this one said 1.4 and 3.9, the ones before that 1.4
-and 4.0 then 2.0 and 4.0, and the first 3.8 and 10.1. Both device rows have
-moved for a named reason:
+where the sittings before this one said 1.4 and 3.8, then 1.4 and 3.9, then
+1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and 10.1. Both device
+rows have moved for a named reason:
 `### The matrix instruction` for the prompt, `### The batch that was not
 there` for the generating one, which went 28.1 to 40.8 tokens a second.
 
 **The device row now generates faster than llama.cpp does on the
-processor** -- 41.5 against 39.9. What is left between it and llama.cpp's
+processor** -- 41.0 against 39.9. What is left between it and llama.cpp's
 own device figure is 1.4 times.
 
 The processor's generating row is the other kind of gap. It reads every
 weight once a token and does one multiply with each, so the bus answers
 rather than the arithmetic: llama.cpp's 40.2 t/s is about 45 GB/s of this
-model and 30.9 is about 35. What is left there is a gap in the kernels --
+model and 30.8 is about 35. What is left there is a gap in the kernels --
 ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
 and this measures -- rather than a gap in what the program is doing.
 
@@ -2831,19 +2868,19 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.738 s
-and 64 in 2.069 s on the processor, 0.251 s and 1.544 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.753 s
+and 64 in 2.081 s on the processor, 0.237 s and 1.561 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 769.2 t/s rather
-than 353.1 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 764.8 t/s rather
+than 340.1 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 41.5 t/s
-now, against 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 41.0 t/s
+now, against 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the

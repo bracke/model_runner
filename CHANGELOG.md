@@ -5,6 +5,38 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **A device prompt is a tenth faster for deleting copies nobody read.** The
+  1419-token prompt reads 3.538 s against 3.933 and the 110-token one 0.239
+  against 0.260, better in every round and bit-identical: nothing about what
+  is computed changed.
+
+  `Run` copied every step's answer into the caller's target, and both callers
+  that name several steps then read one. `Dispatch_Gated` said so in a
+  comment of its own -- "only the last of the four is wanted here. The arms
+  and the combined value are the device's business and stay there" -- and
+  they did not stay there. For a batch of 128 that is three answers of 2.88
+  MB each copied to the host to be stepped over, against the 1.05 MB that is
+  read; `Attend_And_Project` copied the attention blend back with the
+  projection for another 1.05 MB. Across 22 layers and the eleven batches of
+  a long prompt, about two and a third gigabytes of memcpy that nothing
+  reads.
+
+  The change is a `Kept` flag on a sequence step, false where nothing on the
+  host reads that step's answer, and one test in `Run`'s download loop. The
+  room is still stepped over, so what a caller indexes does not depend on
+  what it keeps.
+
+  Feeding loses 0.191 s and attending 0.110, which is where the profile in
+  the entry below said the time was. About half of that entry's
+  fifty-seven per cent was this; the rest is submissions and fences and is
+  still unmeasured. Generating does not move and cannot -- one vector makes
+  those answers a few kilobytes.
+
+  Against llama.cpp the device prompt goes to **464.1 tokens a second** and
+  the gap from 3.8 times to **3.6**.
+
 ### Added
 
 - **`tests device-bench` reports the batched product's throughput at the

@@ -303,6 +303,9 @@ package Model_Runner.Platform.Device.Products is
    --    for a single product.
    --  @param Added False when the sequence is full, which is a refusal to
    --    record rather than a silent truncation.
+   --  @param Kept False when nothing on the host reads this step's answer,
+   --    which saves Run the copy back and leaves it where the step after it
+   --    will read it.
    procedure Add_Product
      (Steps   : in out Sequence;
       Base    : System.Address;
@@ -312,7 +315,8 @@ package Model_Runner.Platform.Device.Products is
       Rows    : Natural;
       Columns : Natural;
       Added   : out Boolean;
-      Key     : System.Address := System.Null_Address);
+      Key     : System.Address := System.Null_Address;
+      Kept    : Boolean := True);
 
    --  Name one product that reads what the product before it produced.
    --
@@ -342,6 +346,9 @@ package Model_Runner.Platform.Device.Products is
    --  @param Added False when the sequence is full, when there is nothing to
    --    chain to, or when the widths do not meet.
    --  @param Key Identifies the matrix so the device may keep it.
+   --  @param Kept False when nothing on the host reads this step's answer,
+   --    which saves Run the copy back and leaves it where the step after it
+   --    will read it.
    procedure Add_Chained_Product
      (Steps   : in out Sequence;
       Base    : System.Address;
@@ -351,7 +358,8 @@ package Model_Runner.Platform.Device.Products is
       Rows    : Natural;
       Columns : Natural;
       Added   : out Boolean;
-      Key     : System.Address := System.Null_Address);
+      Key     : System.Address := System.Null_Address;
+      Kept    : Boolean := True);
 
    --  Name a step that combines the two results before it.
    --
@@ -372,10 +380,14 @@ package Model_Runner.Platform.Device.Products is
    --    sigmoid-weighted one, one for the Gaussian one in its tanh form.
    --  @param Added False when the sequence is full, when there are not two
    --    steps to combine, or when their rows do not match.
+   --  @param Kept False when nothing on the host reads this step's answer,
+   --    which saves Run the copy back and leaves it where the step after it
+   --    will read it.
    procedure Add_Combination
      (Steps : in out Sequence;
       Unit  : Natural;
-      Added : out Boolean);
+      Added : out Boolean;
+      Kept  : Boolean := True);
 
    --  Name an attention step for a sequence to perform.
    --
@@ -425,6 +437,9 @@ package Model_Runner.Platform.Device.Products is
    --    which is every model that generates. False where it sees the whole
    --    text, and every position then attends to Last rather than to Last
    --    plus its own place in the batch.
+   --  @param Kept False when nothing on the host reads this step's answer,
+   --    which saves Run the copy back and leaves it where the step after it
+   --    will read it.
    procedure Add_Attention
      (Steps      : in out Sequence;
       Heads      : Natural;
@@ -443,7 +458,8 @@ package Model_Runner.Platform.Device.Products is
       Window     : Natural := 0;
       Chained    : Boolean := False;
       Causal     : Boolean := True;
-      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0;
+      Kept       : Boolean := True);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -984,6 +1000,14 @@ private
       --  Whether this reads what the product before it wrote, rather than
       --  the activation the caller supplied.
       Chained : Boolean := False;
+
+      --  Whether the caller wants this step's answer back. A step whose
+      --  only reader is the step after it -- an arm of a gate, a blend a
+      --  projection consumes -- has an answer that belongs on the device,
+      --  and copying it to the host is a copy nobody reads. Run leaves the
+      --  room for it in the target either way, so what a caller indexes
+      --  does not depend on what it keeps.
+      Kept    : Boolean := True;
 
       --  A combining step rather than a product: it takes the two results
       --  before it, puts a unit on the first and multiplies by the second.
