@@ -15,3 +15,7 @@
 /tools/bin/
 /tools/alire/
 /tools/config/
+
+# Stray compiler output from a syntax check run outside a project
+*.ali
+*.o
