@@ -8866,3 +8866,73 @@ outside 8120F10DE3E50A4C src/shaders/row_product.comp src/shaders/matrix_product
 # without being told in prose. Host_Load reads /proc and is where that
 # belongs, beside Now and Processor_Seconds, for the reason written over
 # both of them.
+
+# 2026-08-27, later still.  The strip kernel: two wrong guesses and a null
+#
+# The strip kernel is fifty-five per cent of a processor prompt, aggregated
+# over eight threads on the 1419-token prompt. Nothing here is kept.
+#
+# GUESS ONE, the register width. The insertion issues 256-bit vpdpbusd on a
+# processor reporting avx512_vnni, and the plan said this needed a third
+# capability and a fourth compilation. It needs neither and it is not
+# available anyway:
+#
+#   Platform.Instructions.Byte_Products already requires avx512f, avx512bw,
+#   avx512vl and avx512_vnni, and integers-deep.ads is already compiled
+#   -march=x86-64-v4. Nothing was being withheld.
+#
+#   A register holds exactly one Q8_0 block -- 32 bytes of quants -- and
+#   blocks are 34 bytes apart, so a 64-byte load straddles the next block's
+#   two-byte scale. Filling a zmm with two rows instead breaks the {1to8}
+#   scale broadcast: the halves want different scales, and giving them
+#   different scales means a scale table eight times the size, in a loop the
+#   old profile already put at a third of the kernel. The width is pinned to
+#   the block and not to the instruction set.
+#
+# GUESS TWO, where the time is. Profiled by instruction, shares of the
+# symbol:
+#
+#   vpxor (twelve)                              13.96 %
+#   vpdpbusd (eight)                            12.81 %
+#   vfmadd231ps and vcvtdq2ps                   15.11 %
+#   vunpcklps valignd vmovlhps vshufps
+#     vextractf32x4                             ~25 %
+#   vaddps and vmovaps                           7.22 %
+#
+# The zeroing vpxor before each byte dot product costs more than the dot
+# product. And a quarter of the symbol is shuffling -- which was guessed to
+# be the eight-lane reduction that finishes a row, and is not: addr2line
+# puts every hot shuffle in the loop that builds the scale table, where a
+# four-turn inner loop writes Scaling and read-modify-writes Undo, an array
+# -O3 will not keep in registers.
+#
+# THE CHANGE AND THE NULL. Row outside block, the row's four corrections in
+# a local across the block loop, Undo written once at the end. Same values,
+# same order -- a correction still sums over ascending blocks -- so bit for
+# bit, and the digest says so. The object file's shuffle count fell from 299
+# to 236 with three of the four kernels untouched.
+#
+#   round 1   11.111 -> 10.583
+#   round 2   11.209 -> 10.816
+#   round 3   10.688 -> 11.125
+#   round 4   10.998 -> 11.059
+#   round 5   10.877 -> 10.839
+#
+# Median 10.998 -> 10.839, better in three of five, digest 1a26d24d33b8957b
+# either way. Level. Reverted.
+#
+# WHAT IT MEANS. Removing half the shuffles from a block holding a quarter
+# of the samples moved the prompt by one per cent, so they were never on the
+# critical path: they issue in the shadow of the byte-product loop. A
+# profile says where instructions are and this file has now recorded several
+# occasions where that is not where the time is -- the narrow projection,
+# the phase counters, and now this.
+#
+# The kernel is not short of instruction slots. What it is short of is a
+# question this did not ask: the four-bit file is slower than the eight-bit
+# one on the same prompt (0.702 s against 0.661 for 110 tokens), so it is
+# not the weight stream either, and the next measurement is the dependent
+# chain inside the loop rather than anything around it.
+#
+# No source changed.
+

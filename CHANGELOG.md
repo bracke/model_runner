@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A quarter of the strip kernel is shuffling and removing half of it
+  changed nothing.** Nothing kept; the measurement is the point.
+
+  The strip kernel is 55 % of a processor prompt. Two guesses about it were
+  wrong. The register width is not available for the asking — the capability
+  and the `-march=x86-64-v4` compilation already exist, but a register holds
+  exactly one Q8_0 block and blocks are 34 bytes apart, so a 64-byte load
+  straddles the next block's scale, and filling a `zmm` with two rows breaks
+  the `{1to8}` scale broadcast. And the time is not where it looked: the
+  shuffles map through `addr2line` to the scale-table build, not to the
+  reduction.
+
+  Rewriting that build with the row outside the block and its corrections in
+  a local — same arithmetic, same order, bit for bit — took the object
+  file's shuffle count from 299 to 236. Five alternated rounds: median
+  10.998 s against 10.839, better in three of five, same digest. **Level.**
+
+  So those instructions issue in the shadow of the byte-product loop and
+  cost nothing a clock notices. The kernel is not short of instruction
+  slots, and what it is short of is a measurement this did not take.
+
 - **A hot part gives up a tenth of every serial figure, and the load gate
   had been hiding it.** The wait the gate used to do was also, unnoticed,
   letting the part cool. The first sitting under the new gate ran two

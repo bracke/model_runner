@@ -3478,6 +3478,62 @@ test rather than by a digest. That test asserts they agree to what binary32
 holds, and drives both paths from `Use_Wide_Lanes`, which is the flag
 `Head_Dot` already had under a narrower name.
 
+### The instructions that were free
+
+The strip kernel is **fifty-five per cent of a processor prompt** and the
+widest thing left in the file, so this went looking inside it. It found two
+wrong guesses and one measurement worth keeping.
+
+**The first guess was the register width.** The insertion issues 256-bit
+`vpdpbusd` on a processor that reports `avx512_vnni`, so twice the lanes
+looked like it was there for the asking. It is not, and the reason is the
+shape rather than the capability: `Platform.Instructions.Byte_Products`
+already requires `avx512f`, `avx512bw`, `avx512vl` and `avx512_vnni`, and
+`integers-deep.ads` is already compiled `-march=x86-64-v4`, so nothing was
+being withheld. But a register here holds exactly one Q8_0 block --
+thirty-two bytes of quants -- and blocks are thirty-four bytes apart, so a
+sixty-four byte load straddles the next block's scale. The other way to fill
+a `zmm`, two rows at once, breaks the `{1to8}` scale broadcast: the halves
+need different scales, and giving them different scales means an eight times
+larger scale table. **The width is pinned to the block, not to the
+instruction set.**
+
+**The second guess was where the time goes**, and the profile answered it:
+
+| | share of the kernel |
+|---|---:|
+| `vpxor` (twelve) | **13.96 %** |
+| `vpdpbusd` (eight) | 12.81 % |
+| `vfmadd231ps` and `vcvtdq2ps` | 15.11 % |
+| shuffles: `vunpcklps`, `valignd`, `vmovlhps`, `vshufps`, `vextractf32x4` | **~25 %** |
+| `vaddps` and `vmovaps` | 7.22 % |
+
+A quarter of the biggest symbol in the program is shuffling, and the zeroing
+`vpxor` before each byte dot product costs more than the dot product it
+feeds. The shuffles map -- through `addr2line`, the guess having been wrong
+twice already -- not to the reduction that finishes a row but to the loop
+that builds the scale table, where a four-turn inner loop writes `Scaling`
+and read-modify-writes `Undo`, an array `-O3` cannot keep in registers.
+
+So the row went outside the block and the row's four corrections into a
+local. Same arithmetic, same order, bit for bit; the object file's shuffle
+count fell from 299 to 236 with three of the four kernels still untouched.
+
+**And it bought nothing.** Five alternated rounds on the 1419-token prompt,
+median 10.998 s against 10.839, better in three of five, digest
+`1a26d24d33b8957b` either way -- level, inside what this pair resolves.
+
+**That is the finding.** Halving the shuffles in a block holding a quarter
+of the samples moved the whole prompt by one per cent, so those instructions
+were never on the critical path: they issue in the shadow of the
+byte-product loop and cost nothing a clock notices. A profile says where
+instructions *are*, and this file has now recorded several occasions where
+that is not where the *time* is. The strip kernel is not short of
+instruction slots; what it is short of is a different measurement, and this
+one does not answer it.
+
+Nothing kept. The kernel is as it was.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has
