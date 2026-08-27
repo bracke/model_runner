@@ -2582,6 +2582,69 @@ package body Model_Runner.Tokenizer is
       --  vocabulary entry. Each pass is linear in the surviving symbols and
       --  every pass removes one, so the loop terminates in at most Count
       --  passes.
+      --
+      --  What a pair is worth is kept rather than asked for again. Asking
+      --  builds the two symbols into one string and looks that up, and the
+      --  pass below used to do it for every surviving pair every time round:
+      --  a six-thousand-character prompt is some five thousand merges over
+      --  an average of four thousand pairs, which is twenty-one million
+      --  concatenations and lookups and measured 2.05 seconds -- more of a
+      --  run's wall clock than evaluating the prompt it produces.
+      --
+      --  A merge changes what two pairs are worth and no others: the one
+      --  that begins where the merged symbol begins, and the one that ends
+      --  there. So the worth of every pair is worked out once and those two
+      --  are worked out again, which is two lookups a merge rather than a
+      --  pass of them. The pass that remains compares floats.
+      --
+      --  Bit for bit what it replaces. The scan runs over the same symbols
+      --  in the same order -- a merge keeps the left symbol's index, so the
+      --  living symbols stay in increasing index order -- and takes a pair
+      --  only on a strictly greater score, so the leftmost of equals still
+      --  wins.
+      declare
+         Worth : array (1 .. Max_Symbols) of Float := [others => Float'First];
+
+         --  What merging this symbol with the one after it is worth, or
+         --  Float'First where there is nothing after it, no vocabulary
+         --  entry for the join, or an entry the file marked unused.
+         function Pair_Worth (Index : Integer) return Float is
+         begin
+            if Index < 1 or else not Symbols (Index).Alive then
+               return Float'First;
+            end if;
+
+            declare
+               Next : constant Integer := Symbols (Index).Next;
+            begin
+               if Next < 1 then
+                  return Float'First;
+               end if;
+
+               declare
+                  Merged : constant String :=
+                    Working (Symbols (Index).First
+                             .. Symbols (Index).First
+                                + Symbols (Index).Length - 1)
+                    & Working (Symbols (Next).First
+                               .. Symbols (Next).First
+                                  + Symbols (Next).Length - 1);
+                  Token  : constant Token_Id := Find (Item, Merged);
+               begin
+                  if Token /= No_Token
+                    and then Class_Of (Item, Token) /= Class_Unused
+                  then
+                     return Score_Of (Item, Token);
+                  end if;
+                  return Float'First;
+               end;
+            end;
+         end Pair_Worth;
+      begin
+         for Index in 1 .. Count loop
+            Worth (Index) := Pair_Worth (Index);
+         end loop;
+
       loop
          declare
             Best_Left  : Integer := -1;
@@ -2594,24 +2657,10 @@ package body Model_Runner.Tokenizer is
                begin
                   exit when Next < 1;
 
-                  declare
-                     Merged : constant String :=
-                       Working (Symbols (Index).First
-                                .. Symbols (Index).First
-                                   + Symbols (Index).Length - 1)
-                       & Working (Symbols (Next).First
-                                  .. Symbols (Next).First
-                                     + Symbols (Next).Length - 1);
-                     Token  : constant Token_Id := Find (Item, Merged);
-                  begin
-                     if Token /= No_Token
-                       and then Class_Of (Item, Token) /= Class_Unused
-                       and then Score_Of (Item, Token) > Best_Score
-                     then
-                        Best_Score := Score_Of (Item, Token);
-                        Best_Left := Index;
-                     end if;
-                  end;
+                  if Worth (Index) > Best_Score then
+                     Best_Score := Worth (Index);
+                     Best_Left := Index;
+                  end if;
 
                   Index := Next;
                end;
@@ -2632,9 +2681,19 @@ package body Model_Runner.Tokenizer is
                   Symbols (Symbols (Right).Next).Previous := Best_Left;
                end if;
                Symbols (Right).Alive := False;
+               Worth (Right) := Float'First;
+
+               --  The two pairs a merge changes: the one this symbol now
+               --  begins, and the one that ends where it begins.
+               Worth (Best_Left) := Pair_Worth (Best_Left);
+               if Symbols (Best_Left).Previous >= 1 then
+                  Worth (Symbols (Best_Left).Previous) :=
+                    Pair_Worth (Symbols (Best_Left).Previous);
+               end if;
             end;
          end;
       end loop;
+      end;
 
       declare
          Index : Integer := (if Count = 0 then -1 else 1);

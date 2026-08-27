@@ -2855,17 +2855,60 @@ position. Shares would race on it. The change is scratch per share rather
 than per session, and it is the largest thing left in a device prompt after
 attention.
 
-### What tokenizing costs, which no figure here has said
+### What tokenizing cost, which no figure here had said
 
-A device prompt reports 2.98 s of processor time for 3.755 s of wall, and
-two thirds of that is not the model. **Tokenizing this 1419-token prompt
-takes 2.05 s**, measured directly with `tests tokenize`. The speed tool
-times tokenization apart from evaluation, so it appears in no published
-figure -- but the user's wall clock for that run is 6.148 s, of which 3.755
-is the prompt, 0.451 generating, 0.095 loading, and **1.85 s is tokenizing**.
+A device prompt reported 2.98 s of processor time for 3.755 s of wall, and
+two thirds of that was not the model. **Tokenizing a 1419-token prompt took
+2.05 s** -- 1.45 milliseconds a token, and more of the run than evaluating
+the prompt it produces. It appeared in no published figure, because the
+speed tool times tokenization apart from evaluation.
 
-That is a larger single item than the elementwise phases above, and nothing
-here has ever looked at it.
+**What it was.** The SentencePiece road merges the best-scoring adjacent
+pair until no pair names a vocabulary entry, and it found that pair by
+walking every surviving pair, building the two symbols into one string and
+looking that string up -- a pass per merge, as the comment above it said.
+For this prompt that is 6669 symbols falling to 1419, so 5250 merges over an
+average of four thousand pairs: **about 21 million concatenations and hash
+lookups**.
+
+What a merge actually changes is two pairs: the one the merged symbol now
+begins, and the one that ends where it begins. So the worth of every pair is
+worked out once and those two are worked out again -- `6669 + 2 x 5250 =
+17169` lookups, **twelve hundred times fewer**. The pass that remains
+compares floats, so this is the same O(n²) it was; what changed is that the
+constant is a float compare rather than a string built on the heap and
+hashed.
+
+| | before | after | |
+|---|---:|---:|---:|
+| tokenizing the 1419-token prompt | 2.053 s | **0.143 s** | 14.4x |
+| the whole run's wall clock | 6.076 s | **4.033 s** | 1.51x |
+| its processor time | 3.13 s | **1.07 s** | |
+| evaluating the prompt | 3.52 s | 3.54 s | untouched |
+
+**Bit for bit the same tokens.** The scan runs over the same symbols in the
+same order -- a merge keeps the left symbol's index, so the living symbols
+stay in increasing index order -- and takes a pair only on a strictly
+greater score, so the leftmost of equals still wins.
+
+Which vocabularies it reaches, on 3000 characters of the same text:
+
+| | before | after |
+|---|---:|---:|
+| TinyLlama, SentencePiece | 0.53 s | **0.11 s** |
+| Phi-3, SentencePiece | 0.50 s | **0.08 s** |
+| Gemma 3 | 0.58 s | 0.54 s |
+| GPT-2, byte pair | 0.15 s | 0.15 s |
+| Qwen 3, byte pair | 0.46 s | 0.47 s |
+
+The byte-pair road is untouched and was never the problem: it merges within
+a word, where the counts are small and its own comment says a pass per merge
+is right.
+
+**Nothing was looking for this.** It fell out of asking why a device prompt
+used 2.98 s of processor time, which was asked because the phase counters
+did not add up to the wall clock. The figure that mattered most to a user
+was the one no published figure contained.
 
 ### Against llama.cpp
 

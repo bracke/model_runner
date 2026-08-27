@@ -5701,7 +5701,83 @@ scaling 8AED00AB80C603E8 src/library/model_runner-backend-cpu.adb src/library/mo
 #       why the bound exists is history and needs the commit before it; it
 #       is not reproducible and is quoted as a reason rather than a figure.
 # model: none. This figure times the tokenizer on text this tool builds itself.
-tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
+# 2026-08-27, the tokenizer: twenty-one million lookups where seventeen
+# thousand will do, and a user's wall clock halved.
+#
+# The entry above found it by accident. A device prompt reported 2.98 s of
+# processor for 3.755 s of wall, and two thirds of that turned out to be
+# tokenizing: 2.05 s for a 1419-token prompt, which is 1.45 milliseconds a
+# token and more of the run than evaluating the prompt it produces. It is in
+# no published figure because the speed tool times it apart from the
+# evaluation, so nothing here had ever looked at it.
+#
+# What it was. The SentencePiece road merges the best-scoring adjacent pair
+# until no pair names a vocabulary entry, and it found that pair by walking
+# every surviving pair, building the two symbols into one string and looking
+# that string up. A pass per merge, and the comment above it said so. For
+# this prompt that is about six thousand seven hundred symbols falling to
+# fourteen hundred, so five thousand two hundred and fifty merges over an
+# average of four thousand pairs:
+#
+#   about 21 million concatenations and hash lookups
+#
+# What a merge actually changes is two pairs: the one the merged symbol now
+# begins, and the one that ends where it begins. So the worth of every pair
+# is worked out once and those two are worked out again:
+#
+#   6669 + 2 x 5250 = 17169 lookups, twelve hundred times fewer
+#
+# The pass that remains compares floats and is still linear in the surviving
+# symbols, so this is the same O(n^2) it was -- what changed is that the
+# constant is a float compare rather than a string built on the heap and
+# hashed. A heap over the pairs would make it O(n log n) and is not needed
+# to make the figure stop mattering.
+#
+#   tokenizing the 1419-token prompt   2.053 s -> 0.143 s   14.4x
+#
+# And on the run a user waits for, three alternated pairs, device backend:
+#
+#   wall              6.076 s -> 4.033 s   1.51x
+#   processor time    3.13 s  -> 1.07 s
+#   evaluating        3.52 s  -> 3.54 s    untouched, as it must be
+#
+# Bit for bit the same tokens. The scan runs over the same symbols in the
+# same order -- a merge keeps the left symbol's index, so the living symbols
+# stay in increasing index order -- and takes a pair only on a strictly
+# greater score, so the leftmost of equals still wins. The token streams of
+# all three speed fixtures hash the same before and after, and the device
+# prompt still prints 1a26d24d33b8957b.
+#
+# Which vocabularies it reaches, 3000 characters of the same text:
+#
+#   TinyLlama, SentencePiece   0.53 s -> 0.11 s
+#   Phi-3, SentencePiece       0.50 s -> 0.08 s
+#   Gemma 3                    0.58 s -> 0.54 s
+#   GPT-2, byte pair           0.15 s -> 0.15 s
+#   Qwen 3, byte pair          0.46 s -> 0.47 s
+#
+# The byte-pair road is untouched and was never the problem: it merges
+# within a word, where the counts are small and its own comment says a pass
+# per merge is right. The Unigram road is a Viterbi walk and never had this
+# shape.
+#
+# The covered figures were re-measured and did not move: sixty thousand
+# ordinary characters read 0.040 s against the recorded 0.039 and sixty
+# thousand brackets 0.045 against 0.045, timed over twenty runs apiece
+# rather than one, because the shell's clock resolves to ten milliseconds
+# and the figure is four of them. The fixture vocabulary is not
+# SentencePiece and sixty thousand identical characters is not a shape this
+# change touches, which is why.
+#
+# One thing worth saying about how this was found. Nothing was looking for
+# it. It fell out of asking why a device prompt used 2.98 s of processor
+# time, which was asked because the phase counters did not add up to the
+# wall clock. The figure that mattered most to a user this whole session was
+# the one no published figure contained.
+#
+# load: 0.55 to 0.86, 2026-08-27.
+
+tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 
 # 2026-08-24, what the other runtime costs for the same file. The
 # reference-runtime comparison has always been about agreement -- same
