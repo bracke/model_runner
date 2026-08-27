@@ -1,3 +1,7 @@
+with Interfaces;
+with System;
+with System.Machine_Code;
+
 package body Model_Runner.Kernels is
 
    --  Every value here derives from weights a model file supplied, so a
@@ -81,6 +85,93 @@ package body Model_Runner.Kernels is
 
       return Real (Sum);
    end Dot;
+
+   --------------
+   -- Head_Dot --
+   --------------
+
+   --  Set once at a backend's elaboration and read thereafter.
+   Wide_Dots : Boolean := False;
+
+   procedure Use_Wide_Dots (Allowed : Boolean) is
+   begin
+      Wide_Dots := Allowed;
+   end Use_Wide_Dots;
+
+   function Head_Dot
+     (Left     : Real_Array;
+      At_Left  : Element_Count;
+      Right    : Real_Array;
+      At_Right : Element_Count;
+      Span     : Element_Count) return Real is
+   begin
+      --  Written as sums rather than differences: Element_Count starts at
+      --  zero and an empty vector's Last is below its First.
+      if Span = 0
+        or else At_Left < Left'First
+        or else At_Right < Right'First
+        or else At_Left - Left'First + Span > Element_Count (Left'Length)
+        or else At_Right - Right'First + Span > Element_Count (Right'Length)
+      then
+         return 0.0;
+      end if;
+
+      --  Eight pairs a turn, accumulated in the eight lanes and folded once
+      --  at the end. The addresses it advances are its own copies and not
+      --  the caller's, which is the rule every insertion here keeps.
+      if Wide_Dots and then Span mod 8 = 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Left_At  : System.Address := Left (At_Left)'Address;
+            Right_At : System.Address := Right (At_Right)'Address;
+            Blocks   : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Span / 8);
+            Result   : N.Real;
+         begin
+            System.Machine_Code.Asm
+              ("vxorps %%ymm0, %%ymm0, %%ymm0"           & LF
+               & "1:"                                    & LF
+               & "vmovups (%1), %%ymm1"                  & LF
+               & "vmovups (%2), %%ymm2"                  & LF
+               & "vfmadd231ps %%ymm1, %%ymm2, %%ymm0"    & LF
+               & "addq $32, %1"                          & LF
+               & "addq $32, %2"                          & LF
+               & "decq %3"                               & LF
+               & "jnz 1b"                                & LF
+
+               --  Eight lanes down to one: the high half onto the low, then
+               --  two pairwise adds.
+               & "vextractf128 $1, %%ymm0, %%xmm1"       & LF
+               & "vaddps %%xmm1, %%xmm0, %%xmm0"         & LF
+               & "vhaddps %%xmm0, %%xmm0, %%xmm0"        & LF
+               & "vhaddps %%xmm0, %%xmm0, %%xmm0"        & LF
+               & "vmovss %%xmm0, %0"                     & LF
+               & "vzeroupper",
+               Outputs =>
+                 [N.Real'Asm_Output ("=m", Result),
+                  System.Address'Asm_Output ("+r", Left_At),
+                  System.Address'Asm_Output ("+r", Right_At),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Blocks)],
+               Clobber  => "ymm0, ymm1, ymm2, cc, memory",
+               Volatile => True);
+
+            return Result;
+         end;
+      end if;
+
+      declare
+         Sum : N.Wide_Real := 0.0;
+      begin
+         for Index in 0 .. Span - 1 loop
+            Sum := Sum
+              + N.Wide_Real (Left (At_Left + Index))
+                * N.Wide_Real (Right (At_Right + Index));
+         end loop;
+
+         return N.Real (Sum);
+      end;
+   end Head_Dot;
 
    --------------
    -- RMS_Norm --

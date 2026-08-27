@@ -5500,6 +5500,101 @@ package body Tests.Inference_Cases is
               & External_Model.Detail_Text (Fits));
    end Refused_Generation_Names_Its_Reason;
 
+   --  Head_Dot's two paths answer the same thing.
+   --
+   --  The insertion is what the attention scores are computed with wherever
+   --  the host has the wide lanes, and the loop below it is what they are
+   --  computed with everywhere else. The two are not bit for bit -- the
+   --  insertion keeps eight binary32 lanes and folds them at the end, the
+   --  loop keeps one binary64 sum -- so what is asserted is that they agree
+   --  to what binary32 can hold, which is the bound the conformance sweep
+   --  holds the whole evaluator to and the same bound the device's scores
+   --  are held to.
+   --
+   --  Use_Wide_Dots is what the backend calls once at elaboration and what
+   --  this drives directly. On a host without the instructions the wide
+   --  path is never entered: turning it on there would run instructions the
+   --  processor has not got, so this asks the host the same question the
+   --  backend asks and does nothing where the answer is no.
+   --
+   --  The spans that are not a multiple of eight and the ones that leave
+   --  their vector are here too, because both are answered by the guard
+   --  rather than by the arithmetic.
+   procedure Both_Head_Dots_Agree
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package MK renames Model_Runner.Kernels;
+
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+
+      Spans  : constant array (1 .. 6) of N.Element_Count :=
+        [8, 16, 64, 128, 7, 33];
+      Starts : constant array (1 .. 3) of N.Element_Count := [0, 1, 64];
+
+      Room : constant N.Element_Count := 256;
+      Left  : N.Real_Array (0 .. Room - 1);
+      Right : N.Real_Array (0 .. Room - 1);
+
+      Seen : Natural := 0;
+   begin
+      --  Values that use a range rather than a constant, so that a path
+      --  reading the wrong elements answers differently rather than
+      --  accidentally the same.
+      for Index in Left'Range loop
+         Left (Index) :=
+           N.Real (Integer (Index) mod 13) - 6.0
+           + N.Real (Integer (Index) mod 5) * 0.125;
+         Right (Index) :=
+           N.Real (Integer (Index) mod 7) - 3.0
+           - N.Real (Integer (Index) mod 11) * 0.0625;
+      end loop;
+
+      --  Sixty-four is the head width this model uses; the others say the
+      --  answer does not depend on it, and the two that are not a multiple
+      --  of eight say the guard sends them to the loop.
+      for Span of Spans loop
+         for At_Left of Starts loop
+            declare
+               Plain, Chosen : N.Real;
+               Bound : constant N.Real := 1.0e-4 * N.Real (Span);
+            begin
+               MK.Use_Wide_Dots (False);
+               Plain := MK.Head_Dot (Left, At_Left, Right, 0, Span);
+
+               MK.Use_Wide_Dots (Wide);
+               Chosen := MK.Head_Dot (Left, At_Left, Right, 0, Span);
+
+               Assert (abs (Plain - Chosen) <= Bound,
+                       "the two dot products disagree at span"
+                       & N.Element_Count'Image (Span) & " from"
+                       & N.Element_Count'Image (At_Left) & ":"
+                       & N.Real'Image (Plain) & " against"
+                       & N.Real'Image (Chosen));
+
+               Seen := Seen + 1;
+            end;
+         end loop;
+      end loop;
+
+      --  A span that leaves its vector is refused rather than read, on
+      --  either path, and an empty one likewise.
+      for Allowed in Boolean'Range loop
+         MK.Use_Wide_Dots (Allowed and Wide);
+
+         Assert (MK.Head_Dot (Left, Room - 8, Right, 0, 16) = 0.0,
+                 "a span past the end of the left vector was answered");
+         Assert (MK.Head_Dot (Left, 0, Right, Room - 8, 16) = 0.0,
+                 "a span past the end of the right vector was answered");
+         Assert (MK.Head_Dot (Left, 0, Right, 0, 0) = 0.0,
+                 "an empty span was answered");
+      end loop;
+
+      MK.Use_Wide_Dots (Wide);
+      Assert (Seen = 18, "a span was not compared");
+   end Both_Head_Dots_Agree;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -5679,6 +5774,10 @@ package body Tests.Inference_Cases is
         (T, Device_Reads_A_Model_In_Any_Format'Access,
          "a model in any format the program reads loads on the device, "
          & "without being repacked first");
+      Register_Routine
+        (T, Both_Head_Dots_Agree'Access,
+         "the attention dot product answers the same whether the host's "
+         & "wide lanes are used or not");
       Register_Routine
         (T, A_Budget_Accounts_For_A_Batch'Access,
          "a session asked for a budget says where a batch's time went, and "

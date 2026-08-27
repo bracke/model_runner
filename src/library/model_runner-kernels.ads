@@ -56,6 +56,50 @@ package Model_Runner.Kernels is
    --  @return Dot product, or 0.0 when the lengths differ.
    function Dot (Left, Right : Real_Array) return Real;
 
+   --  Dot product of one span out of each of two vectors, for the attention
+   --  scores: a query head against a key row.
+   --
+   --  Accumulates in Real rather than Wide_Real, over eight lanes at a time
+   --  where the host has them, which is why it is not Dot above. Dot is the
+   --  exact one and rounds once; this one is what the attention scores are
+   --  measured against the sweep's bound in, and is what the device has
+   --  always computed them in.
+   --
+   --  Why this is not written as Ada. The shape is a reduction, and a
+   --  reduction is the one shape GNAT will not vectorize at -O3 however it
+   --  is written: the value blend beside this in the evaluator, which is a
+   --  map, comes out as mulpd and addpd, and this came out as mulsd and
+   --  addsd. Written as eight independent lanes -- a map by construction --
+   --  it still came out as eight scalar chains, and renaming the operands
+   --  into slices so the addresses were plainly contiguous did not change
+   --  one instruction. This loop is a quarter of a processor prompt.
+   --
+   --  @param Left Vector the left span is taken from.
+   --  @param At_Left First index of the left span.
+   --  @param Right Vector the right span is taken from.
+   --  @param At_Right First index of the right span.
+   --  @param Span Length of both spans.
+   --  @return The dot product, or 0.0 when either span leaves its vector.
+   function Head_Dot
+     (Left     : Real_Array;
+      At_Left  : Element_Count;
+      Right    : Real_Array;
+      At_Right : Element_Count;
+      Span     : Element_Count) return Real;
+
+   --  Whether Head_Dot above may use the wide lanes and the fused
+   --  multiply-add, which is an eighth of the instructions for the same
+   --  arithmetic.
+   --
+   --  It is told rather than asked, for the reason Quantization's
+   --  Use_Wide_Decoders is told: this package interprets what a model file
+   --  holds and may not reach a host. The backend that runs it asks and
+   --  says so here, once, before any model is read. A caller that never
+   --  says leaves Head_Dot on the loop it had before this existed.
+   --
+   --  @param Allowed True where the host has the wider instructions.
+   procedure Use_Wide_Dots (Allowed : Boolean);
+
    --  Root-mean-square normalization with a per-element gain.
    --
    --  Computes Target (i) = Source (i) / sqrt (mean of squares + Epsilon)

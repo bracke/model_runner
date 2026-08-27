@@ -2979,16 +2979,9 @@ package body Model_Runner.Llama is
                  Keys'First + K_Base + Step * KV_Width + Group * Head_Size;
                Q_At   : constant Element_Count :=
                  Query'First + Head * Head_Size;
-               Sum    : N.Wide_Real := 0.0;
             begin
-               for Component in 0 .. Head_Size - 1 loop
-                  Sum := Sum
-                    + N.Wide_Real (Query (Q_At + Component))
-                      * N.Wide_Real (Keys (Origin + Component));
-               end loop;
-
                Scores (Scores'First + Head * Score_Room + Step) :=
-                 Real (Sum) * Scale;
+                 K.Head_Dot (Query, Q_At, Keys, Origin, Head_Size) * Scale;
             end;
          end loop;
       end loop;
@@ -3045,11 +3038,16 @@ package body Model_Runner.Llama is
             --  one of them. Holding a run of components instead and walking
             --  the steps once reads them where they lie.
             --
-            --  Bit for bit what it replaces. Each component still sums over
-            --  the steps in ascending order and rounds once at the end;
-            --  what moved is where the sum is kept, not what is added to
-            --  it. A run at a time rather than all of them because the run
-            --  is on the stack and a head's width is a model's to choose.
+            --  A run at a time rather than all of them because the run is
+            --  on the stack and a head's width is a model's to choose.
+            --
+            --  Summed in binary32 and not the binary64 this once kept. The
+            --  loop is a map, which -O3 vectorizes unasked, so here the
+            --  format is the lane count: mulps and addps do eight where
+            --  mulpd and addpd did four. It is the argument the score dot
+            --  product above makes and it is answered the same way -- the
+            --  device has always blended these values in binary32, and one
+            --  bound holds both backends.
             declare
                Run : constant Element_Count := 64;
                At_Component : Element_Count := 0;
@@ -3058,22 +3056,19 @@ package body Model_Runner.Llama is
                   declare
                      Here : constant Element_Count :=
                        Element_Count'Min (Run, Value_Size - At_Component);
-                     Sums : N.Wide_Real_Array (0 .. Here - 1) :=
-                       [others => 0.0];
+                     Sums : Real_Array (0 .. Here - 1) := [others => 0.0];
                   begin
                      for Step in First .. Last loop
                         declare
-                           Weight : constant N.Wide_Real :=
-                             N.Wide_Real (Scores (At_Score + Step));
+                           Weight : constant Real :=
+                             Scores (At_Score + Step);
                            At_Value : constant Element_Count :=
                              Values'First + V_Base + Step * V_Width
                              + Group * Value_Size + At_Component;
                         begin
                            for Component in 0 .. Here - 1 loop
                               Sums (Component) := Sums (Component)
-                                + Weight
-                                  * N.Wide_Real
-                                      (Values (At_Value + Component));
+                                + Weight * Values (At_Value + Component);
                            end loop;
                         end;
                      end loop;
@@ -3081,7 +3076,7 @@ package body Model_Runner.Llama is
                      for Component in 0 .. Here - 1 loop
                         Target (Target'First + Head * Value_Size
                                 + At_Component + Component) :=
-                          Real (Sums (Component));
+                          Sums (Component);
                      end loop;
 
                      At_Component := At_Component + Here;
@@ -3431,11 +3426,10 @@ package body Model_Runner.Llama is
                return;
             end if;
 
-            --  A run of components at a time rather than one, for the
-            --  reason written out in Blend_Exact: a position's values are
-            --  contiguous and holding the component still walks them a line
-            --  at a time. Bit for bit what it replaces -- each component
-            --  still sums over the steps in ascending order.
+            --  A run of components at a time rather than one, and summed
+            --  in binary32, for the reasons written out in Blend_Exact: a
+            --  position's values are contiguous, and a map in binary32 is
+            --  eight lanes an instruction where binary64 is four.
             declare
                Run : constant Element_Count := 64;
                At_Component : Element_Count := 0;
@@ -3444,13 +3438,12 @@ package body Model_Runner.Llama is
                   declare
                      Here : constant Element_Count :=
                        Element_Count'Min (Run, Value_Size - At_Component);
-                     Sums : N.Wide_Real_Array (0 .. Here - 1) :=
-                       [others => 0.0];
+                     Sums : Real_Array (0 .. Here - 1) := [others => 0.0];
                   begin
                      for Step in First .. Last loop
                         declare
-                           Weight : constant N.Wide_Real :=
-                             N.Wide_Real (Scores (At_Score + Step));
+                           Weight : constant Real :=
+                             Scores (At_Score + Step);
                            At_Byte : constant B.Byte_Count :=
                              B.Byte_Count (Values'First)
                              + B.Byte_Count (V_Base + Step * V_Width
@@ -3462,11 +3455,10 @@ package body Model_Runner.Llama is
                            for Component in 0 .. Here - 1 loop
                               Sums (Component) := Sums (Component)
                                 + Weight
-                                  * N.Wide_Real
-                                      (Unpack
-                                         (Values,
-                                          At_Byte + B.Byte_Count (Component),
-                                          Scaled));
+                                  * Unpack
+                                      (Values,
+                                       At_Byte + B.Byte_Count (Component),
+                                       Scaled);
                            end loop;
                         end;
                      end loop;
@@ -3474,7 +3466,7 @@ package body Model_Runner.Llama is
                      for Component in 0 .. Here - 1 loop
                         Target (Target'First + Head * Value_Size
                                 + At_Component + Component) :=
-                          Real (Sums (Component));
+                          Sums (Component);
                      end loop;
 
                      At_Component := At_Component + Here;
@@ -3585,9 +3577,8 @@ package body Model_Runner.Llama is
                return;
             end if;
 
-            --  A run of components at a time rather than one, for the
-            --  reason written out in Blend_Exact. Bit for bit what it
-            --  replaces.
+            --  A run of components at a time rather than one, and summed
+            --  in binary32, for the reasons written out in Blend_Exact.
             declare
                Run : constant Element_Count := 64;
                At_Component : Element_Count := 0;
@@ -3596,13 +3587,12 @@ package body Model_Runner.Llama is
                   declare
                      Here : constant Element_Count :=
                        Element_Count'Min (Run, Value_Size - At_Component);
-                     Sums : N.Wide_Real_Array (0 .. Here - 1) :=
-                       [others => 0.0];
+                     Sums : Real_Array (0 .. Here - 1) := [others => 0.0];
                   begin
                      for Step in First .. Last loop
                         declare
-                           Weight : constant N.Wide_Real :=
-                             N.Wide_Real (Scores (At_Score + Step));
+                           Weight : constant Real :=
+                             Scores (At_Score + Step);
                            At_Value : constant Element_Count :=
                              Values'First + V_Base + Step * V_Width
                              + Group * Value_Size + At_Component;
@@ -3610,9 +3600,7 @@ package body Model_Runner.Llama is
                            for Component in 0 .. Here - 1 loop
                               Sums (Component) := Sums (Component)
                                 + Weight
-                                  * N.Wide_Real
-                                      (N.To_Real
-                                         (Values (At_Value + Component)));
+                                  * N.To_Real (Values (At_Value + Component));
                            end loop;
                         end;
                      end loop;
@@ -3620,7 +3608,7 @@ package body Model_Runner.Llama is
                      for Component in 0 .. Here - 1 loop
                         Target (Target'First + Head * Value_Size
                                 + At_Component + Component) :=
-                          Real (Sums (Component));
+                          Sums (Component);
                      end loop;
 
                      At_Component := At_Component + Here;

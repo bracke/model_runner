@@ -7,6 +7,45 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The attention score dot product is a machine-code insertion now, and the
+  value blend beside it is binary32: fourteen and a half per cent and four
+  per cent of a processor prompt.** The entry below this one proved that no
+  arrangement of Ada makes GNAT vectorise a reduction; this is what was left.
+
+  `Model_Runner.Kernels.Head_Dot` issues `vfmadd231ps` over eight binary32
+  pairs a turn and folds the eight lanes once at the end, with the portable
+  loop still there for a host without the instructions. On the 1419-token
+  prompt, alternated rounds under a load of 1.20: 13.538, 14.255 and 13.691 s
+  against **11.736, 11.432 and 11.664** -- better in three of three.
+  Generating is level at 2.02 s against 2.00, and has to be: a generated
+  token has one query row, so the loop runs once a head rather than once a
+  position.
+
+  The value blend was already packed and was packed in *binary64*. It is a
+  map, so the format is the lane count: 34 `mulpd` and 32 `addpd` become 18
+  `mulps` and 17 `addps`. Three rounds did not clear the noise floor, so it
+  was taken seven times and reads better in **seven of seven**, median 11.728
+  against 11.249 -- four per cent. `Blend_Halved` and `Blend_Eighth` got the
+  same change, which their own comments already said they should.
+
+  Both move the answers and the conformance sweep is the arbiter for both, as
+  it is for the byte dot product: 28344 sequences, nothing outside tolerance,
+  run on each change separately. The sixty-four-token digest moves twice,
+  `448c2ed68ec342ee` to `cf8edab322fa571f` to `1cb5fffbb21399ad`, and the
+  110-token prompt digest does not move.
+
+  Against llama.cpp the processor's prompt goes from 141.2 to **168.7 tokens
+  a second** and the gap from 2.5 to 2.3 times.
+
+  A repository check refused the insertion where it was first written.
+  `model_runner-llama.adb` interprets what a model file holds, so it may not
+  `with Model_Runner.Platform` -- that is what keeps a chat template or a
+  metadata value from making the program read something else off the machine.
+  The capability is told rather than asked, as `Use_Wide_Decoders` is:
+  `Kernels.Use_Wide_Dots`, called once from `Backend.CPU`'s elaboration
+  before any container is open. A test drives both paths and asserts they
+  agree.
+
 - **The processor's attention scores in binary32 measured level, and the
   reason is that GNAT will not vectorise a reduction however it is written.**
   Not kept.
