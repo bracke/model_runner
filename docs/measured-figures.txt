@@ -8602,3 +8602,81 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 #   and settled below 1.20 before each of the three llama-bench runs,
 #   2026-08-27
 outside EF041C6FCFD946C8 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+
+# 2026-08-27  The row tile at sixty-four, and the instrument's first row
+#
+# The device's prompt is 2.4 times behind llama.cpp and the tile product is
+# where its arithmetic goes, so this looked at the tile's shape again.
+#
+# What suggested the change. `tests device-bench` times 16384 by 2048 at a
+# batch of 128 in eight formats and they all land together:
+#
+#   f16 3094, bf16 3562, q8_0 4203, q6_k 4198, q5_k 3639, q4_k 4079,
+#   q4_0 4181, q2_k 4290 Gflop/s
+#
+# Half precision decodes nothing and Q2_K has six times fewer bytes and the
+# most elaborate decode of the eight. Neither the weight bytes nor the
+# decode binds this, which leaves what they share. A workgroup takes
+# thirty-two rows and the whole batch, so every row tile reads the batch
+# again: 16384 rows is 512 row tiles and a 128-vector batch at 2048 columns
+# is half a megabyte, so a quarter of a gigabyte of activation reads against
+# thirty-four megabytes of weights.
+#
+# The change. TILE_R 32 -> 64, local_size 64 -> 128, two waves splitting the
+# eight vector matrices four each, both using all sixty-four decoded rows.
+# Accumulators per wave unchanged at sixteen, decode per lane unchanged at
+# sixteen values, activation reads halved. Tile_Rows on the host moved with
+# it; every shape TinyLlama has is still a whole number of sixty-fours.
+#
+#   format   thirty-two rows   sixty-four
+#   f16                 3094         2142
+#   bf16                3562         2536
+#   q8_0                4203         2303
+#   q6_k                4198         2185
+#   q5_k                3639         3274
+#   q4_k                4079         3358
+#   q4_0                4181         3018
+#   q2_k                4290         3357
+#
+# Worse in eight of eight, by thirty to forty-five per cent. Two sittings of
+# the committed shader read within eight per cent of each other, so the loss
+# is far outside what this instrument resolves. Reverted.
+#
+# The likeliest reason, written down as a reason and not as a measurement:
+# with one wave to a workgroup a barrier() has nobody to wait for and is
+# very nearly free; with two it is a real wait, twice every thirty-two
+# columns, and neither wave can begin its arithmetic until the other has
+# finished its half of the decode. Sixty-four such waits a row tile. What it
+# bought was a quarter of a gigabyte of reads the eight figures above say it
+# was not paying much for.
+#
+# Fifth attempt at this tile's shape and the fifth revert: KCH at 64 and at
+# 128, the accumulators two against eight, TILE_V at 64 and at 32, and now
+# TILE_R at 64.
+#
+# AND THE INSTRUMENT. While measuring the above, "query" and "out proj" in
+# the shapes table turned out to be the same shape -- 2048 by 2048 at 128 --
+# reading thirty-three per cent apart, in three sittings, in the same
+# direction. So the table was given a control: the first row's shape again,
+# measured last. One run, four readings of that one shape:
+#
+#   query, first in the table   3035 Gflop/s
+#   out proj                    2173
+#   rows 2048                   2178
+#   query last, the control     2201
+#
+# The three that are not first agree within one and a half per cent and the
+# first is forty per cent above them. The first shape a sitting measures
+# reads high whichever shape it is: the sweep before it works the device far
+# more lightly and it enters this one at a boost clock it cannot hold. The
+# 2714 published for "query" under "### The batched product, profiled" is
+# the instrument; about 2180 is the figure. The control row stays in
+# tests/src/device_bench.adb.
+#
+# The sub-table of vector-tile widths under that section is undisturbed:
+# every column there was taken the same way in its own build, so a
+# comparison across a row is between two equally warm first readings.
+#
+# Only tests/src/device_bench.adb changed, and it is outside every figure
+# group.
+

@@ -829,7 +829,7 @@ package body Device_Bench is
          --  TinyLlama's own, and the vocabulary projection that closes a
          --  run. The two narrow ones are the grouped keys and values: an
          --  eighth of the rows of the query beside them, at the same width.
-         Table : constant array (1 .. 17) of Shape :=
+         Table : constant array (1 .. 18) of Shape :=
            [("query     ",  2048, 2048, 128),
             ("keys      ",   256, 2048, 128),
             ("out proj  ",  2048, 2048, 128),
@@ -859,7 +859,13 @@ package body Device_Bench is
             ("rows 256  ",   256, 2048, 128),
             ("rows 512  ",   512, 2048, 128),
             ("rows 1024 ",  1024, 2048, 128),
-            ("rows 2048 ",  2048, 2048, 128)];
+            ("rows 2048 ",  2048, 2048, 128),
+
+            --  The first row again, last. Three sittings read "query" and
+            --  "out proj" -- the same shape -- thirty per cent apart, and
+            --  what this asks is whether the difference is the shape or
+            --  the position in the table.
+            ("query last",  2048, 2048, 128)];
       begin
          for Which of Table loop
             declare

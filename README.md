@@ -2732,6 +2732,35 @@ and `### What that table was really measuring` below shows that they do not:
 88 per cent of that figure is the instrument. What follows was written before
 that was known, and is kept because the correction is the point.
 
+**A second row of that table is the instrument too, and it took a control to
+see it.** `query` and `out proj` are the same shape -- 2048 by 2048 at a
+batch of 128 -- and the table reads them thirty-three per cent apart. Three
+sittings read the pair apart by the same amount and in the same direction,
+so it is not noise. The table was therefore given a control: the first row's
+shape again, measured last. In one run the four readings of that one shape
+are
+
+| | Gflop/s |
+| --- | ---: |
+| query, first in the table | 3035 |
+| out proj | 2173 |
+| rows 2048 | 2178 |
+| **query last**, the control | **2201** |
+
+The three that are not first agree within one and a half per cent and the
+first is forty per cent above them. **The first shape a sitting measures
+reads high**, whichever shape it is, because the sweep before it works the
+device far more lightly and it enters this one at a boost clock it cannot
+hold. So 2714 above is not what a 2048 by 2048 product does; about 2180 is,
+which is what `out proj` said all along. The control row stays in the
+instrument.
+
+That does not disturb the sub-table below, where every column was taken the
+same way in its own build, so the comparison across a row is between two
+equally warm first readings. It does mean the absolute figures in this
+section's first table are worth about a tenth less than they say, except the
+one row that was already known to be wrong for a different reason.
+
 Widening the batch and changing nothing else says it is the workgroup count:
 455, 706, 835 and 1103 Gflop/s at 8, 16, 32 and 64 workgroups.
 
@@ -3310,6 +3339,65 @@ once from `Backend.CPU`'s elaboration, before any container is open. The
 check found a real mistake rather than an inconvenience, and the insertion
 ended up in the package that holds the arithmetic rather than the one that
 holds the evaluator, which is where it belonged anyway.
+
+### The tile that reads the batch five hundred times, and does not mind
+
+The device's prompt is 2.4 times behind llama.cpp's and the tile product is
+what it spends its arithmetic in, so this looked at the tile's shape for the
+fifth time.
+
+The argument for the change came out of `tests device-bench`, which times a
+16384 by 2048 product at a batch of 128 in each of eight formats. **Every
+format lands between 3.1 and 4.3 teraflops a second** -- half precision with
+no decode at all, and Q2_K with six times fewer bytes and the most elaborate
+decode of the eight, within a few per cent of each other. So neither the
+weight bytes nor the decode is what binds it, which leaves what the two have
+in common: the activations.
+
+A workgroup takes thirty-two rows and the whole batch, so every row tile
+reads the whole batch again. Sixteen thousand rows is five hundred and
+twelve row tiles, and a batch of 128 vectors at 2048 columns is half a
+megabyte: **a quarter of a gigabyte of activation reads against thirty-four
+megabytes of weights.** Doubling the row tile halves that.
+
+So: sixty-four rows to a workgroup, in two waves that split the vectors
+between them, each wave holding four of the eight vector matrices and both
+using all sixty-four decoded rows. The accumulator count per wave is
+unchanged, the decode arithmetic per lane is unchanged, and the loop that
+reads the batch runs half as often.
+
+**It lost, in every one of the eight formats:**
+
+| | thirty-two rows | sixty-four |
+|---|---:|---:|
+| f16 | 3094 | 2142 |
+| bf16 | 3562 | 2536 |
+| q8_0 | **4203** | 2303 |
+| q6_k | 4198 | 2185 |
+| q5_k | 3639 | 3274 |
+| q4_k | 4079 | 3358 |
+| q4_0 | 4181 | 3018 |
+| q2_k | 4290 | 3357 |
+
+Two sittings of the thirty-two-row shader read within eight per cent of each
+other, and the sixty-four-row one is thirty to forty-five per cent below
+both.
+
+The likeliest reason, written down as a reason and not as a measurement:
+with one wave to a workgroup a `barrier()` is very nearly free, because
+there is nobody to wait for. With two it is a real wait, twice for every
+thirty-two columns, and neither wave can start its half of the arithmetic
+until the other has finished its half of the decode. The tile went from a
+wave that never waits to two that wait sixty-four times a row tile. What was
+saved was a quarter of a gigabyte of reads that the numbers above say it was
+never paying much for.
+
+**That is the fifth attempt at this tile's shape and the fifth to be
+reverted** -- the k-chunk at sixty-four and at a hundred and twenty-eight,
+the accumulators two against eight, the vector tile at sixty-four and at
+thirty-two, and now the row tile at sixty-four. The local optimum is a real
+one, and what is left between this device and the other runtime is not the
+tile's shape.
 
 ### Against llama.cpp
 

@@ -7,6 +7,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The matrix tile at sixty-four rows: measured and reverted, and the shapes
+  table in `tests device-bench` gained a control that says its first row
+  reads forty per cent high.**
+
+  `tests device-bench` times a 16384 by 2048 product at a batch of 128 in
+  eight formats, and every one of them lands between 3.1 and 4.3 teraflops a
+  second -- half precision with no decode beside Q2_K with six times fewer
+  bytes and the most elaborate decode. Neither the bytes nor the decode
+  binds it, which leaves the activations: a workgroup takes thirty-two rows
+  and the whole batch, so sixteen thousand rows read a half-megabyte batch
+  five hundred and twelve times, a quarter of a gigabyte against
+  thirty-four megabytes of weights.
+
+  Doubling the row tile -- sixty-four rows in two waves splitting the
+  vectors, same accumulators per wave, same decode per lane -- halves that
+  and **lost in all eight formats**, by thirty to forty-five per cent, where
+  two sittings of the committed shader agree within eight. Written down as a
+  reason and not a measurement: with one wave a `barrier()` has nobody to
+  wait for, and with two it is a real wait twice every thirty-two columns.
+  Fifth attempt at this tile's shape, fifth revert.
+
+  While measuring it, `query` and `out proj` in the shapes table turned out
+  to be the same shape reading thirty-three per cent apart, in three
+  sittings. The table now measures the first row's shape again at the end:
+  in one run the four readings are 3035, 2173, 2178 and 2201 Gflop/s, so the
+  three that are not first agree within one and a half per cent. The first
+  shape a sitting measures reads high whichever shape it is, and the 2714
+  published for `query` is the instrument. The control row stays.
+
 - **The attention score dot product is a machine-code insertion now, and the
   value blend beside it is binary32: fourteen and a half per cent and four
   per cent of a processor prompt.** The entry below this one proved that no
