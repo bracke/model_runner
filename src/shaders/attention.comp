@@ -420,15 +420,33 @@ void main() {
                 break;
             }
 
+            //  The value at this position and component, read once and
+            //  multiplied into every query of the block.
+            //
+            //  Written the other way round -- a query outside a position,
+            //  which is how this began -- the same address was loaded once
+            //  for each query: four loads for four multiply-adds where one
+            //  will do. The dot product above already had the shape; this
+            //  did not.
+            //
+            //  Each query still accumulates over the positions in the same
+            //  order, so the answers do not move.
+            float got[QUERIES];
             for (uint i = 0u; i < QUERIES; i++) {
-                float gathered = 0.0;
-                for (uint j = 0; j < span; j++) {
-                    uint v_at = shape.v_base + (base + j) * shape.v_width
-                                + group * shape.value_size + c;
-                    gathered += tile[i * 64u + j] * kv[v_at];
-                }
+                got[i] = 0.0;
+            }
 
-                held[i][k] = held[i][k] * carry[i] + gathered;
+            for (uint j = 0; j < span; j++) {
+                float v = kv[shape.v_base + (base + j) * shape.v_width
+                             + group * shape.value_size + c];
+
+                for (uint i = 0u; i < QUERIES; i++) {
+                    got[i] += tile[i * 64u + j] * v;
+                }
+            }
+
+            for (uint i = 0u; i < QUERIES; i++) {
+                held[i][k] = held[i][k] * carry[i] + got[i];
             }
         }
 

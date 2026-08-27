@@ -3077,6 +3077,81 @@ kernels 77EB0DAB62549D76 src/library/model_runner-quantization.adb src/library/m
 # are were not re-taken: neither benchmark opens a session, so neither
 # reaches a loop this changed.
 
+# 2026-08-27, attention loaded every value four times. A device prompt is
+# 1.14 times faster for swapping two loops.
+#
+# The item this answers was attention's uncoalesced key reads, and the entry
+# above retired it: the tile is short of arithmetic and not of memory, and
+# attention agrees -- confining its reads to a cache-resident window bought
+# 1.18 times, so its whole memory cost is fifteen per cent and the fix
+# wanted shared-memory staging, which is nought for four on this device.
+# Same target, corrected mechanism. Attention is thirty-five per cent of a
+# device prompt and does 182 gigaflops of arithmetic in about a second,
+# which is 175 gigaflops a second on a part that does 3520 on a product.
+#
+# What was wrong. The weighted sum of values ran the query loop outside the
+# position loop:
+#
+#   for each query i:
+#      for each position j:  got += tile[i][j] * kv[value(j, c)]
+#
+# so kv[value(j, c)] -- one address, one value -- was loaded once for every
+# query of the block. Four loads for four multiply-adds where one will do.
+# The dot product above it already had the shape the other way round, which
+# is why the query block bought 1.5 times there and this did not notice.
+#
+# Swapped, the value is read once and multiplied into every query:
+#
+#   1419-token device prompt   2.544 s -> 2.235 s   1.14x
+#   110-token device prompt    0.203 s -> 0.160 s   1.27x
+#   64 generated               1.591 s -> 1.592 s   unchanged
+#
+# Generating does not move and its digest does not change: a batch of one
+# takes the subgroup kernel, where QUERIES is one and the swap collapses to
+# the same code.
+#
+# **The prompt's answers do change**, and this file said they would not.
+# Each query still accumulates over the positions in the same order and the
+# expressions are the same, so the arithmetic is identical as written; what
+# differs is which multiply-adds the compiler fuses, and GLSL lets it choose
+# unless a variable is declared precise. 1a26d24d33b8957b becomes
+# b3d99fb4151edc6d. The conformance sweep is the check the tile's own
+# half-precision operands are held to and it passes at 28344 sequences with
+# none outside tolerance.
+#
+# The phase counter moved by 0.055 s where the run moved by 0.310. That is
+# the fourth time today, and by now it is not a surprise but a property:
+# these counters are host wall around asynchronous submissions and a change
+# to a kernel shows up wherever the next fence happens to be waited on.
+#
+# What was re-measured, one sitting at a load of 0.52 to 0.82. The two-row
+# table under "The device backend":
+#
+#   6-token prompt, 12 generated       cpu 0.444 s   device 0.343 s
+#     -- evaluating the prompt             0.071         0.055
+#     -- generating                        0.374         0.288
+#     -- processor time                    1.61          0.03
+#   110-token prompt, nothing generated    0.747         0.159
+#     -- processor time                    3.84          0.17
+#
+# And the llama.cpp comparison, both programs in one sitting, llama.cpp at
+# 95b8e33e1 build 10597, three rounds. The engine's rows are 110 tokens in
+# 0.717 s and 64 generated in 2.056 s on the processor, 0.164 s and 1.551 s
+# on the device.
+#
+#   model_runner, processor    153.4 t/s prompt, 31.1 t/s generating
+#   llama.cpp, processor       341.6 t/s prompt, 39.9 t/s generating
+#   model_runner, device       670.7 t/s prompt, 41.3 t/s generating
+#   llama.cpp, device         1693.7 t/s prompt, 56.3 t/s generating
+#   llama.cpp at -ngl 0        752.9 t/s, which is the device answering
+#
+# The gap is 2.2 and 1.3 on the processor, **2.5 and 1.4 on the device**.
+# The device prompt row has gone 412.0, 424.7, 438.2, 464.1, 550.0 and now
+# 670.7 across six sittings today, and the gap on it 4.0 to 2.5.
+#
+# The per-format ratios and the three-way table of where the weights are
+# were not re-taken: neither benchmark makes an attention call.
+
 # 2026-08-27, the batched product is short of arithmetic and not of memory.
 # Six times the bytes costs a quarter more time.
 #
@@ -5408,7 +5483,7 @@ reference A6E0219353599072 src/library/model_runner-backend-reference.adb src/li
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-device 8111D4AD945CD434 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 7769723F4357F9D4 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -8204,4 +8279,4 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 #
 # No source changed.
 
-outside 8111D4AD945CD434 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside 7769723F4357F9D4 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

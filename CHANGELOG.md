@@ -5,6 +5,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **Attention loaded every value once per query of its block; loading it once
+  makes a device prompt 1.14 times faster.** The 1419-token prompt reads
+  2.235 s against 2.544 and the 110-token one 0.160 s against 0.203, better
+  in every round. Generating does not move.
+
+  The weighted sum of values ran the query loop outside the position loop, so
+  one address holding one value was loaded once for every query of the
+  block -- four loads for four multiply-adds where one will do. The dot
+  product above it already had the shape the other way round, which is why
+  the query block bought 1.5 times there and this went unnoticed.
+
+  This is the mechanism the measurement pointed at rather than the one that
+  was planned: attention's whole memory cost is fifteen per cent, so
+  coalescing its key reads was retired, and what was left was instructions.
+
+  **The prompt's answers change.** Each query accumulates over the positions
+  in the same order and the expressions are identical, so the arithmetic is
+  the same as written; what differs is which multiply-adds the compiler
+  fuses, which GLSL lets it choose. The conformance sweep passes at 28344
+  sequences with none outside tolerance. Generating is bit-identical, because
+  a batch of one takes the kernel where the swap collapses to the same code.
+
+  Against llama.cpp the device prompt goes to **670.7 tokens a second** and
+  the gap from 3.0 times to **2.5**.
+
 ### Added
 
 - **The batched product is short of arithmetic and not of memory: six times

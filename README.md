@@ -1516,12 +1516,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.458 s | **0.362 s** |
-| -- evaluating the prompt | 0.077 s | 0.064 s |
-| -- generating | 0.380 s | **0.298 s** |
-| -- processor time | 1.64 s | **0.03 s** |
-| 110-token prompt, nothing generated | 0.740 s | **0.211 s** |
-| -- processor time | 3.79 s | 0.15 s |
+| 6-token prompt, 12 generated | 0.444 s | **0.343 s** |
+| -- evaluating the prompt | 0.071 s | 0.055 s |
+| -- generating | 0.374 s | **0.288 s** |
+| -- processor time | 1.61 s | **0.03 s** |
+| 110-token prompt, nothing generated | 0.747 s | **0.159 s** |
+| -- processor time | 3.84 s | 0.17 s |
 
 All six cells were taken in one sitting on 2026-08-27, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -3102,6 +3102,47 @@ first reading had `f16` 21 per cent slower than `bf16`, which a second round
 showed was noise and **which would have been published as a finding about
 `unpackHalf2x16`**. It takes the best of three passes now.
 
+### Every value read four times
+
+`### Short of arithmetic, not of memory` retired the plan for attention's key
+reads -- its whole memory cost is fifteen per cent and the fix wanted shared
+memory, which is nought for four here. Same target, corrected mechanism.
+Attention is 35 per cent of a device prompt and does 182 Gflop in about a
+second: **175 Gflop/s on a part that does 3520 on a product.**
+
+The weighted sum of values ran the query loop *outside* the position loop:
+
+```
+for each query i:
+   for each position j:  got += tile[i][j] * kv[value(j, c)]
+```
+
+so `kv[value(j, c)]` -- one address, one value -- was loaded once for every
+query of the block. **Four loads for four multiply-adds where one will do.**
+The dot product above it already had the shape the other way round, which is
+why the query block bought 1.5 times there and this went unnoticed.
+
+| | before | after | |
+|---|---:|---:|---:|
+| 1419-token device prompt | 2.544 s | **2.235 s** | 1.14x |
+| 110-token device prompt | 0.203 s | **0.160 s** | 1.27x |
+| 64 generated | 1.591 s | 1.592 s | unchanged |
+
+Generating does not move and its digest does not change: a batch of one takes
+the subgroup kernel, where `QUERIES` is one and the swap collapses to the same
+code.
+
+**The prompt's answers do change, and I predicted they would not.** Each query
+still accumulates over the positions in the same order and the expressions are
+the same, so the arithmetic is identical as written; what differs is which
+multiply-adds the compiler fuses, which GLSL lets it choose unless a variable
+is declared `precise`. The conformance sweep -- the same check the tile's
+half-precision operands are held to -- passes at 28344 sequences with none
+outside tolerance.
+
+The phase counter moved by 0.055 s where the run moved by 0.310. That is the
+fourth time on this page, and by now it is not a surprise but a property.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has
@@ -3114,30 +3155,30 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 162.2 t/s | 31.0 t/s |
-| llama.cpp, processor | 344.5 t/s | 40.0 t/s |
-| model_runner, device | **550.0 t/s** | **40.6 t/s** |
-| llama.cpp, device | 1657.8 t/s | 56.3 t/s |
+| model_runner, processor | 153.4 t/s | 31.1 t/s |
+| llama.cpp, processor | 341.6 t/s | 39.9 t/s |
+| model_runner, device | **670.7 t/s** | **41.3 t/s** |
+| llama.cpp, device | 1693.7 t/s | 56.3 t/s |
 
-On the processor: **1.3 times slower generating and 2.1 times slower reading
+On the processor: **1.3 times slower generating and 2.2 times slower reading
 a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
 code that did not change between them, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
 reading of this table said 3.3 and 16. On the device, **1.4** and **4.0**,
-where the sittings before this one said 1.4 and 3.8, then 1.4 and 3.9, then
-1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and 10.1. Both device
-rows have moved for a named reason:
+where the sittings before this one said 1.4 and 3.0, then 1.4 and 3.6, then
+1.4 and 3.8, then 1.4 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the
+first said 3.8 and 10.1. Both device rows have moved for a named reason:
 `### The matrix instruction` for the prompt, `### The batch that was not
 there` for the generating one, which went 28.1 to 40.8 tokens a second.
 
 **The device row now generates faster than llama.cpp does on the
-processor** -- 40.6 against 40.0. What is left between it and llama.cpp's
+processor** -- 41.3 against 39.9. What is left between it and llama.cpp's
 own device figure is 1.4 times.
 
 The processor's generating row is the other kind of gap. It reads every
 weight once a token and does one multiply with each, so the bus answers
 rather than the arithmetic: llama.cpp's 40.2 t/s is about 45 GB/s of this
-model and 31.0 is about 35. What is left there is a gap in the kernels --
+model and 31.1 is about 35. What is left there is a gap in the kernels --
 ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
 and this measures -- rather than a gap in what the program is doing.
 
@@ -3167,19 +3208,19 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.678 s
-and 64 in 2.062 s on the processor, 0.200 s and 1.575 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.717 s
+and 64 in 2.056 s on the processor, 0.164 s and 1.551 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 773.9 t/s rather
-than 344.5 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 752.9 t/s rather
+than 341.6 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 40.6 t/s
-now, against 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 41.3 t/s
+now, against 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
