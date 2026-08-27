@@ -400,13 +400,30 @@ package body Model_Runner.CLI.Execute is
    --  @param Item Parsed command.
    --  @return Worker tasks the run would use.
    function Selected_Workers (Item : Opt.Command) return Positive is
+      use type Model_Runner.Backend.Backend_Kind;
+
       Able : constant Model_Runner.Backend.Capabilities :=
         Selected_Capabilities (Item);
+
+      --  Supports_Parallel says whether a backend's own products divide
+      --  across workers, and the device's do not: they divide across the
+      --  device. But a run is not only its products. Normalizing a batch
+      --  and joining its residuals are loops over positions on the host
+      --  whichever backend answers, and they were a fifth of a device
+      --  prompt with nothing to share them out to. So the device is given
+      --  a pool for those, and Max_Workers -- which is one, because that
+      --  is a statement about products -- is not what bounds it.
+      Device : constant Boolean :=
+        Item.Backend = Model_Runner.Backend.Backend_Device;
+
+      Most : constant Positive :=
+        (if Device then Model_Runner.Platform.Core_Count
+         else Able.Max_Workers);
    begin
-      if not Able.Supports_Parallel then
+      if not Able.Supports_Parallel and then not Device then
          return 1;
       elsif Item.Threads > 0 then
-         return Positive'Min (Item.Threads, Able.Max_Workers);
+         return Positive'Min (Item.Threads, Most);
       else
          --  The policy lives with the pool, which is what knows that a job
          --  is cut into one more share than it has workers.
@@ -2255,7 +2272,24 @@ package body Model_Runner.CLI.Execute is
                return;
             end if;
 
-            Run_With (null);
+            --  A pool for the host loops a device run still has, made and
+            --  waited for exactly as the processor's is below.
+            if Team_Size <= 1 then
+               Run_With (null);
+            else
+               declare
+                  Team : aliased Workers_CPU.Pool
+                    (Workers_CPU.Worker_Count (Team_Size));
+               begin
+                  Run_With (Team'Unchecked_Access);
+                  Workers_CPU.Close (Team);
+               exception
+                  when others =>
+                     Workers_CPU.Close (Team);
+                     raise;
+               end;
+            end if;
+
             Model_Runner.Backend.Device.Close;
          end;
 

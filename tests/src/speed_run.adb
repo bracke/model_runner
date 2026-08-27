@@ -320,12 +320,16 @@ package body Speed_Run is
             Timer : aliased Model_Runner.Clocks.System_Clock;
             Team  : aliased CPU.Pool (CPU.Worker_Count (Threads));
 
-            --  No pool for a backend that does not partition, whatever the
-            --  thread count says.
+            --  A pool wherever there is more than one worker to put in it,
+            --  whichever backend answers. It used to be withheld from every
+            --  backend but the processor, on the ground that the others do
+            --  not partition a product -- which was true of the products
+            --  and not of the run: normalizing a batch and joining its
+            --  residuals are host loops over positions on any backend, and
+            --  a device run left them on one core while the pool it was not
+            --  given would have shared them out.
             Where : constant CPU.Pool_Reference :=
-              (if Threads = 1
-                 or else Backend /= Model_Runner.Backend.Backend_CPU
-               then null else Team'Unchecked_Access);
+              (if Threads = 1 then null else Team'Unchecked_Access);
          begin
             for Pass in 1 .. Repeats loop
                declare

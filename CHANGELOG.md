@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A device run gets a worker pool, and the host loops it never had one for
+  are shared out: a 1419-token device prompt is 1.44 times faster.** It reads
+  2.522 s against 3.626, the 110-token one 0.205 s against 0.241, better in
+  every round, and the answers are bit-identical.
+
+  Two things were wrong. The input normalization and the two residual joins
+  are loops over positions on the host whichever backend answers, and they
+  ran on the calling task -- 22 per cent of a device prompt on one core. They
+  now go to `Dispatch_Shares`, which was already there and already used a few
+  lines below for attention; a share takes its own scratch row, which is what
+  `Item.Post_Room` -- one row shared by every position -- had prevented.
+
+  And a device run had no pool at all: every place that opened a session
+  decided one on the backend's `Supports_Parallel`, which says whether that
+  backend's own *products* divide across workers. The device's do not; they
+  divide across the device. But a run is not only its products.
+
+  The rotation is left serial on purpose: it writes the key and value cache,
+  and on a device that is a call through an engine that is one task's to use.
+
+  Generating does not move -- a batch of one is below the sixteen this asks
+  for -- and neither does the processor, which had a pool all along. Against
+  llama.cpp the device prompt goes to **550.0 tokens a second** and the gap
+  from 3.6 times to **3.0**.
+
+  `inspect` now reports three worker tasks for a device run where it reported
+  one. The suite caught that: the number was asserted, and asserted as one
+  because that was true.
+
+### Changed
+
 - **Tokenizing is fourteen times faster on SentencePiece vocabularies, and a
   user's wall clock for a long prompt is halved.** A 1419-token prompt
   tokenized in 2.053 s and now takes 0.143 s; the whole run goes from 6.076 s

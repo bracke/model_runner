@@ -10076,12 +10076,16 @@ package body Tests.CLI_Cases is
             Looked  : constant String := Inspected (Kind);
             Worked  : constant String := Ran (Kind);
 
-            --  Three were asked for; a backend that cannot run in parallel
-            --  gets one, and says one.
+            --  Three were asked for. The processor takes them for its
+            --  products; the device takes them for the host loops a run
+            --  still has -- normalizing a batch, joining its residuals --
+            --  which are a fifth of a device prompt and were on one core
+            --  until they were shared out. The reference backend is serial
+            --  by construction and takes one.
             Expected : constant String :=
               (if Back.Backend_Kind'Pos (Kind)
-                 = Back.Backend_Kind'Pos (Back.Backend_CPU)
-               then "3" else "1");
+                 = Back.Backend_Kind'Pos (Back.Backend_Reference)
+               then "1" else "3");
 
             --  A run on a device needs a device. Inspection does not -- it
             --  reports what was asked for without opening anything -- so

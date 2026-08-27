@@ -6283,16 +6283,46 @@ package body Model_Runner.Llama is
             --  projection down included, so that the common tail does not
             --  project it a second time.
             Whole_Block : Boolean := False;
-         begin
-            --  What the block is given. Every architecture here normalizes
-            --  on the way in except Bert, whose block reads the residual as
-            --  it stands -- the normalization it has was applied on the way
-            --  out of the block before this one.
-            if Current.Attention_Norm = null then
-               Norm.all (0 .. Count * Width - 1) :=
-                 Acts.all (0 .. Count * Width - 1);
-            else
-               for Which in 0 .. Count - 1 loop
+
+            --  Three of this block's loops over the batch go to the worker
+            --  pool. They are elementwise: a position's normalization and
+            --  its residual join read and write that position's own slice
+            --  and no other's, so a share of the batch is the same
+            --  arithmetic in the same order and the answer is bit for bit
+            --  what one task produced. Twenty-two per cent of a device
+            --  prompt was here, on one core, while the pool that computes
+            --  its attention a few lines below sat idle.
+            --
+            --  Not the rotation, which is the fourth such loop: it writes
+            --  the key and value cache, and on a device that is a call
+            --  through an engine that is one task's to use.
+            --
+            --  Below a batch of sixteen the pool is not asked. A share is a
+            --  protected round trip a worker, and a token at a time would
+            --  pay for that and have nothing to divide.
+            Team : constant Workers_CPU.Pool_Reference :=
+              (if Count >= 16 then Item.Team else null);
+
+            type Norm_Share is limited new Workers_CPU.Task_Item with
+               null record;
+
+            overriding procedure Run
+              (Share : in out Norm_Share;
+               From  : Element_Count;
+               To    : Element_Count);
+
+            overriding procedure Run
+              (Share : in out Norm_Share;
+               From  : Element_Count;
+               To    : Element_Count)
+            is
+               pragma Unreferenced (Share);
+            begin
+               if From > To then
+                  return;
+               end if;
+
+               for Which in From .. To loop
                   declare
                      Origin : constant Element_Count := Slot (Which, Width);
                   begin
@@ -6303,6 +6333,108 @@ package body Model_Runner.Llama is
                         Norm.all (Origin .. Origin + Width - 1));
                   end;
                end loop;
+            end Run;
+
+            --  The residual joins need scratch where the architecture
+            --  normalizes on the way out of a sublayer, and the session's
+            --  single row of it is what stopped this being shared out:
+            --  every position wrote through the same one. A share takes its
+            --  own for as long as it runs, and only where there is a
+            --  normalization to do -- Post_Norm returns at once when the
+            --  layer has none, which is every llama, so the common case
+            --  allocates nothing.
+            type Join_Share is limited new Workers_CPU.Task_Item with
+               record
+                  After : Boolean := False;
+                  Ok    : Boolean := True;
+               end record;
+
+            overriding procedure Run
+              (Share : in out Join_Share;
+               From  : Element_Count;
+               To    : Element_Count);
+
+            overriding procedure Run
+              (Share : in out Join_Share;
+               From  : Element_Count;
+               To    : Element_Count)
+            is
+               Room : T.Real_Array_Access := null;
+            begin
+               if From > To then
+                  return;
+               end if;
+
+               if Item.Post_Room /= null then
+                  T.Allocate (Width, Room);
+                  if Room = null then
+                     Share.Ok := False;
+                     return;
+                  end if;
+               end if;
+
+               for Which in From .. To loop
+                  declare
+                     Origin : constant Element_Count := Slot (Which, Width);
+                  begin
+                     if Share.After then
+                        Join_Residual
+                          (Source,
+                           Norm.all (Origin .. Origin + Width - 1),
+                           Acts.all (Origin .. Origin + Width - 1),
+                           Current.Post_Feed_Norm,
+                           Current.Post_Feed_Norm_Bias,
+                           Room);
+                     else
+                        Join_Residual
+                          (Source,
+                           Norm.all (Origin .. Origin + Width - 1),
+                           Acts.all (Origin .. Origin + Width - 1),
+                           Current.Post_Attention_Norm,
+                           Current.Post_Attention_Norm_Bias,
+                           Room);
+
+                        --  What the feed-forward reads: the block's own
+                        --  normalized input where the two sublayers run in
+                        --  parallel, the residual as it stands where the
+                        --  block normalized it on the way out, and a fresh
+                        --  normalization of the residual where they run one
+                        --  after the other.
+                        if Normalizes_After (Source.Settings.Kind) then
+                           Norm.all (Origin .. Origin + Width - 1) :=
+                             Acts.all (Origin .. Origin + Width - 1);
+                        elsif Current.Feed_Norm = null then
+                           Norm.all (Origin .. Origin + Width - 1) :=
+                             Kept_Norm.all (Origin .. Origin + Width - 1);
+                        else
+                           Normalize
+                             (Source,
+                              Acts.all (Origin .. Origin + Width - 1),
+                              Current.Feed_Norm.all, Current.Feed_Norm_Bias,
+                              Norm.all (Origin .. Origin + Width - 1));
+                        end if;
+                     end if;
+                  end;
+               end loop;
+
+               T.Free (Room);
+            end Run;
+         begin
+            --  What the block is given. Every architecture here normalizes
+            --  on the way in except Bert, whose block reads the residual as
+            --  it stands -- the normalization it has was applied on the way
+            --  out of the block before this one.
+            if Current.Attention_Norm = null then
+               Norm.all (0 .. Count * Width - 1) :=
+                 Acts.all (0 .. Count * Width - 1);
+            else
+               declare
+                  Share  : aliased Norm_Share;
+                  Shared : E.Error_Info;
+               begin
+                  Workers_CPU.Dispatch_Shares
+                    (Team, Count, Share'Unchecked_Access, Shared);
+               end;
             end if;
 
             --  Kept where the architecture runs its two sublayers from the
@@ -6612,37 +6744,20 @@ package body Model_Runner.Llama is
                end loop;
             end if;
 
-            for Which in 0 .. Count - 1 loop
-               declare
-                  Origin : constant Element_Count := Slot (Which, Width);
-               begin
-                  Join_Residual
-                    (Source,
-                     Norm.all (Origin .. Origin + Width - 1),
-                     Acts.all (Origin .. Origin + Width - 1),
-                     Current.Post_Attention_Norm,
-                     Current.Post_Attention_Norm_Bias,
-                     Item.Post_Room);
+            declare
+               Share  : aliased Join_Share;
+               Shared : E.Error_Info;
+            begin
+               Workers_CPU.Dispatch_Shares
+                 (Team, Count, Share'Unchecked_Access, Shared);
 
-                  --  What the feed-forward reads: the block's own normalized
-                  --  input where the two sublayers run in parallel, the
-                  --  residual as it stands where the block normalized it on
-                  --  the way out, and a fresh normalization of the residual
-                  --  where they run one after the other.
-                  if Normalizes_After (Source.Settings.Kind) then
-                     Norm.all (Origin .. Origin + Width - 1) :=
-                       Acts.all (Origin .. Origin + Width - 1);
-                  elsif Current.Feed_Norm = null then
-                     Norm.all (Origin .. Origin + Width - 1) :=
-                       Kept_Norm.all (Origin .. Origin + Width - 1);
-                  else
-                     Normalize
-                       (Source, Acts.all (Origin .. Origin + Width - 1),
-                        Current.Feed_Norm.all, Current.Feed_Norm_Bias,
-                        Norm.all (Origin .. Origin + Width - 1));
-                  end if;
-               end;
-            end loop;
+               if not Share.Ok or else E.Is_Error (Shared) then
+                  Release;
+                  Item.Current := Failed;
+                  Status := E.Make (E.Memory_Allocation_Failed);
+                  return;
+               end if;
+            end;
 
             Charge (Item, Joining, Mark);
 
@@ -6750,19 +6865,20 @@ package body Model_Runner.Llama is
 
             Charge (Item, Feeding, Mark);
 
-            for Which in 0 .. Count - 1 loop
-               declare
-                  Origin : constant Element_Count := Slot (Which, Width);
-               begin
-                  Join_Residual
-                    (Source,
-                     Norm.all (Origin .. Origin + Width - 1),
-                     Acts.all (Origin .. Origin + Width - 1),
-                     Current.Post_Feed_Norm,
-                     Current.Post_Feed_Norm_Bias,
-                     Item.Post_Room);
-               end;
-            end loop;
+            declare
+               Share  : aliased Join_Share := (After => True, Ok => True);
+               Shared : E.Error_Info;
+            begin
+               Workers_CPU.Dispatch_Shares
+                 (Team, Count, Share'Unchecked_Access, Shared);
+
+               if not Share.Ok or else E.Is_Error (Shared) then
+                  Release;
+                  Item.Current := Failed;
+                  Status := E.Make (E.Memory_Allocation_Failed);
+                  return;
+               end if;
+            end;
 
             Charge (Item, Joining, Mark);
          end;
