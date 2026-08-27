@@ -3534,6 +3534,57 @@ one does not answer it.
 
 Nothing kept. The kernel is as it was.
 
+### What a doubling can and cannot say
+
+`### The floor a device prompt cannot go below` above put the arithmetic at
+eighty per cent of a device prompt by emptying every dispatch. This went at
+the same question from the other side, doubling one kind of dispatch at a
+time, and got answers that cannot both be right beside it:
+
+| doubled | added | of the prompt |
+|---|---:|---:|
+| every tile product | 0.226 s | 10 % |
+| attention | 0.040 s | 1.7 % |
+| every row product | 0.022 s | 1.0 % |
+
+Twelve per cent against eighty. The doubling is even linear -- four tile
+passes add 0.233 s each against the pair's 0.226, within three per cent --
+which is what a measurement looks like when it is measuring *something*
+consistently.
+
+**What it is consistently measuring is not the share.** A second dispatch of
+the same product is recorded into the same command buffer with no barrier
+between it and the first, so the device overlaps them; and it reads weights
+and activations the first pass has just pulled into cache. Both make the
+second pass cheaper than the first, so **a doubling is a lower bound on what
+a kernel costs, not its share of the run**. This page already said so --
+"doubling it adds only 0.405 rather than 0.540, because two dispatches in
+one command buffer pipeline better than one does" -- and the trap was walked
+into anyway, which is the reason for writing it down twice.
+
+The floor is the sounder instrument of the two, because emptying a dispatch
+removes the work without leaving a warmed cache behind it. The arithmetic is
+most of a device prompt, and the surround is a fifth.
+
+**And one thing here is new and stands on its own.** If the arithmetic is
+what binds this, it is fair to ask what about it binds: the same prompt on
+the same code at three weight sizes --
+
+| | weights | prompt |
+|---|---:|---:|
+| Q8_0 | 1171 MB | **2.292 s** |
+| Q4_K_M | 638 MB | 2.342 s |
+| Q2_K | 461 MB | 2.465 s |
+
+**Two and a half times fewer weight bytes is slower, not faster.** The device
+prompt is not bound by the weight traffic at any of these sizes, which
+agrees with what `tests device-bench` says about the tile in isolation and
+now says about the whole run as well. What is left is the arithmetic itself
+and the decode in front of it -- the cheaper formats do more work per byte,
+and the table above is that cost showing through.
+
+Nothing kept; three scratch builds, all discarded.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has

@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Two and a half times fewer weight bytes is slower on the device, and a
+  doubling cannot say what a kernel's share is.** Nothing kept; three scratch
+  builds, all discarded.
+
+  The device's remaining gap was to be attacked at the activation round trip,
+  on a comment saying each result still returns to the host. That comment is
+  stale for the path it matters on: the batched feed-forward already sends
+  gate and up with `Kept => False`, chains the combine, and returns only the
+  down projection.
+
+  So the question became where a device prompt's time is, measured by
+  doubling one kind of dispatch at a time: tile products 10 %, attention
+  1.7 %, row products 1.0 %. Twelve per cent against the eighty that
+  `### The floor a device prompt cannot go below` gets by emptying every
+  dispatch — and the doubling is linear, four passes adding 0.233 s each
+  against the pair's 0.226.
+
+  **The doubling is a lower bound, not a share.** A second dispatch of the
+  same product is recorded with no barrier after the first, so the device
+  overlaps them, and it reads caches the first pass warmed. This page already
+  said so in the floor section; the trap was walked into anyway.
+
+  What is new is the byte test: the same prompt at Q8_0 (1171 MB), Q4_K_M
+  (638 MB) and Q2_K (461 MB) reads **2.292, 2.342 and 2.465 s** — smaller is
+  slower. The device prompt is not bound by weight traffic at any of these
+  sizes.
+
 - **A quarter of the strip kernel is shuffling and removing half of it
   changed nothing.** Nothing kept; the measurement is the point.
 

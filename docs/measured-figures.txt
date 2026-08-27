@@ -8936,3 +8936,57 @@ outside 8120F10DE3E50A4C src/shaders/row_product.comp src/shaders/matrix_product
 #
 # No source changed.
 
+# 2026-08-27, last.  What a doubling cannot say, and what the bytes say
+#
+# The plan was the device's activation round trip, on the comment in
+# model_runner-platform-device-products.ads saying a sequence of several
+# still returns each result to the host. That comment is stale where it
+# matters: Backend.Device's batched feed-forward already sends gate and up
+# with Kept => False, chains the combining step, and returns only the down
+# projection. Nine megabytes a layer at a batch of 128 already stay put.
+#
+# So the question became where a device prompt's time is. Instrument: double
+# one kind of dispatch, leave everything else identical, measure the whole
+# 1419-token device prompt. Three alternated rounds each, medians:
+#
+#   every tile product   2.273 -> 2.499   +0.226 s   10 %
+#   attention            2.293 -> 2.333   +0.040 s    1.7 %
+#   every row product    2.259 -> 2.281   +0.022 s    1.0 %
+#
+# And linear: four tile passes read 3.013 against 2.314, which is 0.233 s an
+# extra pass against the pair's 0.226, within three per cent.
+#
+# Twelve per cent of arithmetic against the eighty per cent that "### The
+# floor a device prompt cannot go below" measured by emptying every
+# dispatch. Both are careful and they cannot both be the share.
+#
+# THE DOUBLING IS A LOWER BOUND, NOT A SHARE. A second dispatch of the same
+# product goes into the same command buffer with no barrier after the first,
+# so the device overlaps them, and it reads weights and activations the
+# first pass has just pulled into cache. Both make the second pass cheaper
+# than the first. The floor section on that page already says this in one
+# sentence -- "doubling it adds only 0.405 rather than 0.540, because two
+# dispatches in one command buffer pipeline better than one does" -- and it
+# was walked into anyway, which is why it is now written twice.
+#
+# Emptying a dispatch is the sounder of the two, because it removes the work
+# without leaving a warmed cache behind it. The arithmetic is most of a
+# device prompt and the surround is a fifth, as that section said.
+#
+# WHAT IS NEW, and it stands on its own. If arithmetic binds the device
+# prompt, what about it binds? The same prompt, the same code, three weight
+# sizes:
+#
+#   Q8_0    1171 MB   2.292 s, 2.305 s
+#   Q4_K_M   638 MB   2.342 s, 2.414 s
+#   Q2_K     461 MB   2.465 s, 2.430 s
+#
+# Two and a half times fewer bytes is slower, not faster, and the order is
+# the same in both rounds. The device prompt is not bound by weight traffic
+# at any of these sizes -- which agrees with what tests device-bench says
+# about the tile in isolation (every format within a few per cent at six
+# times the byte range) and now says about a whole run as well. The cheaper
+# formats do more work per byte and the table is that cost showing through.
+#
+# Three scratch builds, all discarded. No source changed.
+
