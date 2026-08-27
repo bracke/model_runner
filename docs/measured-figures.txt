@@ -7730,4 +7730,84 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # engine's llama.cpp rows and 0.70 at the start of the llama-bench runs,
 # 0.85 to 0.68 for the alternated rounds, 2026-08-27.
 
+# 2026-08-27, the elementwise phases profiled: not dispatches, one core. Two
+# changes sized and neither kept.
+#
+# The item said joining, normalizing and rotating are about a fifth of a
+# long prompt, that elementwise work should be nearly free, and that it was
+# "likely a batching-of-dispatches problem rather than a kernel one". The
+# first half is right and the second is wrong.
+#
+# After the copies were deleted these three read 0.250, 0.195 and 0.394 s of
+# a 3.882 s device prompt: twenty-two per cent, and the second largest item
+# after attending. None of them is a dispatch. They are host loops in
+# model_runner-llama.adb -- Join_Residual, Normalize, K.Add and
+# Apply_Rotary -- run on the calling task, and a device run does not make
+# them any less host work.
+#
+# What says so, and it is a one-line experiment:
+#
+#   1419-token device prompt, --threads 1   3.400 s   2.94 s of processor
+#   1419-token device prompt, --threads 8   3.527 s   2.97 s of processor
+#
+# Eight workers change nothing, and the processor time is the same to a per
+# cent. So this is **one core doing elementwise work while seven sit idle**,
+# for a fifth of the run.
+#
+# Where the processor time goes, and a thing worth knowing on its own. A
+# device prompt reports 2.98 s of processor for 3.755 s of wall. Two thirds
+# of that is not the model at all: tokenizing this 1419-token prompt takes
+# **2.05 s**, measured directly with `tests tokenize`, and the speed tool
+# times it apart from the evaluation so it appears in no published figure.
+# The user's wall clock for that run is 6.148 s, of which 3.755 is the
+# prompt, 0.451 generating, 0.095 loading -- and 1.85 s is tokenizing. That
+# is a larger single item than this one and nothing here has ever looked at
+# it.
+#
+# Two changes were sized inside the kernels and neither is kept.
+#
+# **The dead zero-fill.** RMS_Norm opens with Target := [others => 0.0] and
+# then writes every element of Target in one of two loops below, so the fill
+# is a whole pass over the array thrown away -- and it is called twice a
+# layer for every position, sixty-two thousand times in this prompt. Moving
+# it to the refusal path is bit-exact. It is also not a win:
+#
+#   1419-token device prompt, normalizing   0.251 s -> 0.241 s
+#   110-token processor prompt              0.748 s -> 0.759 s, worse in 3 of 3
+#
+# The device gains ten milliseconds and the processor loses eleven. Removing
+# a write pass making a loop slower is not what anybody would predict; the
+# likeliest reason is that the fill brings the lines in before the scattered
+# writes below ask for them, so what looks like a wasted pass is a prefetch.
+# Written down as a likely reason and not as a measurement. Four figure
+# groups name model_runner-kernels.adb, so this would have cost four
+# re-measurements for a quarter of a per cent in one direction and a loss in
+# the other. Not kept.
+#
+# **The serial accumulator.** RMS_Norm sums the squares into one binary64
+# accumulator left to right, which is a dependency chain the compiler cannot
+# vectorize. Eight partial accumulators, summed at the end:
+#
+#   normalizing   0.245 s -> 0.221 s
+#   joining       0.390 s -> 0.373 s
+#
+# Forty milliseconds on a 3.9 s prompt -- one per cent -- and it reassociates
+# a sum every published digest depends on, on both backends and the
+# reference path. One per cent is not worth moving every figure in this
+# file. Not kept. The estimate that the chain was worth 0.18 s was wrong:
+# two thousand and forty-eight floats is eight kilobytes and the loop is
+# nearer memory-bound than latency-bound.
+#
+# What is left, named with its blocker. The three phases parallelize by
+# position: every position's arithmetic is independent of every other's, so
+# shares of a batch would be **bit-exact**, and Workers_CPU.Dispatch_Shares
+# already exists and is already used a few lines above for attention in the
+# same loop. What stops a straight substitution is Item.Post_Room: one
+# scratch array of the model's width, allocated once, that Join_Residual
+# writes through for every position. Shares would race on it. The change is
+# scratch per share rather than per session, and it is the largest thing
+# left in a device prompt after attention.
+#
+# No source changed.
+
 outside 1D9F8CDEFF9AF5CA src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

@@ -5,6 +5,38 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **The elementwise phases profiled: not dispatches, one core.** Joining,
+  normalizing and rotating are 22 per cent of a device prompt and the second
+  largest item after attending, and the guess that this was "a
+  batching-of-dispatches problem" was wrong. They are host loops on the
+  calling task: a 1419-token device prompt reads 3.400 s at `--threads 1`
+  and 3.527 s at `--threads 8`, with the processor time identical. One core
+  does elementwise work for a fifth of the run while seven sit idle.
+
+  Two changes were sized and neither kept. Removing `RMS_Norm`'s dead
+  zero-fill -- a whole pass over the target that the two loops below
+  overwrite, 62,000 times a prompt -- is bit-exact and takes the device's
+  normalizing from 0.251 s to 0.241 while making a processor prompt *worse*,
+  0.748 s to 0.759 in all three rounds; the likeliest reason is that the
+  fill brings the lines in before the scattered writes ask for them.
+  Reassociating its serial binary64 accumulator into eight buys 40
+  milliseconds, one per cent, and would move every published digest on both
+  backends.
+
+  What is left is named with its blocker: the phases parallelize by position
+  and would be bit-exact, `Dispatch_Shares` is already used a few lines
+  above for attention, and what stops a straight substitution is
+  `Item.Post_Room` -- one scratch array shared by every position, which
+  shares would race on.
+
+- **What tokenizing costs, which no figure here has said.** Tokenizing a
+  1419-token prompt takes **2.05 s**. The speed tool times it apart from
+  evaluation, so it is in no published figure -- but the wall clock for that
+  run is 6.148 s, of which 1.85 s is tokenizing. That is a larger single
+  item than the elementwise phases and nothing here has looked at it.
+
 ### Changed
 
 - **A device prompt is a tenth faster for deleting copies nobody read.** The

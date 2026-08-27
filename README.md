@@ -2803,6 +2803,70 @@ written down as unexplained: either those products do not take that path, or
 the phase counter attributes their wait to the phase after them, the phases
 being host-side wall around asynchronous submissions.
 
+### One core, and seven idle
+
+After the copies were deleted, joining, normalizing and rotating are 0.394,
+0.250 and 0.195 seconds of a 3.882 second device prompt -- **twenty-two per
+cent, and the second largest item after attending.** None of them is a
+dispatch. They are host loops -- `Join_Residual`, `Normalize`, `K.Add`,
+`Apply_Rotary` -- run on the calling task, and a device run does not make
+them any less host work.
+
+A one-line experiment says so:
+
+| 1419-token device prompt | wall | processor |
+|---|---:|---:|
+| `--threads 1` | 3.400 s | 2.94 s |
+| `--threads 8` | 3.527 s | 2.97 s |
+
+Eight workers change nothing and the processor time is the same to a per
+cent. **One core does elementwise work for a fifth of the run while seven
+sit idle.**
+
+Two changes inside the kernels were sized and neither is kept.
+
+**The dead zero-fill.** `RMS_Norm` opens with `Target := [others => 0.0]`
+and then writes every element of `Target` below, so the fill is a whole pass
+thrown away -- sixty-two thousand times in this prompt. Moving it to the
+refusal path is bit-exact, and it is not a win: the device's normalizing
+goes 0.251 s to 0.241 while a 110-token processor prompt goes **0.748 s to
+0.759, worse in all three rounds**. Removing a write pass making a loop
+slower is not what anybody would predict; the likeliest reason is that the
+fill brings the lines in before the scattered writes ask for them, so what
+looks like a wasted pass is a prefetch. That is written down as a likely
+reason, not a measurement.
+
+**The serial accumulator.** `RMS_Norm` sums the squares into one binary64
+accumulator left to right, a dependency chain nothing can vectorize. Eight
+partial accumulators take normalizing from 0.245 s to 0.221 and joining from
+0.390 to 0.373 -- **forty milliseconds, one per cent** -- and reassociate a
+sum every published digest depends on, on both backends and the reference
+path. Not worth it. The estimate that the chain was worth 0.18 s was wrong:
+2048 floats is eight kilobytes, and the loop is nearer memory-bound than
+latency-bound.
+
+**What is left, and its blocker.** The three phases parallelize by position:
+every position's arithmetic is independent of every other's, so shares of a
+batch would be **bit-exact**, and `Dispatch_Shares` already exists and is
+already used a few lines above for attention in the same loop. What stops a
+straight substitution is `Item.Post_Room` -- one scratch array of the
+model's width, allocated once, that `Join_Residual` writes through for every
+position. Shares would race on it. The change is scratch per share rather
+than per session, and it is the largest thing left in a device prompt after
+attention.
+
+### What tokenizing costs, which no figure here has said
+
+A device prompt reports 2.98 s of processor time for 3.755 s of wall, and
+two thirds of that is not the model. **Tokenizing this 1419-token prompt
+takes 2.05 s**, measured directly with `tests tokenize`. The speed tool
+times tokenization apart from evaluation, so it appears in no published
+figure -- but the user's wall clock for that run is 6.148 s, of which 3.755
+is the prompt, 0.451 generating, 0.095 loading, and **1.85 s is tokenizing**.
+
+That is a larger single item than the elementwise phases above, and nothing
+here has ever looked at it.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has
