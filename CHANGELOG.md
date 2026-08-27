@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Attention through the cooperative matrix works once its operands are
+  already half precision -- 1.43 times faster -- and the half-precision
+  cache it needs puts 8107 of 28344 conformance sequences outside
+  tolerance. Not kept.**
+
+  The entry below guessed that removing the staging would still leave the
+  matrix kernel slower. That guess was wrong, and a probe said so before
+  anything was built: the same kernel with the staging deleted and the
+  operands read from the query room instead -- same instruction count, same
+  matrix products, neither the room nor the conversion loops -- read
+  attention at 0.99 s against the staged kernel's 1.65 and the kept
+  kernel's 1.39.
+
+  Built properly, with the device's copy of the cache written as
+  `float16_t`, attention reads 1.031 s against 1.475 over three alternated
+  rounds. The whole prompt does not move (3.919 s against 3.926): rotating
+  gains 0.130 s converting each cache row on the host, and feeding gains
+  0.192 s that nothing here touches.
+
+  **The sweep is what decides it.** A half-precision cache is not a rounding
+  of operands the way the batched product's weights are -- it compounds,
+  because a key written at the first position is read again at every
+  position after it. Twenty-nine per cent of the sweep fell outside
+  tolerance. It would not be kept even if the prompt had moved.
+
+  Two things are kept from it: the probe technique, which priced a change
+  before it was built and corrected a badly wrong estimate, and the figure
+  itself -- 1.43 times for the matrix instruction when its operands are
+  already the precision it wants.
+
 - **Attention through the cooperative matrix was built, measured twelve per
   cent slower, and is not kept.** With the query block in, attention was
   doing 182 Gflop at about 153 gigaflops a second on a part whose matrix

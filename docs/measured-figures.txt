@@ -7482,4 +7482,77 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 #
 # Not kept. attention.comp with a query block of four stands.
 
+# 2026-08-27, the same kernel on a half-precision cache: the arithmetic
+# works and the cache cannot. Also not kept, and the second reason is the
+# one that settles it.
+#
+# The entry above ended by naming what would have to be different: a cache
+# already in half precision, which would remove the staging of the keys and
+# the values. That was measured before it was built, with a probe -- the
+# same kernel with the staging deleted and the operands read from the query
+# room instead, so the same count of instructions and the same matrix
+# products without the room or the conversion loops. Attention read 0.99 s
+# against the staged kernel's 1.65 and the kept kernel's 1.39. The estimate
+# written into the entry above, that removing the staging would leave it
+# still slower, was wrong by a wide margin: the staging was two fifths of
+# that kernel, not a few per cent of it.
+#
+# So it was built properly. The device's copy of the cache is written in
+# half precision -- Put_Cache converts on the way into the mapping, Reserve
+# asks for two bytes an element instead of four -- and all four attention
+# kernels read it as float16_t. The matrix kernel then loads its key and
+# value operands straight out of the cache with no staging at all, and its
+# shared memory falls from 8768 bytes a workgroup to 6656.
+#
+# Three alternated rounds on a 1419-token prompt, by phase:
+#
+#                     exact cache, query block   half cache, matrix
+#   ROTATING                    0.200 s                  0.330 s
+#   ATTENDING                   1.475 s                  1.031 s
+#   FEEDING                     1.300 s                  1.492 s
+#   accounted for               4.290 s                  4.190 s
+#
+# **Attention is 1.43 times faster.** The cooperative matrix does work for
+# attention; the entry above was right that staging was what stopped it and
+# wrong about how much staging cost.
+#
+# And the prompt does not move: 3.926 s against 3.919, medians of three
+# alternated whole runs. Two things eat it. ROTATING gains 0.130 s, which is
+# the host converting every cache row to half precision as it writes it --
+# a scalar loop, and one that F16C would make nearly free. FEEDING gains
+# 0.192 s reproducibly, which nothing in this change touches and is most
+# likely attention's own work moving across a phase boundary, since the
+# phases are host-side wall around asynchronous submissions.
+#
+# None of that decides it. The conformance sweep does:
+#
+#   sequences 28344, outside tolerance 8107, refused 0
+#
+# **Twenty-nine per cent of the sweep.** A half-precision cache is not a
+# rounding of the operands the way the batched product's weights are; it is
+# a rounding that compounds, because a key written at the first position is
+# read again at every position after it. This program's tolerance is the
+# tolerance every other figure here is taken against, and it is not close.
+#
+# That is also, in hindsight, why the session cache offers Halved as an
+# option a caller asks for rather than as what it does: somebody had already
+# established this and wrote it down as "lossy" in
+# model_runner-llama.ads. The measurement here says how lossy.
+#
+# So the kernel is not kept, and it would not be kept even if the prompt had
+# moved: the speed is the smaller half of the argument and the sweep is the
+# larger. What would have to be different is no longer a cache -- it is a
+# matrix instruction that takes binary32 operands, which this device does
+# not offer, or a shape that lets the scores be computed without rounding
+# what goes into them.
+#
+# Two things are worth keeping from it. The probe technique -- read the
+# wrong operands from the right places, so the instruction count and the
+# room are both right and only the answers are wrong -- priced a change
+# before it was built and corrected an estimate that was badly wrong. And
+# the number itself: attention through the matrix instruction is 1.43 times
+# the hand-written kernel when the operands are already the precision it
+# wants. That is the figure to hold against any future device whose cache
+# can afford to be.
+
 outside 3F9710DCA5D80D0C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

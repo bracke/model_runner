@@ -2565,10 +2565,65 @@ these operands are read once.
 
 It would also have changed the answers, which the kernel it replaces does
 not: the operands round to half precision, and a deep prompt printed
-`77423c8d0bfd05a3` against `7ec6b755e53e16b4`. What would have to be
-different for it to pay is a cache already in half precision -- which would
-remove two thirds of the room, and which this program offers only as a lossy
-option -- or a part with more shared memory per compute unit.
+`77423c8d0bfd05a3` against `7ec6b755e53e16b4`.
+
+### The half-precision cache, which the sweep refused
+
+The paragraph above named the way out -- a cache already in half precision,
+so the keys and values need no staging -- and guessed it would not be enough.
+**That guess was wrong, and measuring it first is what showed so.** A probe
+of the same kernel with the staging deleted and the operands read from the
+query room instead, so the same count of instructions and the same matrix
+products with neither the room nor the conversion loops, read attention at
+**0.99 s** against the staged kernel's 1.65 and the kept kernel's 1.39. The
+staging was two fifths of that kernel, not a few per cent of it.
+
+So it was built: the device's copy of the cache written in half precision,
+and all four attention kernels reading it as `float16_t`. Three alternated
+rounds on a 1419-token prompt, by phase:
+
+| | exact cache, query block | half cache, matrix |
+|---|---:|---:|
+| rotating | 0.200 s | 0.330 s |
+| attending | 1.475 s | **1.031 s** |
+| feeding | 1.300 s | 1.492 s |
+| accounted for | 4.290 s | 4.190 s |
+
+**Attention is 1.43 times faster.** The cooperative matrix does work for
+attention; what had stopped it was the staging, exactly as the section above
+suspected, and only the size of that cost was misjudged.
+
+The prompt does not move -- 3.926 s against 3.919 over three alternated
+whole runs -- because rotating gains 0.130 s converting every cache row on
+the host as it writes it, and feeding gains 0.192 s that nothing here
+touches and is most likely attention's own work crossing a phase boundary.
+
+**None of that decides it. The conformance sweep does:**
+
+```
+conformance: sequences 28344, outside tolerance 8107, refused 0
+```
+
+Twenty-nine per cent of the sweep. A half-precision cache is not a rounding
+of the operands the way the batched product's weights are; it is a rounding
+that **compounds**, because a key written at the first position is read again
+at every position after it. That is why the session cache offers `halved` as
+something a caller asks for and not as what it does -- and this is the
+measurement of how much it costs.
+
+So it is not kept, and it would not be kept even if the prompt had moved:
+the speed is the smaller half of the argument and the sweep is the larger.
+What would have to be different is no longer a cache; it is a matrix
+instruction that takes binary32 operands, which this device does not offer.
+
+Two things are worth keeping. **The probe technique** -- read the wrong
+operands from the right places, so the instruction count and the shared
+memory are both right and only the answers are wrong -- priced a change
+before it was built and corrected an estimate that was badly wrong. And the
+number: attention through the matrix instruction is 1.43 times the
+hand-written kernel when the operands are already the precision it wants,
+which is the figure to hold against any future part whose cache can afford
+to be.
 
 ### Eight more formats, and what a branch costs when it is never taken
 
