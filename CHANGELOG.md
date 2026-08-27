@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The processor's attention read the whole key cache once for every head;
+  reading it once for the heads that share it is four per cent of a processor
+  prompt, bit-exact.** A 1419-token prompt reads 14.669 s against 15.292 and
+  a 110-token one 0.703 s against 0.731, better in every round.
+
+  The processor prompt had never had the floor treatment. Its budget is
+  attending 6.79 s and feeding 6.91 of 16.11, and emptying the score dot
+  product alone takes the prompt to 11.96 -- so **that one loop is 65 per
+  cent of attending and 27 per cent of the whole prompt**, which nothing here
+  had named.
+
+  The head loop was outermost, so each head streamed 363 kilobytes of keys
+  for itself and the next head streamed them again. With the position
+  outside, the heads of a share read the same key row one after another. It
+  is the same shape as the device's attention change and the same shape the
+  value blend twenty lines below already had.
+
+  Four accumulators were also tried on that loop's serial binary64 chain:
+  seven per cent of attending, and it reassociates a sum every published
+  digest depends on. Not kept.
+
+  Four per cent is small for a loop that is 27 per cent of the prompt, and
+  that is the finding -- the rest is the binary64 conversion and the
+  arithmetic itself, which is the same answer the device gave from the other
+  side.
+
+### Changed
+
 - **Attention loaded every value once per query of its block; loading it once
   makes a device prompt 1.14 times faster.** The 1419-token prompt reads
   2.235 s against 2.544 and the 110-token one 0.160 s against 0.203, better
