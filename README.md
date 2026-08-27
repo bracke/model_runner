@@ -2504,12 +2504,10 @@ computes a dot product and not the order it accumulates it in.
 Attention lands at 1.36 s against the 1.27 s the ablation named as this
 kernel's floor, so the block recovered nearly all of the traffic there was
 to recover. **What is left is the larger half.** That 1.27 s is 182 Gflop of
-useful arithmetic, which is about 145 gigaflops a second on a part whose
-matrix tile reaches 2031. Attention is now bound by instruction issue rather
-than by memory, and closing that wants the scores computed as a matrix
-product through the cooperative matrix, which is what the other runtime
-does. That is a much larger change than this one rather than a variation on
-it.
+useful arithmetic, which is about 153 gigaflops a second on a part whose
+matrix tile reaches 2031. Attention is now bound by arithmetic rather than
+by memory -- and the section below is what happened when that arithmetic was
+handed to the matrix instruction.
 
 One mistake is worth recording because the suite did not catch it. Sweeping
 the block width with `sed` set `QUERIES` in both arms of its own `#ifdef`,
@@ -2519,6 +2517,58 @@ hundred and eighty tests passed, because the suite's batches are shorter
 than a block and the extra queries were clamped onto the last real one. A
 repository check now reads the number out of the shader and requires the
 engine's `Query_Block` to equal it.
+
+### And the matrix instruction, which lost
+
+Thirteen times of headroom on an instruction this program already
+dispatches, so it was built: `attention_matrix.comp`, Q times K transposed
+as one matrix product, the softmax in shared memory between them, the
+weights times the values as another, at the same sixteen-by-sixteen-by-
+sixteen half-precision shape the batched product uses. Sixteen queries a
+workgroup, and bound only for a head sixty-four wide or narrower whose width
+is a whole number of sixteen.
+
+A separate source rather than a fourth compilation of `attention.comp`,
+because the two share no text. That is the line this work has settled on: a
+define where only part of a kernel differs, a file where the shape does.
+
+| attention alone, 1419 tokens | |
+|---|---:|
+| **query block of four**, which stands | **1.396 s** |
+| matrix, 16 keys a tile | 1.565 s |
+| matrix, 32 keys a tile | 1.583 s |
+| matrix, 64 keys a tile | 1.858 s |
+
+**Twelve per cent slower at its best, better in no round, and not kept.**
+
+The reason is shared memory, again. The instruction takes half precision and
+the cache is binary32, so the keys and the values have to be staged through
+shared memory to be converted; the softmax is not a matrix product, so the
+scores come out to shared memory and the weights go back in; and a running
+softmax multiplies the answer by a factor a row at a time, which the
+instruction cannot do to its own registers, so the accumulators come out and
+go back once a tile as well.
+
+The three variants order themselves by exactly that and nothing else -- 8768
+bytes a workgroup at 1.579 s, 11328 at 1.607, 16448 at 1.858 -- and a wider
+key tile does *fewer* softmax round trips per key while being slower for it,
+which rules the round trips out and leaves the room they need. The kernel
+that stands uses one kilobyte.
+
+**That is the fourth time hand-staging into shared memory has lost here**,
+and the first where what it was staging for was the matrix instruction
+rather than a hand-written loop. The three before were the row product's
+window, the matrix product's staged operand and attention's staged keys. The
+matrix product itself remains the one place staging pays, and the reason has
+not changed: its weight tile is read by four multiply-adds apiece, where
+these operands are read once.
+
+It would also have changed the answers, which the kernel it replaces does
+not: the operands round to half precision, and a deep prompt printed
+`77423c8d0bfd05a3` against `7ec6b755e53e16b4`. What would have to be
+different for it to pay is a cache already in half precision -- which would
+remove two thirds of the room, and which this program offers only as a lossy
+option -- or a part with more shared memory per compute unit.
 
 ### Eight more formats, and what a branch costs when it is never taken
 

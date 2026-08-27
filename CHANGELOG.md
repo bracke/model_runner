@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Attention through the cooperative matrix was built, measured twelve per
+  cent slower, and is not kept.** With the query block in, attention was
+  doing 182 Gflop at about 153 gigaflops a second on a part whose matrix
+  tile reaches 2031, and confining its reads to a cache-resident window
+  bought only 1.18 times -- so what remained was arithmetic, on an
+  instruction this program already dispatches.
+
+  Built as `attention_matrix.comp`: Q times K transposed as one matrix
+  product, the softmax in shared memory between them, the weights times the
+  values as another, at the same 16x16x16 half-precision shape the batched
+  product uses. Attention alone on a 1419-token prompt read 1.565 s at its
+  best against 1.396 for the kernel it would have replaced, better in no
+  round.
+
+  The reason is shared memory, again. The instruction takes half precision
+  and the cache is binary32, so the keys and values must be staged to be
+  converted; the softmax is not a matrix product, so the scores come out and
+  the weights go back; and a running softmax scales the answer a row at a
+  time, which the instruction cannot do to its own registers, so the
+  accumulators come out and back once a tile too. The three key-tile widths
+  order themselves by their room and nothing else -- 8768 bytes 1.579 s,
+  11328 bytes 1.607 s, 16448 bytes 1.858 s -- and a wider tile does *fewer*
+  round trips per key, which rules the round trips out. The kernel that
+  stands uses one kilobyte.
+
+  Fourth time hand-staging into shared memory has lost on this device, and
+  the first where it was staging for the matrix instruction rather than a
+  hand-written loop. It would also have changed the answers, since the
+  operands round to half precision.
+
 - **A workgroup of the attention kernel answers four query positions instead
   of one, and a device prompt is a tenth faster.** Attention itself goes
   from 2.030 s to 1.356 s on a 1419-token prompt; the 110-token device

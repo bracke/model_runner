@@ -7409,4 +7409,77 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # load: 0.93 to 1.26 for the device backend table and the llama.cpp rows,
 # 0.67 to 1.44 for the block sweep and the alternated rounds, 2026-08-27.
 
+# 2026-08-27, attention through the cooperative matrix: built, measured
+# twelve per cent slower, and not kept.
+#
+# The entry above ended by naming this as the next thing to try, and the
+# arithmetic said it should work. With the query block in, confining
+# attention's reads to a cache-resident window bought only 1.18 times
+# against the 1.63 it had bought before, so the memory was mostly dealt with
+# and what remained was arithmetic: 182 Gflop in about 1.2 s, which is
+# roughly 153 gigaflops a second on a part whose matrix tile reaches 2031.
+# Thirteen times of headroom, on an instruction this program already
+# dispatches.
+#
+# What was built. src/shaders/attention_matrix.comp: Q times K transposed as
+# one matrix product, the softmax in shared memory between them, and the
+# weights times the values as another, at the sixteen-by-sixteen-by-sixteen
+# half-precision shape the device offers and matrix_product.comp already
+# uses. Sixteen queries a workgroup, one subgroup, and the caller binds it
+# only for a head sixty-four wide or narrower whose width is a whole number
+# of sixteen -- which TinyLlama is.
+#
+# A separate source rather than a fourth compilation of attention.comp,
+# because the two share no text. That is the line this work has settled on:
+# a define where only part of a kernel differs, a file where the shape does.
+#
+# What it measured, attention alone on a 1419-token prompt, alternated:
+#
+#   query block of four (kept)   1.396, 1.444, 1.397, 1.527 s
+#   matrix, 16 keys a tile       1.565, 1.579, 1.622 s
+#   matrix, 32 keys a tile       1.583, 1.596, 1.607 s
+#   matrix, 64 keys a tile       1.858 s
+#
+# Twelve per cent slower at its best, and the whole prompt did not move
+# outside its own spread either way.
+#
+# Why, and the reason is the one this file keeps arriving at. The
+# instruction wants half precision and the cache is binary32, so the keys
+# and the values have to be staged through shared memory to be converted;
+# the softmax is not a matrix product, so the scores come out to shared
+# memory and the weights go back in; and a running softmax multiplies the
+# answer by a factor a row at a time, which the instruction cannot do to its
+# own registers, so the accumulators come out and go back once a tile as
+# well. Shared memory is what bounds occupancy on this part, and the three
+# variants order themselves by exactly that and nothing else:
+#
+#   16 keys a tile   8768 bytes a workgroup   1.579 s
+#   32 keys a tile  11328 bytes a workgroup   1.607 s
+#   64 keys a tile  16448 bytes a workgroup   1.858 s
+#
+# A wider key tile does fewer softmax round trips per key and is slower for
+# it, which rules out the round trips as the cost and leaves the room they
+# need. The kernel it replaces uses one kilobyte.
+#
+# That is the fourth time hand-staging into shared memory has lost on this
+# device, and the first where what it was staging for was the matrix
+# instruction rather than a hand-written loop. The three before were the row
+# product's window, the matrix product's staged operand and attention's
+# staged keys. The matrix product itself remains the one place staging pays,
+# and the reason has not changed: its weight tile is read by four
+# multiply-adds apiece, where these operands are read once.
+#
+# It also changes the answers, which the row product's version does not: the
+# operands are rounded to half precision, so a deep prompt printed
+# 77423c8d0bfd05a3 against 7ec6b755e53e16b4. That is a cost as well as a
+# consequence, and it would have needed the sweep's tolerance to carry it.
+#
+# What would have to be different for this to pay. A cache already in half
+# precision would remove the staging of the keys and the values, which is
+# two thirds of the room -- the session cache has a Halved mode and it is
+# lossy, so that is a trade rather than a fix. Beyond that the answer is a
+# part with more shared memory per compute unit, which is not this one.
+#
+# Not kept. attention.comp with a query block of four stands.
+
 outside 3F9710DCA5D80D0C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
