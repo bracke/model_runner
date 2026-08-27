@@ -154,6 +154,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Eight more formats were added to the device's tile and the shader got
+  slower for the six that were already in it, so none of it is kept.**
+  `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1` and `IQ4_NL` share one shape and took one
+  branch between them; `Q2_K` and `IQ4_XS` took a branch each. All fifteen
+  formats pass the device format test at the tiled shape, so the decodes are
+  right. `Q4_0` reads 0.358 s against 0.532 and `Q2_K` 0.813 against 0.844
+  -- and `Q8_0`, the control, 0.372 against 0.285.
+
+  It is the shader's size and not anything it runs. With the eight refused
+  by the host, so that not one line of the new code can be reached, the same
+  shader still reads 0.346, 0.427 and 0.350 against 0.286, 0.285 and 0.293:
+  twenty-one per cent for code that never executes. A pipeline pays for every
+  branch compiled into it whether or not the branch is taken.
+
+  Fourth time occupancy has decided a device question here, and the first
+  where the cause is the size of the code rather than the shape of a read.
+  What it would take is a second pipeline, which means the tile existing
+  twice; `docs/measured-figures.txt` has the trade and the numbers.
+
 - **Attention's memory shape: the obvious fix built, measured and not kept,
   and a pattern this project can now state three times over.** A lane
   computes one score by walking a key in series, and a wave's sixty-four

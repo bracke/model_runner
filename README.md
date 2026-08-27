@@ -2372,6 +2372,46 @@ runs on a Vulkan 1.0 device, and `row_product.comp` records the same refusal
 for the same reason -- and without them it is a barrier a position, which is
 sixty-four a tile against the two it has now.
 
+### Eight more formats, and what a branch costs when it is never taken
+
+Six formats reach the device's tile and nine do not. Eight of the nine were
+written: `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1` and `IQ4_NL` share one shape and take
+one branch between them, `Q2_K` and `IQ4_XS` a branch each, and `Q3_K` was
+left. All fifteen formats pass the device format test at sixty-four rows and
+a batch of forty, so the decodes are right.
+
+| 110-token device prompt | before | after |
+|---|---:|---:|
+| Q4_0 | 0.532 s | **0.358 s** |
+| Q2_K | 0.844 s | 0.813 s |
+| Q8_0, the control | 0.285 s | **0.372 s** |
+
+**The control got thirty per cent worse**, and it is the shader's size rather
+than anything it runs. With the eight new formats refused by the host -- so
+that not one line of the new code can be reached -- the same shader still
+reads 0.346, 0.427 and 0.350 against the old shader's 0.286, 0.285 and 0.293
+in the same sitting. **Twenty-one per cent for code that never executes.**
+
+A pipeline pays for every branch compiled into it whether or not the branch
+is taken: the register allocation is for the whole shader, and the occupancy
+that follows is for every dispatch. That is the fourth time occupancy has
+decided a device question here and the first where the cause is the size of
+the code rather than the shape of a read; the three before it were shared
+memory taken by hand.
+
+**What it would take** is a second pipeline, so that the six formats that
+were fast keep a shader with six branches and the eight new ones get their
+own. The engine already makes five modules and a sixth is mechanical; what is
+not mechanical is that the tile itself -- the accumulators, the column loop,
+the operand loads and the store -- would then exist twice and drift. The
+duplication is a real cost and so is the 1.45 times on `Q4_0`, and the trade
+wants deciding rather than assuming.
+
+One number for whoever decides: `Q2_K` gained three per cent where `Q4_0`
+gained forty-five, and the likely reason is that a "Q2_K" file is a mixture
+like every other -- much of it is `Q3_K`, the one format left outside, so
+tiling the rest of it cannot show. `Q3_K` would have to go in with them.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has

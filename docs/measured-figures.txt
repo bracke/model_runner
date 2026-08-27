@@ -6843,4 +6843,60 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # -- and without them it is a barrier a position, which is sixty-four
 # barriers a tile against the two it has now.
 
+# 2026-08-27, the nine formats still outside the tile: eight of them built,
+# and the shader they were added to got slower for every format that was
+# already in it. Not kept.
+#
+# What was built. Q4_0, Q4_1, Q5_0, Q5_1 and IQ4_NL share one shape -- a
+# scale, sixteen bytes of nibbles, the low half of byte j element j and the
+# high half element j + 16 -- so one branch takes all five and differs only
+# in what is done to a nibble: centred on eight or sixteen, lifted by a
+# minimum, given a fifth bit held apart, or read as an index into the table
+# of levels. Q2_K and IQ4_XS took a branch each. Q3_K was left. All fifteen
+# formats pass the device format test at sixty-four rows and a batch of
+# forty, so the decodes are right.
+#
+# What it measured, three alternated rounds each:
+#
+#   Q4_0    110-token device prompt   0.532 s  ->  0.358 s
+#   Q2_K    110-token device prompt   0.844 s  ->  0.813 s
+#   Q8_0    110-token device prompt   0.285 s  ->  0.372 s
+#
+# The eight-bit format is the control. It got thirty per cent worse.
+#
+# It is the shader's size and not anything it runs, and that is the finding.
+# With the eight new formats refused by the host -- Uses_Matrix turned back
+# to the six it had, so not one line of the new code can be reached -- the
+# same shader still reads 0.346, 0.427 and 0.350 against the old shader's
+# 0.286, 0.285 and 0.293 in the same sitting. Twenty-one per cent for code
+# that never executes.
+#
+# So a pipeline pays for every branch compiled into it, whether or not the
+# branch is taken: the register allocation is for the whole shader and the
+# occupancy that follows is for every dispatch. Writing the sixteen stores
+# out rather than choosing a word from four with a chain of tests was worth
+# something -- Q4_0 went from 0.406 to 0.358 -- and did not touch the
+# control.
+#
+# That is the fourth time this file has recorded occupancy deciding a
+# device question, and the first where the cause is the size of the code
+# rather than the shape of a read. The three before it were shared memory
+# taken by hand: the row product's window, the matrix product's staged
+# operand, attention's staged keys.
+#
+# What it would take, named and not built. A second pipeline, so that the
+# six formats that were fast keep a shader with six branches in it and the
+# eight new ones get their own. The engine already makes five modules and a
+# sixth is mechanical; what is not mechanical is that the tile itself -- the
+# accumulators, the column loop, the operand loads and the store, about a
+# hundred and twenty lines -- would then exist twice and drift. The cost of
+# the duplication is real and so is the 1.45 times on Q4_0, and the trade
+# wants deciding rather than assuming.
+#
+# One number worth keeping for whoever does. Q2_K gained three per cent
+# where Q4_0 gained forty-five, and the likely reason is that a "Q2_K" file
+# is a mixture like every other: much of it is Q3_K, which is the one format
+# left outside, so tiling the rest of it cannot show. Q3_K would have to go
+# in with them.
+
 outside 86D1890F46B8061C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
