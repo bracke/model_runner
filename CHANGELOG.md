@@ -7,6 +7,40 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Attention reduces across a subgroup where the device offers one: a fifth
+  faster as a kernel, and four per cent on a generated token with a long
+  context.** `attention.comp` is compiled twice, the second with
+  `SUBGROUPS`, and the engine binds it where the device reports the basic
+  and arithmetic subgroup operations in a compute stage -- a different
+  question from the matrix instruction, and one that needs no extension,
+  since subgroup arithmetic is core Vulkan 1.1.
+
+  Per tile of sixty-four scores every lane walked all sixty-four entries
+  twice, once for the largest and once for the sum: a hundred and
+  twenty-eight serial reads a lane against the sixty-four the dot product
+  itself takes. Both are now one instruction and a partial per subgroup.
+  `tests device-bench` reads 1.18 to 1.19 times faster on four shapes.
+
+  **A prompt cannot feel it, and that is the finding.** A 110-token device
+  prompt reads 0.269 s against 0.271 and a 1419-token one 4.268 against
+  4.377, inside its own spread -- even though doubling the dispatch prices
+  attention at 12 and 31 per cent of those two runs. Sixty-four tokens
+  generated after a 1419-token prompt is the one shape that moves: 2.305 s
+  against 2.401, better in each of three rounds, bit-identical answers.
+
+  The reason is the workgroup count. A prompt dispatches a workgroup per
+  head per position -- some forty-five thousand across twelve compute units
+  -- and at that occupancy the reductions' latency hides behind other
+  workgroups, leaving only the memory the keys come out of. A generated
+  token dispatches thirty-two, one a head, with nothing to hide behind. The
+  same kernel change is worth a fifth where the device is latency-bound and
+  nothing where it is saturated, and `tests device-bench` measures the
+  latency-bound shape by construction -- which is why a kernel benchmark and
+  a run are not measuring the same machine.
+
+  Kept because it is faster or level everywhere and the answers do not
+  change, not because of the nineteen per cent.
+
 - **A generated token on the device is 1.3 to 3.3 times faster, and the
   reason it was slow is not the one anybody would have guessed.** `Q5_K_M`
   generates 64 tokens in 2.301 s against 7.499, `Q2_K` in 1.433 against

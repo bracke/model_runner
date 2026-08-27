@@ -178,6 +178,19 @@ package Model_Runner.Platform.Device is
    --  @return True when the matrix product may be dispatched here.
    function Has_Matrix_Instruction (Item : Context) return Boolean;
 
+   --  Whether a shader here may reduce across a subgroup.
+   --
+   --  True where the device reports the basic and arithmetic subgroup
+   --  operations in a compute shader, and where the loader let the instance
+   --  be made at more than Vulkan 1.0 -- a shader using them is SPIR-V 1.3,
+   --  which a 1.0 instance may refuse. Every other host answers False and
+   --  runs the attention kernel that reduces through shared memory, which
+   --  is what this program did everywhere until there was something else.
+   --
+   --  @param Item Open device.
+   --  @return True when the subgroup attention kernel may be dispatched.
+   function Has_Subgroup_Arithmetic (Item : Context) return Boolean;
+
    --  What a host pointer must be aligned to before this device will take
    --  it.
    --
@@ -268,6 +281,13 @@ private
       --  Whether the device took the cooperative matrix extension and
       --  offers the shape the batched product is written for.
       Matrices : Boolean := False;
+
+      --  Whether it offers subgroup arithmetic to a compute shader, which
+      --  is what the second attention kernel's reduction is made of. A
+      --  different question with a different answer: it is core Vulkan 1.1
+      --  and asks for no extension, so a device may have this and not the
+      --  matrix instruction.
+      Subgroups : Boolean := False;
 
       --  Which memory kinds the processor can both write and see without
       --  being told to flush, as a mask over the device's list. An imported

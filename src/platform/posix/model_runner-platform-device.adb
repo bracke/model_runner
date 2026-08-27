@@ -303,6 +303,15 @@ package body Model_Runner.Platform.Device is
    function To_Shape_Query is
      new Ada.Unchecked_Conversion (System.Address, Shape_Query_Call);
 
+   --  What a device has to offer its compute shaders before the subgroup
+   --  attention kernel may be dispatched: the basic operations, which is
+   --  what names a subgroup and elects a lane of it, and the arithmetic
+   --  ones, which is the add and the maximum the reduction is made of.
+   --  VkSubgroupFeatureFlagBits, and the compute bit of VkShaderStageFlags.
+   Subgroup_Basic      : constant := 16#0000_0001#;
+   Subgroup_Arithmetic : constant := 16#0000_0004#;
+   Stage_Is_Compute    : constant := 16#0000_0020#;
+
    --  How wide a subgroup is here, which the matrix instruction's shapes
    --  are stated for. The shader is written for sixty-four and says so;
    --  a device whose subgroups are another width is left on the row
@@ -941,6 +950,12 @@ package body Model_Runner.Platform.Device is
             --  about the physical device and neither needs a logical one.
             Usable : Boolean := False;
 
+            --  And whether it offers subgroup arithmetic to a compute
+            --  shader, which is a different question with a different
+            --  answer: it is core Vulkan 1.1 and wants no extension, so a
+            --  device may have it and not the matrix instruction.
+            Grouped : Boolean := False;
+
             List  : constant Extension_List_Call :=
               To_Extension_List
                 (Entry_Point (From.Handle,
@@ -989,10 +1004,11 @@ package body Model_Runner.Platform.Device is
                end if;
             end if;
 
-            --  What the device will multiply, and how wide its subgroups
-            --  are. Both calls arrived after 1.0, so both are asked only
-            --  where the instance was made with more than that.
-            if Has_Matrix and then Instance_Api >= Api_1_1 then
+            --  What the device will multiply, how wide its subgroups are,
+            --  and what it will let a compute shader do with one. All of
+            --  these arrived after 1.0, so all are asked only where the
+            --  instance was made with more than that.
+            if Instance_Api >= Api_1_1 then
                declare
                   Widths : constant Properties_2_Call :=
                     To_Properties_2
@@ -1012,11 +1028,26 @@ package body Model_Runner.Platform.Device is
 
                   Right_Width : Boolean := False;
                begin
-                  if Widths /= null and then Shapes /= null then
+                  if Widths /= null then
                      Reported.Next := Wide'Address;
                      Widths (Physical, Reported'Address);
                      Right_Width := Wide.Width = 64;
 
+                     --  The reduction needs a lane elected and the two
+                     --  arithmetic operations, in a compute shader. A
+                     --  device offering them in some other stage and not
+                     --  this one is a device this leaves on the wide
+                     --  kernel.
+                     Grouped :=
+                       (Wide.Operations
+                        and (Subgroup_Basic or Subgroup_Arithmetic))
+                       = (Subgroup_Basic or Subgroup_Arithmetic)
+                       and then (Wide.Stages and Stage_Is_Compute) /= 0;
+                  end if;
+
+                  if Widths /= null and then Shapes /= null
+                    and then Has_Matrix
+                  then
                      if Right_Width
                        and then Shapes (Physical, Held'Access,
                                         Offered'Address) in 0 | 5
@@ -1116,6 +1147,7 @@ package body Model_Runner.Platform.Device is
             end loop;
 
             Item.Matrices := Usable;
+            Item.Subgroups := Grouped;
 
             --  The alignment a host pointer needs is a property this build
             --  does not ask for -- it arrives through an interface version
@@ -1205,6 +1237,13 @@ package body Model_Runner.Platform.Device is
 
    function Has_Matrix_Instruction (Item : Context) return Boolean
    is (Item.Matrices);
+
+   -------------------------------
+   -- Has_Subgroup_Arithmetic --
+   -------------------------------
+
+   function Has_Subgroup_Arithmetic (Item : Context) return Boolean
+   is (Item.Subgroups);
 
    ---------------------
    -- Host_Alignment --

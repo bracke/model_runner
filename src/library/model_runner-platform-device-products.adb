@@ -295,6 +295,14 @@ package body Model_Runner.Platform.Device.Products is
    --  one exists only for a batch of one -- a generated token -- and is null
    --  on a device that refused it, which is what makes this a choice rather
    --  than an assumption.
+   --  Which of the two attention kernels this device got. The subgroup one
+   --  where it offered the operations, the shared-memory one everywhere
+   --  else.
+   function Attend_Kernel (Item : Engine) return Address
+   is (if Item.Group_Line /= Null_Handle
+       then Item.Group_Line
+       else Item.Attend_Line);
+
    function Row_Line (Item : Engine; Count : Natural) return Address
    is (if Count = 1 and then Item.Single_Line /= Null_Handle
        then Item.Single_Line
@@ -1181,6 +1189,25 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Item.Attender := Made;
+
+         --  And the same source compiled with SUBGROUPS, where the device
+         --  offers them. Allowed to fail on its own: a device that takes
+         --  the wide kernel and refuses this one attends as it always did.
+         if Has_Subgroup_Arithmetic (On) then
+            declare
+               Grouped : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Attention_Subgroups;
+            begin
+               Request.Size := Interfaces.C.size_t (Grouped'Length * 4);
+               Request.Code := Grouped'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Grouped := Made;
+               end if;
+            end;
+         end if;
       end;
 
       --  And the two that only some devices get: the matrix product and
@@ -1405,8 +1432,21 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         C.Strings.Free (Name);
          Item.Attend_Line := Made;
+
+         --  And the subgroup one, if its module was made. A refusal here is
+         --  not a fault either.
+         if Item.Grouped /= Null_Handle then
+            Request.Stage.Module := Item.Grouped;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Group_Line := Made;
+            end if;
+         end if;
+
+         C.Strings.Free (Name);
       end;
 
       --  And the two pipelines the matrix product needs, against the same
@@ -1737,6 +1777,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Commands, "vkDestroyCommandPool");
       Item.Descriptor := Null_Handle;
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
+      Give_Back (Item.Group_Line, "vkDestroyPipeline");
       Give_Back (Item.Single_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
@@ -1750,6 +1791,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
+      Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
@@ -3019,7 +3061,7 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Attend_Line);
+         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Attend_Kernel (Item));
          Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                     Sets'Address, 0, Null_Handle);
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
@@ -3800,7 +3842,7 @@ package body Model_Runner.Platform.Device.Products is
                   --  The attention kernel, and back again afterwards, as
                   --  the combining step does.
                   Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Item.Attend_Line);
+                    (Item.Buffer, Bind_Point_Compute, Attend_Kernel (Item));
 
                   declare
                      Shape : aliased Attention_Constants :=

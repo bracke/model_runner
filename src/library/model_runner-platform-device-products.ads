@@ -808,6 +808,13 @@ private
       --  keys and values in one of them, and the same push-constant range.
       Attender   : System.Address := System.Null_Address;
 
+      --  The same kernel compiled with SUBGROUPS, where the device says a
+      --  compute shader may reduce across a subgroup. Its tile reductions
+      --  are one instruction each instead of sixty-four serial reads a
+      --  lane; everything else in it is the same text. Null where the
+      --  device said no, and the third kernel then answers every call.
+      Grouped    : System.Address := System.Null_Address;
+
       --  The fourth and fifth kernels, which go together and are made only
       --  where the device offers the matrix instruction: a tile of the
       --  answer at a time, and the copy of the batch in half precision that
@@ -843,6 +850,7 @@ private
       Halve_Line  : System.Address := System.Null_Address;
       Extra_Line  : System.Address := System.Null_Address;
       Single_Line : System.Address := System.Null_Address;
+      Group_Line  : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
       --  is what the device said when it was opened.

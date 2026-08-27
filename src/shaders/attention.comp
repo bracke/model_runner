@@ -1,5 +1,31 @@
 #version 450
 
+//  This source is compiled twice, and the second compilation defines
+//  SUBGROUPS. The two differ in one thing: how the sixty-four lanes of a
+//  workgroup agree on the largest score in a tile and on the sum of the
+//  weights. Without subgroup operations every lane walks all sixty-four
+//  entries of the tile for each of those, twice, which is a hundred and
+//  twenty-eight serial reads a lane a tile against the sixty-four the dot
+//  product itself takes. With them each is one instruction and a partial
+//  per subgroup.
+//
+//  Written as one source rather than two because everything else -- the
+//  scores, the bound, the running softmax, the weighted values -- is the
+//  same text and must stay so. The engine binds the subgroup pipeline where
+//  the device says it offers arithmetic operations to a compute shader and
+//  the wide one everywhere else, which is every device that speaks only
+//  Vulkan 1.0.
+//
+//  The sum is the one thing that is not bit-identical between them: a
+//  subgroup add associates as the hardware chooses and the serial loop
+//  associates left to right. It is the denominator of a softmax and the
+//  difference is in its last bits; the conformance sweep is what says that
+//  is small enough, as it is for the matrix product.
+#ifdef SUBGROUPS
+#extension GL_KHR_shader_subgroup_basic      : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+
 //  A batch of positions attending to everything the cache holds.
 //
 //  The scores against every cached key, the bound the architecture states on
@@ -108,6 +134,60 @@ const uint room = 256;
 //  One tile of scores, one per invocation.
 shared float tile[64];
 
+#ifdef SUBGROUPS
+//  One partial per subgroup. Sixty-four of them, because a device may make
+//  its subgroups as narrow as it likes and sixty-four lanes could in
+//  principle be sixty-four of them; it is two hundred and fifty-six bytes
+//  and shared memory is what bounds occupancy here, so the room is worth
+//  counting even when it is small.
+shared float shared_max[64];
+shared float shared_sum[64];
+
+//  The largest of a value across the workgroup, and the sum of one. The
+//  test on the subgroup count is workgroup-uniform, so the barriers inside
+//  it are reached by every lane or by none -- which is what makes them
+//  legal.
+float whole_max (float mine) {
+    float found = subgroupMax (mine);
+
+    if (gl_NumSubgroups == 1u) {
+        return found;
+    }
+
+    if (subgroupElect ()) {
+        shared_max[gl_SubgroupID] = found;
+    }
+    barrier ();
+
+    float whole = shared_max[0];
+    for (uint i = 1u; i < gl_NumSubgroups; i++) {
+        whole = max (whole, shared_max[i]);
+    }
+    barrier ();
+    return whole;
+}
+
+float whole_sum (float mine) {
+    float found = subgroupAdd (mine);
+
+    if (gl_NumSubgroups == 1u) {
+        return found;
+    }
+
+    if (subgroupElect ()) {
+        shared_sum[gl_SubgroupID] = found;
+    }
+    barrier ();
+
+    float whole = 0.0;
+    for (uint i = 0u; i < gl_NumSubgroups; i++) {
+        whole += shared_sum[i];
+    }
+    barrier ();
+    return whole;
+}
+#endif
+
 void main() {
     uint head = gl_WorkGroupID.x;
     uint slot = gl_WorkGroupID.y;
@@ -195,10 +275,33 @@ void main() {
             }
         }
 
+        uint span = min(64u, last - base + 1);
+
+        //  The weight of this lane's own score, worked out once and put
+        //  back where every lane can read it.
+        //
+        //  It used to be worked out where it was wanted, which is once by
+        //  every lane for every score of the tile and then again for every
+        //  component of the value: eight thousand exponentials a tile where
+        //  there are sixty-four distinct ones. The barriers below are what
+        //  that costs, and a barrier is cheaper than a hundred and
+        //  twenty-eight exponentials.
+#ifdef SUBGROUPS
+        //  A lane past the end scored minus infinity, so it takes no part
+        //  in the largest and adds nothing to the sum, and neither
+        //  reduction has to know where the tile ends.
+        float raised = max (top, whole_max (score));
+        float carry = exp (top - raised);
+        float mine = lane < span ? exp (score - raised) : 0.0;
+
+        sum = sum * carry + whole_sum (mine);
+
+        barrier();
+        tile[lane] = mine;
+        barrier();
+#else
         tile[lane] = score;
         barrier();
-
-        uint span = min(64u, last - base + 1);
 
         float highest = tile[0];
         for (uint j = 1; j < span; j++) {
@@ -208,15 +311,6 @@ void main() {
         float raised = max(top, highest);
         float carry = exp(top - raised);
 
-        //  The weight of this lane's own score, worked out once and put
-        //  back where every lane can read it.
-        //
-        //  It used to be worked out where it was wanted, which is once by
-        //  every lane for every score of the tile and then again for every
-        //  component of the value: eight thousand exponentials a tile where
-        //  there are sixty-four distinct ones. The two barriers below are
-        //  what that costs, and a barrier is cheaper than a hundred and
-        //  twenty-eight exponentials.
         float mine = lane < span ? exp(tile[lane] - raised) : 0.0;
 
         barrier();
@@ -228,6 +322,7 @@ void main() {
             added += tile[j];
         }
         sum = sum * carry + added;
+#endif
 
         for (uint k = 0; k < room / 64; k++) {
             uint c = lane + k * 64;

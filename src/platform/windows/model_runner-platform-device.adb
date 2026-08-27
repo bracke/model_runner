@@ -101,6 +101,14 @@ package body Model_Runner.Platform.Device is
    function Has_Matrix_Instruction (Item : Context) return Boolean
    is (Item.Matrices);
 
+   -------------------------------
+   -- Has_Subgroup_Arithmetic --
+   -------------------------------
+
+   --  Nor any subgroup to reduce across.
+   function Has_Subgroup_Arithmetic (Item : Context) return Boolean
+   is (Item.Subgroups);
+
    ---------------------
    -- Host_Alignment --
    ---------------------
