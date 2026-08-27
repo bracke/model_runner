@@ -5686,6 +5686,81 @@ package body Tests.Inference_Cases is
       Assert (Seen = Spans'Length, "a span was not compared");
    end Both_Blend_Runs_Agree;
 
+   --  The vectorized exponential answers what the library's does.
+   --
+   --  Not bit for bit and not meant to be: this is a degree five polynomial
+   --  in binary32 where the library's is binary64, which is the whole point
+   --  of it. What is asserted is a relative agreement of a few parts in a
+   --  million over the range a softmax actually hands it -- the scores of
+   --  an attention row less the largest of them, so zero down to well past
+   --  where binary32 gives up.
+   --
+   --  The floor is the case worth naming. Below eighty-seven the true value
+   --  is smaller than binary32 holds, and what matters is that the answer
+   --  is a very small number or zero rather than a large one: the exponent
+   --  this builds would wrap rather than saturate if the floor were not
+   --  there, and a score far behind the leader would come back ahead of it.
+   procedure The_Exponential_Agrees
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package MK renames Model_Runner.Kernels;
+
+      Room : constant N.Element_Count := 96;
+      Run  : N.Real_Array (0 .. Room - 1);
+      Want : N.Real_Array (0 .. Room - 1);
+   begin
+      --  Zero down to a hundred and twenty, which is past the floor.
+      for Index in Run'Range loop
+         Run (Index) := -1.25 * N.Real (Integer (Index));
+         Want (Index) :=
+           N.Real (N.Exp (N.Wide_Real (Run (Index))));
+      end loop;
+
+      MK.Exponentiate (Run, 0.0);
+
+      for Index in Run'Range loop
+         declare
+            Got  : constant N.Real := Run (Index);
+            Said : constant N.Real := Want (Index);
+         begin
+            --  Above the floor, a relative bound; below it, both are
+            --  smaller than anything a softmax can be moved by, and what
+            --  is asserted is only that neither has become large.
+            if Said > 1.0e-30 then
+               Assert (abs (Got - Said) <= 1.0e-5 * Said,
+                       "the exponential disagrees at"
+                       & N.Real'Image (-1.25 * N.Real (Integer (Index)))
+                       & ":" & N.Real'Image (Got)
+                       & " against" & N.Real'Image (Said));
+            else
+               Assert (Got >= 0.0 and then Got <= 1.0e-30,
+                       "past the floor the exponential answered"
+                       & N.Real'Image (Got) & ", which is not small");
+            end if;
+         end;
+      end loop;
+
+      --  And the subtraction it is given rather than doing itself: the
+      --  largest element taken off leaves that element at one.
+      declare
+         Scores : N.Real_Array (0 .. 3) := [2.5, -1.0, 7.25, 0.0];
+      begin
+         MK.Exponentiate (Scores, 7.25);
+
+         Assert (abs (Scores (2) - 1.0) <= 1.0e-6,
+                 "the largest score did not come back as one:"
+                 & N.Real'Image (Scores (2)));
+
+         for Index in Scores'Range loop
+            Assert (Scores (Index) > 0.0 and then Scores (Index) <= 1.0,
+                    "a weight left the range a softmax needs:"
+                    & N.Real'Image (Scores (Index)));
+         end loop;
+      end;
+   end The_Exponential_Agrees;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -5865,6 +5940,10 @@ package body Tests.Inference_Cases is
         (T, Device_Reads_A_Model_In_Any_Format'Access,
          "a model in any format the program reads loads on the device, "
          & "without being repacked first");
+      Register_Routine
+        (T, The_Exponential_Agrees'Access,
+         "the vectorized exponential answers what the library's does, over "
+         & "the range a softmax hands it");
       Register_Routine
         (T, Both_Blend_Runs_Agree'Access,
          "one run of an attention head's output is the same whether the "

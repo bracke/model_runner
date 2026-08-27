@@ -1,3 +1,4 @@
+with Ada.Unchecked_Conversion;
 with Interfaces;
 with System;
 with System.Machine_Code;
@@ -406,6 +407,65 @@ package body Model_Runner.Kernels is
       end;
    end Layer_Norm;
 
+   --------------------
+   -- Exponentiate --
+   --------------------
+
+   procedure Exponentiate (Target : in out Real_Array; Less : Real) is
+      use type Interfaces.Unsigned_32;
+
+      --  Neither check can fire here and both stop the loop vectorizing:
+      --  the exponent is built from a value the floor below bounds, and the
+      --  index walks the array it was given.
+      pragma Suppress (Overflow_Check);
+      pragma Suppress (Range_Check);
+
+      function To_Real is
+        new Ada.Unchecked_Conversion (Interfaces.Unsigned_32, N.Real);
+
+      --  One over the natural logarithm of two, and the floor below which
+      --  binary32 has nothing left to say.
+      Log2_E : constant N.Real := 1.44269504088896;
+      Floor  : constant N.Real := -87.0;
+
+      --  Three halves of two raised to twenty-three. Adding it to a number
+      --  of this size and taking it away again rounds to the nearest whole
+      --  one, which is what the library call this replaces was doing and
+      --  the only part of it that could not be vectorized.
+      Magic : constant N.Real := 12_582_912.0;
+
+      --  Two raised to a fraction in [-0.5, 0.5], to about the last bit
+      --  binary32 keeps.
+      C1 : constant N.Real := 0.693147180559945;
+      C2 : constant N.Real := 0.240226506959101;
+      C3 : constant N.Real := 0.055504108664822;
+      C4 : constant N.Real := 0.009618129107629;
+      C5 : constant N.Real := 0.001333355814643;
+   begin
+      for Index in Target'Range loop
+         declare
+            X : constant N.Real :=
+              N.Real'Max (Target (Index) - Less, Floor) * Log2_E;
+
+            Whole : constant N.Real := (X + Magic) - Magic;
+            F     : constant N.Real := X - Whole;
+
+            --  Two raised to the fraction, Horner from the top.
+            P : constant N.Real :=
+              1.0 + F * (C1 + F * (C2 + F * (C3 + F * (C4 + F * C5))));
+
+            --  And two raised to the whole part, built as an exponent.
+            --  Whole is between -126 and 0 for every value the floor lets
+            --  through, so the sum stays inside what the field holds.
+            Bits : constant Interfaces.Unsigned_32 :=
+              Interfaces.Shift_Left
+                (Interfaces.Unsigned_32 (Integer (Whole) + 127), 23);
+         begin
+            Target (Index) := P * To_Real (Bits);
+         end;
+      end loop;
+   end Exponentiate;
+
    -------------
    -- Softmax --
    -------------
@@ -430,14 +490,14 @@ package body Model_Runner.Kernels is
          end if;
       end loop;
 
-      for Index in Target'Range loop
-         declare
-            Weighted : constant Wide_Real :=
-              N.Exp (Wide_Real (Target (Index)) - Wide_Real (Largest));
-         begin
-            Target (Index) := Real (Weighted);
-            Sum := Sum + Weighted;
-         end;
+      --  The exponentials as a map, then the total as a pass of its own.
+      --  Written apart because they are different shapes: the first
+      --  vectorizes and the second is a reduction, and leaving them
+      --  together left the whole of it on one lane.
+      Exponentiate (Target, Largest);
+
+      for Value of Target loop
+         Sum := Sum + Wide_Real (Value);
       end loop;
 
       if Sum <= 0.0 or else not N.Is_Finite (Sum) then

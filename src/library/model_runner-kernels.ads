@@ -127,6 +127,37 @@ package Model_Runner.Kernels is
       Stride    : Element_Count;
       Steps     : Element_Count);
 
+   --  Every element of a run replaced by e raised to it, less a constant.
+   --
+   --  Target (i) becomes exp (Target (i) - Less), which is the shape a
+   --  softmax wants: the largest score subtracted so that nothing overflows
+   --  and the largest term is one.
+   --
+   --  Why this is here rather than a call to the library's exponential. A
+   --  softmax over an attention row calls that once an element, and a
+   --  processor prompt is heads times positions times positions of them: a
+   --  profile puts the exponential and the softmax around it at eight and a
+   --  half per cent of a 1419-token prompt, nearly all of it inside
+   --  __ieee754_exp. One call cannot be vectorized and this shape can --
+   --  it is a map, every element independent of every other, which is what
+   --  -O3 turns into eight lanes without being asked.
+   --
+   --  What replaces the call is the standard decomposition: e^x is two
+   --  raised to x over the natural logarithm of two, split into a whole
+   --  part done by building an exponent and a fraction done by a degree
+   --  five polynomial. It is computed in binary32, where the library's is
+   --  binary64, and both of those change the answer -- which is what the
+   --  conformance sweep is for, as it was for the two insertions above.
+   --
+   --  The floor at eighty-eight is not a nicety. Below it the true value is
+   --  smaller than binary32 holds, and the exponent this builds would wrap
+   --  rather than saturate, so a score far behind the leader would come
+   --  back as a large number instead of nothing at all.
+   --
+   --  @param Target Run to replace in place.
+   --  @param Less Subtracted from every element before the exponential.
+   procedure Exponentiate (Target : in out Real_Array; Less : Real);
+
    --  Whether Head_Dot and Blend_Run above may use the wide lanes and the
    --  fused multiply-add, which is a fraction of the instructions for the
    --  same arithmetic.

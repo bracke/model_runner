@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The softmax's exponential is four lanes now instead of a library call:
+  three and a half per cent of a processor prompt.** A profile put the
+  exponential and the softmax around it at 8.5 % of the 1419-token prompt,
+  nearly all inside `__ieee754_exp`. Exponentiating a row is a map, and a
+  map is what `-O3` vectorizes without being asked; a call is what stops it.
+
+  `Kernels.Exponentiate` is the standard decomposition — e^x as two raised
+  to x over the logarithm of two, the whole part built as an exponent field
+  and the fraction by a degree five polynomial, in binary32.
+
+  Two invisible things kept it scalar. `'Truncation` is a call into
+  `System.Fat_Flt.Attr_Float`, replaced by adding and subtracting three
+  halves of two to the twenty-third; and `Integer (Whole)` carried an
+  overflow check that the floor at eighty-seven already makes impossible.
+  With both gone: 18 `addps` and 16 `mulps` where there were `mulss`,
+  `addss` and two `call`s.
+
+  Five alternated rounds, median 10.854 s against **10.480**, better in
+  **five of five**. The profile said 8.5 % and the clock says 3.5 — samples
+  are not seconds. The answers move; the sweep is the arbiter, 28344
+  sequences with nothing outside tolerance, and a test holds the two
+  exponentials to a few parts in a million and names the floor as the case
+  that matters.
+
+- **A correction of the same kind as the last one.** The engine figures were
+  found still reading 0.470 s and 1.68 s from two sittings earlier: the
+  restamp that should have moved them was in a script that failed partway
+  and never wrote, exactly as the llama.cpp table's did. Both are right now,
+  and every edit in this sitting was applied and verified one at a time.
+
 - **Two and a half times fewer weight bytes is slower on the device, and a
   doubling cannot say what a kernel's share is.** Nothing kept; three scratch
   builds, all discarded.
