@@ -816,6 +816,14 @@ private
       Matrix     : System.Address := System.Null_Address;
       Halver     : System.Address := System.Null_Address;
 
+      --  The row product again, compiled from the same source with SINGLE,
+      --  which sets its group to one. A generated token is one vector, and
+      --  the wide kernel carries eight accumulators and eight kilobytes of
+      --  shared memory for a reduction seven eighths of which is discarded.
+      --  Null if the device refused it, which leaves a batch of one on the
+      --  wide kernel exactly as before.
+      Single     : System.Address := System.Null_Address;
+
       --  And the sixth: the same tile, compiled from the same source with
       --  MORE_FORMATS, decoding the eight formats the fourth leaves out.
       --  Two pipelines rather than one that decodes them all, because a
@@ -834,6 +842,7 @@ private
       Matrix_Line : System.Address := System.Null_Address;
       Halve_Line  : System.Address := System.Null_Address;
       Extra_Line  : System.Address := System.Null_Address;
+      Single_Line : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
       --  is what the device said when it was opened.

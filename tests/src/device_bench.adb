@@ -666,6 +666,138 @@ package body Device_Bench is
          end;
       end Prompt;
 
+      --  What a weight byte costs when exactly one vector reads it, format
+      --  by format, on the row product.
+      --
+      --  A generated token is one vector against every matrix in the model,
+      --  so it reads every weight once and reuses nothing. If that path were
+      --  bound by the bus, every format would move the same bytes in the
+      --  same time and the only difference between them would be how many
+      --  bytes a row is. This says whether it is.
+      --
+      --  Absolute seconds rather than a ratio against the processor, which
+      --  is what `tests benchmark` prints: a ratio cannot say which side
+      --  moved, and the question here is entirely about one side.
+      procedure Formats is
+         use type N.Element_Count;
+         use type Model_Runner.Bytes.Byte_Count;
+         use type Model_Runner.Bytes.Byte_Array_Access;
+
+         type Values is access N.Real_Array;
+
+         Rows    : constant := 2048;
+         Columns : constant := 4096;
+         Seconds : constant Duration := 0.30;
+
+         type Shape is record
+            Packing  : Products.Weight_Packing;
+            Name     : String (1 .. 6);
+            Elements : Positive;
+            Bytes    : Positive;
+         end record;
+
+         --  Binary32 is here as the floor: it decodes to nothing at all, so
+         --  whatever it reaches is what this device does with a row product
+         --  when the decode is free.
+         Table : constant array (1 .. 15) of Shape :=
+           [(Products.Values_F32,   "f32   ",   1,   4),
+            (Products.Values_F16,   "f16   ",   1,   2),
+            (Products.Values_BF16,  "bf16  ",   1,   2),
+            (Products.Packed_Q4_0,  "q4_0  ",  32,  18),
+            (Products.Packed_Q4_1,  "q4_1  ",  32,  20),
+            (Products.Packed_Q5_0,  "q5_0  ",  32,  22),
+            (Products.Packed_Q5_1,  "q5_1  ",  32,  24),
+            (Products.Packed_Q8_0,  "q8_0  ",  32,  34),
+            (Products.Packed_IQ4_NL, "iq4nl ", 32,  18),
+            (Products.Packed_Q2_K,  "q2_k  ", 256,  84),
+            (Products.Packed_Q3_K,  "q3_k  ", 256, 110),
+            (Products.Packed_Q4_K,  "q4_k  ", 256, 144),
+            (Products.Packed_Q5_K,  "q5_k  ", 256, 176),
+            (Products.Packed_Q6_K,  "q6_k  ", 256, 210),
+            (Products.Packed_IQ4_XS, "iq4xs ", 256, 136)];
+
+         Asked : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Columns) - 1);
+         Got   : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Rows) - 1);
+      begin
+         Asked.all := [others => 0.25];
+
+         for Which of Table loop
+            declare
+               Width : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count (Columns / Which.Elements)
+                 * Model_Runner.Bytes.Byte_Count (Which.Bytes);
+
+               Room : constant Model_Runner.Bytes.Byte_Count :=
+                 Width * Model_Runner.Bytes.Byte_Count (Rows);
+
+               Weights : Model_Runner.Bytes.Byte_Array_Access;
+               Started : Ada.Calendar.Time;
+               Calls   : Natural := 0;
+               Spent   : Duration := 0.0;
+               Ok      : Boolean := True;
+               Halted  : Boolean;
+            begin
+               Model_Runner.Bytes.Allocate (Room, Weights);
+               exit when Weights = null;
+
+               --  A pattern rather than zeroes: a block of zeroes has a
+               --  zero scale, and a device that reads one is doing the same
+               --  work as a device that reads any other, but a reader of
+               --  this would rightly ask.
+               for Index in Weights.all'Range loop
+                  Weights.all (Index) :=
+                    Model_Runner.Bytes.Byte ((Natural (Index) * 37) mod 251);
+               end loop;
+
+               Started := Ada.Calendar.Clock;
+
+               loop
+                  Products.Multiply
+                    (Engine, Weights.all, 0, Which.Packing, Rows, Columns,
+                     Asked.all, 1, Got.all, Ok, Halted,
+                     Key => Weights.all (Weights.all'First)'Address);
+                  exit when not Ok;
+                  Calls := Calls + 1;
+                  Spent := Ada.Calendar.Clock - Started;
+                  exit when Spent >= Seconds;
+               end loop;
+
+               if Ok and then Calls > 0 then
+                  declare
+                     Each : constant Long_Float :=
+                       Long_Float (Spent) / Long_Float (Calls);
+
+                     --  Nanoseconds an element and gigabytes a second, so
+                     --  that a format which reads fewer bytes and takes
+                     --  longer says so in both directions at once.
+                     Cell : constant Long_Float :=
+                       Each * 1.0E9
+                       / (Long_Float (Rows) * Long_Float (Columns));
+
+                     Rate : constant Long_Float :=
+                       Long_Float (Room) / Each / 1.0E9;
+                  begin
+                     Ada.Text_IO.Put_Line
+                       ("    " & Which.Name
+                        & Duration'Image (Duration (Each)) & " s a product,"
+                        & Long_Float'Image (Cell) & " ns an element,"
+                        & Long_Float'Image (Rate) & " GB/s,"
+                        & Model_Runner.Bytes.Byte_Count'Image (Room / 1024)
+                        & " KiB");
+                  end;
+               else
+                  Ada.Text_IO.Put_Line
+                    ("    " & Which.Name & " the device would not take it");
+               end if;
+
+               Products.Forget_Matrices (Engine);
+               Model_Runner.Bytes.Free (Weights);
+            end;
+         end loop;
+      end Formats;
+
       --  Whether reserving a cache costs the weights their place.
       --
       --  The engine keeps a model's matrices on the device and gives the
@@ -815,6 +947,12 @@ package body Device_Bench is
       Ada.Text_IO.Put_Line ("  weights against a reserved cache:");
       Squeeze (1024, 20, 0);
       Squeeze (1024, 20, 23_068_672);
+
+      --  And what one vector costs a format, which is the shape a generated
+      --  token has: no reuse anywhere, so the decode is paid once an element
+      --  and amortized over nothing.
+      Ada.Text_IO.Put_Line ("  one vector a product, by format:");
+      Formats;
 
       Products.Close (Engine);
       Devices.Close (Opened);

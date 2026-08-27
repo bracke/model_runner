@@ -508,7 +508,9 @@ cd tests && ./bin/tests fixture-likeness --model /path/to/your.gguf [--names]
 cd tests && ./bin/tests render --model /path/to/your.gguf --system S --prompt P
                                            # the model's own chat template
 cd tests && ./bin/tests slow                # where the suite's time goes
-cd tests && ./bin/tests device-bench        # what an attention call costs
+cd tests && ./bin/tests device-bench        # what an attention call costs,
+                                           # and what one vector costs a
+                                           # row product in each format
 ```
 
 `fixture-likeness` asks the question the rest of the suite cannot. Everything
@@ -1504,17 +1506,18 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.450 s | **0.431 s** |
-| -- evaluating the prompt | 0.069 s | 0.053 s |
-| -- generating | 0.381 s | 0.378 s |
-| -- processor time | 1.61 s | **0.04 s** |
-| 110-token prompt, nothing generated | 0.763 s | **0.280 s** |
-| -- processor time | 3.66 s | **0.10 s** |
+| 6-token prompt, 12 generated | 0.456 s | **0.350 s** |
+| -- evaluating the prompt | 0.070 s | 0.062 s |
+| -- generating | 0.389 s | **0.289 s** |
+| -- processor time | 1.61 s | **0.03 s** |
+| 110-token prompt, nothing generated | 0.806 s | **0.282 s** |
+| -- processor time | 3.87 s | **0.11 s** |
 
-All six cells were taken in one sitting on 2026-08-26, back to back, each
+All six cells were taken in one sitting on 2026-08-27, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
 columns are comparable, which they were not in the version of this table
-before last.
+before last. The generating row is where the last change landed: it read
+0.378 s until `### The batch that was not there` below.
 
 **The device wins both runs now, and spends a fortieth of the processor's
 time doing it.** Six changes took its 110-token prompt from 1.951 s to
@@ -1911,17 +1914,23 @@ of 1.08 rising to 1.28, most of the rise being the run itself:
 
 | Format | One vector | Eight | | Format | One vector | Eight |
 | --- | --- | --- | --- | --- | --- | --- |
-| Q2_K | 0.28 | 0.10 | | Q3_K | 0.41 | 0.11 |
-| IQ4_NL | 0.24 | 0.08 | | F16 | 0.40 | 0.12 |
-| Q5_1 | 0.26 | 0.08 | | Q8_0 | **0.36** | **0.08** |
-| Q5_0 | 0.26 | 0.08 | | Q4_K | 0.52 | 0.12 |
-| Q4_1 | 0.26 | 0.07 | | Q5_K | 0.59 | 0.15 |
-| IQ4_XS | 0.41 | 0.11 | | Q6_K | 0.52 | 0.12 |
-| | | | | Q4_0 | 0.40 | 0.07 |
-| | | | | BF16 | 0.68 | 0.14 |
-| | | | | F32 | 0.89 | 0.15 |
+| Q2_K | 0.13 | 0.10 | | Q3_K | 0.20 | 0.11 |
+| IQ4_NL | 0.14 | 0.08 | | F16 | 0.34 | 0.12 |
+| Q5_1 | 0.17 | 0.08 | | Q8_0 | **0.23** | **0.08** |
+| Q5_0 | 0.17 | 0.08 | | Q4_K | 0.37 | 0.12 |
+| Q4_1 | 0.17 | 0.07 | | Q5_K | 0.30 | 0.15 |
+| IQ4_XS | 0.25 | 0.12 | | Q6_K | 0.49 | 0.12 |
+| | | | | Q4_0 | 0.26 | 0.08 |
+| | | | | BF16 | 0.60 | 0.14 |
+| | | | | F32 | 0.72 | 0.15 |
 
-and q8_0 at thirty-two vectors a pass, which is 0.036.
+and q8_0 at thirty-two vectors a pass, which is 0.039.
+
+**Every cell of the one-vector column fell** between this reading and the
+one before it -- Q2_K from 0.28, Q5_K from 0.59, Q8_0 from 0.36 -- and the
+eight-vector column did not move at all. That is the narrow row kernel of
+`### The batch that was not there`: it is bound to a batch of one and the
+eight-vector column is the control that says so.
 
 Read the one-vector column as a statement about the processor as much as
 about the device, because that is what it is. The formats the device wins hardest on
@@ -2415,20 +2424,20 @@ and binds whichever of the two decodes the weights it was handed. `Q3_K`
 went in with the eight, which makes the tile's coverage every format but
 binary32.
 
-| 110-token device prompt | before | after |
-|---|---:|---:|
-| Q4_0 | 0.753 s | **0.411 s** |
-| Q2_K | 0.991 s | **0.387 s** |
-| Q8_0, the control | 0.525 s | 0.532 s |
-| Q4_K_M, a control | 0.423 s | 0.415 s |
-| Q5_K_M, a control | 0.450 s | 0.446 s |
+| 110-token device prompt | before | after | |
+|---|---:|---:|---:|
+| Q2_K | 0.821 s | **0.295 s** | 2.79x |
+| Q4_0 | 0.469 s | **0.311 s** | 1.51x |
+| Q8_0, the control | 0.283 s | 0.276 s | |
+| Q4_K_M, a control | 0.291 s | 0.284 s | |
+| Q5_K_M, a control | 0.300 s | 0.293 s | |
 
-Medians of three alternated rounds in one sitting. **The three controls do
-not move**, which is the whole point of the split: the formats that were
-already fast are compiled into a pipeline the new decodes are not in, so
-they cannot pay for them.
+Medians of alternated rounds in one sitting. **The three controls do not
+move**, which is the whole point of the split: the formats that were already
+fast are compiled into a pipeline the new decodes are not in, so they cannot
+pay for them.
 
-`Q2_K` gained 2.6 times where the one-shader attempt had gained three per
+`Q2_K` gained 2.8 times where the one-shader attempt had gained three per
 cent, and that is `Q3_K`. A "Q2_K" file is a mixture like every other and
 much of it is `Q3_K`, so leaving that one format outside had hidden what
 tiling the rest of it was worth. The earlier note named that number as the
@@ -2462,28 +2471,32 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 146.9 t/s | 30.5 t/s |
-| llama.cpp, processor | 355.1 t/s | 39.8 t/s |
-| model_runner, device | **413.5 t/s** | 28.1 t/s |
-| llama.cpp, device | 1672.9 t/s | 57.5 t/s |
+| model_runner, processor | 136.5 t/s | 30.8 t/s |
+| llama.cpp, processor | 383.6 t/s | 40.2 t/s |
+| model_runner, device | **412.0 t/s** | **40.8 t/s** |
+| llama.cpp, device | 1659.4 t/s | 57.3 t/s |
 
-On the processor: **1.3 times slower generating and 2.4 times slower reading
+On the processor: **1.3 times slower generating and 2.8 times slower reading
 a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
 code that did not change between them, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, 2.0 and **4.0**, where
-the sitting before this one said 2.1 and 8.0 and the first said 3.8 and
-10.1. The device's prompt row is the one that moved, and
-`### The matrix instruction` says why: the batch is a matrix product now.
+reading of this table said 3.3 and 16. On the device, **1.4** and **4.0**,
+where the sitting before this one said 2.0 and 4.0 and the first said 3.8
+and 10.1. Both device rows have now moved for a named reason:
+`### The matrix instruction` for the prompt, `### The batch that was not
+there` for the generating one, which went 28.1 to 40.8 tokens a second.
 
-The two halves of that are not the same finding. Generating reads every
-weight once a token and does one multiply with each, so it is the bus rather
-than the arithmetic that answers: llama.cpp's 40.0 t/s is about 45 GB/s of
-this model, and 29.6 t/s is about 33. Being over half way to the other
-program's bandwidth is where quantizing the activations left this, and what
-is left is a gap in the kernels -- they are ordinary Ada compiled for
-baseline x86-64, which `## Not implemented` says and this measures -- rather
-than a gap in what the program is doing.
+**The device row now generates faster than llama.cpp does on the
+processor** -- 40.8 against 40.2 -- and faster than llama.cpp does with its
+own layers off the device, which reads 39.8. What is left between it and
+llama.cpp's own device figure is 1.4 times.
+
+The processor's generating row is the other kind of gap. It reads every
+weight once a token and does one multiply with each, so the bus answers
+rather than the arithmetic: llama.cpp's 40.2 t/s is about 45 GB/s of this
+model and 30.8 is about 35. What is left there is a gap in the kernels --
+ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
+and this measures -- rather than a gap in what the program is doing.
 
 The prompt is the other kind, and the device row has just stopped being an
 example of it. A batch here shares one reading of the weights between the
@@ -2511,23 +2524,25 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.749 s
-and 64 in 2.095 s on the processor, 0.266 s and 2.279 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.806 s
+and 64 in 2.077 s on the processor, 0.267 s and 1.570 s on the device,
 medians of three as everywhere else here. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 883.8 t/s rather
-than 355.1 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 781.1 t/s rather
+than 383.6 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The noisiest row is the device generating: 28.1 t/s here, against 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1, 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7, 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in eleven
-earlier sittings at comparable loads -- though the last of those is the only
-one measured with the results read back out of cached memory. Nothing in
-this change touches it: a generated token is one vector and takes the row
-product, as it did. The processor rows and
-both prompt rows repeat to a few per cent. Every figure in the table is one
+The device generating row was the noisiest here for a long time: 40.8 t/s
+now, against 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
+14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
+comparable loads. Every reading between 26.9 and 32.0 is the same code; the
+step to 40.8 is the narrow row kernel and nothing else, and it is the first
+time this row has moved for a reason rather than for a sitting. The
+processor rows and both prompt rows repeat to a few per cent. Every figure in the table is one
 model, one file, one host and two prompt lengths, and a model that is not a
 small dense llama may sit anywhere with respect to it.
 
@@ -3782,6 +3797,80 @@ So a generated token on the device is in the same position as a prompt on the
 processor: the arithmetic is arranged about as well as this program knows how
 to arrange it, and what is left is that the products do not run at the speed
 the memory could feed them.
+
+**That last sentence was wrong, and the section below is what replaced it.**
+The products were not short of memory. They were spending seven eighths of
+their arithmetic and seven eighths of their shared memory on a batch that
+was not there.
+
+### The batch that was not there
+
+The item this answers said the device generated 2.0 times behind llama.cpp
+and had never been diagnosed. The first measurement was five real models
+generating sixty-four tokens each, against their own size:
+
+| model | size | a token | reached |
+|---|---:|---:|---:|
+| Q2_K | 461 MB | 58.5 ms | 7.9 GB/s |
+| Q4_0 | 609 MB | 29.8 ms | 20.4 GB/s |
+| Q4_K_M | 638 MB | 68.1 ms | 9.4 GB/s |
+| Q5_K_M | 747 MB | 117.7 ms | 6.3 GB/s |
+| Q8_0 | 1171 MB | 34.4 ms | 34.0 GB/s |
+
+**Time per token is not a function of size.** The smallest file takes twice
+as long per token as the largest, and the rate reached varies five and a half
+times between formats. A kernel bound by the bus cannot do that.
+
+`tests device-bench` grew a per-format sweep to say what it is bound by
+instead -- a resident 2048 by 4096 matrix, one vector, in absolute seconds
+rather than the ratio against the processor `tests benchmark` prints, because
+a ratio cannot say which side moved. Multiplying its cost per element by a
+model's element count reproduces the token time for every format: `Q8_0` 34.2
+ms predicted against 34.4 measured, `Q5_K` 121 against 118, `Q2_K` 55 against
+58.5. **A generated token on the device is the row product and nothing else**
+-- attention, the blends, the sampling and the submissions are all inside the
+error bar.
+
+Half precision and binary32 then named the cause between them. Binary32 reads
+four bytes an element and reaches the bus. Half precision reads two, and took
+*the same time per element* at half the traffic. Something fixed was being
+paid per element by every format alike.
+
+It was the batch group. The shader carries `GROUP` accumulators, reads
+`GROUP` vector offsets per weight, and reserves `256 * GROUP` floats of
+shared memory for its reduction; `GROUP` is eight because a prompt reads
+eight vectors to a pass. A generated token is one vector, so seven eighths of
+the arithmetic, seven eighths of the activation reads and seven eighths of
+eight kilobytes a workgroup went on padding that the write at the end throws
+away -- and on this device the shared memory is the part that decides how
+many workgroups a compute unit will hold.
+
+So `row_product.comp` is compiled twice, the second with `SINGLE`, which sets
+the group to one, and the engine binds the narrow pipeline when the batch is
+one. The same arrangement the matrix product already uses, built the same
+morning, and the third time occupancy has decided a question here.
+
+| 64 generated, on the device | before | after | |
+|---|---:|---:|---:|
+| Q5_K_M | 7.499 s | **2.301 s** | 3.26x |
+| Q2_K | 4.211 s | **1.433 s** | 2.94x |
+| Q4_K_M | 4.594 s | **3.061 s** | 1.50x |
+| Q4_0 | 1.970 s | **1.324 s** | 1.49x |
+| Q8_0 | 2.072 s | **1.630 s** | 1.27x |
+
+Medians of three alternated rounds, better in every one. The answers are
+bit-identical -- `448c2ed68ec342ee` either way -- because the narrow kernel
+accumulates the same products in the same order and drops only arithmetic
+whose results were never written. A prompt does not move, 0.336 s against
+0.340, because a prompt is never a batch of one. **Binary32 barely moves
+either, at 1.05 times, and that is the control**: it was the one format
+already at the bus, so the one with nothing to win.
+
+The gap to llama.cpp on a generated token goes from 2.07 times to 1.49.
+
+Two formats gained almost nothing and are named rather than averaged away:
+`Q6_K` at 1.07 and `Q5_1` at 1.06. Whatever binds those two is not the group
+width, and nothing here has yet asked what it is.
 
 ### What the counters say, and what this file got wrong
 

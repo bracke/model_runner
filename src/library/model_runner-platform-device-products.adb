@@ -291,6 +291,15 @@ package body Model_Runner.Platform.Device.Products is
                   | Packed_IQ4_NL | Packed_Q2_K | Packed_Q3_K
                   | Packed_IQ4_XS);
 
+   --  Which of the two row kernels a batch of this length wants. The narrow
+   --  one exists only for a batch of one -- a generated token -- and is null
+   --  on a device that refused it, which is what makes this a choice rather
+   --  than an assumption.
+   function Row_Line (Item : Engine; Count : Natural) return Address
+   is (if Count = 1 and then Item.Single_Line /= Null_Handle
+       then Item.Single_Line
+       else Item.Pipeline);
+
    function Uses_Matrix
      (Item    : Engine;
       Packing : Weight_Packing;
@@ -1104,6 +1113,24 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Item.Shader := Made;
+
+         --  And the same source compiled for a batch of one. Allowed to
+         --  fail on its own: a device that takes the wide kernel and
+         --  refuses the narrow one runs every batch on the wide one, which
+         --  is what every device did until now.
+         declare
+            Narrow : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Row_Single;
+         begin
+            Request.Size := Interfaces.C.size_t (Narrow'Length * 4);
+            Request.Code := Narrow'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Single := Made;
+            end if;
+         end;
       end;
 
       --  The second kernel's module.
@@ -1305,8 +1332,21 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         C.Strings.Free (Name);
          Item.Pipeline := Made;
+
+         --  And the narrow one, against the same layout. A refusal here is
+         --  not a fault either.
+         if Item.Single /= Null_Handle then
+            Request.Stage.Module := Item.Single;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Single_Line := Made;
+            end if;
+         end if;
+
+         C.Strings.Free (Name);
       end;
 
       --  And the second kernel's pipeline, against the same layout.
@@ -1697,6 +1737,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Commands, "vkDestroyCommandPool");
       Item.Descriptor := Null_Handle;
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
+      Give_Back (Item.Single_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Line, "vkDestroyPipeline");
@@ -1705,6 +1746,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Layout, "vkDestroyPipelineLayout");
       Give_Back (Item.Set_Layout, "vkDestroyDescriptorSetLayout");
+      Give_Back (Item.Single, "vkDestroyShaderModule");
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
@@ -2312,7 +2354,8 @@ package body Model_Runner.Platform.Device.Products is
             C.unsigned (Room / Tile_Vectors), 1);
       end;
 
-      Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+      Bind_Pipeline
+           (Item.Buffer, Bind_Point_Compute, Row_Line (Item, Count));
       Good := True;
    end Tile_Product;
 
@@ -2595,7 +2638,8 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+         Bind_Pipeline
+           (Item.Buffer, Bind_Point_Compute, Row_Line (Item, Count));
          Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                     Sets'Address, 0, Null_Handle);
 
@@ -3727,7 +3771,8 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+         Bind_Pipeline
+           (Item.Buffer, Bind_Point_Compute, Row_Line (Item, Count));
 
          for Index in 1 .. Steps.Held loop
             declare
@@ -3788,7 +3833,8 @@ package body Model_Runner.Platform.Device.Products is
                   end;
 
                   Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
                   goto Next_Dispatch;
                end if;
 
@@ -3819,7 +3865,8 @@ package body Model_Runner.Platform.Device.Products is
                   end;
 
                   Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Item.Pipeline);
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
                   goto Next_Dispatch;
                end if;
 

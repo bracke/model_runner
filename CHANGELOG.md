@@ -7,13 +7,60 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A generated token on the device is 1.3 to 3.3 times faster, and the
+  reason it was slow is not the one anybody would have guessed.** `Q5_K_M`
+  generates 64 tokens in 2.301 s against 7.499, `Q2_K` in 1.433 against
+  4.211, `Q8_0` in 1.630 against 2.072 -- 27.8, 44.7 and 39.3 tokens a
+  second. Medians of three alternated rounds, better in every one, and the
+  output digest is unchanged: `448c2ed68ec342ee` either way.
+
+  **The diagnosis.** Time per generated token was not a function of model
+  size: the 461 MB `Q2_K` file took twice as long per token as the 1171 MB
+  `Q8_0` one, and the achieved rate varied five and a half times across
+  formats. A kernel bound by memory cannot do that. A new per-format sweep
+  in `tests device-bench` -- absolute seconds for one vector against a
+  resident matrix, rather than the ratio against the processor that `tests
+  benchmark` prints -- gave the cost per element, and multiplying it by a
+  model's element count reproduced the token time for every format. So a
+  generated token on the device is the row product and nothing else.
+
+  Half precision and binary32 named the cause between them: binary32 reads
+  four bytes an element at the bus rate, half precision reads two and took
+  the same time per element at half the traffic. Something fixed was being
+  paid per element. It was the batch group: the shader carries eight
+  accumulators, reads eight vector offsets per weight and reserves eight
+  kilobytes of shared memory for a reduction, because a prompt reads eight
+  vectors to a pass. A generated token is one vector, so seven eighths of
+  all three were spent on padding thrown away at the end -- and the shared
+  memory is what bounds how many workgroups a compute unit will hold.
+
+  `row_product.comp` is now compiled twice, the second with `SINGLE`, which
+  sets the group to one; the engine binds the narrow pipeline for a batch of
+  one and the wide one otherwise. The same arrangement `matrix_product.comp`
+  already uses, and a repository check reads the narrow compilation's digest
+  as well as the wide one's.
+
+  A prompt does not move -- 0.336 s against 0.340 -- because a prompt is
+  never a batch of one. Binary32 barely moves either, at 1.05 times, which
+  is the control: it was the one format already at the bus and so the one
+  with nothing to win.
+
+  Against llama.cpp the device now generates at **40.8 tokens a second
+  against 28.1**, and the gap goes from 2.0 times to 1.4. It is also past
+  what llama.cpp reaches generating on this processor, 40.2, and past what
+  llama.cpp reaches with its own layers off the device, 39.8. Both the
+  device backend table and the fifteen per-format ratios were re-measured
+  with it; every cell of the one-vector column fell and no cell of the
+  eight-vector column moved, which is what says the narrow kernel is bound
+  to a batch of one rather than asserting it.
+
 - **Every format but binary32 now reaches the device's matrix instruction,
   through a second pipeline compiled from the same shader.** `Q4_0` reads a
-  110-token prompt in 0.411 s against 0.753, and `Q2_K` in 0.387 against
-  0.991 -- 1.8 and 2.6 times -- while the six formats that were already on
-  the tile do not move: `Q8_0` 0.532 s against 0.525, `Q4_K_M` 0.415 against
-  0.423, `Q5_K_M` 0.446 against 0.450. Medians of three alternated rounds in
-  one sitting.
+  110-token prompt in 0.311 s against 0.469, and `Q2_K` in 0.295 against
+  0.821 -- 1.5 and 2.8 times -- while the six formats that were already on
+  the tile do not move: `Q8_0` 0.276 s against 0.283, `Q4_K_M` 0.284 against
+  0.291, `Q5_K_M` 0.293 against 0.300. Medians of alternated rounds in one
+  sitting.
 
   `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1` and `IQ4_NL` share one shape and one branch
   between them, differing only in what is done to a nibble; `Q2_K`, `Q3_K`
@@ -45,7 +92,7 @@ Keep a Changelog and the project uses semantic versioning.
   compilations. The tile itself is one text and cannot drift, which is why
   this is a define rather than a second file.
 
-  `Q2_K` gained 2.6 times where the same eight-in-one-shader attempt had
+  `Q2_K` gained 2.8 times where the same eight-in-one-shader attempt had
   gained three per cent, and that is `Q3_K` going in with them: a "Q2_K" file
   is a mixture and much of it is `Q3_K`, so leaving that one format out had
   hidden the rest. It was the number the earlier note said to watch.

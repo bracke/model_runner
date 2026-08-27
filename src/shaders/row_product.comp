@@ -89,7 +89,19 @@ const uint FMT_IQ4_XS = 14u;
 //  over it unroll and the accumulators stay in registers; making it the
 //  batch length instead would put them in memory and give back what the
 //  batching just bought.
+//  This source is compiled twice, and the second compilation defines
+//  SINGLE. A generated token is one vector against every matrix in the
+//  model, and with GROUP at eight it carries eight accumulators, reads
+//  eight offsets and reserves eight kilobytes of shared memory for a
+//  reduction seven eighths of which is thrown away. The engine binds the
+//  narrow pipeline when the batch is one and the wide one otherwise, so
+//  neither pays for the other -- the same trade matrix_product.comp makes
+//  between its two compilations, and for the same measured reason.
+#ifdef SINGLE
+const uint GROUP = 1u;
+#else
 const uint GROUP = 8u;
+#endif
 
 //  Invocations that share one row.
 //

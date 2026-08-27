@@ -5342,6 +5342,21 @@ package body Checks is
                   & "compiled; compile it and run 'tests shader "
                   & "src/shaders/row_product.comp OUT.spv' again");
          end if;
+
+         --  That source is compiled twice as well, the second with SINGLE,
+         --  and the narrow words carry a digest of their own. Read for the
+         --  same reason as the matrix product's pair: a regeneration that
+         --  named the file once leaves the other half behind.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Row_Single_Digest
+         then
+            Fail ("the second compilation of src/shaders/row_product.comp "
+                  & "is older than the source; compile it twice, the second "
+                  & "with -DSINGLE to row_single.spv, and run 'tests shader' "
+                  & "again with every shader named");
+         end if;
       end;
 
       --  And the second shader, asked the same way. Every shader the engine
