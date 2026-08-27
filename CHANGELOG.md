@@ -7,6 +7,49 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Every format but binary32 now reaches the device's matrix instruction,
+  through a second pipeline compiled from the same shader.** `Q4_0` reads a
+  110-token prompt in 0.411 s against 0.753, and `Q2_K` in 0.387 against
+  0.991 -- 1.8 and 2.6 times -- while the six formats that were already on
+  the tile do not move: `Q8_0` 0.532 s against 0.525, `Q4_K_M` 0.415 against
+  0.423, `Q5_K_M` 0.446 against 0.450. Medians of three alternated rounds in
+  one sitting.
+
+  `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1` and `IQ4_NL` share one shape and one branch
+  between them, differing only in what is done to a nibble; `Q2_K`, `Q3_K`
+  and `IQ4_XS` take a branch each. The fifteenth format, binary32, is still
+  refused on purpose: the tile's operand is half precision, and a caller who
+  kept a model at binary32 asked for the mantissa that would be lost.
+
+  **Why two pipelines and not fourteen branches.** Putting the eight new
+  decodes into the existing shader cost the six that were already there
+  twenty-one per cent with the host refusing to dispatch them -- so with not
+  one line of the new code reachable. A pipeline's registers are allocated
+  for every branch compiled into it, and the occupancy that follows is the
+  occupancy of every dispatch. `matrix_product.comp` is therefore compiled
+  twice, once as it stands and once with `MORE_FORMATS`, and the engine binds
+  whichever of the two decodes the weights it was given. The two share
+  everything but the decode: the tile, the accumulators, the column loop, the
+  operand loads and the store are one text.
+
+  A shader compiled twice needed the shader tool to name its constants for
+  the compiled file rather than the source. Shaders compiled once are
+  unaffected, their two names agreeing. The two constants carry a digest
+  each, of the same file, and a repository check requires them to agree: a
+  pair that does not is one of the two compiled from a source the other has
+  moved past, which the staleness check on its own cannot see.
+
+  The cost is two SPIR-V modules in the binary rather than one, 48584 bytes
+  beside 42004, and a rule no compiler enforces -- that the decode is the
+  only part of `matrix_product.comp` which may differ between its two
+  compilations. The tile itself is one text and cannot drift, which is why
+  this is a define rather than a second file.
+
+  `Q2_K` gained 2.6 times where the same eight-in-one-shader attempt had
+  gained three per cent, and that is `Q3_K` going in with them: a "Q2_K" file
+  is a mixture and much of it is `Q3_K`, so leaving that one format out had
+  hidden the rest. It was the number the earlier note said to watch.
+
 - **Half precision and brain floating point reach the device's matrix
   instruction too, and a `--repack bf16` prompt reads 0.302 s against
   1.164.** They cost nothing to add: half precision is already what the tile

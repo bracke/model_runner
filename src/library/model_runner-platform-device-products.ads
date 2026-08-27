@@ -816,6 +816,16 @@ private
       Matrix     : System.Address := System.Null_Address;
       Halver     : System.Address := System.Null_Address;
 
+      --  And the sixth: the same tile, compiled from the same source with
+      --  MORE_FORMATS, decoding the eight formats the fourth leaves out.
+      --  Two pipelines rather than one that decodes them all, because a
+      --  pipeline's registers are allocated for every branch in it and the
+      --  fourteen-branch shader cost the six formats a fifth of their speed
+      --  with the other eight unreachable. Null if the device took the
+      --  first and refused this one, which leaves the eight where they
+      --  were and does not disturb the six.
+      Extra      : System.Address := System.Null_Address;
+
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
@@ -823,6 +833,7 @@ private
       Attend_Line : System.Address := System.Null_Address;
       Matrix_Line : System.Address := System.Null_Address;
       Halve_Line  : System.Address := System.Null_Address;
+      Extra_Line  : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
       --  is what the device said when it was opened.

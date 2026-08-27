@@ -152,7 +152,18 @@ package body Shader_Generation is
          Digest : Interfaces.Unsigned_64;
          Marked : Boolean;
 
-         Name : constant String := Ada_Name (Pair.Source.all);
+         --  Named for the compiled file rather than the source, so that
+         --  one shader may be compiled twice and reach the engine as two
+         --  constants. The matrix product is: a pipeline pays for every
+         --  branch compiled into it whether or not the branch is taken --
+         --  twenty-one per cent, measured -- so the formats it decodes are
+         --  split across two compilations of one source. The digest below
+         --  is still the source's, which is what the staleness check wants
+         --  and is the same for both.
+         --
+         --  Every shader that is compiled once is unaffected: its two names
+         --  agree.
+         Name : constant String := Ada_Name (Pair.Compiled.all);
       begin
          Ok := False;
 

@@ -268,18 +268,29 @@ package body Model_Runner.Platform.Device.Products is
    --
    --  Four questions, and each of them is a promise the shader relies on
    --  rather than a preference. The device has to have said it offers the
-   --  instruction; the weights have to be in one of the six formats
-   --  matrix_product.comp decodes, at a width that is a whole number of
-   --  their blocks -- and binary32 is deliberately not one of them, because
-   --  the tile's operand is half precision and a caller who kept a model at
-   --  binary32 asked for the mantissa that would be lost; the rows have to
-   --  divide by the tile, because a workgroup writes a whole tile and a
-   --  partial one would write into the next vector's answers; and the batch has to be long enough to be
-   --  worth rounding up to a tile.
+   --  instruction; the weights have to be in one of the fourteen formats
+   --  matrix_product.comp decodes between its two compilations, at a width
+   --  that is a whole number of their blocks -- and binary32 is
+   --  deliberately not one of them, because the tile's operand is half
+   --  precision and a caller who kept a model at binary32 asked for the
+   --  mantissa that would be lost; the rows have to divide by the tile,
+   --  because a workgroup writes a whole tile and a partial one would write
+   --  into the next vector's answers; and the batch has to be long enough
+   --  to be worth rounding up to a tile.
    --
-   --  Everything else -- nine formats, a generated token, a row count
-   --  the tile does not divide, and every device that has not got the
-   --  instruction -- goes where it always went.
+   --  Everything else -- binary32, a generated token, a row count the tile
+   --  does not divide, and every device that has not got the instruction --
+   --  goes where it always went.
+
+   --  Which of the two pipelines a format belongs to. The six the first
+   --  decodes are the ones a published model is usually made of; the eight
+   --  the second decodes are the rest. The split is the shader's, not a
+   --  judgement about the formats: see the note on Extra.
+   function On_Extra (Packing : Weight_Packing) return Boolean
+   is (Packing in Packed_Q4_0 | Packed_Q4_1 | Packed_Q5_0 | Packed_Q5_1
+                  | Packed_IQ4_NL | Packed_Q2_K | Packed_Q3_K
+                  | Packed_IQ4_XS);
+
    function Uses_Matrix
      (Item    : Engine;
       Packing : Weight_Packing;
@@ -290,11 +301,15 @@ package body Model_Runner.Platform.Device.Products is
        and then Item.Matrix_Line /= Null_Handle
        and then Rows mod Tile_Rows = 0
        and then Count >= Tile_Least
+       and then (not On_Extra (Packing)
+                 or else Item.Extra_Line /= Null_Handle)
        and then ((Packing in Values_F16 | Values_BF16
                   and then Columns mod 32 = 0)
-                 or else (Packing = Packed_Q8_0 and then Columns mod 32 = 0)
-                 or else (Packing in Packed_Q4_K | Packed_Q5_K
-                                     | Packed_Q6_K
+                 or else (Packing in Packed_Q4_0 | Packed_Q4_1 | Packed_Q5_0
+                                     | Packed_Q5_1 | Packed_Q8_0
+                                     | Packed_IQ4_NL
+                          and then Columns mod 32 = 0)
+                 or else (Packing in Super_Packing
                           and then Columns mod 256 = 0)));
 
    function Half_Descriptor (Item : Engine) return Buffer_Info
@@ -1156,6 +1171,8 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Matrix_Product;
             Copy   : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Half_Batch;
+            More   : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Matrix_Extra;
             Request : aliased Shader_Create_Info;
          begin
             if Create = null then
@@ -1187,6 +1204,19 @@ package body Model_Runner.Platform.Device.Products is
                   Item.Matrices := False;
                else
                   Item.Halver := Made;
+
+                  --  And the sixth, from the same source compiled with the
+                  --  other eight formats. This one is allowed to fail on
+                  --  its own: it is left null and those eight go to the row
+                  --  product, while the six the fourth decodes carry on.
+                  Request.Size := Interfaces.C.size_t (More'Length * 4);
+                  Request.Code := More'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Extra := Made;
+                  end if;
                end if;
             end if;
          end;
@@ -1376,6 +1406,19 @@ package body Model_Runner.Platform.Device.Products is
                   Item.Matrices := False;
                else
                   Item.Halve_Line := Made;
+
+                  --  And the second tile, if its module was made. A
+                  --  refusal here is not a fault either.
+                  if Item.Extra /= Null_Handle then
+                     Request.Stage.Module := Item.Extra;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Extra_Line := Made;
+                     end if;
+                  end if;
                end if;
             end if;
 
@@ -1654,6 +1697,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Commands, "vkDestroyCommandPool");
       Item.Descriptor := Null_Handle;
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
+      Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Line, "vkDestroyPipeline");
       Give_Back (Item.Attend_Line, "vkDestroyPipeline");
@@ -1661,6 +1705,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Layout, "vkDestroyPipelineLayout");
       Give_Back (Item.Set_Layout, "vkDestroyDescriptorSetLayout");
+      Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");
@@ -2245,7 +2290,10 @@ package body Model_Runner.Platform.Device.Products is
         (Item.Buffer, Pipeline_Stage_Compute, Pipeline_Stage_Compute,
          0, 1, Wall'Address, 0, Null_Handle, 0, Null_Handle);
 
-      Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Matrix_Line);
+      --  Whichever of the two tiles decodes this format.
+      Bind_Pipeline
+        (Item.Buffer, Bind_Point_Compute,
+         (if On_Extra (Packing) then Item.Extra_Line else Item.Matrix_Line));
 
       declare
          Shape : aliased Shape_Constants :=

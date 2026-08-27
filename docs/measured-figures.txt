@@ -5090,7 +5090,7 @@ reference 541E9ABD66FAA7E8 src/library/model_runner-backend-reference.adb src/li
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-device 86D1890F46B8061C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 004CDDF25E80F1F2 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -6899,4 +6899,84 @@ tokenizer 1FF8432124AF218F src/library/model_runner-tokenizer.adb
 # left outside, so tiling the rest of it cannot show. Q3_K would have to go
 # in with them.
 
-outside 86D1890F46B8061C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# 2026-08-27, the second pipeline: the same shader compiled twice, and every
+# format but binary32 on the tile.
+#
+# The entry above priced a fourteen-branch shader and found it cost the six
+# formats already on the tile twenty-one per cent for code the host would
+# not let run. This is the answer it named: matrix_product.comp is compiled
+# once as it stands, for those six, and once with MORE_FORMATS for the other
+# eight, and the engine makes a sixth module and a sixth pipeline and binds
+# whichever of the two decodes the weights it was handed. Q3_K went in with
+# the eight, which the entry above said would have to happen.
+#
+# Three alternated rounds each, `tests speed --model M --prompt-file
+# fixtures/speed-prompt.txt --max-tokens 0 --repeats 1 --backend device`,
+# medians:
+#
+#   Q4_0    110-token device prompt   0.753 s  ->  0.411 s
+#   Q2_K    110-token device prompt   0.991 s  ->  0.387 s
+#   Q8_0    110-token device prompt   0.525 s  ->  0.532 s
+#   Q4_K_M  110-token device prompt   0.423 s  ->  0.415 s
+#   Q5_K_M  110-token device prompt   0.450 s  ->  0.446 s
+#
+# The last three are controls and none of them moves. Taken again in a
+# second sitting after the gate: 0.811 -> 0.422, 1.014 -> 0.389, 0.529 ->
+# 0.526, 0.418 -> 0.417, 0.446 -> 0.448. Same conclusion, and the controls
+# hold in both.
+#
+# And once more from the binary that was committed, after a comment in the
+# shader was reflowed and both compilations remade: Q4_0 0.423, Q2_K 0.399,
+# Q8_0 0.526. The words in the package are the words that were measured.
+#
+# How the two sides were built. Not two binaries from two checkouts: one
+# line, `Item.Extra := Made` against `Item.Extra := Null_Handle`, so the
+# "before" makes the second module and throws it away and every format it
+# would have taken falls back to the row product exactly as it did at HEAD.
+# That is a faithful before precisely because the first pipeline is
+# compiled from the same words either way -- which is the whole claim being
+# tested.
+#
+# Q2_K gained 2.6 times where the one-shader attempt gained three per cent.
+# That is Q3_K, as the entry above predicted it would be: a "Q2_K" file is a
+# mixture and much of it is Q3_K, so leaving that one format outside hid
+# what tiling the rest of it was worth. The prediction is worth recording as
+# having held, because most of the guesses in this file have not.
+#
+# A rejected shape, measured rather than argued. The first attempt put the
+# decode in a shared function so that main() could be identical in both
+# files. That restructuring alone -- same six formats, same arithmetic, no
+# new decode anywhere -- read 0.358, 0.372 and 0.362 s against the
+# committed 0.287, 0.285 and 0.283 in one sitting. Twenty-six per cent for a
+# function call. So the sharing is done by the preprocessor: one text, two
+# compilations, and the decode is the only part that differs.
+#
+# What the split costs, said plainly. Two SPIR-V modules in the binary
+# instead of one, 48584 bytes against 42004. And a rule no compiler checks:
+# the decode is the only part of matrix_product.comp that may differ between
+# its two compilations. The tile itself -- the accumulators, the column loop,
+# the operand loads, the store -- is one text and cannot drift, which was
+# the objection to a second pipeline and is the reason this is a define
+# rather than a second file.
+#
+# One tool change went with it. `tests shader` names the Ada constant for
+# the compiled file rather than the source, so one source can arrive as two
+# constants; the digest it records is still the source's, which is what the
+# staleness check wants and is the same for both. Shaders compiled once are
+# unaffected: their two names agree.
+#
+# The device format test now holds all fourteen tiled formats to the tiled
+# tolerance at sixty-four rows and a batch of forty, and binary32 to the
+# tight one, which is what proves binary32 is still refused on purpose.
+#
+# The device group's own published figures were NOT re-taken. The two-row
+# table under "The device backend" and the llama.cpp comparison rows are
+# both Q8_0, which is compiled into the first pipeline and cannot reach the
+# second; it was measured as a control in both sittings here and did not
+# move. Both fingerprints are restamped rather than left stale, and this
+# paragraph is the answer the rule asks for.
+#
+# The machine: load 0.46 falling to 0.45 for the first sitting and 0.99
+# rising to 1.00 for the second, both under the 1.20 this file requires.
+
+outside 004CDDF25E80F1F2 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb

@@ -388,7 +388,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Localization | Every application-authored string through `messages`; 174 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
-| Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, for half precision, brain floating point, eight-bit blocks and the four-, five- and six-bit k-quants, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
+| Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. It is compiled twice, once for the six formats a published model is usually made of and once for the eight others, because a pipeline pays for every branch compiled into it whether or not the branch is taken; between the two it decodes every format but binary32, which it refuses on purpose because its operand is half precision. The engine binds whichever of the two decodes the weights it was handed. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
 | Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests render`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
@@ -486,13 +486,20 @@ cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
 cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv \
                              [SOURCE.comp OUT.spv ...] [ROOT]
                                            # after recompiling a shader, and
-                                           # naming every one of the five:
+                                           # naming every one of the six:
                                            # the package is written whole.
                                            # Four compile with
                                            # `glslangValidator -V`; the
                                            # matrix product needs
                                            # `--target-env vulkan1.3`,
-                                           # because it is SPIR-V 1.6.
+                                           # because it is SPIR-V 1.6, and
+                                           # is compiled twice -- again with
+                                           # `-DMORE_FORMATS` to
+                                           # matrix_extra.spv, which is the
+                                           # sixth. A constant is named for
+                                           # the compiled file, so the two
+                                           # arrive as Matrix_Product and
+                                           # Matrix_Extra.
 cd tests && ./bin/tests fuzz --seed 1 --cases 2000
 cd tests && ./bin/tests fixtures           # write tests/fixtures/tiny-model.gguf
 cd tests && ./bin/tests package .. .       # write model_runner-<version>.tar
@@ -2374,11 +2381,11 @@ sixty-four a tile against the two it has now.
 
 ### Eight more formats, and what a branch costs when it is never taken
 
-Six formats reach the device's tile and nine do not. Eight of the nine were
-written: `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1` and `IQ4_NL` share one shape and take
-one branch between them, `Q2_K` and `IQ4_XS` a branch each, and `Q3_K` was
-left. All fifteen formats pass the device format test at sixty-four rows and
-a batch of forty, so the decodes are right.
+Six formats reached the device's tile and nine did not. Eight of the nine
+were written first: `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1` and `IQ4_NL` share one
+shape and take one branch between them, `Q2_K` and `IQ4_XS` a branch each,
+and `Q3_K` was left. All fifteen formats pass the device format test at
+sixty-four rows and a batch of forty, so the decodes are right.
 
 | 110-token device prompt | before | after |
 |---|---:|---:|
@@ -2399,18 +2406,49 @@ decided a device question here and the first where the cause is the size of
 the code rather than the shape of a read; the three before it were shared
 memory taken by hand.
 
-**What it would take** is a second pipeline, so that the six formats that
-were fast keep a shader with six branches and the eight new ones get their
-own. The engine already makes five modules and a sixth is mechanical; what is
-not mechanical is that the tile itself -- the accumulators, the column loop,
-the operand loads and the store -- would then exist twice and drift. The
-duplication is a real cost and so is the 1.45 times on `Q4_0`, and the trade
-wants deciding rather than assuming.
+### The second pipeline, and Q3_K with it
 
-One number for whoever decides: `Q2_K` gained three per cent where `Q4_0`
-gained forty-five, and the likely reason is that a "Q2_K" file is a mixture
-like every other -- much of it is `Q3_K`, the one format left outside, so
-tiling the rest of it cannot show. `Q3_K` would have to go in with them.
+So the shader is compiled twice instead. `matrix_product.comp` decodes the
+six as it stands and the other eight with `MORE_FORMATS` defined, and the
+engine makes a sixth module and a sixth pipeline from the second compilation
+and binds whichever of the two decodes the weights it was handed. `Q3_K`
+went in with the eight, which makes the tile's coverage every format but
+binary32.
+
+| 110-token device prompt | before | after |
+|---|---:|---:|
+| Q4_0 | 0.753 s | **0.411 s** |
+| Q2_K | 0.991 s | **0.387 s** |
+| Q8_0, the control | 0.525 s | 0.532 s |
+| Q4_K_M, a control | 0.423 s | 0.415 s |
+| Q5_K_M, a control | 0.450 s | 0.446 s |
+
+Medians of three alternated rounds in one sitting. **The three controls do
+not move**, which is the whole point of the split: the formats that were
+already fast are compiled into a pipeline the new decodes are not in, so
+they cannot pay for them.
+
+`Q2_K` gained 2.6 times where the one-shader attempt had gained three per
+cent, and that is `Q3_K`. A "Q2_K" file is a mixture like every other and
+much of it is `Q3_K`, so leaving that one format outside had hidden what
+tiling the rest of it was worth. The earlier note named that number as the
+one to watch, and it was.
+
+**What it costs.** Two SPIR-V modules in the binary rather than one, 48584
+bytes beside 42004; and a rule that the decode is the only part of the
+shader that may differ between them, which is a rule a reader has to keep
+rather than a thing the compiler checks. What it does not cost is a second
+copy of the tile: the accumulators, the column loop, the operand loads and
+the store are one text, read twice by the preprocessor. Naming the Ada
+constants for the compiled file rather than the source is what let one
+source become two constants; shaders compiled once are unaffected, their two
+names agreeing.
+
+A first attempt put the decode in a shared function so that `main` could be
+byte-identical in both files. **That restructuring alone cost twenty-six per
+cent** -- 0.358, 0.372 and 0.362 s against 0.287, 0.285 and 0.283 for the
+same six formats and the same arithmetic. A function call is not free here
+either, and the preprocessor is the cheaper way to share a text.
 
 ### Against llama.cpp
 

@@ -780,13 +780,13 @@ package body Tests.Backend_Cases is
 
                      --  Only where the matrix product could have run: a
                      --  shape it refuses is the row product whichever
-                     --  device this is.
+                     --  device this is. Between its two pipelines the tile
+                     --  now decodes every format but binary32, which it
+                     --  refuses on purpose -- the operand it multiplies by
+                     --  is half precision.
                      Bound : constant N.Real :=
                        (if Chosen.Tiled
-                          and then Format_Of (Which)
-                                     in G.Type_F16 | G.Type_BF16
-                                        | G.Type_Q8_0 | G.Type_Q4_K
-                                        | G.Type_Q5_K | G.Type_Q6_K
+                          and then Format_Of (Which) not in G.Type_F32
                         then Tiled_Bound else Row_Bound);
                   begin
                      if Many = 1 then

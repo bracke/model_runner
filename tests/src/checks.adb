@@ -5407,6 +5407,22 @@ package body Checks is
                   & "was compiled; compile it with --target-env vulkan1.3 "
                   & "and run 'tests shader' again with every shader named");
          end if;
+
+         --  That source is compiled twice, once with MORE_FORMATS, and each
+         --  compilation carries a digest of the source it came from. The
+         --  test above reads one of them; this reads the other, because a
+         --  regeneration that named the file once would leave the second
+         --  set of words behind without anything noticing.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Matrix_Extra_Digest
+         then
+            Fail ("the second compilation of src/shaders/matrix_product.comp"
+                  & " is older than the source; compile it twice, the second"
+                  & " with -DMORE_FORMATS to matrix_extra.spv, and run "
+                  & "'tests shader' again with every shader named");
+         end if;
       end;
 
       --  And the fifth, which goes with it.
