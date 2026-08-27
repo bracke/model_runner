@@ -3047,6 +3047,61 @@ surround away -- every submission, every transfer, every host loop, all of it
 free -- and this is 2.03 s, still two and a half times behind. **The remaining
 gap is the arithmetic.**
 
+### Short of arithmetic, not of memory
+
+The section above ends by saying there is no instrument here that separates
+what the tile does per flop from the memory it reads. There is one now: **one
+shape, one batch, every format the tile decodes.** The flops are identical
+and only the bytes differ, so what changes between rows is the traffic and
+nothing else.
+
+16384 by 2048 at 128 vectors, best of three passes, two rounds averaged:
+
+| | bytes a weight | weights | Gflop/s |
+|---|---:|---:|---:|
+| f16 | 2.00 | 64 MiB | 2737 |
+| bf16 | 2.00 | 64 MiB | 2624 |
+| q8_0 | 1.06 | 34 MiB | 3066 |
+| q6_k | 0.82 | 26 MiB | 3132 |
+| q5_k | 0.69 | 22 MiB | 3176 |
+| q4_k | 0.56 | 18 MiB | 3236 |
+| q4_0 | 0.56 | 18 MiB | 3225 |
+| q2_k | 0.33 | 10 MiB | 3358 |
+
+**Six point one times the bytes for one point two five times the time.** If
+the tile were bound by memory the two-bit format would run six times the
+eight-bit one's speed; it runs nine per cent faster.
+
+Fitting `time = arithmetic + bytes` across the two extremes gives **3.52
+teraflops a second of arithmetic** and a **marginal byte rate of 87 GB/s** --
+which is what `row_product.comp`'s own note calls "about ninety" for this
+part. **The weight reads are already at the bus**, and for the eight-bit
+format memory is 15 per cent of the time against arithmetic's 85.
+
+**What that retires** is the point of having asked. A smaller weight format
+is not a faster one here -- `q4_k` and `q8_0` are within six per cent. A
+half-precision anything on the weight side buys nothing. A better weight
+layout buys nothing. Every idea whose mechanism is *fewer bytes* or
+*better-shaped bytes* is answered at once.
+
+What is left is flops per clock out of the matrix instruction. Twelve compute
+units at about 2.7 GHz doing 256 half-precision flops a clock each would be
+8.3 Tflop/s, so 3.52 is around 42 per cent of it -- and that peak is
+arithmetic on a number this page has not measured, so read it as an order and
+not a figure.
+
+It also raises the prior on attention, which is measured separately and
+agrees: confining its reads to a cache-resident window bought 1.18 times once
+the query block was in. **Both device kernels are short of arithmetic and
+neither is short of memory** -- a coherent thing to know about this part, and
+not knowable from any single measurement.
+
+One note on the instrument. Taken a pass apiece these eight read a spread of
+sixty per cent between rounds and disagreed about which format was fastest; a
+first reading had `f16` 21 per cent slower than `bf16`, which a second round
+showed was noise and **which would have been published as a finding about
+`unpackHalf2x16`**. It takes the best of three passes now.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has

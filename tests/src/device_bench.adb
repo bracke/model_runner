@@ -666,6 +666,141 @@ package body Device_Bench is
          end;
       end Prompt;
 
+      --  Whether the batched product is short of arithmetic or short of
+      --  memory, which nothing here has been able to say.
+      --
+      --  One shape, one batch, every format the tile decodes: the flops are
+      --  identical and only the bytes differ. Half precision reads two
+      --  bytes a weight and the eight-bit format 1.06, and neither decodes
+      --  to anything -- a copy and a byte times a scale -- so that pair
+      --  varies the traffic by 1.88 and holds everything else still. If the
+      --  tile is bound by memory the wider one takes 1.88 times as long; if
+      --  it is bound by arithmetic they are level.
+      --
+      --  Sixteen thousand rows rather than the two thousand a layer asks
+      --  for, because a call costs 0.29 ms before it computes anything and
+      --  at a layer's shape that is most of what would be timed. Here it is
+      --  a tenth.
+      procedure Grains is
+         use type N.Element_Count;
+         use type Model_Runner.Bytes.Byte_Count;
+         use type Model_Runner.Bytes.Byte_Array_Access;
+
+         type Values is access N.Real_Array;
+
+         Rows    : constant := 16384;
+         Columns : constant := 2048;
+         Vectors : constant := 128;
+         Seconds : constant Duration := 0.40;
+
+         type Grain is record
+            Name     : String (1 .. 6);
+            Packing  : Products.Weight_Packing;
+            Elements : Positive;
+            Bytes    : Positive;
+         end record;
+
+         Table : constant array (1 .. 8) of Grain :=
+           [("f16   ", Products.Values_F16,    1,   2),
+            ("bf16  ", Products.Values_BF16,   1,   2),
+            ("q8_0  ", Products.Packed_Q8_0,  32,  34),
+            ("q6_k  ", Products.Packed_Q6_K, 256, 210),
+            ("q5_k  ", Products.Packed_Q5_K, 256, 176),
+            ("q4_k  ", Products.Packed_Q4_K, 256, 144),
+            ("q4_0  ", Products.Packed_Q4_0,  32,  18),
+            ("q2_k  ", Products.Packed_Q2_K, 256,  84)];
+
+         Asked : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Columns) * Vectors - 1);
+         Got   : constant Values :=
+           new N.Real_Array (0 .. N.Element_Count (Rows) * Vectors - 1);
+      begin
+         Asked.all := [others => 0.25];
+
+         for Which of Table loop
+            declare
+               Room : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count (Columns / Which.Elements)
+                 * Model_Runner.Bytes.Byte_Count (Which.Bytes)
+                 * Model_Runner.Bytes.Byte_Count (Rows);
+
+               Weights : Model_Runner.Bytes.Byte_Array_Access;
+               Started : Ada.Calendar.Time;
+               Calls   : Natural := 0;
+               Spent   : Duration := 0.0;
+               Best    : Duration := Duration'Last;
+               Ok      : Boolean := True;
+               Halted  : Boolean;
+            begin
+               Model_Runner.Bytes.Allocate (Room, Weights);
+               exit when Weights = null;
+
+               for Index in Weights.all'Range loop
+                  Weights.all (Index) :=
+                    Model_Runner.Bytes.Byte (Natural (Index mod 251));
+               end loop;
+
+               --  The best of three passes rather than one, and the best
+               --  rather than the middle for the reason
+               --  Measure_Device_Ratio states: what varies here is how much
+               --  the pass was interrupted, and the least interrupted one
+               --  is the closest this gets to the device measured alone.
+               --  Taken a pass apiece these eight read a spread of sixty
+               --  per cent between rounds and disagreed about which format
+               --  was fastest.
+               for Pass in 1 .. 3 loop
+                  Calls := 0;
+                  Started := Ada.Calendar.Clock;
+
+                  loop
+                     Products.Multiply
+                       (Engine, Weights.all, 0, Which.Packing, Rows,
+                        Columns, Asked.all, Vectors, Got.all, Ok, Halted,
+                        Key => Weights.all (Weights.all'First)'Address);
+                     exit when not Ok;
+                     Calls := Calls + 1;
+                     Spent := Ada.Calendar.Clock - Started;
+                     exit when Spent >= Seconds;
+                  end loop;
+
+                  exit when not Ok or else Calls = 0;
+
+                  if Spent / Calls < Best then
+                     Best := Spent / Calls;
+                  end if;
+               end loop;
+
+               if Ok and then Calls > 0 then
+                  declare
+                     Each : constant Long_Float := Long_Float (Best);
+
+                     Rate : constant Long_Float :=
+                       2.0 * Long_Float (Rows) * Long_Float (Columns)
+                       * Long_Float (Vectors) / Each / 1.0E9;
+
+                     Feed : constant Long_Float :=
+                       Long_Float (Room) / Each / 1.0E9;
+                  begin
+                     Ada.Text_IO.Put_Line
+                       ("    " & Which.Name
+                        & Duration'Image (Duration (Each)) & " s,"
+                        & Long_Float'Image (Rate) & " Gflop/s,"
+                        & Long_Float'Image (Feed) & " GB/s,"
+                        & Model_Runner.Bytes.Byte_Count'Image
+                            (Room / 1_048_576)
+                        & " MiB of weights");
+                  end;
+               else
+                  Ada.Text_IO.Put_Line
+                    ("    " & Which.Name & " the device would not take it");
+               end if;
+
+               Products.Forget_Matrices (Engine);
+               Model_Runner.Bytes.Free (Weights);
+            end;
+         end loop;
+      end Grains;
+
       --  What the batched product reaches at the shapes a layer actually
       --  asks for, rather than at a tidy square.
       --
@@ -1098,6 +1233,11 @@ package body Device_Bench is
       --  layer asks for, which is what a prompt does.
       Ada.Text_IO.Put_Line ("  a batch of 128, by shape:");
       Tiles;
+
+      --  And one shape at every format, where only the bytes differ.
+      Ada.Text_IO.Put_Line
+        ("  16384 by 2048 at 128 vectors, by format:");
+      Grains;
 
       Products.Close (Engine);
       Devices.Close (Opened);

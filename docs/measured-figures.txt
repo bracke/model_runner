@@ -3077,6 +3077,72 @@ kernels 77EB0DAB62549D76 src/library/model_runner-quantization.adb src/library/m
 # are were not re-taken: neither benchmark opens a session, so neither
 # reaches a loop this changed.
 
+# 2026-08-27, the batched product is short of arithmetic and not of memory.
+# Six times the bytes costs a quarter more time.
+#
+# The entry above ended by saying this file had no instrument that separated
+# what the tile does per flop from the memory it reads. It has one now. One
+# shape, one batch, every format the tile decodes: the flops are identical
+# and only the bytes differ, so what changes between rows is the traffic and
+# nothing else.
+#
+# Sixteen thousand three hundred and eighty-four rows by two thousand and
+# forty-eight, a hundred and twenty-eight vectors, best of three passes,
+# two rounds averaged:
+#
+#   f16    2.00 bytes a weight   64 MiB   2737 Gflop/s
+#   bf16   2.00                  64       2624
+#   q8_0   1.06                  34       3066
+#   q6_k   0.82                  26       3132
+#   q5_k   0.69                  22       3176
+#   q4_k   0.56                  18       3236
+#   q4_0   0.56                  18       3225
+#   q2_k   0.33                  10       3358
+#
+# **Six point one times the bytes for one point two five times the time.**
+# If the tile were bound by memory the two-bit format would be six times the
+# eight-bit one's speed; it is nine per cent.
+#
+# Fitting time = arithmetic + bytes across the two extremes:
+#
+#   the arithmetic         3.52 teraflops a second
+#   the marginal byte rate 87 gigabytes a second
+#
+# and for the eight-bit format that puts the memory at fifteen per cent of
+# the time and the arithmetic at eighty-five. Eighty-seven gigabytes a
+# second is what row_product.comp's own note calls "about ninety" for this
+# part: **the weight reads are already at the bus.** There is nothing to win
+# by coalescing them better, by laying the weights out differently, or by
+# making them smaller.
+#
+# What this retires, which is the point of having asked. A smaller weight
+# format is not a faster one on this device -- q4_k and q8_0 are within six
+# per cent. A half-precision anything on the weight side buys nothing. A
+# better weight layout buys nothing. Every idea whose mechanism is "fewer
+# bytes" or "better-shaped bytes" is answered.
+#
+# What is left is flops per clock out of the matrix instruction. Twelve
+# compute units at about 2.7 GHz doing 256 half-precision flops a clock each
+# would be 8.3 teraflops a second, so 3.52 is about forty-two per cent of
+# it -- and that peak is arithmetic on a number this file has not measured,
+# so it is quoted as an order and not as a figure.
+#
+# It also raises the prior on attention, which is measured separately and
+# agrees: confining its reads to a cache-resident window bought 1.18 times
+# after the query block went in. **Both device kernels are short of
+# arithmetic and neither is short of memory**, which is a coherent thing to
+# know about this part and was not knowable from any single measurement.
+#
+# One note on the instrument. Taken a pass apiece these eight read a spread
+# of sixty per cent between rounds and disagreed about which format was
+# fastest -- a first reading had f16 twenty-one per cent slower than bf16,
+# which a second round showed was noise and which would have been published
+# as a finding about unpackHalf2x16. Grains takes the best of three passes
+# now, for the reason Measure_Device_Ratio already states.
+#
+# tests/src/device_bench.adb is the only source changed, and no figure group
+# names it.
+
 # 2026-08-27, the narrow projection was the instrument. The tile does 3.4
 # teraflops a second and the shape table was measuring a round trip.
 #

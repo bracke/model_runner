@@ -7,6 +7,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The batched product is short of arithmetic and not of memory: six times
+  the bytes costs a quarter more time.** `tests device-bench` grew an
+  instrument that holds the shape and the batch still and sweeps only the
+  format, so the flops are identical and only the traffic differs. At 16384
+  by 2048 and 128 vectors it reads 2624 Gflop/s at two bytes a weight and
+  3358 at a third of a byte -- **6.1 times the bytes for 1.25 times the
+  time**.
+
+  Fitting arithmetic against bytes gives **3.52 Tflop/s of arithmetic and a
+  marginal byte rate of 87 GB/s**, which is this part's bus. The weight
+  reads are already as fast as they can be, and for the eight-bit format
+  memory is 15 per cent of the time.
+
+  That retires a class of ideas at once: a smaller weight format is not a
+  faster one here (`q4_k` and `q8_0` are within six per cent), and nothing
+  whose mechanism is fewer or better-shaped bytes will move the product.
+  What is left is flops per clock out of the matrix instruction. Attention,
+  measured separately, agrees -- so both device kernels are short of
+  arithmetic and neither is short of memory.
+
+  The instrument takes the best of three passes: a pass apiece gave a
+  sixty per cent spread between rounds and a first reading that had `f16` 21
+  per cent slower than `bf16`, which was noise and would have been published
+  as a finding about `unpackHalf2x16`.
+
 - **The narrow projection that looked six times slow was the instrument, and
   the tile does 3.4 teraflops a second.** `tests device-bench` times a whole
   `Multiply` -- upload, record, submit, wait, copy back -- and that round trip
