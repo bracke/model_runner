@@ -420,7 +420,10 @@ begin
                --  this used to say, and it could not tell which. It can:
                --  Host_Load.Publishable is the rule this repository already
                --  applies to every figure it prints, and a stage's time is a
-               --  figure. Above that load the number says nothing about the
+               --  figure. The average and not Quiet_Enough here on purpose:
+               --  the question is whether the machine was busy over the
+               --  minute this stage ran in, which is the window the average
+               --  covers and the window a sample taken now does not. Above that load the number says nothing about the
                --  stage, so it is reported and not counted -- conformance
                --  read 648, 992, 1505 and 1794 s in one day against a bound
                --  of 1250, and the difference was the machine every time.
@@ -1573,8 +1576,14 @@ begin
                end if;
             end;
 
+         --  Quiet_Enough and not Publishable, because this asks whether a
+         --  figure may be taken *now* and the two readers above ask whether
+         --  the machine was busy while something already ran. The minute's
+         --  average is the right instrument for the second question and the
+         --  wrong one for the first: it answers about the window a finished
+         --  stage occupied, and it lags the window a run is about to.
          elsif not Given ("--anyway")
-           and then not Host_Load.Publishable (Load_Now)
+           and then not Host_Load.Quiet_Enough
          then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,

@@ -3058,20 +3058,16 @@ package body Model_Runner.Llama is
                        Element_Count'Min (Run, Value_Size - At_Component);
                      Sums : Real_Array (0 .. Here - 1) := [others => 0.0];
                   begin
-                     for Step in First .. Last loop
-                        declare
-                           Weight : constant Real :=
-                             Scores (At_Score + Step);
-                           At_Value : constant Element_Count :=
-                             Values'First + V_Base + Step * V_Width
-                             + Group * Value_Size + At_Component;
-                        begin
-                           for Component in 0 .. Here - 1 loop
-                              Sums (Component) := Sums (Component)
-                                + Weight * Values (At_Value + Component);
-                           end loop;
-                        end;
-                     end loop;
+                     K.Blend_Run
+                       (Sums      => Sums,
+                        Weights   => Scores,
+                        At_Weight => At_Score + First,
+                        Values    => Values,
+                        At_Value  =>
+                          Values'First + V_Base + First * V_Width
+                          + Group * Value_Size + At_Component,
+                        Stride    => V_Width,
+                        Steps     => Last - First + 1);
 
                      for Component in 0 .. Here - 1 loop
                         Target (Target'First + Head * Value_Size

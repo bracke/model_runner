@@ -61,6 +61,41 @@ package Host_Load is
    function Publishable (Load : Long_Float) return Boolean
    is (Load <= Too_Busy);
 
+   --  Whether the machine is quiet enough to take a figure on, now.
+   --
+   --  This is the gate every tool asks; Publishable above is one of the two
+   --  ways it answers, and is kept as the plain predicate of a number
+   --  because a gate that depends on the machine cannot be tested and this
+   --  one can.
+   --
+   --  **A load average lags in both directions**, and this was written
+   --  after watching it do both. It is an average over the minute behind,
+   --  so a machine that went idle the instant a run finished still reads
+   --  two or three for minutes: every figure here is taken in a sitting of
+   --  runs back to back, so the number the gate used to read was nearly
+   --  always the *previous run's own load* decaying, and what the gate did
+   --  was wait for arithmetic rather than for the machine -- a six-group
+   --  re-measure spent most of its half hour that way. It lags the other
+   --  way too, and that is the half that mattered: with eight spinners
+   --  started on this machine the average was still 1.06 three seconds
+   --  later, and the gate let the run through.
+   --
+   --  So the question goes to the processors: what share of them was busy
+   --  over a fifth of a second just now. That is what the gate always meant
+   --  -- is anything else running -- and it answers about now, in a fifth
+   --  of a second, in both directions.
+   --
+   --  The bound is the same Too_Busy either way, once as an average of
+   --  runnable processes and once as a count of busy processors, which is
+   --  the same quantity over different windows.
+   --
+   --  A host that keeps no per-processor times falls back to Publishable of
+   --  the load average, and is left exactly where it was before this
+   --  existed.
+   --
+   --  @return True when a figure taken now is worth publishing.
+   function Quiet_Enough return Boolean;
+
    --  Wait for the machine to be quiet enough to publish a figure from.
    --
    --  Every figure retaken this week came through a loop that polled the

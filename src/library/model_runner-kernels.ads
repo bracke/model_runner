@@ -87,18 +87,58 @@ package Model_Runner.Kernels is
       At_Right : Element_Count;
       Span     : Element_Count) return Real;
 
-   --  Whether Head_Dot above may use the wide lanes and the fused
-   --  multiply-add, which is an eighth of the instructions for the same
-   --  arithmetic.
+   --  One run of an attention head's output: a span of components summed
+   --  over a span of positions, each position's values scaled by its score.
+   --
+   --  Sums is added to rather than set, so a caller that wants only these
+   --  positions starts it at zero. Values holds one position's components
+   --  contiguously and Stride is how far apart two positions are; Weights
+   --  holds one score a position, contiguously.
+   --
+   --  Why this is not written as Ada either, and it is not the reason
+   --  Head_Dot is. This shape is a map and -O3 does vectorize it, eight
+   --  lanes of mulps and addps. What it cannot do is keep Sums in
+   --  registers across the positions, because Sums is an array the loop
+   --  writes: so every position pays a load and a store of the whole run
+   --  as well as its arithmetic, five instructions where the arithmetic is
+   --  two. A run of sixty-four components is eight registers, and held
+   --  there a position costs one broadcast and eight fused multiply-adds
+   --  reading the values where they lie -- nine instructions against
+   --  forty.
+   --
+   --  The multiply and the add are fused, so a product is rounded once
+   --  where the portable form rounds it twice. That is the more accurate
+   --  of the two and it is still a different answer, which the conformance
+   --  sweep is what decides about.
+   --
+   --  @param Sums Run of sums, added to in place.
+   --  @param Weights Vector the scores are taken from.
+   --  @param At_Weight Index of the first position's score.
+   --  @param Values Vector the values are taken from.
+   --  @param At_Value Index of the first position's first component.
+   --  @param Stride Elements between one position's values and the next's.
+   --  @param Steps How many positions.
+   procedure Blend_Run
+     (Sums      : in out Real_Array;
+      Weights   : Real_Array;
+      At_Weight : Element_Count;
+      Values    : Real_Array;
+      At_Value  : Element_Count;
+      Stride    : Element_Count;
+      Steps     : Element_Count);
+
+   --  Whether Head_Dot and Blend_Run above may use the wide lanes and the
+   --  fused multiply-add, which is a fraction of the instructions for the
+   --  same arithmetic.
    --
    --  It is told rather than asked, for the reason Quantization's
    --  Use_Wide_Decoders is told: this package interprets what a model file
    --  holds and may not reach a host. The backend that runs it asks and
    --  says so here, once, before any model is read. A caller that never
-   --  says leaves Head_Dot on the loop it had before this existed.
+   --  says leaves both on the loops they had before this existed.
    --
    --  @param Allowed True where the host has the wider instructions.
-   procedure Use_Wide_Dots (Allowed : Boolean);
+   procedure Use_Wide_Lanes (Allowed : Boolean);
 
    --  Root-mean-square normalization with a per-element gain.
    --

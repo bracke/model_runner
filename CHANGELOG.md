@@ -7,6 +7,97 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A hot part gives up a tenth of every serial figure, and the load gate
+  had been hiding it.** The wait the gate used to do was also, unnoticed,
+  letting the part cool. The first sitting under the new gate ran two
+  benchmarks back to back and the second read nine per cent below the first
+  on the same code.
+
+  Measured rather than assumed, which took two goes — the first attempt
+  waited four minutes because four minutes sounded right, which is the same
+  mistake as the load average with a guess in place of a lagging proxy. The
+  second reads `k10temp` and waits until two samples twenty seconds apart
+  are within a degree.
+
+  | | settled, 47 °C | straight after, 81 °C |
+  | --- | ---: | ---: |
+  | q8_0 `Row_Dot` | **2739** | 2399 |
+  | one share | **2602** | 2380 |
+  | eight shares | 14030 | 13681 |
+
+  The serial rows lose a tenth and the eight-share row two per cent: a hot
+  part gives up single-core boost first, and the all-core figure is already
+  at the sustained clock. Every figure under `### Kernels` is a serial rate
+  and every figure in the scaling section is a serial rate or a ratio
+  against one, so all of them are boost-sensitive and none of them said so.
+  Both are re-measured on a settled part and both now say it.
+
+  Not done, and the obvious next thing: the tools print the load and the
+  processor seconds beside a figure and not the temperature, so a reader
+  cannot yet tell a settled figure from a hot one without prose.
+
+- **The load gate asks the processors now, not the load average, and a
+  six-group re-measure went from half an hour of waiting to no waiting at
+  all.** A load average lags in both directions and this was found by
+  watching it do both.
+
+  Held out: every figure here is taken in a sitting of runs back to back, so
+  the number `Host_Load.Publishable` read was nearly always the previous
+  run's own load decaying. The gate was waiting for arithmetic rather than
+  for the machine. Let in: with eight spinners started on this machine, the
+  average was still 1.06 three seconds later and the gate admitted the run —
+  the half that mattered, and nothing here had noticed it.
+
+  It now samples `/proc/stat` over a fifth of a second and counts busy
+  processors against the same `Too_Busy` of 1.5, which is the same quantity
+  over a different window. A host that keeps no such times has only the
+  average and is left exactly where it was. Verified three ways: a quiet
+  machine at average 1.16 admitted; eight spinners refused; and a machine
+  whose spinners had just stopped, average 1.86, admitted and measured in
+  1.1 s total where the old gate refused it outright. The sitting after it
+  ran seventeen speed runs, three `llama-bench` runs and two benchmarks back
+  to back with no waiting and no refusals.
+
+  Confined to `tests/src/host_load.ads` and its body, so no call site changed
+  and no figure group moved for it.
+
+  **The load figures printed beside a run now read higher than the machine
+  actually was**, because the gate no longer waits for the average to fall.
+  They overstate the disturbance rather than understate it, which is the
+  safe direction, but they are not comparable with the load figures recorded
+  before this. `docs/measured-figures.txt` says so where it matters.
+
+- **A correction.** The llama.cpp comparison table was restamped in the
+  previous entry's sitting and the edit that wrote it failed partway and was
+  never applied, while the sentences either side of it were — so one commit
+  carried a table reading 141.2 and 352.0 t/s under prose quoting 166.7 and
+  389.0. The fingerprint check did not catch it and cannot: it asks whether
+  a group was re-measured, not whether every number in it moved. The table
+  is right now and the README records what happened.
+
+- **The value blend keeps its sums in registers now: five and three quarter
+  per cent of a processor prompt.** `model_runner-llama.o` held no packed
+  fused multiply-add at all -- eighteen `mulps`, seventeen `addps` -- this
+  being compiled for baseline x86-64, but the fusing was the smaller half of
+  what was there.
+
+  `-O3` vectorizes the blend's inner loop and cannot keep `Sums` in
+  registers across the positions, because `Sums` is an array the loop writes
+  and `Values` may alias it. So each position paid a load and a store of the
+  whole run as well as its arithmetic: forty instructions where nine would
+  do. `Model_Runner.Kernels.Blend_Run` loads eight accumulators once,
+  broadcasts a position's score into eight lanes, issues eight
+  `vfmadd231ps` over the values where they lie, and stores once at the end.
+
+  Seven alternated rounds on the 1419-token prompt, median 11.372 s against
+  **10.723**, better in **seven of seven**. The answers move because a fused
+  multiply-add rounds a product once where the portable form rounds it
+  twice -- the insertion is the more accurate of the two -- and the sweep is
+  the arbiter: 28344 sequences, nothing outside tolerance. A test holds the
+  two paths together.
+
+  `Kernels.Use_Wide_Dots` is now `Use_Wide_Lanes`, since it gates both.
+
 - **The matrix tile at sixty-four rows: measured and reverted, and the shapes
   table in `tests device-bench` gained a control that says its first row
   reads forty per cent high.**
@@ -71,7 +162,7 @@ Keep a Changelog and the project uses semantic versioning.
   `with Model_Runner.Platform` -- that is what keeps a chat template or a
   metadata value from making the program read something else off the machine.
   The capability is told rather than asked, as `Use_Wide_Decoders` is:
-  `Kernels.Use_Wide_Dots`, called once from `Backend.CPU`'s elaboration
+  `Kernels.Use_Wide_Lanes`, called once from `Backend.CPU`'s elaboration
   before any container is open. A test drives both paths and asserts they
   agree.
 

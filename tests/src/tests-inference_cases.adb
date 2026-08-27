@@ -5511,7 +5511,7 @@ package body Tests.Inference_Cases is
    --  holds the whole evaluator to and the same bound the device's scores
    --  are held to.
    --
-   --  Use_Wide_Dots is what the backend calls once at elaboration and what
+   --  Use_Wide_Lanes is what the backend calls once at elaboration and what
    --  this drives directly. On a host without the instructions the wide
    --  path is never entered: turning it on there would run instructions the
    --  processor has not got, so this asks the host the same question the
@@ -5560,10 +5560,10 @@ package body Tests.Inference_Cases is
                Plain, Chosen : N.Real;
                Bound : constant N.Real := 1.0e-4 * N.Real (Span);
             begin
-               MK.Use_Wide_Dots (False);
+               MK.Use_Wide_Lanes (False);
                Plain := MK.Head_Dot (Left, At_Left, Right, 0, Span);
 
-               MK.Use_Wide_Dots (Wide);
+               MK.Use_Wide_Lanes (Wide);
                Chosen := MK.Head_Dot (Left, At_Left, Right, 0, Span);
 
                Assert (abs (Plain - Chosen) <= Bound,
@@ -5581,7 +5581,7 @@ package body Tests.Inference_Cases is
       --  A span that leaves its vector is refused rather than read, on
       --  either path, and an empty one likewise.
       for Allowed in Boolean'Range loop
-         MK.Use_Wide_Dots (Allowed and Wide);
+         MK.Use_Wide_Lanes (Allowed and Wide);
 
          Assert (MK.Head_Dot (Left, Room - 8, Right, 0, 16) = 0.0,
                  "a span past the end of the left vector was answered");
@@ -5591,9 +5591,100 @@ package body Tests.Inference_Cases is
                  "an empty span was answered");
       end loop;
 
-      MK.Use_Wide_Dots (Wide);
+      MK.Use_Wide_Lanes (Wide);
       Assert (Seen = 18, "a span was not compared");
    end Both_Head_Dots_Agree;
+
+   --  Blend_Run's two paths agree, and both refuse what leaves a vector.
+   --
+   --  Not bit for bit: the insertion fuses the multiply and the add, so a
+   --  product is rounded once where the loop rounds it twice, and the
+   --  fused one is the more accurate. What is asserted is that they agree
+   --  to what binary32 holds over the number of positions a run sums.
+   --
+   --  Sixty-four components is the width the insertion is written for and
+   --  the width this model's heads have; the other two say the guard sends
+   --  a different width to the loop and that the loop is what answers it.
+   procedure Both_Blend_Runs_Agree
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package MK renames Model_Runner.Kernels;
+
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+
+      Spans : constant array (1 .. 3) of N.Element_Count := [64, 32, 17];
+
+      Stride : constant N.Element_Count := 96;
+      Steps  : constant N.Element_Count := 40;
+
+      Weights : N.Real_Array (0 .. Steps - 1);
+      Values  : N.Real_Array (0 .. Stride * Steps - 1);
+
+      Seen : Natural := 0;
+   begin
+      for Index in Weights'Range loop
+         Weights (Index) :=
+           N.Real (Integer (Index) mod 9) * 0.125 - 0.5;
+      end loop;
+
+      for Index in Values'Range loop
+         Values (Index) :=
+           N.Real (Integer (Index) mod 23) - 11.0
+           + N.Real (Integer (Index) mod 7) * 0.0625;
+      end loop;
+
+      for Span of Spans loop
+         declare
+            Plain, Chosen : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+            Bound : constant N.Real := 1.0e-3 * N.Real (Steps);
+         begin
+            MK.Use_Wide_Lanes (False);
+            MK.Blend_Run (Plain, Weights, 0, Values, 0, Stride, Steps);
+
+            MK.Use_Wide_Lanes (Wide);
+            MK.Blend_Run (Chosen, Weights, 0, Values, 0, Stride, Steps);
+
+            for Component in Plain'Range loop
+               Assert (abs (Plain (Component) - Chosen (Component)) <= Bound,
+                       "the two blends disagree at span"
+                       & N.Element_Count'Image (Span) & " component"
+                       & N.Element_Count'Image (Component) & ":"
+                       & N.Real'Image (Plain (Component)) & " against"
+                       & N.Real'Image (Chosen (Component)));
+            end loop;
+
+            Seen := Seen + 1;
+         end;
+      end loop;
+
+      --  A run that would read past the values, a stride narrower than the
+      --  run, and no positions at all: each leaves the sums untouched on
+      --  either path rather than reading what it was not given.
+      for Allowed in Boolean'Range loop
+         MK.Use_Wide_Lanes (Allowed and Wide);
+
+         declare
+            Sums : N.Real_Array (0 .. 63) := [others => 7.0];
+
+            function Untouched return Boolean is
+              (for all Component of Sums => Component = 7.0);
+         begin
+            MK.Blend_Run (Sums, Weights, 0, Values, 0, Stride, Steps + 1);
+            Assert (Untouched, "a run past the end of the values was taken");
+
+            MK.Blend_Run (Sums, Weights, 0, Values, 0, 32, Steps);
+            Assert (Untouched, "a stride narrower than the run was taken");
+
+            MK.Blend_Run (Sums, Weights, 0, Values, 0, Stride, 0);
+            Assert (Untouched, "a run of no positions was taken");
+         end;
+      end loop;
+
+      MK.Use_Wide_Lanes (Wide);
+      Assert (Seen = Spans'Length, "a span was not compared");
+   end Both_Blend_Runs_Agree;
 
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
@@ -5774,6 +5865,10 @@ package body Tests.Inference_Cases is
         (T, Device_Reads_A_Model_In_Any_Format'Access,
          "a model in any format the program reads loads on the device, "
          & "without being repacked first");
+      Register_Routine
+        (T, Both_Blend_Runs_Agree'Access,
+         "one run of an attention head's output is the same whether the "
+         & "host's wide lanes are used or not");
       Register_Routine
         (T, Both_Head_Dots_Agree'Access,
          "the attention dot product answers the same whether the host's "

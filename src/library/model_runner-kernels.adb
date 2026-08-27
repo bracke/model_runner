@@ -91,12 +91,12 @@ package body Model_Runner.Kernels is
    --------------
 
    --  Set once at a backend's elaboration and read thereafter.
-   Wide_Dots : Boolean := False;
+   Wide_Lanes : Boolean := False;
 
-   procedure Use_Wide_Dots (Allowed : Boolean) is
+   procedure Use_Wide_Lanes (Allowed : Boolean) is
    begin
-      Wide_Dots := Allowed;
-   end Use_Wide_Dots;
+      Wide_Lanes := Allowed;
+   end Use_Wide_Lanes;
 
    function Head_Dot
      (Left     : Real_Array;
@@ -119,7 +119,7 @@ package body Model_Runner.Kernels is
       --  Eight pairs a turn, accumulated in the eight lanes and folded once
       --  at the end. The addresses it advances are its own copies and not
       --  the caller's, which is the rule every insertion here keeps.
-      if Wide_Dots and then Span mod 8 = 0 then
+      if Wide_Lanes and then Span mod 8 = 0 then
          declare
             LF : constant Character := ASCII.LF;
 
@@ -172,6 +172,120 @@ package body Model_Runner.Kernels is
          return N.Real (Sum);
       end;
    end Head_Dot;
+
+   ---------------
+   -- Blend_Run --
+   ---------------
+
+   --  Sixty-four components, which is eight registers of eight lanes. A
+   --  run of another width goes to the loop below, which is what every
+   --  host without the instructions runs anyway.
+   Held_Run : constant Element_Count := 64;
+
+   procedure Blend_Run
+     (Sums      : in out Real_Array;
+      Weights   : Real_Array;
+      At_Weight : Element_Count;
+      Values    : Real_Array;
+      At_Value  : Element_Count;
+      Stride    : Element_Count;
+      Steps     : Element_Count)
+   is
+      Span : constant Element_Count := Element_Count (Sums'Length);
+   begin
+      --  Written as sums rather than differences: Element_Count starts at
+      --  zero and an empty vector's Last is below its First.
+      if Steps = 0
+        or else Span = 0
+        or else At_Weight < Weights'First
+        or else At_Value < Values'First
+        or else At_Weight - Weights'First + Steps
+                  > Element_Count (Weights'Length)
+        or else Stride < Span
+        or else At_Value - Values'First + (Steps - 1) * Stride + Span
+                  > Element_Count (Values'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span = Held_Run then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Sums_At   : constant System.Address := Sums (Sums'First)'Address;
+            Weight_At : System.Address := Weights (At_Weight)'Address;
+            Value_At  : System.Address := Values (At_Value)'Address;
+            Left      : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Steps);
+            Apart     : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Stride * (N.Real'Size / 8));
+         begin
+            System.Machine_Code.Asm
+              ("vmovups 0(%3), %%ymm0"                   & LF
+               & "vmovups 32(%3), %%ymm1"                & LF
+               & "vmovups 64(%3), %%ymm2"                & LF
+               & "vmovups 96(%3), %%ymm3"                & LF
+               & "vmovups 128(%3), %%ymm4"               & LF
+               & "vmovups 160(%3), %%ymm5"               & LF
+               & "vmovups 192(%3), %%ymm6"               & LF
+               & "vmovups 224(%3), %%ymm7"               & LF
+
+               --  One position a turn: its score into all eight lanes,
+               --  then eight fused multiply-adds reading its values where
+               --  they lie.
+               & "1:"                                    & LF
+               & "vbroadcastss (%0), %%ymm8"             & LF
+               & "vfmadd231ps 0(%1), %%ymm8, %%ymm0"     & LF
+               & "vfmadd231ps 32(%1), %%ymm8, %%ymm1"    & LF
+               & "vfmadd231ps 64(%1), %%ymm8, %%ymm2"    & LF
+               & "vfmadd231ps 96(%1), %%ymm8, %%ymm3"    & LF
+               & "vfmadd231ps 128(%1), %%ymm8, %%ymm4"   & LF
+               & "vfmadd231ps 160(%1), %%ymm8, %%ymm5"   & LF
+               & "vfmadd231ps 192(%1), %%ymm8, %%ymm6"   & LF
+               & "vfmadd231ps 224(%1), %%ymm8, %%ymm7"   & LF
+               & "addq $4, %0"                           & LF
+               & "addq %4, %1"                           & LF
+               & "decq %2"                               & LF
+               & "jnz 1b"                                & LF
+
+               & "vmovups %%ymm0, 0(%3)"                 & LF
+               & "vmovups %%ymm1, 32(%3)"                & LF
+               & "vmovups %%ymm2, 64(%3)"                & LF
+               & "vmovups %%ymm3, 96(%3)"                & LF
+               & "vmovups %%ymm4, 128(%3)"               & LF
+               & "vmovups %%ymm5, 160(%3)"               & LF
+               & "vmovups %%ymm6, 192(%3)"               & LF
+               & "vmovups %%ymm7, 224(%3)"               & LF
+               & "vzeroupper",
+               Outputs =>
+                 [System.Address'Asm_Output ("+r", Weight_At),
+                  System.Address'Asm_Output ("+r", Value_At),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Left)],
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Sums_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, ymm8, "
+                 & "cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Step in 0 .. Steps - 1 loop
+         declare
+            Weight : constant N.Real := Weights (At_Weight + Step);
+            Here   : constant Element_Count := At_Value + Step * Stride;
+         begin
+            for Component in 0 .. Span - 1 loop
+               Sums (Sums'First + Component) :=
+                 Sums (Sums'First + Component)
+                 + Weight * Values (Here + Component);
+            end loop;
+         end;
+      end loop;
+   end Blend_Run;
 
    --------------
    -- RMS_Norm --

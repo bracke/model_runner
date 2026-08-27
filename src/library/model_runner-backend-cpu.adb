@@ -832,6 +832,6 @@ begin
      (Model_Runner.Platform.Wide_Vectors);
    Model_Runner.Quantization.Integers.Use_Deep_Rows
      (Model_Runner.Platform.Byte_Products);
-   Model_Runner.Kernels.Use_Wide_Dots
+   Model_Runner.Kernels.Use_Wide_Lanes
      (Model_Runner.Platform.Wide_Vectors);
 end Model_Runner.Backend.CPU;

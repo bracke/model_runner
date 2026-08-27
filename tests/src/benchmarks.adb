@@ -1788,7 +1788,7 @@ package body Benchmarks is
       --  the machine. Refused rather than warned about, and the caller who
       --  wants it anyway says so.
       if not Anyway and then Wait > 0
-        and then not Host_Load.Publishable (Started_At)
+        and then not Host_Load.Quiet_Enough
         and then not Host_Load.Wait_For_Quiet (Wait, Still'Access)
       then
          IO.Put_Line
@@ -1802,7 +1802,7 @@ package body Benchmarks is
       end if;
 
       if not Anyway and then Wait = 0
-        and then not Host_Load.Publishable (Started_At)
+        and then not Host_Load.Quiet_Enough
       then
          IO.Put_Line
            (IO.Standard_Error,

@@ -1970,7 +1970,12 @@
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-kernels 77EB0DAB62549D76 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-27 entry below, on a part that had stopped
+#   cooling: two readings twenty seconds apart within a degree, starting
+#   at 47 C and ending at 89.
+# load: the benchmark was given --wait 10 and started when the processors
+#   said the machine was quiet.
+kernels 09669C7DFDBA0142 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
@@ -3521,11 +3526,13 @@ kernels 77EB0DAB62549D76 src/library/model_runner-quantization.adb src/library/m
 # No source changed. The dispatch counts were zeroed in a scratch build and
 # put back.
 
-# Re-measured for the 2026-08-27 entry above -- the attention score
-#   insertion and the value blend in binary32.
-# load: 0.38 to 0.51 for the twelve-token run, 0.51 to 1.11 for the same at
-#   --arith f32, and 1.03 for the fourteen-thread pair, 2026-08-27
-engine 18B6CD3519200606 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-27 entry below -- the value blend held
+#   in registers, and the load gate that stopped waiting for an
+#   average to decay.
+# load: 0.79 to 1.58 across the twelve-token run, the f32 one and the
+#   fourteen-thread pair. See the note on load figures in the entry
+#   above: this sitting did not wait for the average to decay.
+engine 7DEF70601A7B0448 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -3833,10 +3840,12 @@ engine 18B6CD3519200606 src/library/model_runner-llama.adb src/library/model_run
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-27 entry above -- the attention score
-#   insertion and the value blend in binary32.
-# load: 1.02 throughout, both backends and both arithmetics, 2026-08-27
-reference F782EB89DE6C0C86 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-27 entry below -- the value blend held
+#   in registers, and the load gate that stopped waiting for an
+#   average to decay.
+# load: 1.74 to 2.24 across the three runs, and see the note on load
+#   figures in the entry above.
+reference 42B62D1782514126 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -5672,11 +5681,12 @@ reference F782EB89DE6C0C86 src/library/model_runner-backend-reference.adb src/li
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-27 entry above -- the attention score
-#   insertion and the value blend in binary32.
-# load: 1.11 for the six-token pair and 1.10 for the 110-token pair, both
-#   columns back to back, 2026-08-27
-device EF041C6FCFD946C8 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-27 entry below -- the value blend held
+#   in registers, and the load gate that stopped waiting for an
+#   average to decay.
+# load: 1.37 to 1.58 across the six-token pair and the 110-token pair,
+#   and see the note on load figures in the entry above.
+device 8120F10DE3E50A4C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -6019,11 +6029,12 @@ device EF041C6FCFD946C8 src/shaders/row_product.comp src/shaders/matrix_product.
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-27 entry above -- the attention score
-#   insertion and the value blend in binary32.
-# load: 1.00 to 1.24 for the model, 1.05 to 1.61 for the draft and 1.03 to
-#   2.10 for the drafted run, 2026-08-27
-drafting D8FD5BE09CC25FC1 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-27 entry below -- the value blend held
+#   in registers, and the load gate that stopped waiting for an
+#   average to decay.
+# load: 1.45 to 2.22 across the three runs, and see the note on load
+#   figures in the entry above.
+drafting 49090C3C4E8CBB1D src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -6268,11 +6279,12 @@ drafting D8FD5BE09CC25FC1 src/library/model_runner-generation.adb src/library/mo
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-27 entry above -- the attention score
-#   insertion and the value blend in binary32.
-# load: 1.14 to 1.91 pinned and 1.04 to 2.47 unpinned, most of the rise being
-#   the benchmark itself, 2026-08-27
-scaling 4438AEAAA18E35BE src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-27 entry below -- the value blend held
+#   in registers, and the load gate that stopped waiting for an
+#   average to decay.
+# load: the two benchmark runs were given --wait 10 and started when
+#   the processors said the machine was quiet.
+scaling C07D542BB5DA9351 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker
@@ -8596,12 +8608,13 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 # more. Eight readings, both signs twice: the second worker on a core buys
 # nothing either way, and the paragraph says so rather than picking one.
 
-# Re-measured for the 2026-08-27 entry above -- the attention score
-#   insertion and the value blend in binary32.
-# load: under 1.20 before every run, 1.09 down to 1.00 across the engine rows,
-#   and settled below 1.20 before each of the three llama-bench runs,
-#   2026-08-27
-outside EF041C6FCFD946C8 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-27 entry below -- the value blend held
+#   in registers, and the load gate that stopped waiting for an
+#   average to decay.
+# load: 0.79 to 2.38 across the engine rows, taken back to back with no
+#   waiting between them, and the three llama-bench runs after them.
+#   See the note on load figures in the entry above.
+outside 8120F10DE3E50A4C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -8680,3 +8693,176 @@ outside EF041C6FCFD946C8 src/shaders/row_product.comp src/shaders/matrix_product
 # Only tests/src/device_bench.adb changed, and it is outside every figure
 # group.
 
+# 2026-08-27  The blend in registers, and the gate that was waiting for arithmetic
+#
+# TWO CHANGES. The first is the one the item was for; the second is the
+# instrument, and it is the one that will save the most time.
+#
+# 1. Kernels.Blend_Run. model_runner-llama.o held no packed fused
+#    multiply-add at all -- eighteen mulps and seventeen addps -- this being
+#    compiled for baseline x86-64. But the fusing was the smaller half. The
+#    blend is Sums (c) += Score * Values (c) over a run of components and a
+#    span of positions; -O3 vectorizes the inner loop and cannot keep Sums
+#    in registers across the positions, because Sums is an array the loop
+#    writes and Values may alias it. So a position paid a load and a store
+#    of the whole run as well as its arithmetic: forty instructions where
+#    nine would do.
+#
+#    Eight accumulators loaded once, a position's score broadcast into eight
+#    lanes, eight vfmadd231ps over the values where they lie, stored once at
+#    the end. Seven alternated rounds on the 1419-token prompt:
+#
+#      11.459 -> 10.704   11.297 -> 10.534   11.372 -> 10.922
+#      11.131 -> 10.575   11.494 -> 10.723   11.095 -> 10.797
+#      11.446 -> 11.076
+#
+#    Median 11.372 -> 10.723, five and three quarter per cent, better in
+#    seven of seven. The answers move because the fused form rounds a
+#    product once where the portable one rounds it twice -- the insertion is
+#    the more accurate -- and the sweep is the arbiter: 28344 sequences,
+#    nothing outside tolerance. Use_Wide_Dots is now Use_Wide_Lanes.
+#
+# 2. THE LOAD GATE. Host_Load.Publishable asked the one-minute load average
+#    whether a figure was worth publishing. A load average lags in both
+#    directions and this sitting was spent watching it do both.
+#
+#    Held out: every figure here is taken in a sitting of runs back to back,
+#    so the number the gate read was nearly always the previous run's own
+#    load decaying. The gate was waiting for arithmetic rather than for the
+#    machine. The six-group re-measure before this one spent most of half an
+#    hour that way, and the shell scripts made it worse by waiting for 1.20
+#    where the gate only wanted 1.50.
+#
+#    Let in: with eight spinners started on this machine the average was
+#    still 1.06 three seconds later, and the gate admitted the run. That is
+#    the half that mattered, and nothing here had noticed it.
+#
+#    So the question goes to the processors: /proc/stat sampled over a fifth
+#    of a second, busy processors counted against the same Too_Busy of 1.5 --
+#    the same quantity over a different window. A host that keeps no such
+#    times has only the average and is left where it was. Verified three
+#    ways: quiet machine at average 1.16 admitted; eight spinners refused;
+#    and a machine whose spinners had just stopped, average 1.86, admitted
+#    and measured in 1.1 s total, where the old gate refused it outright.
+#
+#    The sitting below then ran seventeen speed runs, three llama-bench runs
+#    and two benchmarks back to back with no waiting at all and no refusals.
+#
+# A NOTE ON THE LOAD FIGURES BELOW, which changes how to read them. The gate
+# no longer waits for the average to fall, so the average printed beside a
+# run is often the previous runs' own load still decaying: several below
+# read over 2 on a machine that had nothing on it but this program. They
+# overstate the disturbance rather than understate it, which is the safe
+# direction, but they are no longer comparable with the load figures in
+# entries above this one. What admitted every run below was the
+# busy-processor sample, not the number printed.
+#
+# THE SITTING. 2026-08-27, back to back, medians of three as the tool
+# reports them.
+#
+#   engine, twelve tokens from the short prompt
+#     0.453 s wall -- 0.079 evaluating, 0.374 generating, 1.64 s processor
+#     the same at --arith f32: 1.322 s for 8.83 s of processor
+#     fourteen threads: 0.475 s for 1.92 s, against 0.453 and 1.64 at seven
+#
+#   reference, four tokens
+#     cpu       0.065 s prompt, 0.122 s generating
+#     reference 5.691 s prompt, 3.775 s generating
+#     fifty times in total, eighty-eight on the prompt, thirty-one on the
+#     generation; seventeen times at --arith f32; and serial on synthetic
+#     tensors 2.34x q8_0, 2.35x q4_k, 3.11x f32
+#
+#   device, the two-row table
+#     six tokens, twelve generated: cpu 0.459 s (0.081 + 0.377, 1.63 s
+#     processor), device 0.356 s (0.063 + 0.292, 0.03 s processor)
+#     110 tokens: cpu 0.661 s for 3.47 s of processor, device 0.166 s for
+#     0.18 s
+#
+#   drafting, twelve tokens each
+#     eight-bit 0.432 s, two-bit 1.588 s, drafted 3.547 s with 24 proposed
+#     and 7 accepted -- 36 ms and 132 ms a token, 63 ms to check five
+#     positions, and a threshold of about 4 ms a token for a draft to pay.
+#     The drafted run prints 33f48397f89839f6, which is what the undrafted
+#     one prints: the guarantee showing up in a published figure.
+#
+#   scaling, taskset -c 0-7 tests benchmark --wait 10
+#     q8_0 one vector   1 share 2575 Me/s, 7 shares 13087, 8 shares 13559
+#     q4_k one vector   1 share 2579,      7 shares 13119, 8 shares 14294
+#     q8_0 thirty-two   1 share 4791,      7 shares 24346, 8 shares 26309
+#     q4_k thirty-two   1 share 4767,      7 shares 24844, 8 shares 26174
+#     unpinned: q8_0 one vector 12921 at seven and 13564 at eight, batched
+#     22817 and 26379
+#
+#   outside, against llama.cpp 95b8e33e1
+#     model_runner processor  110 in 0.660 s, 64 in 2.003 s
+#     model_runner device     110 in 0.166 s, 64 in 1.562 s
+#     llama-bench --device none   pp110 388.96, tg64 40.42
+#     llama-bench -ngl 99         pp110 1644.94, tg64 56.44
+#     llama-bench -ngl 0          pp110 781.93, tg64 40.16
+#
+# AND A CORRECTION TO THE ENTRY ABOVE. The llama.cpp comparison table was
+# restamped in that sitting and the edit that wrote it failed partway and
+# was never applied, while the sentences either side of it were. So one
+# commit carried a table reading 141.2 and 352.0 under prose quoting 166.7
+# and 389.0. The fingerprint check did not catch it and cannot: it asks
+# whether a group was re-measured, not whether every number in it moved.
+# The table is right now and the README says what happened.
+#
+# What moved and what did not. The processor's 110-token prompt reads 166.7
+# tokens a second against 168.7, which is level: the blend is quadratic in
+# the context and a 110-token prompt holds a hundred and sixty times less
+# attention than the 1419-token one it was measured on. The worker pair
+# changed sign again, five per cent worse for seventeen per cent more, which
+# is the ninth reading and the fourth change of sign.
+
+# 2026-08-27, later.  A hot part, and what the gate had been hiding
+#
+# The gate above stopped waiting for a load average to decay, and the wait
+# it removed had been doing a second job nobody had noticed: letting the
+# part cool. The first sitting under the new gate ran two benchmarks back to
+# back and the second read nine per cent below the first on the same code.
+#
+# Measured rather than assumed, which took two goes. The first attempt
+# waited four minutes because four minutes sounded right; that is the same
+# mistake as the load average, one lagging proxy swapped for a guess. The
+# second reads the part instead -- k10temp, /sys/class/hwmon -- and waits
+# until two samples twenty seconds apart are within a degree.
+#
+# The same benchmark, settled against straight-after:
+#
+#                      settled, 47 C    straight after, 81 C
+#   q8_0 Row_Dot                2739                    2399
+#   q4_k Row_Dot                2688                    2400
+#   one share                   2602                    2380
+#   eight shares               14030                   13681
+#
+# The serial rows lose a tenth and the eight-share row loses two per cent.
+# That is the whole finding: a hot part gives up single-core boost first,
+# and the all-core figure is already at the sustained clock with nothing
+# left to give up. Every figure in "### Kernels" is a serial rate and every
+# figure in the scaling section is a serial rate or a ratio against one, so
+# all of them are boost-sensitive and none of them said so until now.
+#
+# The pair below was taken settled: pinned started at 47 C and ended at 89,
+# unpinned started at 50 and ended at 89.
+#
+#   pinned
+#     q8_0 one vector   1 share 2602 Me/s, 7 shares 12955, 8 shares 14030
+#     q4_k one vector   1 share 2640,      7 shares 12907, 8 shares 14176
+#     q8_0 thirty-two   1 share 4759,      7 shares 24642, 8 shares 26184
+#     q4_k thirty-two   1 share 4845,      7 shares 24638, 8 shares 26841
+#     serial against the reference: 2.34x q8_0, 2.35x q4_k, 3.13x f32
+#   unpinned
+#     q8_0 one vector   7 shares 12817, 8 shares 13325
+#     q8_0 thirty-two   7 shares 24445, 8 shares 26039
+#
+#   row dot product, ns an element: f32 0.25, q4_0 0.30, bf16 0.31, q8_0
+#   0.37, q4_k 0.37, q6_k 0.38, q5_k 0.40, q3_k 0.47, q4_1 0.48, iq4xs 0.49,
+#   q5_0 0.52, f16 0.55, q5_1 0.56, iq4nl 0.62, q2_k 0.69
+#
+# What is not done, and is the obvious next thing: the tools print the load
+# and the processor seconds beside a figure and do not print the
+# temperature, so a reader still cannot tell a settled figure from a hot one
+# without being told in prose. Host_Load reads /proc and is where that
+# belongs, beside Now and Processor_Seconds, for the reason written over
+# both of them.
