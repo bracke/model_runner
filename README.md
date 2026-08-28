@@ -1221,16 +1221,16 @@ All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself and at the arithmetic it chooses for itself. From the
 six-token prompt in `tests/fixtures/speed-prompt-short.txt`, twelve tokens
-take **0.450 s** -- 0.070 s evaluating the prompt and 0.375 s generating --
-and **1.61 s** of processor time, the median of three runs. Loading the model
-costs a further **0.069 s** of wall that this figure does not include, and it
+take **0.442 s** -- 0.068 s evaluating the prompt and 0.375 s generating --
+and **1.58 s** of processor time, the median of three runs. Loading the model
+costs a further **0.066 s** of wall that this figure does not include, and it
 used to cost 0.6 s: the weights are the file's own pages now rather than a
 copy of them, so what loading does is open a mapping and what reading them
 costs is paid as they are touched.
 
 The arithmetic is half of that. `--arith int8` is the default and rounds the
 vector a product multiplies to a byte an element; the same run at `--arith
-f32`, taken back to back in the same sitting, is **1.363 s** for 8.78 s of
+f32`, taken back to back in the same sitting, is **1.374 s** for 8.82 s of
 processor time. What that costs is measured and bounded in `### Quantized
 activations` below, and it is why every figure in this section is worth
 reading twice: once as a time, and once as a statement about which of the two
@@ -1284,12 +1284,13 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. Taken back to back
-in the same sitting, the same run at fifteen threads takes **0.495 s** of
-wall against **0.450 s** at seven, and 1.88 s of processor time against
-1.61 s.
+in the same sitting, the same run at fifteen threads takes **0.478 s** of
+wall against **0.442 s** at seven, and 1.81 s of processor time against
+1.58 s.
 
-That is ten per cent *worse* on the wall for seventeen per cent more processor
-time, where the sitting before read two per cent worse for fifteen per cent
+That is eight per cent *worse* on the wall for fifteen per cent more processor
+time, where the sitting before read ten per cent worse for seventeen per cent
+more, the one before that two per cent worse for fifteen per cent
 more, the one before four per cent *off* the wall for ten per cent more and
 the one before that one per cent off for sixteen. All three
 are inside what this pair resolves, and the honest summary after ten
@@ -1331,12 +1332,13 @@ A job is cut into one more piece than the pool has workers, because the task
 that submits it takes the last piece rather than waiting; the figures below
 count those pieces, and so does the benchmark. Eight of them is this machine
 fully occupied, since it has eight cores -- reported as sixteen processors,
-which is not the same thing. Eight shares take 0.450 s for 1.61 s of processor
-time and fifteen take 0.495 s for 1.88 s: the second worker on a core shares
+which is not the same thing. Eight shares take 0.442 s for 1.58 s of processor
+time and fifteen take 0.478 s for 1.81 s: the second worker on a core shares
 the first one's execution units, and what is left over for it to use is
-small enough that the pair keeps changing sign. Ten per cent *slower* for
-seventeen per cent more processor time, where the reading before this one
-was five per cent slower for seventeen per cent more, the one before that
+small enough that the pair keeps changing sign. Eight per cent *slower* for
+fifteen per cent more processor time, where the reading before this one was
+ten per cent slower for seventeen, the one before five per cent slower for
+seventeen, the one before that
 four per cent *faster* for ten per cent more, the one before that eight
 per cent slower for fourteen, and the ones before those bought nothing for
 eighty-one per cent more, three per cent for eighty-four, and eleven per
@@ -1365,21 +1367,23 @@ there were cores, the operating system took a core from a worker, and the
 whole job waited for that worker because a job is not done until its slowest
 share is. It now takes the last share itself instead of waiting. Pinned, eight
 shares went from 9326 Me/s to 14182. Taken again with the command above,
-eight shares reads 12162 Me/s against seven at 12607 -- so with one vector a
-pass eight is *below* seven, by three and a half per cent, where the sitting
-before read it nine per cent above and it used to fall by a quarter and then
-by six. Batched it is above: thirty-two vectors a pass reads 23932 at eight
-against 23183 at seven, by three per cent. What the change was for was the
+eight shares reads 12532 Me/s against seven at 12647 -- so with one vector a
+pass eight is *level* with seven, one per cent below, where the sitting
+before read it three and a half per cent below, the one before that nine per
+cent above, and it used to fall by a quarter and then by six. Batched it is
+above: thirty-two vectors a pass reads 25761 at eight against 23716 at
+seven, by nine per cent. What the change was for was the
 quarter, and the quarter is gone: what is left flaps around zero by a few
 per cent and changes sign between sittings, which is the honest reading of
 five of them. The 9326 is history: it needs the commit before the change, and it is
 quoted here as the reason rather than as something a reader can reproduce.
 
-Unpinned, eight is level with seven batched -- 23522 against 23607 -- and is
-below it with one vector a pass, 11487 against 12141, by five per cent. That
-is the reading this paragraph was written around returning: it used to fall
-below with one vector by four per cent, then rose above by seven, then sat
-two below, then six above, and is five below again, at a level about a tenth under the sitting before
+Unpinned, eight is below seven batched -- 20901 against 22907, nine per
+cent -- and is above it with one vector a pass, 11918 against 11619, by
+three. That is the reading this paragraph was written around returning: it
+used to fall below with one vector by four per cent, then rose above by
+seven, then sat two below, then six above, then five below, and is three
+above again, at a level about a tenth under the sitting before
 across every share count and on both compilations of the kernel, which is
 what says the level is the sitting and the sign is the shape. unpinned, the spare task can take a processor
 on a core that already has one, which is cheap but is not free, and the
@@ -1401,9 +1405,9 @@ host that cannot answer says so rather than guessing. `--threads` overrides it
 everywhere and still accepts any number the backend allows.
 
 What is left over is not the memory. Measured on its own, away from the model,
-the matrix product reaches about 5.0x on eight shares against its own serial
-rate, and reaches it whether one vector is passed or thirty-two -- 2482 to
-12162 Me/s in the first case, 4.9x, and 4628 to 23932 in the second, 5.2x,
+the matrix product reaches about 5.3x on eight shares against its own serial
+rate, and reaches it whether one vector is passed or thirty-two -- 2512 to
+12532 Me/s in the first case, 5.0x, and 4636 to 25761 in the second, 5.6x,
 medians of three runs, pinned. The batched case peaks at eight shares when
 pinned and the one-vector case at seven; which of the two peaks where has
 changed between sittings, and that is the reading that moves rather than the
@@ -1432,7 +1436,7 @@ first, and the all-core figure is already at the sustained clock where there
 is nothing left to give up. Every figure in this section is a serial rate or
 a ratio against one, so every one of them is boost-sensitive. They are taken
 on a part that has stopped cooling -- two readings twenty seconds apart
-within a degree -- and both runs quoted here started at 54 and 59 degrees,
+within a degree -- and both runs quoted here started at 55 and 59 degrees,
 warmer than the 47 to 50 of the sittings before, for the reason `### A
 slower day, measured on both sides` gives. That ratio alone
 caps eight cores at 6.4x, and the rest is cache and hand-off. It is a 15 W
@@ -1449,13 +1453,14 @@ ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
 end. That gap was the contention, not the bytes: with the contention gone the
 four-bit format is within a few per cent of the eight-bit one either way --
-12393 Me/s against 12162 at eight shares with one vector, 24669 against 23932
-with thirty-two, and 2498 against 2482 serially. Which of the two leads
-changes with the case and with the run: four-bit two per cent ahead with one
-vector here, three per cent batched, one per cent serially -- level on all
-three -- where the seven sittings before read it level, level, ahead by ten
-with one vector, ahead by two, behind by two, level, and behind.
-Read nine times, the pair is level and the sitting is the spread.
+12071 Me/s against 12532 at eight shares with one vector, 26088 against 25761
+with thirty-two, and 2537 against 2512 serially. Which of the two leads
+changes with the case and with the run: four-bit four per cent behind with
+one vector here, one per cent ahead batched, one per cent ahead serially --
+level on all three -- where the eight sittings before read it level, level,
+level, ahead by ten with one vector, ahead by two, behind by two, level, and
+behind.
+Read ten times, the pair is level and the sitting is the spread.
 That is the finding -- they are level, and a gap either way at one shape is the
 machine rather than the format. End to end they are level too, and the two
 files have to be read a token at a time to see it: alternating the two round
@@ -1504,14 +1509,14 @@ tests speed --model MODEL --backend reference --max-tokens 4
 ```
 
 Four tokens from the short prompt, medians of three, taken back to back at a
-`cpu` spends 0.069 s evaluating the prompt and
-0.128 s generating; `reference` spends 5.807 s and 3.874 s. That is
-**forty-nine times** the work in total, eighty-four times on the prompt
-and thirty times on the generation, and the two print the same digest.
+`cpu` spends 0.062 s evaluating the prompt and
+0.134 s generating; `reference` spends 5.810 s and 3.843 s. That is
+**forty-nine times** the work in total, ninety-four times on the prompt
+and twenty-nine times on the generation, and the two print the same digest.
 
 The ratio doubled when the default arithmetic changed, and it is worth being
 clear that only one side moved: `reference` computes what it always did.
-Comparing the two at `--arith f32` gives fourteen times, and the ratio at
+Comparing the two at `--arith f32` gives sixteen times, and the ratio at
 the default has grown again with the arithmetic: the byte dot product moved the `cpu`
 side and `reference` still computes what it always did.
 The prompt suffers more because that is where the batching goes: `cpu` shares
@@ -1527,12 +1532,12 @@ existed, taken by hand and never checked; then as twelve and a half, taken by
 hand again; then as nine, on a host sharing two thirds of a processor with
 somebody else, where the `cpu` side had less to lose than the serial one.
 `tests benchmark` measures the algorithmic part on synthetic tensors --
-serial against serial, no pool on either side -- and reports 2.32x for q8_0,
-2.30x for q4_k and 3.03x for f32. The rest of the fourteen is the worker pool
+serial against serial, no pool on either side -- and reports 2.35x for q8_0,
+2.30x for q4_k and 3.15x for f32. The rest of the sixteen is the worker pool
 and the batching, which is the honest way to read the figure: `reference` is
 between two and three times slower than the same loop written for speed, and
 the remaining factor is the parallelism it has none of. The generation ratio
-moved most across these readings, from under five to twelve to thirty,
+moved most across these readings, from under five to twelve to twenty-nine,
 and in the direction the same explanation predicts: what got faster this year is
 the kernel the pool runs, and the reference declines the pool.
 
@@ -1551,12 +1556,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.447 s | **0.358 s** |
-| -- evaluating the prompt | 0.071 s | 0.061 s |
-| -- generating | 0.375 s | **0.297 s** |
-| -- processor time | 1.63 s | **0.03 s** |
-| 110-token prompt, nothing generated | **0.489 s** | 0.167 s |
-| -- processor time | 2.80 s | 0.18 s |
+| 6-token prompt, 12 generated | 0.440 s | **0.343 s** |
+| -- evaluating the prompt | 0.062 s | 0.054 s |
+| -- generating | 0.371 s | **0.289 s** |
+| -- processor time | 1.59 s | **0.04 s** |
+| 110-token prompt, nothing generated | **0.465 s** | 0.145 s |
+| -- processor time | 2.59 s | 0.16 s |
 
 All six cells were taken in one sitting on 2026-08-28, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -4222,9 +4227,9 @@ twelve a panel predict.
 
 **The processor's prompt read 254.6 tokens a second in that sitting and the
 gap to llama.cpp on a prompt was 1.51 times**, from 2.5 when this began. The
-sitting after it reads 226.3 and 1.54 for code that is three per cent
-faster: the whole machine measured about a tenth slower that day, llama.cpp
-included, and `### A slower day, measured on both sides` says so.
+two sittings after it read 226.3 and 1.54, then 238.1 and 1.37, on code
+that got faster each time while the machine got slower under it -- llama.cpp
+included, which is what `### A slower day, measured on both sides` is for.
 
 The answers move -- the correction associates differently and the fold is a
 tree where it was an ascending binary64 sum -- and the sweep is the arbiter
@@ -4331,14 +4336,108 @@ against each other directly, alternated, on that machine in that state: level
 on the 110-token prompt and three and a half per cent apart on the long one,
 exactly as the section above says.
 
-So every absolute in this section is about a tenth below its predecessor, and
-the ratios -- which is what a comparison table is for -- are within a
-rounding of where they were. The gap on a processor prompt reads 1.5 times
-against llama.cpp, where the sitting before read 1.51. **An absolute
-published without the machine it was taken on is a number about nothing**,
+So every absolute in that sitting was about a tenth below its predecessor,
+and the ratios -- which is what a comparison table is for -- were within a
+rounding of where they had been.
+
+**And it kept going.** The sitting after that one read llama.cpp at 326.0
+tokens a second on a prompt, down another six per cent from 347.8 and down
+fifteen from the 385.0 of three sittings ago, on a binary that has not been
+rebuilt. This program's own figure went the other way over the same three,
+from 254.6 to 226.3 to 238.1, because the code changed under it. **The gap
+is the only thing in this table that means anything across sittings**: 1.51,
+1.54, 1.37. **An absolute published without the machine it was taken on is a
+number about nothing**,
 which the host block in
 [docs/measured-figures.txt](docs/measured-figures.txt) has said for a while
 and this is the first sitting to need it.
+
+### A strip of eight, and four for what it cannot reach
+
+The strip kernel was still sixty-five per cent of a prompt, and after
+`### Five hundred and twelve bits, measured and refused` the width was known
+not to be the lever. The instruction count was. Per block the kernel loads
+two rows of weights and biases them -- four instructions -- and then spends
+four per dot product. **Those four loads served four vectors. Serving eight
+halves their share**, and the eight extra accumulators the wider strip needs
+were sitting unused: this instruction set has thirty-two registers and the
+shape was using ten.
+
+| | per block | per dot product |
+| --- | ---: | ---: |
+| four vectors | 42 instructions for 8 dots | 5.25 |
+| eight vectors | 77 for 16 | **4.81** |
+
+The obstacle was not the vector registers, it was the sixteen
+general-purpose ones. Eight activation pointers, two weight rows, the scale
+table, the block totals, the answers, a block count and three index registers
+do not fit. Two things make them fit. **Four pointers reach eight vectors**:
+the strip's vectors are a fixed stride apart, so a second index register
+starting at four strides and stepping beside the first addresses the upper
+four through the lower four's pointers. And the two operands that are read
+once each -- the block count and that stride -- are given memory constraints
+rather than registers, which costs two instructions at entry and buys two
+registers for the loop.
+
+The bias corrections stopped needing a fold at all. A row's eight of them are
+the eight lanes of one accumulator, one to a vector, so where the four-wide
+shape spent twelve instructions folding them the eight-wide shape spends one
+store. The sums still fold, twice -- and the second row's eight accumulators
+live above the sixteenth register, which `vhaddps` cannot encode, so they
+come down first. Ten instructions once a panel, against a hundred and
+seventy-six blocks of work.
+
+| | before | after |
+| --- | ---: | ---: |
+| round 1 | 7.588 s | 6.947 s |
+| round 2 | 7.199 s | 6.971 s |
+| round 3 | 7.660 s | 7.021 s |
+| round 4 | 7.604 s | 6.777 s |
+
+**Eight and a half per cent, better in four of four**, and 449.2 G
+instructions against 410.2. Every digest is unchanged: the association inside
+each accumulator is what it was, and doubling the number of accumulators does
+not touch it.
+
+**A strip of eight cannot reach four to seven vectors, and the first attempt
+sent them through the single-vector kernel.** That cost a sixth of the
+six-token prompt and *moved its answer*, because the single-vector kernel
+sums a row in one register across blocks where a strip folds eight lanes.
+Neither is wrong and they do not agree in the last bits. So the four-wide
+kernel stayed, as `Rows_By_Strips_Four`, for the one strip of four a batch
+may end with; three or fewer after that still go singly, as they always did.
+A batch is a hundred and twenty-eight and divides by eight, so this is the
+last batch of a prompt and nothing else -- and it is the difference between a
+digest that moves and one that does not.
+
+### Two kernels priced, and what the price says
+
+Attention's two kernels are eleven per cent of a prompt between them and
+neither had ever been priced. Both are already hand-written wide, so a
+profile share says nothing about whether there is anything to win. Running
+each one twice does.
+
+| | instructions added | wall added |
+| --- | ---: | ---: |
+| `Head_Scores` | 26.4 G, **6.5 %** | 2.8 % |
+| `Blend_Run` | 9.6 G, **2.4 %** | ~6 % |
+
+**They are opposite kinds of expensive, and both answers are useful.**
+
+`Head_Scores` issues six and a half per cent of the program's instructions
+and a second copy of it costs under three per cent of the wall -- so it is
+already overlapping with everything around it, and making its instructions
+fewer would buy a fraction of that. There is nothing here.
+
+`Blend_Run` is the reverse: **two and a half per cent of the instructions and
+six and a half per cent of the samples**. It is not computing, it is waiting.
+It walks the value cache with a stride of the cache's row width, one position
+at a time, which is a gather in everything but name. What that says is that
+the thing to change is the layout it reads, not the code that reads it -- and
+that is a different kind of change from every one in this section so far.
+
+Neither was built. The point of pricing a block is to find out whether to,
+and this pair says: not this one, and not that way.
 
 ### Against llama.cpp
 
@@ -4352,17 +4451,17 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **226.3 t/s** | 31.2 t/s |
-| llama.cpp, processor | 347.8 t/s | 40.0 t/s |
-| model_runner, device | 658.7 t/s | **38.9 t/s** |
-| llama.cpp, device | 1679.8 t/s | 56.2 t/s |
+| model_runner, processor | **238.1 t/s** | 31.5 t/s |
+| llama.cpp, processor | 326.0 t/s | 40.0 t/s |
+| model_runner, device | 758.6 t/s | **40.7 t/s** |
+| llama.cpp, device | 1638.4 t/s | 56.2 t/s |
 
-On the processor: **1.3 times slower generating and 1.5 times slower reading
+On the processor: **1.3 times slower generating and 1.4 times slower reading
 a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
 code that did not change between them, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, **1.4** and **2.5**,
-where the sittings before this one said 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
+reading of this table said 3.3 and 16. On the device, **1.4** and **2.2**,
+where the sittings before this one said 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
 1.4 and 2.6, then 1.4 and 2.5, then 1.4 and 3.0, then 1.4 and 3.6, then 1.4 and 3.8, then 1.4
 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and
 10.1. Both device rows have moved for a named reason:
@@ -4381,17 +4480,17 @@ which numbers belong to which figure. Reading the table against its own
 prose is what caught it, which is a thing only a person does.
 
 **The device row and llama.cpp's processor row generate at about the same
-rate** -- 38.9 against 40.0 in this sitting, where the four before read 40.9
-against 40.4, 41.0 against 40.4, 40.7 against 40.7, and 41.6 against 40.0.
-Three of those five put this program's device ahead and two put it behind,
-by under three per cent either way, which is a pair of figures sitting on
-top of each other rather than a lead in either direction. What is left
+rate** -- 40.7 against 40.0 in this sitting, where the five before read 38.9
+against 40.0, 40.9 against 40.4, 41.0 against 40.4, 40.7 against 40.7, and
+41.6 against 40.0. Four of those six put this program's device ahead and two
+put it behind, by under three per cent either way, which is a pair of figures
+sitting on top of each other rather than a lead in either direction. What is left
 between it and llama.cpp's own device figure is 1.4 times.
 
 The processor's generating row is the other kind of gap. It reads every
 weight once a token and does one multiply with each, so the bus answers
 rather than the arithmetic: llama.cpp's 40.0 t/s is about 46 GB/s of this
-model and 31.2 is about 36. What is left there is a gap in the kernels --
+model and 31.5 is about 37. What is left there is a gap in the kernels --
 ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
 and this measures -- rather than a gap in what the program is doing.
 
@@ -4421,8 +4520,8 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.486 s
-and 64 in 2.053 s on the processor, 0.167 s and 1.647 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.462 s
+and 64 in 2.032 s on the processor, 0.145 s and 1.571 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -4435,13 +4534,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 759.2 t/s rather
-than 347.8 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 749.1 t/s rather
+than 326.0 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 38.9 t/s
-now, against 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 40.7 t/s
+now, against 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -4507,9 +4606,9 @@ All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.446 s | 37 ms a token |
-| the same model at two bits | 1.790 s | 149 ms a token |
-| the first, drafted by the second | 3.773 s | 24 proposed, 7 accepted |
+| TinyLlama-1.1B at eight bits | 0.444 s | 37 ms a token |
+| the same model at two bits | 1.753 s | 146 ms a token |
+| the first, drafted by the second | 3.785 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking
@@ -5866,14 +5965,14 @@ engine supports:
 
 | Format | ns/element | Format | ns/element |
 |---|---|---|---|
-| F32 | 0.27 | Q3_K | 0.50 |
-| Q4_0 | 0.32 | Q4_1 | 0.50 |
+| F32 | 0.27 | Q4_1 | 0.49 |
+| Q4_0 | 0.32 | Q3_K | 0.50 |
 | BF16 | 0.32 | IQ4_XS | 0.51 |
-| Q8_0 | 0.39 | Q5_0 | 0.55 |
-| Q4_K | 0.40 | F16 | 0.57 |
-| Q6_K | 0.40 | Q5_1 | 0.59 |
-| Q5_K | 0.42 | IQ4_NL | 0.65 |
-| | | Q2_K | 0.73 |
+| Q8_0 | 0.38 | Q5_0 | 0.55 |
+| Q4_K | 0.39 | F16 | 0.57 |
+| Q6_K | 0.40 | Q5_1 | 0.58 |
+| Q5_K | 0.42 | IQ4_NL | 0.64 |
+| | | Q2_K | 0.71 |
 
 Taken on a part that has stopped cooling, which this table needs and did not
 used to say: every row here is a serial rate, and `## Speed`'s scaling

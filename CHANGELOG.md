@@ -7,6 +7,47 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A strip of eight vectors instead of four: 8.5 % of a 1419-token prompt,
+  better in four of four.** Instructions 449.2 G to 410.2. Every digest
+  unchanged.
+
+  Two weight loads a block served four vectors; they serve eight now, and the
+  inner loop falls from 5.25 instructions per dot product to 4.81. The eight
+  extra accumulators were free — the shape was using ten of thirty-two vector
+  registers.
+
+  The obstacle was the general-purpose registers, not the vector ones. Four
+  pointers reach eight vectors: the strip's vectors are a fixed stride apart,
+  so a second index register starting at four strides addresses the upper
+  four through the lower four's pointers. The block count and that stride
+  take memory constraints rather than registers.
+
+  The corrections stopped needing a fold: a row's eight are the eight lanes
+  of one accumulator, one to a vector, so twelve instructions became one
+  store.
+
+  `Rows_By_Strips_Four` stays for the one strip of four a batch may end with.
+  Sending those through the single-vector kernel instead cost a sixth of the
+  six-token prompt and moved its digest — a strip folds eight lanes where the
+  single-vector kernel sums a row in one register, and the two do not agree
+  in the last bits.
+
+- **`Scale_At` forced inline.** Taking the block size out of the driver's
+  scale loop left it tight enough that the compiler stopped inlining the
+  half-precision read and gave it a symbol of its own, costing what the call
+  it replaced had cost. `rows` plus `scale_at` 3.5 % of a prompt to 2.7 %,
+  instructions 456.7 G to 449.2.
+
+### Measured and not built
+
+- **Attention's two kernels priced by running each twice.** `Head_Scores`
+  issues 6.5 % of the program's instructions and a second copy costs under
+  3 % of the wall — it already overlaps, and there is nothing to win.
+  `Blend_Run` is the reverse: **2.4 % of the instructions and 6.7 % of the
+  samples**, so it is waiting rather than computing. It walks the value cache
+  one position at a time with a stride of the cache row, which is a gather in
+  everything but name. The thing to change there is the layout, not the code.
+
 - **Three loops the compiler would not vectorize, written out: 3.5 % of a
   1419-token prompt, better in three of four.** Instructions 469.3 G to
   456.7. No digest moves.

@@ -39,6 +39,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Here : B.Byte_Index) return N.Real
      with Inline;
 
+   --  Not merely Inline. Taking the block size out of the driver's scale
+   --  loop left the loop tight enough that the compiler stopped inlining
+   --  this and gave it a symbol of its own, and a profile found it there
+   --  costing what the call it replaced had cost: a two-byte load, an or, a
+   --  move and a convert, behind a call and a return.
+   pragma Inline_Always (Scale_At);
+
    function Scale_At
      (Data : B.Byte_Array;
       Here : B.Byte_Index) return N.Real
@@ -247,6 +254,28 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
       Taken     : out Boolean);
 
+   --  The same, four vectors wide, for the three to seven a strip of
+   --  eight cannot reach. A batch is 128 and divides by eight; the last
+   --  batch of a prompt is whatever is left of it, and sending four of
+   --  those through the single-vector kernel instead cost a sixth of a
+   --  six-token prompt and moved its answer.
+   procedure Rows_By_Strips_Four
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Weights   : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Stride    : Element_Count;
+      Count     : Element_Count;
+      At_Vector : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean);
+
    procedure Rows_Singly
      (Data      : Model_Runner.Bytes.Byte_Array;
       Offset    : Model_Runner.Bytes.Byte_Count;
@@ -423,6 +452,355 @@ package body Model_Runner.Quantization.Integers.Kernels is
    --  under five kilobytes, so a panel stays in the nearest cache across
    --  every strip of the batch, and the order of the loops is the packing.
    procedure Rows_By_Strips
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Weights   : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Stride    : Element_Count;
+      Count     : Element_Count;
+      At_Vector : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      LF : constant Character := ASCII.LF;
+
+      Panel_Rows : constant := 2;
+      Strip      : constant := 8;
+
+      --  As in Rows_Singly: the widest row this reads, so that nothing is
+      --  allocated inside a loop.
+      Scale_Room : constant := 1024;
+
+      --  Both scales multiplied together for every row of the panel, vector
+      --  of the strip and block of the row, laid out with the block outside
+      --  so that one index register walks it beside the activations. Sixteen
+      --  numbers a block, which is sixty-four bytes -- twice the step the
+      --  activations take, which is why the index register carrying it is
+      --  scaled by two and there are still only two of them.
+      type Strip_Scales is
+        array (0 .. Panel_Rows * Strip * Scale_Room - 1) of N.Real;
+      --  Not initialized. Every entry the insertion reads is written by
+      --  the loop below, and giving it a value first was sixteen per cent
+      --  of a prompt spent in memset -- sixty-four kilobytes zeroed for
+      --  every strip of four vectors, which a profile found and no reading
+      --  of the source would have.
+      Scaling : Strip_Scales;
+
+      --  Where each vector of the strip keeps its scales, the scale itself,
+      --  and the block total the bias correction wants. Eight numbers a
+      --  block for the last two, which is the same thirty-two byte step the
+      --  activations take.
+      type Vector_Places is array (0 .. Strip - 1) of Element_Count;
+      type Vector_Numbers is array (0 .. Strip * Scale_Room - 1) of N.Real;
+
+      Vector_At    : Vector_Places;
+      Vector_Scale : Vector_Numbers;
+      Vector_Total : Vector_Numbers;
+
+      --  Sixteen sums and sixteen corrections, all thirty-two folded by the
+      --  insertion rather than by a loop here. The corrections need no fold
+      --  at all: a row's eight of them are the eight lanes of one
+      --  accumulator, one to a vector, and go out as one store.
+      type Landing is array (0 .. 2 * Panel_Rows * Strip - 1) of N.Real
+        with Alignment => 32;
+      Landed : Landing;
+
+      --  What separates the strip's fifth vector from its first, in bytes.
+      --  Four pointers reach eight vectors: the second index register
+      --  starts here and steps beside the first, which is what keeps this
+      --  shape inside the general-purpose registers a machine has.
+      Vector_Step : Interfaces.Unsigned_64;
+
+      Block_Count : Interfaces.Unsigned_64;
+
+   begin
+      Taken := False;
+
+      if Blocks > Scale_Room or else Rows mod Panel_Rows /= 0 then
+         return;
+      end if;
+
+      Block_Count := Interfaces.Unsigned_64 (Blocks);
+
+      --  What the strip's eight vectors contribute, worked out once for the
+      --  whole call rather than once for every row panel: where each
+      --  vector's scales begin, the scale itself, and the block total the
+      --  bias correction wants, already narrowed. Every one of these is the
+      --  same for every row, and leaving them in the innermost loop cost
+      --  about as much as the insertion saved -- which is what the counter
+      --  said the first time this was built.
+      for Vector in Element_Count range 0 .. Strip - 1 loop
+         Vector_At (Natural (Vector)) :=
+           (First + (At_Vector + Vector) * Stride) / Activation_Block;
+      end loop;
+
+      --  A quantized activation is one byte, so the distance in bytes is
+      --  the distance in elements.
+      Vector_Step := Interfaces.Unsigned_64 (4 * Stride);
+
+      for Vector in 0 .. Strip - 1 loop
+         for Block in 0 .. Blocks - 1 loop
+            declare
+               At_Scale : constant Element_Count :=
+                 Vector_At (Vector) + Block;
+            begin
+               Vector_Scale (Natural (Block) * Strip + Vector) :=
+                 Scales (Scales'First + At_Scale);
+               Vector_Total (Natural (Block) * Strip + Vector) :=
+                 N.Real (Totals (Totals'First + At_Scale));
+            end;
+         end loop;
+      end loop;
+
+      for Panel in Element_Count range 0 .. Rows / Panel_Rows - 1 loop
+         declare
+            At_Row : constant Element_Count := Panel * Panel_Rows;
+            Base   : constant B.Byte_Index :=
+              Data'First + Offset + Row_Bytes * B.Byte_Count (At_Row);
+         begin
+            for Block in 0 .. Blocks - 1 loop
+               for Row in Element_Count range 0 .. Panel_Rows - 1 loop
+                  declare
+                     Scale : constant N.Real :=
+                       Weights (Weights'First
+                                + (At_Row + Row) * Blocks + Block);
+
+                     At_Vec : constant Natural := Natural (Block) * Strip;
+                     At_Out : constant Natural :=
+                       Natural (Block) * (Panel_Rows * Strip)
+                       + Natural (Row) * Strip;
+                  begin
+                     --  A map and nothing else. The correction that used
+                     --  to share these turns is the insertion's now.
+                     for Vector in 0 .. Strip - 1 loop
+                        Scaling (At_Out + Vector) :=
+                          Scale * Vector_Scale (At_Vec + Vector);
+                     end loop;
+                  end;
+               end loop;
+            end loop;
+
+            System.Machine_Code.Asm
+              ("movl $0x80808080, %%eax" & LF &
+               "vmovd %%eax, %%xmm3" & LF &
+               "vpbroadcastd %%xmm3, %%ymm3" & LF &
+               "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
+               "vpxord %%ymm9, %%ymm9, %%ymm9" & LF &
+               "vpxord %%ymm10, %%ymm10, %%ymm10" & LF &
+               "vpxord %%ymm11, %%ymm11, %%ymm11" & LF &
+               "vpxord %%ymm12, %%ymm12, %%ymm12" & LF &
+               "vpxord %%ymm13, %%ymm13, %%ymm13" & LF &
+               "vpxord %%ymm14, %%ymm14, %%ymm14" & LF &
+               "vpxord %%ymm15, %%ymm15, %%ymm15" & LF &
+               "vpxord %%ymm16, %%ymm16, %%ymm16" & LF &
+               "vpxord %%ymm17, %%ymm17, %%ymm17" & LF &
+               "vpxord %%ymm18, %%ymm18, %%ymm18" & LF &
+               "vpxord %%ymm19, %%ymm19, %%ymm19" & LF &
+               "vpxord %%ymm20, %%ymm20, %%ymm20" & LF &
+               "vpxord %%ymm21, %%ymm21, %%ymm21" & LF &
+               "vpxord %%ymm22, %%ymm22, %%ymm22" & LF &
+               "vpxord %%ymm23, %%ymm23, %%ymm23" & LF &
+               "vpxord %%ymm24, %%ymm24, %%ymm24" & LF &
+               "vpxord %%ymm25, %%ymm25, %%ymm25" & LF &
+               "xorq %%rcx, %%rcx" & LF &
+               "xorq %%rdx, %%rdx" & LF &
+               "movq %8, %%rax" & LF &
+               "movq %10, %%rsi" & LF &
+               "1:" & LF &
+               "vmovdqu (%1,%%rcx,1), %%ymm0" & LF &
+               "vpxor %%ymm3, %%ymm0, %%ymm0" & LF &
+               "vmovdqu (%2,%%rcx,1), %%ymm1" & LF &
+               "vpxor %%ymm3, %%ymm1, %%ymm1" & LF &
+
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%3,%%rdx,1), %%ymm0, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 0(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm8" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%4,%%rdx,1), %%ymm0, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 4(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm9" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%5,%%rdx,1), %%ymm0, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 8(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm10" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%6,%%rdx,1), %%ymm0, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 12(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm11" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%3,%%rsi,1), %%ymm0, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 16(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm12" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%4,%%rsi,1), %%ymm0, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 20(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm13" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%5,%%rsi,1), %%ymm0, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 24(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm14" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%6,%%rsi,1), %%ymm0, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 28(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm15" & LF &
+
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%3,%%rdx,1), %%ymm1, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 32(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%4,%%rdx,1), %%ymm1, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 36(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%5,%%rdx,1), %%ymm1, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 40(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%6,%%rdx,1), %%ymm1, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 44(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%3,%%rsi,1), %%ymm1, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 48(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%4,%%rsi,1), %%ymm1, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 52(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%5,%%rsi,1), %%ymm1, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 56(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
+               "vpdpbusd (%6,%%rsi,1), %%ymm1, %%ymm2" & LF &
+               "vcvtdq2ps %%ymm2, %%ymm2" & LF &
+               "vfmadd231ps 60(%7,%%rdx,2)%{1to8%}, %%ymm2, %%ymm23" & LF &
+
+               --  Both rows' corrections, one lane a vector, in four.
+               "vmovups 0(%7,%%rdx,2), %%ymm4" & LF &
+               "vfmadd231ps (%9,%%rdx,1), %%ymm4, %%ymm24" & LF &
+               "vmovups 32(%7,%%rdx,2), %%ymm5" & LF &
+               "vfmadd231ps (%9,%%rdx,1), %%ymm5, %%ymm25" & LF &
+
+               "addq $34, %%rcx" & LF &
+               "addq $32, %%rdx" & LF &
+               "addq $32, %%rsi" & LF &
+               "decq %%rax" & LF &
+               "jnz 1b" & LF &
+
+               --  The corrections need no fold: eight lanes, one a vector.
+               "vmovups %%ymm24, 64(%0)" & LF &
+               "vmovups %%ymm25, 96(%0)" & LF &
+
+               --  Eight accumulators a row down to eight numbers, by the
+               --  same pairwise tree as before, run once for each row.
+               "vhaddps %%ymm9, %%ymm8, %%ymm8" & LF &
+               "vhaddps %%ymm11, %%ymm10, %%ymm10" & LF &
+               "vhaddps %%ymm13, %%ymm12, %%ymm12" & LF &
+               "vhaddps %%ymm15, %%ymm14, %%ymm14" & LF &
+               "vhaddps %%ymm10, %%ymm8, %%ymm8" & LF &
+               "vhaddps %%ymm14, %%ymm12, %%ymm12" & LF &
+               "vextractf128 $1, %%ymm8, %%xmm1" & LF &
+               "vaddps %%xmm1, %%xmm8, %%xmm8" & LF &
+               "vextractf128 $1, %%ymm12, %%xmm5" & LF &
+               "vaddps %%xmm5, %%xmm12, %%xmm12" & LF &
+               "vmovups %%xmm8, 0(%0)" & LF &
+               "vmovups %%xmm12, 16(%0)" & LF &
+
+               --  The second row's eight live above the sixteenth register,
+               --  which the horizontal add cannot encode, so they come down
+               --  first. Once a panel, against a hundred and seventy-six
+               --  blocks of work.
+               "vmovaps %%ymm16, %%ymm8" & LF &
+               "vmovaps %%ymm17, %%ymm9" & LF &
+               "vmovaps %%ymm18, %%ymm10" & LF &
+               "vmovaps %%ymm19, %%ymm11" & LF &
+               "vmovaps %%ymm20, %%ymm12" & LF &
+               "vmovaps %%ymm21, %%ymm13" & LF &
+               "vmovaps %%ymm22, %%ymm14" & LF &
+               "vmovaps %%ymm23, %%ymm15" & LF &
+               "vhaddps %%ymm9, %%ymm8, %%ymm8" & LF &
+               "vhaddps %%ymm11, %%ymm10, %%ymm10" & LF &
+               "vhaddps %%ymm13, %%ymm12, %%ymm12" & LF &
+               "vhaddps %%ymm15, %%ymm14, %%ymm14" & LF &
+               "vhaddps %%ymm10, %%ymm8, %%ymm8" & LF &
+               "vhaddps %%ymm14, %%ymm12, %%ymm12" & LF &
+               "vextractf128 $1, %%ymm8, %%xmm1" & LF &
+               "vaddps %%xmm1, %%xmm8, %%xmm8" & LF &
+               "vextractf128 $1, %%ymm12, %%xmm5" & LF &
+               "vaddps %%xmm5, %%xmm12, %%xmm12" & LF &
+               "vmovups %%xmm8, 32(%0)" & LF &
+               "vmovups %%xmm12, 48(%0)",
+               Inputs =>
+                 [System.Address'Asm_Input ("r", Landed'Address),
+                  System.Address'Asm_Input ("r", Data (Base + 2)'Address),
+                  System.Address'Asm_Input
+                    ("r", Data (Base + Row_Bytes + 2)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First
+                                  + At_Vector * Stride)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First
+                                  + (At_Vector + 1) * Stride)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First
+                                  + (At_Vector + 2) * Stride)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First
+                                  + (At_Vector + 3) * Stride)'Address),
+                  System.Address'Asm_Input ("r", Scaling (0)'Address),
+                  Interfaces.Unsigned_64'Asm_Input ("m", Block_Count),
+                  System.Address'Asm_Input ("r", Vector_Total (0)'Address),
+                  Interfaces.Unsigned_64'Asm_Input ("m", Vector_Step)],
+               Clobber  =>
+                 "rax,rcx,rdx,rsi,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,"
+                 & "ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,ymm14,ymm15,"
+                 & "ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,"
+                 & "ymm24,ymm25,memory",
+               Volatile => True);
+
+            for Row in Element_Count range 0 .. Panel_Rows - 1 loop
+               for Vector in Element_Count range 0 .. Strip - 1 loop
+                  declare
+                     Which : constant Natural :=
+                       Natural (Row) * Strip + Natural (Vector);
+                     At_It : constant Element_Count :=
+                       (At_Row + Row) * Count + At_Vector + Vector;
+                  begin
+                     --  Both already folded: the sum in the first sixteen
+                     --  of Landed and the correction in the sixteen after.
+                     Sums (Sums'First + At_It) :=
+                       Sums (Sums'First + At_It)
+                       + N.Wide_Real (Landed (Which))
+                       - 128.0
+                         * N.Wide_Real
+                             (Landed (Panel_Rows * Strip + Which));
+                  end;
+               end loop;
+            end loop;
+         end;
+      end loop;
+
+      Taken := True;
+   end Rows_By_Strips;
+
+   ------------------------
+   -- Rows_By_Strips_Four --
+   ------------------------
+
+   procedure Rows_By_Strips_Four
      (Data      : Model_Runner.Bytes.Byte_Array;
       Offset    : Model_Runner.Bytes.Byte_Count;
       Row_Bytes : Model_Runner.Bytes.Byte_Count;
@@ -694,7 +1072,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
       end loop;
 
       Taken := True;
-   end Rows_By_Strips;
+   end Rows_By_Strips_Four;
 
    --------------------------
    -- Rows_By_Strips_Q4K --
@@ -3628,7 +4006,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  belong.
       if Deep and then Rows mod 2 = 0 and then Count >= 4 then
          declare
-            Full : constant Element_Count := (Count / 4) * 4;
+            Full : constant Element_Count := (Count / 8) * 8;
+            Four : Element_Count := Full;
             Done : Boolean;
 
             --  The weight side of every scale, worked out once for the
@@ -3660,10 +4039,10 @@ package body Model_Runner.Quantization.Integers.Kernels is
                end;
             end loop;
 
-            for At_Strip in Element_Count range 0 .. Full / 4 - 1 loop
+            for At_Strip in Element_Count range 0 .. Full / 8 - 1 loop
                Rows_By_Strips
                  (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-                  Held, Totals, First, Stride, Count, At_Strip * 4, Sums,
+                  Held, Totals, First, Stride, Count, At_Strip * 8, Sums,
                   Done);
 
                if not Done then
@@ -3671,7 +4050,21 @@ package body Model_Runner.Quantization.Integers.Kernels is
                end if;
             end loop;
 
-            for Which in Full .. Count - 1 loop
+            --  Four of what a strip of eight could not reach, and then the
+            --  three or fewer left after that one at a time.
+            if Count - Full >= 4 then
+               Rows_By_Strips_Four
+                 (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                  Held, Totals, First, Stride, Count, Full, Sums, Done);
+
+               if not Done then
+                  return;
+               end if;
+
+               Four := Full + 4;
+            end if;
+
+            for Which in Four .. Count - 1 loop
                Rows_Singly
                  (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
                   Totals, First + Which * Stride, Which, Count, Sums);
