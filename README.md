@@ -4381,9 +4381,10 @@ of loop spent on twenty-four rather than twelve. Fewer instructions,
 the `leaq` that advances two rows at once cost more than the loop they
 replaced.
 
-Between them those two say the value blend is not where a layout change would
-pay, which is what the pair was run to find out. **The 7.2 per cent stands
-unexplained**, and saying so is better than the third guess.
+Between them those two say the value blend is not where a *layout* change
+would pay, which is what the pair was run to find out. It stood unexplained
+for one commit; `### Three questions asked of the hardware` below explains
+it, and the explanation is why both of these failed.
 
 **A strip of twelve: priced at one and a half per cent, not built.** After
 `### A strip of eight` the arithmetic looked like it went on. It does not,
@@ -4395,6 +4396,67 @@ sixteen general-purpose registers** and a scale table padded to a hundred and
 twenty-eight bytes a block. Eight vectors against two rows is a local
 optimum and the counting is what says so, not a measurement that was never
 taken.
+
+### Three questions asked of the hardware
+
+The commit before this one left a symbol whose cost had no explanation and
+two guesses about it that had both failed. Guessing again was the wrong move;
+counting was the right one. `perf record` takes a hardware event as easily as
+it takes cycles, and attributing *misses* to symbols rather than *time* is
+what settled all three questions below.
+
+**Where the value blend's time goes, answered.** Over the whole prompt the
+run takes 2.53 G last-level misses, 19.0 G first-level misses on 172.9 G
+loads, and 12.2 M page-table walks. By symbol:
+
+| | LLC misses | L1 misses | TLB walks |
+| --- | ---: | ---: | ---: |
+| `blend_run` | **68.1 %** | 19.0 % | 8.2 % |
+| `head_scores` | 19.9 % | 6.3 % | 11.8 % |
+| `rows_by_strips` | 3.3 % | **70.8 %** | 14.1 % |
+
+**Two thirds of everything this program fetches from memory is fetched by
+the value blend**, on two and a half per cent of its instructions. That is
+the answer, and it says plainly why the two earlier attempts failed: a
+prefetch hides latency and an unroll hides latency, and **this is not
+latency, it is bytes**. The value cache of a 1419-token prompt is 1.4 MB a
+layer and 32 MB across the model, against sixteen of last-level cache, and
+every blend reads it from memory.
+
+The strip kernel is the mirror image and it is the reassuring half of the
+table: seventy per cent of the first-level misses and three per cent of the
+last-level ones, which is a kernel streaming through cache exactly as
+intended.
+
+What this points at is **fewer bytes rather than better access**: the value
+cache stored at half precision would halve the traffic and change the
+answers by a rounding. That is the next thing to try, and it is a different
+change from any in this section -- it is not a loop, it is a format.
+
+**The thirty-four byte stride, ablated: nothing.** A Q8_0 block interleaves
+its two-byte scale with its thirty-two quants, so the kernel steps weights by
+thirty-four and every load straddles a cache line about half the time.
+Setting the step to thirty-two gives wrong answers and right timing, and the
+timing is **6.629 s against 6.976 -- no gain**. Misaligned loads cost nothing
+measurable on this part, so the alignment argument for repacking the weights
+is dead.
+
+**And the scale extraction is already done once per share.** The remaining
+argument for a repack was `rows`' seven per cent, which reads those
+interleaved scales back out. It was hoisted from the kernel to the caller and
+measured: **390.2 G instructions to 413.5**, worse, because the tiles already
+partition the share's rows -- the work was never repeated -- and the
+conditional slice handed down copied itself once a tile. The only version
+that would save anything is a cache living across batches, which is about a
+hundred and twenty-eight megabytes for this model to save perhaps six per
+cent, and the weights would stop being the file's own pages. Written down
+rather than built.
+
+**The exponential, ablated.** Everything around it in softmax fell and it did
+not, so it was run twice: **6.629 s against 6.985**, five and a half per cent
+of the wall for two and three quarter per cent more instructions. One copy is
+three to five per cent and retires slowly, like the blend. It is the largest
+thing left in these kernels that has never been touched.
 
 ### A slower day, measured on both sides
 

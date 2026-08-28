@@ -10017,3 +10017,41 @@ outside C357B86434B45980 src/shaders/row_product.comp src/shaders/matrix_product
 # THE PROCESSOR'S PROMPT READS 238.1 TOKENS A SECOND and the gap to
 # llama.cpp on a prompt is 1.40 times, from 2.5 when this began.
 
+# 2026-08-28  Three questions asked of the hardware
+#
+#   No code changed, so no figure group moved. What changed is what is known
+#   about them.
+#
+#   Misses by symbol, whole prompt, perf record on the event rather than on
+#   cycles. The run takes 2.53 G last-level misses, 19.0 G first-level misses
+#   on 172.9 G loads and 12.2 M page-table walks.
+#
+#                        LLC     L1     TLB
+#     blend_run         68.1%  19.0%   8.2%
+#     head_scores       19.9%   6.3%  11.8%
+#     rows_by_strips     3.3%  70.8%  14.1%
+#     rows                  -      -  20.8%
+#
+#   Two thirds of everything fetched from memory is fetched by the value
+#   blend, on two and a half per cent of the instructions. That is why the
+#   prefetch and the two-a-turn unroll of the commit before both did nothing:
+#   both hide latency and this is bytes. The value cache of a 1419-token
+#   prompt is 1.4 MB a layer, 32 MB across the model, against 16 of
+#   last-level cache. The strip kernel is the mirror image and the
+#   reassuring half of the table.
+#
+#   The thirty-four byte stride, ablated by setting it to thirty-two: 6.629 s
+#   against 6.976, no gain, so misaligned loads cost nothing measurable here.
+#   And the scale extraction a repack would delete is already done once per
+#   share and not once per tile -- hoisted to the caller it measured 390.2 G
+#   instructions against 413.5, worse, the conditional slice copying once a
+#   tile. A cache across batches is the only version that saves anything:
+#   about 128 MiB for this model, perhaps six per cent, and the weights stop
+#   being the file's own pages.
+#
+#   Exponentiate doubled: 6.629 s against 6.985, five and a half per cent of
+#   the wall for two and three quarter per cent more instructions.
+#
+#   All three taken back to back, three rounds each, on the machine the
+#   sitting above was taken on.
+

@@ -5,6 +5,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **Two thirds of everything this program fetches from memory is fetched by
+  `Blend_Run`** — 68.1 % of the run's last-level cache misses on 2.4 % of its
+  instructions, with `Head_Scores` taking another 19.9 %. That is why the
+  prefetch and the unroll below both did nothing: a prefetch hides latency,
+  and this is bytes. The strip kernel is the mirror image and the reassuring
+  half — 70.8 % of the first-level misses and 3.3 % of the last-level ones, a
+  kernel streaming through cache as intended. What it points at is the value
+  cache stored at half precision, which is a format change and not a loop
+  change.
+
+- **The 34-byte block stride costs nothing** (6.629 s against 6.976 with the
+  step set to 32 — wrong answers, right timing), so the alignment argument
+  for repacking the weights is dead. And the scale extraction the repack
+  would also delete is already done once per share, not once per tile:
+  hoisting it to the caller measured 390.2 G instructions against 413.5,
+  worse. Only a cache living across batches would save anything — about
+  128 MiB here for perhaps 6 %, and the weights would stop being the file's
+  own pages.
+
+- **`Exponentiate` doubled costs 5.5 % of the wall for 2.75 % more
+  instructions** (6.629 s against 6.985). One copy is three to five per cent
+  and retires slowly. It is the largest untouched thing left in these
+  kernels.
+
 ### Added
 
 - **The two symbols nobody had opened: 10.5 % of a 1419-token prompt, better
