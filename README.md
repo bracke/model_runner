@@ -4806,6 +4806,36 @@ workgroups, and only a check that reads both numbers would ever have said so.
 
 **The device's prompt gap is 2.1 times**, from 2.5.
 
+### The nine per cent is arithmetic, not transfer
+
+A device prompt spends nine per cent of itself on the processor, and the
+obvious suspect was the transfer: the cache is written a position at a time,
+so a batch of a hundred and twenty-eight costs two hundred and fifty-six
+calls a layer where the attention dispatch beside it costs one and the file
+already says a call is eighty-three microseconds. The rows of a batch lie
+next to each other at both ends, so one call each way does it.
+
+**It measured nothing.** The phase went 0.208 s to 0.201 and the prompt did
+not move. `Put_Cache` writes into a buffer that stays mapped -- which is why
+`memmove` shows in the profile and not a submission -- so a call there is a
+copy and not a fence. Reverted.
+
+**So the phase is its own arithmetic**, and it is worth saying what that is.
+Replacing the cosine and the sine with the angle itself -- wrong answers,
+right timing -- takes the phase from **0.203 s to 0.137**: a third of it is
+two transcendentals a pair a position a layer, computed in binary64.
+
+And half of that third is redundant. `Apply_Rotary` is called twice for every
+position of a batch, once for the queries and once for the keys, and **each
+call computes the same table of angles**: same position, same base, same
+scaling, same factors. Sharing it between the two is bit-for-bit the same
+answer and about one and a half per cent of a device prompt -- which is what
+it costs, measured, rather than what it looked like it might.
+
+That is the next thing here, and it wants care: the rotation is where every
+other figure in this file starts, so a refactor of it is a refactor of
+everything's first step.
+
 ### A slower day, measured on both sides
 
 The figures in this section were re-taken twice, because the first sitting

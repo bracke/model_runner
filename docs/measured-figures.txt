@@ -10414,3 +10414,33 @@ outside 76CF29BCC0D901AF src/shaders/row_product.comp src/shaders/matrix_product
 #
 # THE DEVICE'S PROMPT GAP IS 2.1 TIMES, from 2.5, and the processor's is 1.2.
 
+# 2026-08-29  The nine per cent is arithmetic, not transfer
+#
+#   No code changed, so no figure group moved.
+#
+#   A device prompt spends nine per cent of itself on the processor and the
+#   obvious suspect was the transfer: the cache is written a position at a
+#   time, two hundred and fifty-six calls a layer for a batch of a hundred
+#   and twenty-eight, where the attention dispatch beside it costs one. The
+#   rows lie next to each other at both ends, so one call each way does it.
+#
+#     a call a position    0.208 s rotating
+#     a call a layer       0.201 s rotating,  prompt unmoved
+#
+#   Nothing. Put_Cache writes into a buffer that stays mapped, so a call
+#   there is a copy and not a fence -- which is why memmove shows in a
+#   profile of a device run and no submission does. Reverted.
+#
+#   The phase is its own arithmetic. Replacing the cosine and the sine with
+#   the angle itself, wrong answers and right timing:
+#
+#     as it is                       0.203 s rotating
+#     without the transcendentals    0.137 s rotating
+#
+#   A third of the phase is two transcendentals a pair a position a layer, in
+#   binary64. And half of that third is redundant: Apply_Rotary is called
+#   once for the queries and once for the keys at every position of a batch,
+#   with the same position, base, scaling and factors, and each call computes
+#   the same table of angles. Sharing it between the two is bit for bit the
+#   same answer and about one and a half per cent of a device prompt.
+

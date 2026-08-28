@@ -5,6 +5,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **A device prompt's 9 % on the processor is arithmetic, not transfer.**
+  The cache is written a position at a time — 256 calls a layer against the
+  attention dispatch's one — and batching it into one call each way for keys
+  and values **measured nothing** (phase 0.208 s to 0.201, prompt unmoved).
+  `Put_Cache` writes into a buffer that stays mapped, so a call there is a
+  copy and not a fence. Reverted.
+
+  Replacing the cosine and sine with the angle itself — wrong answers, right
+  timing — takes the phase from **0.203 s to 0.137**: a third of it is two
+  transcendentals a pair a position a layer, in binary64. And half of that
+  third is redundant, because `Apply_Rotary` is called once for the queries
+  and once for the keys at each position and **each computes the same table
+  of angles**. Sharing it is bit-for-bit identical and worth about 1.5 % of a
+  device prompt.
+
 ### Fixed
 
 - **The committed shader words did not come from the committed shader
