@@ -5,6 +5,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The llama.cpp comparison now publishes the 1419-token prompt beside the
+  110-token one**, which is the prompt every change in that section is
+  actually judged on. It says two things the short one does not: the gap is
+  wider — **1.3x on the processor against 1.2, and 2.4 on the device against
+  2.3**, because attention grows with the square of the context and is what
+  this program is furthest behind on — and it is far quieter, `llama-bench`
+  reporting ±0.6 on 282.2 at 1419 tokens against ±21 on 331.0 at 110.
+
+  That noise had twice forced a paragraph explaining a published figure that
+  moved more between sittings than the change being measured: the device row
+  went 808.8 to 709.7 while the code got 6.5 % faster. Both tables are kept —
+  nine sittings of history were taken on the short prompt — but the long one
+  is the figure to argue about.
+
 ### Added
 
 - **One table of angles for a position's two rotations: 23 % off the rotating

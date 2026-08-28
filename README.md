@@ -5006,8 +5006,40 @@ sides, with llama.cpp at `95b8e33e1`:
 | model_runner, device | 709.7 t/s | **40.6 t/s** |
 | llama.cpp, device | 1660.0 t/s | 55.9 t/s |
 
-On the processor: **1.3 times slower generating and 1.2 times slower reading
-a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
+**And the same four rows against a prompt of 1419 tokens**, which is the one
+every change in this section is actually judged on:
+
+| | prompt, 1419 tokens | generating, 64 tokens |
+| --- | ---: | ---: |
+| model_runner, processor | **214.8 t/s** | 31.6 t/s |
+| llama.cpp, processor | 282.2 t/s | 39.8 t/s |
+| model_runner, device | **743.7 t/s** | 40.6 t/s |
+| llama.cpp, device | 1791.5 t/s | 56.0 t/s |
+
+**The longer prompt is the harder one and the quieter one, and it took this
+long to publish because nobody asked it to.** Two things it says that the
+short one does not.
+
+The gap is wider: **1.3 times on the processor against 1.2, and 2.4 on the
+device against 2.3.** Attention grows with the square of the context and it
+is the part of a layer this program is furthest behind on, so a table taken
+at a hundred and ten tokens reads a little kinder than the work deserves.
+
+And it is far less noisy. `llama-bench` reports its own spread, and over
+three runs it is **±0.6 on 282.2 at 1419 tokens against ±21 on 331.0 at
+110** -- a hundred and ten tokens is where a call's fixed cost still shows,
+on both sides. This section has twice had to explain a figure that moved
+more between sittings than the change being measured moved it: the device row
+went 808.8 to 709.7 while the code got six and a half per cent faster. The
+row above is why that happened; the row here is what should have been read.
+
+Both are kept. The short prompt is what nine sittings of history in this
+section were taken on and dropping it would throw that away, and a reader
+comparing against somebody else's `pp110` needs it. But **the long one is the
+figure to argue about**.
+
+On the processor at 110 tokens: **1.3 times slower generating and 1.2 times
+slower reading a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
 code that did not change between them, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
 reading of this table said 3.3 and 16. On the device, **1.4** and **2.3**,
@@ -5069,6 +5101,20 @@ tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt-short.txt \
 llama-bench -m MODEL -p 110 -n 64 -t 8 -r 3 --device none
 llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
+
+and the 1419-token table is the same four with the long prompt file and
+`-p 1419` in place of `-p 110`:
+
+```
+tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt-long.txt \
+  --max-tokens 0
+llama-bench -m MODEL -p 1419 -n 64 -t 8 -r 3 --device none
+llama-bench -m MODEL -p 1419 -n 64 -ngl 99 -r 3
+```
+
+`llama-bench` counts tokens rather than reading a file, so its 1419 are
+synthetic where this program's are a real text. What is being timed is the
+number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
 speed` reports seconds and this table reports rates: 110 tokens in 0.409 s
