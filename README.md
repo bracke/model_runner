@@ -4608,8 +4608,57 @@ memory is not what it costs, and the counter that said two thirds of the
 program's fetches happen there was answering a question nobody should have
 asked: where the fetches are, not what they cost.
 
-That leaves the seven per cent standing on twelve instructions a position,
-and the next person to look at it should start from the instructions.
+That leaves the seven per cent standing on twelve instructions a position.
+`### What the two loops are actually waiting for` below asks the processor
+what they are waiting for, and gets an answer.
+
+### What the two loops are actually waiting for
+
+Five changes have been made to the strip kernel and five things tried against
+the value blend, and not once did anybody ask the processor what either loop
+was limited by. It answers in one run. Zen 4 dispatches six slots a cycle, so
+a slot is either an operation or a stall, and the stall has a side:
+
+| | instructions | cycles | IPC | front-end stalls | back-end stalls |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| whole prompt | 382.0 G | 133.5 G | 2.86 | 3.2 % | 43.3 % |
+| `rows_by_strips` | 283.3 G | 87.1 G | **3.25** | **0.6 %** | 39.3 % |
+| `head_scores` | 25.3 G | 9.6 G | 2.63 | 5.2 % | 40.9 % |
+| `blend_run` | 9.8 G | 10.4 G | **0.94** | 1.1 % | **78.6 %** |
+
+**The strip kernel is at its arithmetic floor, and that is the end of it.**
+Three and a quarter instructions a cycle, six tenths of one per cent lost to
+the front end. Per block it issues thirty-six multiply-add-class operations
+-- sixteen byte dot products, sixteen scaled accumulations and four
+corrections -- onto the two pipes that can take them, which is eighteen
+cycles of floor against the twenty-four it takes. Every one of the
+thirty-six is arithmetic the answer needs.
+
+That also kills the one idea left for it. Sixteen of the seventy-seven
+instructions a block are `vpxor` zeroing an accumulator, which looked like
+twenty per cent worth removing -- but a zeroing idiom is eliminated at
+rename, so it never reaches a pipe, and the front end is not the constraint
+by a factor of sixty. **Five changes in, the kernel is done**: nothing but a
+different algorithm moves it.
+
+**The value blend is waiting on the first-level cache, which is why nothing
+worked.** Nought point nine four instructions a cycle and seventy-nine per
+cent of its slots stalled behind the dispatch. It is not bandwidth -- five
+experiments say so -- and it is not the front end. It is that a position's
+values are two hundred and fifty-six bytes and thirty-two kilobytes does not
+hold a prompt's worth of them, so every position is four first-level misses
+whatever the order they lie in. The head-major copy did not change that
+either: a megabyte and a half is not thirty-two kilobytes.
+
+The only reuse there is to have is **across query positions**, and that is
+now a calculation rather than a guess. Two queries against thirty-two
+components is eight accumulators and two broadcasts, which fits the register
+file with room; it reads each cache line for two queries instead of one and
+costs about seventeen per cent more instructions to do it. On a loop running
+at nought point nine four, seventeen per cent more instructions is close to
+free. That is the next thing to try, and it is the first attempt at this
+seven per cent that starts from a measurement of what it is doing rather than
+a guess about what it might be.
 
 ### A slower day, measured on both sides
 

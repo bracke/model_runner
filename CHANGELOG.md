@@ -5,6 +5,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The strip kernel is at its arithmetic floor.** IPC 3.25, with 0.6 % of
+  its dispatch slots lost to the front end and 39 % to the back. Per block it
+  issues 36 multiply-add-class operations onto the two pipes that take them —
+  18 cycles of floor against the 24 it takes — and every one of them is
+  arithmetic the answer needs. That also kills the last idea for it: the
+  sixteen `vpxor` a block are a zeroing idiom eliminated at rename, so they
+  never reach a pipe. **Five changes in, the kernel is done**; nothing but a
+  different algorithm moves it.
+
+- **The value blend is waiting on the first-level cache.** IPC 0.94, 78.6 %
+  of its slots stalled behind dispatch, 1.1 % in front of it. Not bandwidth —
+  five experiments say so — and not the front end: a position's values are
+  256 bytes and 32 KB does not hold a prompt's worth, so every position is
+  four L1 misses whatever the order. The head-major copy did not change that
+  either.
+
+  The only reuse available is across query positions. Two queries against
+  thirty-two components is eight accumulators and two broadcasts, fits the
+  register file, reads each line for two queries instead of one, and costs
+  about 17 % more instructions — which on a loop running at 0.94 is close to
+  free.
+
 ### Measured and not kept
 
 - **The redundant attention reads were removed, and it bought nothing.** A

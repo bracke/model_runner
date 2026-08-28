@@ -10196,3 +10196,33 @@ outside E44CC8956C67054B src/shaders/row_product.comp src/shaders/matrix_product
 #   not what it costs. What is left is twelve instructions a position, and
 #   that is where the next attempt should start.
 
+# 2026-08-28  What the two loops are actually waiting for
+#
+#   No code changed, so no figure group moved.
+#
+#   Zen 4 dispatches six slots a cycle, so a slot is an operation or a stall
+#   and the stall has a side. Whole prompt: 382.0 G instructions, 133.5 G
+#   cycles, 25.4 G slots with no ops from the front end, 346.6 G back-end
+#   stalls -- 3.2 per cent and 43.3 of the 801 G slots.
+#
+#                      instr    cycles   IPC   front   back
+#     rows_by_strips  283.3 G   87.1 G  3.25    0.6%  39.3%
+#     head_scores      25.3 G    9.6 G  2.63    5.2%  40.9%
+#     blend_run         9.8 G   10.4 G  0.94    1.1%  78.6%
+#
+#   The strip kernel is at its arithmetic floor. Per block it issues
+#   thirty-six multiply-add-class operations -- sixteen byte dot products,
+#   sixteen scaled accumulations, four corrections -- onto the two pipes that
+#   take them, eighteen cycles of floor against twenty-four taken, and every
+#   one of them is arithmetic the answer needs. The sixteen vpxor a block are
+#   a zeroing idiom eliminated at rename and never reach a pipe, so the
+#   twenty per cent they looked worth is not there. Five changes in, done.
+#
+#   The value blend is first-level bound: a position's values are two hundred
+#   and fifty-six bytes and thirty-two kilobytes does not hold a prompt's
+#   worth of them, so every position is four misses whatever the order --
+#   which is why the head-major copy changed nothing either. The only reuse
+#   is across query positions: two queries by thirty-two components is eight
+#   accumulators and two broadcasts, halves the misses, and costs about
+#   seventeen per cent more instructions on a loop running at 0.94.
+
