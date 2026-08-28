@@ -660,6 +660,101 @@ package body Model_Runner.Kernels is
       return P * To_Real (Bits);
    end Raised;
 
+   --  The largest value of a run and whether every one of them is finite,
+   --  in one pass over eight lanes.
+   --
+   --  What this replaces was a scalar loop and stayed one: the finiteness
+   --  test is an integer test of the exponent field, and a compiler that
+   --  sees a float array turned into bits one element at a time will not
+   --  make eight lanes of it. Written out, both questions are lane work --
+   --  a maximum, and an ordered compare of the magnitude against infinity
+   --  whose mask is accumulated. A value that is not finite fails that
+   --  compare whether it is infinite or a NaN, which is the whole of the
+   --  test the caller wanted.
+   procedure Largest_Finite
+     (Target  : Real_Array;
+      Largest : out Real;
+      Finite  : out Boolean)
+   is
+      Count : constant Element_Count := Element_Count (Target'Length);
+      Whole : constant Element_Count := (Count / 8) * 8;
+      Index : Element_Count := 0;
+   begin
+      Largest := Target (Target'First);
+      Finite  := True;
+
+      if Wide_Lanes and then Whole > 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            At_Value : System.Address := Target (Target'First)'Address;
+            Blocks   : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Whole / 8);
+            Top      : N.Real;
+            Flags    : Interfaces.Unsigned_32;
+         begin
+            System.Machine_Code.Asm
+              ("movl $0x7fffffff, %%eax"                  & LF
+               & "vmovd %%eax, %%xmm3"                    & LF
+               & "vbroadcastss %%xmm3, %%ymm3"            & LF
+               & "movl $0x7f800000, %%eax"                & LF
+               & "vmovd %%eax, %%xmm4"                    & LF
+               & "vbroadcastss %%xmm4, %%ymm4"            & LF
+               & "vpcmpeqd %%ymm5, %%ymm5, %%ymm5"        & LF
+               & "vbroadcastss (%2), %%ymm0"              & LF
+               & "1:"                                     & LF
+               & "vmovups (%2), %%ymm1"                   & LF
+               & "vmaxps %%ymm1, %%ymm0, %%ymm0"          & LF
+               & "vandps %%ymm3, %%ymm1, %%ymm2"          & LF
+               & "vcmpltps %%ymm4, %%ymm2, %%ymm2"        & LF
+               & "vandps %%ymm2, %%ymm5, %%ymm5"          & LF
+               & "addq $32, %2"                           & LF
+               & "decq %3"                                & LF
+               & "jnz 1b"                                 & LF
+
+               --  Eight lanes down to one, by halves.
+               & "vextractf128 $1, %%ymm0, %%xmm1"        & LF
+               & "vmaxps %%xmm1, %%xmm0, %%xmm0"          & LF
+               & "vmovhlps %%xmm0, %%xmm0, %%xmm1"        & LF
+               & "vmaxps %%xmm1, %%xmm0, %%xmm0"          & LF
+               & "vshufps $1, %%xmm0, %%xmm0, %%xmm1"     & LF
+               & "vmaxps %%xmm1, %%xmm0, %%xmm0"          & LF
+               & "vmovss %%xmm0, %0"                      & LF
+
+               --  One bit a lane, and all eight set is all eight finite.
+               & "vmovmskps %%ymm5, %%eax"                & LF
+               & "movl %%eax, %1"                         & LF
+               & "vzeroupper",
+               Outputs =>
+                 [N.Real'Asm_Output ("=m", Top),
+                  Interfaces.Unsigned_32'Asm_Output ("=m", Flags),
+                  System.Address'Asm_Output ("+r", At_Value),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Blocks)],
+               Clobber  =>
+                 "rax, ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, cc, memory",
+               Volatile => True);
+
+            Largest := Top;
+            Finite  := Interfaces."=" (Flags, 255);
+            Index   := Whole;
+         end;
+      end if;
+
+      while Index < Count loop
+         declare
+            Value : constant Real := Target (Target'First + Index);
+         begin
+            if not N.Is_Finite (Value) then
+               Finite := False;
+            elsif Value > Largest then
+               Largest := Value;
+            end if;
+         end;
+
+         Index := Index + 1;
+      end loop;
+   end Largest_Finite;
+
    procedure Exponentiate (Target : in out Real_Array; Less : Real) is
       --  Neither check can fire here and both stop the loop vectorizing:
       --  the exponent is built from a value Raised bounds, and the index
@@ -686,15 +781,15 @@ package body Model_Runner.Kernels is
          return;
       end if;
 
-      Largest := Target (Target'First);
-      for Value of Target loop
-         if not N.Is_Finite (Value) then
+      declare
+         Finite : Boolean;
+      begin
+         Largest_Finite (Target, Largest, Finite);
+
+         if not Finite then
             return;
          end if;
-         if Value > Largest then
-            Largest := Value;
-         end if;
-      end loop;
+      end;
 
       --  The exponentials as a map, then the total as a pass of its own.
       --  Written apart because they are different shapes: the first
@@ -702,17 +797,53 @@ package body Model_Runner.Kernels is
       --  together left the whole of it on one lane.
       Exponentiate (Target, Largest);
 
-      for Value of Target loop
-         Sum := Sum + Wide_Real (Value);
-      end loop;
+      --  Four running totals rather than one. Binary64 addition is not
+      --  associative and the compiler will not split a reduction chain
+      --  itself, so every add waited on the one before it -- four cycles
+      --  each down the whole run of scores. Four independent chains cost
+      --  the same instructions and wait for none of them, and the four are
+      --  put back together in a fixed order so the answer is a function of
+      --  the input and not of the length.
+      declare
+         pragma Suppress (Index_Check);
+         pragma Suppress (Range_Check);
+
+         Parts : array (0 .. 3) of Wide_Real := [others => 0.0];
+         Index : N.Element_Index := Target'First;
+      begin
+         while Index + 3 <= Target'Last loop
+            Parts (0) := Parts (0) + Wide_Real (Target (Index));
+            Parts (1) := Parts (1) + Wide_Real (Target (Index + 1));
+            Parts (2) := Parts (2) + Wide_Real (Target (Index + 2));
+            Parts (3) := Parts (3) + Wide_Real (Target (Index + 3));
+            Index := Index + 4;
+         end loop;
+
+         while Index <= Target'Last loop
+            Parts (0) := Parts (0) + Wide_Real (Target (Index));
+            Index := Index + 1;
+         end loop;
+
+         Sum := (Parts (0) + Parts (1)) + (Parts (2) + Parts (3));
+      end;
 
       if Sum <= 0.0 or else not N.Is_Finite (Sum) then
          return;
       end if;
 
-      for Index in Target'Range loop
-         Target (Index) := Real (Wide_Real (Target (Index)) / Sum);
-      end loop;
+      --  One reciprocal, taken in the wide format and rounded once, then a
+      --  narrow multiply for every score. What this replaces converted each
+      --  score up, divided in binary64 and converted back down -- four
+      --  values a turn on a machine this file is compiled baseline for, and
+      --  a divide is not a multiply. The scores move by a rounding of the
+      --  reciprocal and the sweep is what says that is close enough.
+      declare
+         Over : constant Real := Real (1.0 / Sum);
+      begin
+         for Index in Target'Range loop
+            Target (Index) := Target (Index) * Over;
+         end loop;
+      end;
 
       Ok := True;
    end Softmax;

@@ -3638,15 +3638,24 @@ package body Model_Runner.Quantization.Integers.Kernels is
          begin
             for Row in 0 .. Rows - 1 loop
                declare
+                  --  Width is the block's size, worked out once at the top
+                  --  of this procedure. Asking for it again inside the loop
+                  --  was a call that did not inline and a third of what
+                  --  this procedure cost: a profile found it there,
+                  --  between an overflow check and a bounds compare that
+                  --  are gone with it.
+                  pragma Suppress (Index_Check);
+                  pragma Suppress (Range_Check);
+                  pragma Suppress (Overflow_Check);
+
                   Base : constant B.Byte_Index :=
                     Data'First + Offset + Row_Bytes * B.Byte_Count (Row);
+                  At_Row : constant Element_Count := Row * Blocks;
                begin
                   for Block in 0 .. Blocks - 1 loop
-                     Held (Row * Blocks + Block) :=
+                     Held (At_Row + Block) :=
                        Scale_At
-                         (Data,
-                          Base + B.Byte_Count (G.Block_Bytes (Format))
-                                 * B.Byte_Count (Block));
+                         (Data, Base + Width * B.Byte_Count (Block));
                   end loop;
                end;
             end loop;

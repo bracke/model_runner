@@ -7,6 +7,49 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Three loops the compiler would not vectorize, written out: 3.5 % of a
+  1419-token prompt, better in three of four.** Instructions 469.3 G to
+  456.7. No digest moves.
+
+  The strip driver's scale table asked `Block_Bytes` for the block size
+  inside its own loop and the call did not inline — a call, an overflow
+  check and a bounds compare per block, around a two-byte load. The size is
+  already a constant of the enclosing procedure.
+
+  Softmax divided every score by a binary64 sum, converting up and back four
+  values a turn, and accumulated that sum down a single dependency chain.
+  One reciprocal and a narrow multiply now; four independent chains put back
+  together in a fixed order.
+
+  Softmax's first pass wanted the largest score and whether every score is
+  finite. The finiteness test is an integer test of the exponent field and
+  kept the loop scalar. As an insertion both are lane work: a maximum, and
+  an ordered compare of the magnitude against infinity whose mask is
+  accumulated — a value that is not finite fails it whether it is an
+  infinity or a NaN.
+
+  It does not show on the 110-token prompt, and that is the shape of the
+  work: attention grows with the square of the context.
+
+### Measured and refused
+
+- **Two Q8_0 blocks per 512-bit byte dot product: 7 % fewer instructions for
+  20 % more cycles.** Built, measured, reverted. This part double-pumps
+  512-bit operations, so a wide dot product costs what the two narrow ones it
+  replaces cost and the three instructions around each cost what their two
+  copies cost — while the wide shape needs a broadcast, a multiply to fold
+  the row scale in, and four correction multiply-adds where there was one.
+  The earlier 2.12x throughput probe reads like a promise and is not one.
+
+### Changed
+
+- **The published figures were re-taken on a machine measuring about a tenth
+  slower**, llama.cpp included: 385.0 t/s on a prompt before, 347.8 now, with
+  the part's idle floor up from 51 to 54 degrees. Every absolute in `## Speed`
+  moves with it and the ratios do not — the processor prompt gap reads 1.5x
+  against 1.51x. The two binaries were also run against each other directly
+  on that machine to separate the two effects.
+
 - **The bias correction and the eight-lane fold moved into the insertion:
   14 % of a processor prompt, better in three of three.** The largest single
   change measured on the processor here. **Prompt 254.6 t/s against
