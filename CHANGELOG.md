@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The scale-table build is 17 % of a processor prompt, and an earlier
+  entry here said it was free.** Nothing kept; the measurement corrects the
+  record and names the largest item left.
+
+  Two entries disagreed: one halved the build's shuffles and measured level,
+  concluding the block was free; the other found the inner loop already at
+  four-fifths of the byte product's isolated peak, leaving half the kernel
+  unaccounted. One ablation settles it — build the table for the first panel
+  only, wrong answers but valid floats. **Median 8.058 → 6.700 s, 1.358
+  seconds, better in five of five.**
+
+  Both measurements are true, and the arithmetic says why. For a 2048-row
+  matrix the build runs 1024 panels × 64 blocks × 8 = 512K iterations, and
+  the insertion beside it runs 512K byte dot products. **The build is not
+  overhead around the inner loop; it is a second loop of the same length**,
+  four or five instructions an iteration against the dot product's four.
+  Halving one kind of instruction inside it could never show.
+
+  What it computes — a weight scale times an activation scale, eight a block
+  — is irreducible. Computing them once a panel, storing them, and reading
+  them back a few instructions later is not.
+
 - **The interleaved layout is worth about 5 % and was not built.** Priced
   before it was written, which is the whole point of the entry.
 

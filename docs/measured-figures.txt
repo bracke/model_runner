@@ -9535,3 +9535,49 @@ outside 5CB684E62A2666B0 src/shaders/row_product.comp src/shaders/matrix_product
 #
 # No source changed.
 
+# 2026-08-28  The second loop, of the same length
+#
+# Two entries above disagreed. One halved the scale-table build's shuffles,
+# measured level, and concluded the block was free. The other priced the
+# interleaved layout and found the inner loop already at four-fifths of the
+# byte product's isolated peak, which leaves half this kernel somewhere
+# else. Both cannot be right.
+#
+# THE ABLATION. Build the table for the first panel only: wrong answers,
+# but valid floats -- an uninitialised table reads as denormals and times
+# nothing honest -- and the build's cost divided by the panel count.
+#
+#   round 1   8.456 -> 6.700      round 4   8.328 -> 6.841
+#   round 2   8.058 -> 6.829      round 5   7.869 -> 6.700
+#   round 3   7.798 -> 6.541
+#
+# Median 8.058 -> 6.700. Seventeen per cent of a prompt, 1.358 seconds,
+# better in five of five. The scale table is not free and never was.
+#
+# AND THE ARITHMETIC THAT SHOULD HAVE COME FIRST reconciles the two
+# measurements. For a 2048-row matrix the build runs 1024 panels of 64
+# blocks of 8 -- 512 thousand iterations -- and the insertion beside it runs
+# 512 thousand byte dot products. The build is not overhead around the inner
+# loop. It is a second loop of the same length, four or five instructions an
+# iteration against the dot product's four. Halving one kind of instruction
+# inside it was never going to show against the whole prompt, and removing
+# the loop shows at once.
+#
+# That is the second time this file has misread a null. The first was
+# reading a profile's instruction shares as time shares; this is reading a
+# null on one kind of instruction as a null on the block that holds it. The
+# rule that survives both: an ablation prices a block, a profile does not.
+#
+# WHAT IT COMPUTES is Scale (row, block) * Vector_Scale (block, vector),
+# eight products a block, stored and then read back one at a time by the
+# insertion as a {1to8} broadcast. The products are irreducible -- the
+# insertion needs every one of them. Computing them once a panel, writing
+# them to memory and reading them back a few instructions later is not, and
+# that is where the seventeen per cent is.
+#
+# Nothing kept: the ablation gives wrong answers and exists to price the
+# block. It is the largest single item measured on the processor since the
+# byte dot product itself.
+#
+# No source changed.
+

@@ -3523,14 +3523,19 @@ count fell from 299 to 236 with three of the four kernels still untouched.
 median 10.998 s against 10.839, better in three of five, digest
 `1a26d24d33b8957b` either way -- level, inside what this pair resolves.
 
-**That is the finding.** Halving the shuffles in a block holding a quarter
-of the samples moved the whole prompt by one per cent, so those instructions
-were never on the critical path: they issue in the shadow of the
-byte-product loop and cost nothing a clock notices. A profile says where
-instructions *are*, and this file has now recorded several occasions where
-that is not where the *time* is. The strip kernel is not short of
-instruction slots; what it is short of is a different measurement, and this
-one does not answer it.
+**That is the finding, and the conclusion drawn from it below was wrong.**
+Halving the shuffles in a block holding a quarter of the samples moved the
+whole prompt by one per cent, so those *instructions* are not what the block
+costs. What was written here next -- that they issue in the shadow of the
+byte-product loop and cost nothing a clock notices -- does not follow, and
+`### The second loop, of the same length` measures the block at **seventeen
+per cent of a prompt**. Halving its shuffles bought nothing because its cost
+was never its shuffles.
+
+A profile says where instructions *are*, and this file has recorded several
+occasions where that is not where the *time* is. This one is the reverse
+mistake: reading a null on one kind of instruction as a null on the block
+that holds it.
 
 Nothing kept. The kernel is as it was.
 
@@ -4022,6 +4027,49 @@ Which leaves a contradiction, and it is now the sharpest open question here.
 and measured level, concluding they overlap with the dot products and cost
 nothing. If that is right, the missing half is somewhere neither measurement
 has looked.
+
+### The second loop, of the same length
+
+Two entries disagreed. `### The instructions that were free` halved the
+scale-table build's shuffles and measured level, and concluded the block was
+free. `### The interleaving, priced before it was built` found the inner loop
+already at four-fifths of the byte product's isolated peak, which leaves half
+this kernel somewhere else. Both cannot be right.
+
+One ablation settles it: build the table for the first panel only. Wrong
+answers, but valid floats -- an uninitialised table would read as denormals
+and time nothing honest -- and the build's cost divided by the panel count.
+
+| | with the build | without it |
+|---|---:|---:|
+| round 1 | 8.456 s | 6.700 s |
+| round 2 | 8.058 s | 6.829 s |
+| round 3 | 7.798 s | 6.541 s |
+| round 4 | 8.328 s | 6.841 s |
+| round 5 | 7.869 s | 6.700 s |
+
+**Seventeen per cent of a prompt -- 1.358 seconds -- better in five of
+five.** The scale table is not free and never was.
+
+**And the arithmetic that should have been done first says why both
+measurements are true.** For a 2048-row matrix the build runs one thousand
+and twenty-four panels of sixty-four blocks of eight, which is 512 thousand
+iterations; the insertion beside it runs 512 thousand byte dot products.
+**The build is not overhead around the inner loop. It is a second loop of
+the same length**, four or five instructions an iteration against the dot
+product's four. Halving one kind of instruction inside it was never going to
+show, and removing the loop shows immediately.
+
+What it computes is `Scale (row, block) * Vector_Scale (block, vector)` --
+eight products a block, stored, then read back one at a time by the
+insertion as a broadcast. The products themselves are irreducible: the
+insertion needs each of them. What is not irreducible is computing them once
+a panel and writing them to memory to be read again a few instructions
+later, and that is where the seventeen per cent lives.
+
+Nothing kept here: the ablation gives wrong answers and exists to price the
+block. But it is the largest single item this file has measured on the
+processor since the byte dot product itself.
 
 ### Against llama.cpp
 
