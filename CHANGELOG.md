@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--kv-cache q8` is 2.3x faster: 18.263 s to 7.971**, from 2.7x slower
+  than f32 to 1.19x, at a quarter of the memory a context costs.
+  `Head_Dot_Eighth` and `Blend_Run_Eighth` widen eight bytes with
+  `vpmovzxbd`, take the bias out, convert and multiply — four instructions
+  for eight components where the exact path spends one, and a quarter of the
+  bytes. The same pair the half-precision cache got last commit.
+
+### Measured and not kept
+
+- **Attention reads the whole cache once per query position**, so a batch of
+  128 reads it 128 times. That is what two thirds of the program's memory
+  traffic is, and why prefetching, unrolling and halving the bytes had each
+  measured as nothing: the traffic is redundant, not slow.
+
+  Swapping the loops so a head is held still while the positions run past it
+  — one head's slice is 347 KB and fits L2 — **more than doubled the misses**
+  (7.57 G to 16.18) and cost 12 % of the prompt. Tiling the positions
+  sixteen at a time did not bring them back. A position's keys and values are
+  one contiguous kilobyte across all its heads, so a position at a time reads
+  whole rows and a head at a time reads a quarter of every row it touches:
+  the redundant reads are cheap because they are sequential.
+
+  Removing the redundancy needs the cache laid out head-major, which crosses
+  into the device and its shaders. Reverted; the evidence for that change is
+  now much better than it was.
+
+### Added
+
 - **`--kv-cache f16` is 3.4x faster and usable now.** The half-precision and
   byte context storages have been here for a while and nothing wide read
   them: a prompt taking 6.9 s at full precision took **26.9 at half**, with

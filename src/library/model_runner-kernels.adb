@@ -486,6 +486,249 @@ package body Model_Runner.Kernels is
    end Blend_Run;
 
    ---------------------
+   -- Head_Dot_Eighth --
+   ---------------------
+
+   function Head_Dot_Eighth
+     (Left     : Real_Array;
+      At_Left  : Element_Count;
+      Right    : Model_Runner.Bytes.Byte_Array;
+      At_Right : Model_Runner.Bytes.Byte_Index;
+      Scale    : Real;
+      Span     : Element_Count) return Real
+   is
+      use type Model_Runner.Bytes.Byte_Count;
+   begin
+      if Span = 0
+        or else At_Left < Left'First
+        or else At_Right < Right'First
+        or else At_Left - Left'First + Span > Element_Count (Left'Length)
+        or else At_Right - Right'First
+                  + Model_Runner.Bytes.Byte_Count (Span) > Right'Length
+      then
+         return 0.0;
+      end if;
+
+      if Wide_Lanes and then Span mod 8 = 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Left_At  : System.Address := Left (At_Left)'Address;
+            Right_At : System.Address := Right (At_Right)'Address;
+            Blocks   : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Span / 8);
+            Result   : N.Real;
+         begin
+            System.Machine_Code.Asm
+              ("movl $128, %%eax"                        & LF
+               & "vmovd %%eax, %%xmm3"                   & LF
+               & "vpbroadcastd %%xmm3, %%ymm3"           & LF
+               & "vxorps %%ymm0, %%ymm0, %%ymm0"         & LF
+               & "1:"                                    & LF
+               & "vmovups (%1), %%ymm1"                  & LF
+               & "vpmovzxbd (%2), %%ymm2"                & LF
+               & "vpsubd %%ymm3, %%ymm2, %%ymm2"         & LF
+               & "vcvtdq2ps %%ymm2, %%ymm2"              & LF
+               & "vfmadd231ps %%ymm1, %%ymm2, %%ymm0"    & LF
+               & "addq $32, %1"                          & LF
+               & "addq $8, %2"                           & LF
+               & "decq %3"                               & LF
+               & "jnz 1b"                                & LF
+
+               & "vextractf128 $1, %%ymm0, %%xmm1"       & LF
+               & "vaddps %%xmm1, %%xmm0, %%xmm0"         & LF
+               & "vhaddps %%xmm0, %%xmm0, %%xmm0"        & LF
+               & "vhaddps %%xmm0, %%xmm0, %%xmm0"        & LF
+               & "vmovss %%xmm0, %0"                     & LF
+               & "vzeroupper",
+               Outputs =>
+                 [N.Real'Asm_Output ("=m", Result),
+                  System.Address'Asm_Output ("+r", Left_At),
+                  System.Address'Asm_Output ("+r", Right_At),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Blocks)],
+               Clobber  => "rax, ymm0, ymm1, ymm2, ymm3, cc, memory",
+               Volatile => True);
+
+            return Result * Scale;
+         end;
+      end if;
+
+      declare
+         Sum : N.Wide_Real := 0.0;
+      begin
+         for Index in 0 .. Span - 1 loop
+            Sum := Sum
+              + N.Wide_Real (Left (At_Left + Index))
+                * N.Wide_Real
+                    (N.Real
+                       (Integer
+                          (Right
+                             (At_Right
+                              + Model_Runner.Bytes.Byte_Count (Index)))
+                        - 128)
+                     * Scale);
+         end loop;
+
+         return N.Real (Sum);
+      end;
+   end Head_Dot_Eighth;
+
+   ----------------------
+   -- Blend_Run_Eighth --
+   ----------------------
+
+   procedure Blend_Run_Eighth
+     (Sums      : in out Real_Array;
+      Weights   : Real_Array;
+      At_Weight : Element_Count;
+      Scales    : Real_Array;
+      At_Scale  : Element_Count;
+      Values    : Model_Runner.Bytes.Byte_Array;
+      At_Value  : Model_Runner.Bytes.Byte_Index;
+      Stride    : Element_Count;
+      Steps     : Element_Count)
+   is
+      use type Model_Runner.Bytes.Byte_Count;
+
+      Span : constant Element_Count := Element_Count (Sums'Length);
+   begin
+      if Steps = 0
+        or else Span = 0
+        or else At_Weight < Weights'First
+        or else At_Scale < Scales'First
+        or else At_Value < Values'First
+        or else At_Weight - Weights'First + Steps
+                  > Element_Count (Weights'Length)
+        or else At_Scale - Scales'First + Steps
+                  > Element_Count (Scales'Length)
+        or else Stride < Span
+        or else At_Value - Values'First
+                  + Model_Runner.Bytes.Byte_Count
+                      ((Steps - 1) * Stride + Span) > Values'Length
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span = Held_Run then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Sums_At   : constant System.Address := Sums (Sums'First)'Address;
+            Weight_At : System.Address := Weights (At_Weight)'Address;
+            Scale_At  : System.Address := Scales (At_Scale)'Address;
+            Value_At  : System.Address := Values (At_Value)'Address;
+            Left      : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Steps);
+            Apart     : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Stride);
+         begin
+            System.Machine_Code.Asm
+              ("movl $128, %%eax"                        & LF
+               & "vmovd %%eax, %%xmm10"                  & LF
+               & "vpbroadcastd %%xmm10, %%ymm10"         & LF
+               & "vmovups 0(%4), %%ymm0"                 & LF
+               & "vmovups 32(%4), %%ymm1"                & LF
+               & "vmovups 64(%4), %%ymm2"                & LF
+               & "vmovups 96(%4), %%ymm3"                & LF
+               & "vmovups 128(%4), %%ymm4"               & LF
+               & "vmovups 160(%4), %%ymm5"               & LF
+               & "vmovups 192(%4), %%ymm6"               & LF
+               & "vmovups 224(%4), %%ymm7"               & LF
+
+               --  One position a turn: its score times its row's scale into
+               --  all eight lanes, then eight widen-unbias-convert-multiply
+               --  groups reading sixty-four bytes where the exact path
+               --  reads two hundred and fifty-six.
+               & "1:"                                    & LF
+               & "vbroadcastss (%0), %%ymm8"             & LF
+               & "vbroadcastss (%1), %%ymm9"             & LF
+               & "vmulps %%ymm9, %%ymm8, %%ymm8"         & LF
+               & "vpmovzxbd 0(%2), %%ymm9"             & LF
+               & "vpsubd %%ymm10, %%ymm9, %%ymm9"      & LF
+               & "vcvtdq2ps %%ymm9, %%ymm9"             & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm0"   & LF
+               & "vpmovzxbd 8(%2), %%ymm9"             & LF
+               & "vpsubd %%ymm10, %%ymm9, %%ymm9"      & LF
+               & "vcvtdq2ps %%ymm9, %%ymm9"             & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm1"   & LF
+               & "vpmovzxbd 16(%2), %%ymm9"            & LF
+               & "vpsubd %%ymm10, %%ymm9, %%ymm9"      & LF
+               & "vcvtdq2ps %%ymm9, %%ymm9"             & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm2"   & LF
+               & "vpmovzxbd 24(%2), %%ymm9"            & LF
+               & "vpsubd %%ymm10, %%ymm9, %%ymm9"      & LF
+               & "vcvtdq2ps %%ymm9, %%ymm9"             & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm3"   & LF
+               & "vpmovzxbd 32(%2), %%ymm9"            & LF
+               & "vpsubd %%ymm10, %%ymm9, %%ymm9"      & LF
+               & "vcvtdq2ps %%ymm9, %%ymm9"             & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm4"   & LF
+               & "vpmovzxbd 40(%2), %%ymm9"            & LF
+               & "vpsubd %%ymm10, %%ymm9, %%ymm9"      & LF
+               & "vcvtdq2ps %%ymm9, %%ymm9"             & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm5"   & LF
+               & "vpmovzxbd 48(%2), %%ymm9"            & LF
+               & "vpsubd %%ymm10, %%ymm9, %%ymm9"      & LF
+               & "vcvtdq2ps %%ymm9, %%ymm9"             & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm6"   & LF
+               & "vpmovzxbd 56(%2), %%ymm9"            & LF
+               & "vpsubd %%ymm10, %%ymm9, %%ymm9"      & LF
+               & "vcvtdq2ps %%ymm9, %%ymm9"             & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm7"   & LF
+               & "addq $4, %0"                           & LF
+               & "addq $4, %1"                           & LF
+               & "addq %5, %2"                           & LF
+               & "decq %3"                               & LF
+               & "jnz 1b"                                & LF
+
+               & "vmovups %%ymm0, 0(%4)"                 & LF
+               & "vmovups %%ymm1, 32(%4)"                & LF
+               & "vmovups %%ymm2, 64(%4)"                & LF
+               & "vmovups %%ymm3, 96(%4)"                & LF
+               & "vmovups %%ymm4, 128(%4)"               & LF
+               & "vmovups %%ymm5, 160(%4)"               & LF
+               & "vmovups %%ymm6, 192(%4)"               & LF
+               & "vmovups %%ymm7, 224(%4)"               & LF
+               & "vzeroupper",
+               Outputs =>
+                 [System.Address'Asm_Output ("+r", Weight_At),
+                  System.Address'Asm_Output ("+r", Scale_At),
+                  System.Address'Asm_Output ("+r", Value_At),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Left)],
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Sums_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart)],
+               Clobber  =>
+                 "rax, ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, "
+                 & "ymm8, ymm9, ymm10, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Step in 0 .. Steps - 1 loop
+         declare
+            Weight : constant N.Real :=
+              Weights (At_Weight + Step) * Scales (At_Scale + Step);
+            Here   : constant Model_Runner.Bytes.Byte_Count :=
+              At_Value + Model_Runner.Bytes.Byte_Count (Step * Stride);
+         begin
+            for Index in 0 .. Span - 1 loop
+               Sums (Sums'First + Index) :=
+                 Sums (Sums'First + Index)
+                 + Weight
+                   * N.Real
+                       (Integer
+                          (Values
+                             (Here + Model_Runner.Bytes.Byte_Count (Index)))
+                        - 128);
+            end loop;
+         end;
+      end loop;
+   end Blend_Run_Eighth;
+
+   ---------------------
    -- Head_Dot_Halved --
    ---------------------
 

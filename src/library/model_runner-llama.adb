@@ -3415,16 +3415,16 @@ package body Model_Runner.Llama is
                                     + Group * Head_Size);
                   Row    : constant Real :=
                     Key_Scales (Key_Scales'First + Rows + Step);
-                  Sum    : N.Wide_Real := 0.0;
                begin
-                  for Component in 0 .. Head_Size - 1 loop
-                     Sum := Sum
-                       + N.Wide_Real (Query (Q_Origin + Component))
-                         * N.Wide_Real
-                             (Unpack (Keys,
-                                      Origin + B.Byte_Count (Component), Row));
-                  end loop;
-                  Scores (At_Score + Step) := Real (Sum) * Scale;
+                  Scores (At_Score + Step) :=
+                    K.Head_Dot_Eighth
+                      (Left     => Query,
+                       At_Left  => Q_Origin,
+                       Right    => Keys,
+                       At_Right => Origin,
+                       Scale    => Row,
+                       Span     => Head_Size)
+                    * Scale;
                end;
             end loop;
 
@@ -3474,28 +3474,20 @@ package body Model_Runner.Llama is
                        Element_Count'Min (Run, Value_Size - At_Component);
                      Sums : Real_Array (0 .. Here - 1) := [others => 0.0];
                   begin
-                     for Step in First .. Last loop
-                        declare
-                           Weight : constant Real :=
-                             Scores (At_Score + Step);
-                           At_Byte : constant B.Byte_Count :=
-                             B.Byte_Count (Values'First)
-                             + B.Byte_Count (V_Base + Step * V_Width
-                                             + Group * Value_Size
-                                             + At_Component);
-                           Scaled : constant Real :=
-                             Val_Scales (Val_Scales'First + Rows + Step);
-                        begin
-                           for Component in 0 .. Here - 1 loop
-                              Sums (Component) := Sums (Component)
-                                + Weight
-                                  * Unpack
-                                      (Values,
-                                       At_Byte + B.Byte_Count (Component),
-                                       Scaled);
-                           end loop;
-                        end;
-                     end loop;
+                     K.Blend_Run_Eighth
+                       (Sums      => Sums,
+                        Weights   => Scores,
+                        At_Weight => At_Score + First,
+                        Scales    => Val_Scales,
+                        At_Scale  => Val_Scales'First + Rows + First,
+                        Values    => Values,
+                        At_Value  =>
+                          Values'First
+                          + B.Byte_Count (V_Base + First * V_Width
+                                          + Group * Value_Size
+                                          + At_Component),
+                        Stride    => V_Width,
+                        Steps     => Last - First + 1);
 
                      for Component in 0 .. Here - 1 loop
                         Target (Target'First + Head * Value_Size

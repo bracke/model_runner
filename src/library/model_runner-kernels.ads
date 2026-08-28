@@ -1,3 +1,4 @@
+with Model_Runner.Bytes;
 with Model_Runner.Numerics;
 
 --  Portable scalar reference kernels.
@@ -177,6 +178,51 @@ package Model_Runner.Kernels is
       At_Weight : Element_Count;
       Values    : Real_Array;
       At_Value  : Element_Count;
+      Stride    : Element_Count;
+      Steps     : Element_Count);
+
+   --  What Head_Dot and Blend_Run do, reading a context kept as one byte
+   --  an element with a scale for every row. A byte holds its value biased
+   --  by a hundred and twenty-eight, so eight of them are widened, unbiased,
+   --  converted and multiplied -- four instructions for eight components
+   --  against the exact path's one, and a quarter of the bytes.
+   --
+   --  Written for the reason the halved pair was: the storage was here and
+   --  nothing wide read it, so a quarter of the memory cost nearly three
+   --  times the time.
+   --
+   --  @param Left Vector the query is taken from.
+   --  @param At_Left Index of the query's first component.
+   --  @param Right Bytes the key is taken from.
+   --  @param At_Right Index of the key's first byte.
+   --  @param Scale What a byte of this row is worth.
+   --  @param Span How many components.
+   --  @return The dot product of the two.
+   function Head_Dot_Eighth
+     (Left     : Real_Array;
+      At_Left  : Element_Count;
+      Right    : Model_Runner.Bytes.Byte_Array;
+      At_Right : Model_Runner.Bytes.Byte_Index;
+      Scale    : Real;
+      Span     : Element_Count) return Real;
+
+   --  @param Sums Run of sums, added to in place.
+   --  @param Weights Vector the scores are taken from.
+   --  @param At_Weight Index of the first position's score.
+   --  @param Scales One scale for every position's row.
+   --  @param At_Scale Index of the first position's scale.
+   --  @param Values Bytes the values are taken from.
+   --  @param At_Value Index of the first position's first byte.
+   --  @param Stride Elements between one position's values and the next's.
+   --  @param Steps How many positions.
+   procedure Blend_Run_Eighth
+     (Sums      : in out Real_Array;
+      Weights   : Real_Array;
+      At_Weight : Element_Count;
+      Scales    : Real_Array;
+      At_Scale  : Element_Count;
+      Values    : Model_Runner.Bytes.Byte_Array;
+      At_Value  : Model_Runner.Bytes.Byte_Index;
       Stride    : Element_Count;
       Steps     : Element_Count);
 
