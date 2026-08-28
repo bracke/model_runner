@@ -10313,3 +10313,38 @@ outside D129F9EE7629D361 src/shaders/row_product.comp src/shaders/matrix_product
 #   encode_plain 3.3. No attention symbols, so attention is on the device;
 #   the rotation and the cache writes are not, and that is the nine per cent.
 
+# 2026-08-28  A shader that is better and cannot be landed
+#
+#   No code changed, so no figure group moved.
+#
+#   Attention is forty per cent of a device prompt. The shader already tiles
+#   queries -- attention.comp's third compilation defines QUERY_TILE and
+#   answers four positions a workgroup -- so what is left is the constants.
+#   QUERIES and room multiply into the per-lane store, held[QUERIES][room/64].
+#
+#     four queries, 256 window    0.856 s attending   2.611 s prompt
+#     eight queries, 256 window        --             26 per cent worse
+#     eight queries, 128 window   0.707 s attending   2.490 s prompt
+#
+#   Seventeen per cent off attention and four and a half off the device
+#   prompt, better in three of three, digest unchanged.
+#
+#   It cannot be landed here. Changing a shader means regenerating the words
+#   committed beside it, and this machine's glslang is 15.1.0 while the
+#   committed words were built by another. Recompiled with the documented
+#   flags and nothing else changed, the set is stable but different: 2.611 s
+#   against the committed 2.40, and a digest of 1a26d24d33b8957b where the
+#   committed device build gives b3d99fb4151edc6d. Seven per cent, which is
+#   more than the four and a half the change wins.
+#
+#   WHICH GLSLANG BUILT THE COMMITTED SHADER WORDS IS NOT RECORDED ANYWHERE
+#   and should be. This host has 15.1.0 and does not reproduce them.
+#
+#   And a warning about the flags. An hour went into measuring against a
+#   baseline whose first attention compilation used --target-env vulkan1.0,
+#   which is not what the README says. That build was slower and answered
+#   differently on every run -- five digests in five runs of the same binary
+#   -- and it was caught only by going back to the committed tree and finding
+#   it stable at one. The three compilations are: plain -V, then --target-env
+#   vulkan1.1 -DSUBGROUPS, then the same with -DQUERY_TILE.
+

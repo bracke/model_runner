@@ -4746,6 +4746,54 @@ Two things to try, in that order, and neither is small: attention as one
 shader over a tile of queries rather than what it is now, and the rotation
 moved to where the values it rotates already are.
 
+### A shader that is better and cannot be landed
+
+Attention is forty per cent of a device prompt, so the shader is where to
+look -- and the first thing to say is that what I proposed to write already
+exists. `src/shaders/attention.comp` is compiled three times, and the third
+defines `QUERY_TILE`: a workgroup answers a block of four query positions and
+multiplies each cached key into all four rather than reading it once for
+each. The comment above it records the measurement that put it there.
+
+What is left is the constants. `QUERIES` is four and `room` -- the window of
+cached positions a tile holds -- is two hundred and fifty-six, and the
+per-lane store is `held[QUERIES][room / 64]`, so the two multiply into the
+register budget. Eight queries against the same window is thirty-two floats a
+lane and **measured twenty-six per cent worse overall**, which is what
+spilling looks like. Eight against a window of a hundred and twenty-eight is
+sixteen again -- the same registers, twice the reuse, half the window:
+
+| | attending | device prompt |
+| --- | ---: | ---: |
+| four queries, 256 window | 0.856 s | 2.611 s |
+| eight queries, 128 window | **0.707 s** | **2.490 s** |
+
+**Seventeen per cent off attention and four and a half off the whole device
+prompt, better in three of three, and the digest does not move.**
+
+**It cannot be landed here, and the reason is worth writing down.** Changing
+a shader means recompiling it and regenerating the words committed beside it,
+and this machine's glslang is 15.1.0 while the committed words were built by
+some other one. Recompiled with the documented flags and nothing else
+changed, the whole set is **stable but different: 2.611 s against the
+committed 2.40, and a digest that lands on the processor's rather than the
+one the committed device build gives.** Both are inside the sweep's bound;
+neither is wrong; and the seven per cent between them is larger than the four
+and a half the shader change wins.
+
+So the change is measured, right, and blocked: landing it would mean landing
+this toolchain's words for every shader, and that costs more than it buys.
+What it needs is the version that built the committed ones, and the figures
+file does not say which that was. **It says so now.**
+
+An hour was also spent measuring against a baseline compiled with
+`--target-env vulkan1.0` for the first of the three, which is not what the
+README says to use. That build was slower *and* answered differently on every
+run -- five digests in five runs -- and it was only caught by going back to
+the committed tree and finding it stable. A wrong flag on one of three
+compilations of one of five shaders, and every device number after it was
+about nothing.
+
 ### A slower day, measured on both sides
 
 The figures in this section were re-taken twice, because the first sitting

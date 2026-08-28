@@ -5,6 +5,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured and blocked
+
+- **Eight queries a block against a 128-position window takes 17 % off
+  attention and 4.5 % off a device prompt** — 0.856 s to 0.707 attending,
+  2.611 to 2.490 overall, better in three of three, digest unchanged. The
+  attention shader already tiles queries; `QUERIES` and `room` multiply into
+  the per-lane register budget, so eight against the existing 256 window
+  spills and measured 26 % worse, while eight against 128 is the same
+  registers with twice the reuse.
+
+  **It cannot be landed on this machine.** Changing a shader means
+  regenerating the words committed beside it, and this machine's glslang is
+  15.1.0 while the committed words came from another. Recompiled with the
+  documented flags and nothing else changed, the set is stable but different:
+  2.611 s against the committed 2.40, and a digest matching the processor's
+  rather than the committed device build's. That 7 % is larger than the 4.5 %
+  the change wins, so landing it would be a net loss. The figures file does
+  not record which glslang built the committed words; it does now.
+
 ### Measured
 
 - **A device prompt is 40 % attention.** The first look inside the device
