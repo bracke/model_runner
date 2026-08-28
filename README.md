@@ -1563,12 +1563,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.438 s | **0.339 s** |
-| -- evaluating the prompt | 0.067 s | 0.053 s |
-| -- generating | 0.370 s | **0.286 s** |
-| -- processor time | 1.58 s | **0.03 s** |
-| 110-token prompt, nothing generated | **0.437 s** | 0.163 s |
-| -- processor time | 2.46 s | 0.18 s |
+| 6-token prompt, 12 generated | 0.435 s | **0.339 s** |
+| -- evaluating the prompt | 0.066 s | 0.051 s |
+| -- generating | 0.368 s | **0.288 s** |
+| -- processor time | 1.60 s | **0.03 s** |
+| 110-token prompt, nothing generated | **0.411 s** | 0.136 s |
+| -- processor time | 2.40 s | 0.15 s |
 
 All six cells were taken in one sitting on 2026-08-28, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -4746,53 +4746,65 @@ Two things to try, in that order, and neither is small: attention as one
 shader over a tile of queries rather than what it is now, and the rotation
 moved to where the values it rotates already are.
 
-### A shader that is better and cannot be landed
+### The words did not match the source
 
-Attention is forty per cent of a device prompt, so the shader is where to
-look -- and the first thing to say is that what I proposed to write already
-exists. `src/shaders/attention.comp` is compiled three times, and the third
-defines `QUERY_TILE`: a workgroup answers a block of four query positions and
-multiplies each cached key into all four rather than reading it once for
-each. The comment above it records the measurement that put it there.
+The section that used to sit here said a shader change was measured, right,
+and blocked: recompiling anything regenerated the words committed beside it,
+and this machine's glslang gave a set that ran seven per cent slower and
+answered differently. The conclusion was that the toolchain was wrong. **The
+toolchain was right and the source was wrong**, which took one more
+measurement to see and is a better thing to have found.
 
-What is left is the constants. `QUERIES` is four and `room` -- the window of
-cached positions a tile holds -- is two hundred and fifty-six, and the
-per-lane store is `held[QUERIES][room / 64]`, so the two multiply into the
-register budget. Eight queries against the same window is thirty-two floats a
-lane and **measured twenty-six per cent worse overall**, which is what
-spilling looks like. Eight against a window of a hundred and twenty-eight is
-sixteen again -- the same registers, twice the reuse, half the window:
+Recompile all nine and compare them one at a time, rather than diffing the
+generated file as a whole: **seven of the nine reproduce byte for byte.**
+Only `matrix_product.spv` and `matrix_extra.spv` differ, and only in
+thirty-six words. Disassembled, the difference is one constant:
+
+```
+<     %uint_64 = OpConstant %uint 64        committed words
+>    %uint_128 = OpConstant %uint 128       compiled from the committed source
+```
+
+`TILE_V` in `matrix_product.comp` says 128 and the committed words were built
+from 64. Somebody changed it and never regenerated. **Every device figure
+this file has ever published describes `TILE_V = 64`**, and the edit that
+said 128 has never once run -- which is as well, because compiling it makes a
+device prompt seven per cent slower.
+
+Setting the source back to 64 makes all nine reproduce exactly, and the
+device answers `b3d99fb4151edc6d` at the same speed it always did. The check
+beside this could not have caught it: it compares the source against a digest
+recorded when the words were made, so a stale `.spv` handed to `tests shader`
+updates the digest and leaves the words. **What it proves is that the source
+has not changed since somebody ran the tool, not that the words came from the
+source.**
+
+### Eight queries a block
+
+With the shaders reproducible the attention change lands. `QUERIES` and
+`room` multiply into the per-lane store `held[QUERIES][room / 64]`, so they
+trade against each other: eight queries against the existing window of two
+hundred and fifty-six is thirty-two floats a lane and measured twenty-six per
+cent worse, which is spilling. Eight against a window of a hundred and
+twenty-eight is sixteen again -- the same registers, twice the reuse, half
+the window.
 
 | | attending | device prompt |
 | --- | ---: | ---: |
-| four queries, 256 window | 0.856 s | 2.611 s |
-| eight queries, 128 window | **0.707 s** | **2.490 s** |
+| four queries, 256 window | 0.931 s | 2.427 s |
+| eight queries, 128 window | **0.782 s** | **2.337 s** |
 
-**Seventeen per cent off attention and four and a half off the whole device
-prompt, better in three of three, and the digest does not move.**
+**Sixteen per cent off attention and three and seven tenths off the whole
+device prompt, better in three of three, and the digest does not move.**
 
-**It cannot be landed here, and the reason is worth writing down.** Changing
-a shader means recompiling it and regenerating the words committed beside it,
-and this machine's glslang is 15.1.0 while the committed words were built by
-some other one. Recompiled with the documented flags and nothing else
-changed, the whole set is **stable but different: 2.611 s against the
-committed 2.40, and a digest that lands on the processor's rather than the
-one the committed device build gives.** Both are inside the sweep's bound;
-neither is wrong; and the seven per cent between them is larger than the four
-and a half the shader change wins.
+`Query_Block` beside it in the engine says how many workgroups to ask for and
+had to move with it. **A repository check caught that and the conformance
+sweep did not**, which is worth recording: the dispatch asked for a block of
+four and the shader answered eight, so half the workgroups did work already
+done and the answers came out right anyway. Right answers, twice the
+workgroups, and only a check that reads both numbers would ever have said so.
 
-So the change is measured, right, and blocked: landing it would mean landing
-this toolchain's words for every shader, and that costs more than it buys.
-What it needs is the version that built the committed ones, and the figures
-file does not say which that was. **It says so now.**
-
-An hour was also spent measuring against a baseline compiled with
-`--target-env vulkan1.0` for the first of the three, which is not what the
-README says to use. That build was slower *and* answered differently on every
-run -- five digests in five runs -- and it was only caught by going back to
-the committed tree and finding it stable. A wrong flag on one of three
-compilations of one of five shaders, and every device number after it was
-about nothing.
+**The device's prompt gap is 2.1 times**, from 2.5.
 
 ### A slower day, measured on both sides
 
@@ -4926,17 +4938,17 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **252.9 t/s** | 31.6 t/s |
-| llama.cpp, processor | 335.0 t/s | 39.9 t/s |
-| model_runner, device | 674.8 t/s | **40.5 t/s** |
-| llama.cpp, device | 1676.1 t/s | 56.2 t/s |
+| model_runner, processor | **269.6 t/s** | 31.4 t/s |
+| llama.cpp, processor | 326.3 t/s | 39.8 t/s |
+| model_runner, device | 808.8 t/s | **40.6 t/s** |
+| llama.cpp, device | 1679.1 t/s | 56.3 t/s |
 
-On the processor: **1.3 times slower generating and 1.3 times slower reading
+On the processor: **1.3 times slower generating and 1.2 times slower reading
 a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
 code that did not change between them, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, **1.4** and **2.5**,
-where the sittings before this one said 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
+reading of this table said 3.3 and 16. On the device, **1.4** and **2.1**,
+where the sittings before this one said 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
 1.4 and 2.6, then 1.4 and 2.5, then 1.4 and 3.0, then 1.4 and 3.6, then 1.4 and 3.8, then 1.4
 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and
 10.1. Both device rows have moved for a named reason:
@@ -4955,18 +4967,18 @@ which numbers belong to which figure. Reading the table against its own
 prose is what caught it, which is a thing only a person does.
 
 **The device row and llama.cpp's processor row generate at about the same
-rate** -- 40.5 against 39.9 in this sitting, where the nine before read 40.4
-against 39.9, 40.2 against 39.9, 40.1 against 40.0, 40.7 against 40.0, 38.9
-against 40.0, 40.9 against 40.4, 41.0 against 40.4, 40.7 against 40.7, and
-41.6 against 40.0. Eight of those ten put this program's device ahead and two
-put it behind, by under three per cent either way, which is a pair of figures
+rate** -- 40.6 against 39.8 in this sitting, where the ten before read 40.5
+against 39.9, 40.4 against 39.9, 40.2 against 39.9, 40.1 against 40.0, 40.7
+against 40.0, 38.9 against 40.0, 40.9 against 40.4, 41.0 against 40.4, 40.7
+against 40.7, and 41.6 against 40.0. Nine of those eleven put this program's
+device ahead and two put it behind, by under three per cent either way, which is a pair of figures
 sitting on top of each other rather than a lead in either direction. What is left
 between it and llama.cpp's own device figure is 1.4 times.
 
 The processor's generating row is the other kind of gap. It reads every
 weight once a token and does one multiply with each, so the bus answers
-rather than the arithmetic: llama.cpp's 39.9 t/s is about 46 GB/s of this
-model and 31.6 is about 37. What is left there is a gap in the kernels --
+rather than the arithmetic: llama.cpp's 39.8 t/s is about 46 GB/s of this
+model and 31.4 is about 37. What is left there is a gap in the kernels --
 ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
 and this measures -- rather than a gap in what the program is doing.
 
@@ -4996,8 +5008,8 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.435 s
-and 64 in 2.027 s on the processor, 0.163 s and 1.581 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.408 s
+and 64 in 2.041 s on the processor, 0.136 s and 1.577 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -5010,13 +5022,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 867.6 t/s rather
-than 335.0 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 850.1 t/s rather
+than 326.3 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 40.5 t/s
-now, against 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 40.6 t/s
+now, against 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the

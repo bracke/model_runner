@@ -5,6 +5,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The committed shader words did not come from the committed shader
+  source.** `TILE_V` in `matrix_product.comp` says 128 and the words were
+  built from 64: somebody changed it and never regenerated. Every device
+  figure this repository has published describes 64, the edit saying 128 has
+  never run, and compiling it makes a device prompt 7 % slower. Set back to
+  64, all nine shaders reproduce byte for byte with glslang 15.1.0 and the
+  documented flags — which are now recorded in the figures file, since
+  nothing named them.
+
+  The shader check cannot catch this: it compares the source against a digest
+  recorded when the words were made, so a stale `.spv` handed to
+  `tests shader` updates the digest and leaves the words.
+
+### Added
+
+- **Eight queries a workgroup against a 128-position window: 16 % off
+  attention and 3.7 % off a device prompt**, better in three of three, digest
+  unchanged. `QUERIES` and `room` multiply into `held[QUERIES][room/64]`, so
+  eight against the existing 256 window spills and measured 26 % worse.
+  `Query_Block` moved with it — a repository check caught that the two must
+  agree and the sweep did not, because the dispatch asked for blocks of four
+  while the shader answered eight: half the workgroups redoing work, right
+  answers either way.
+
+  **The device's prompt gap is 2.1x**, from 2.5.
+
 ### Measured and blocked
 
 - **Eight queries a block against a 128-position window takes 17 % off

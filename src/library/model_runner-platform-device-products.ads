@@ -58,7 +58,7 @@ package Model_Runner.Platform.Device.Products is
    --  attention.comp declares the same number as QUERIES under QUERY_TILE
    --  and the two have to agree: this decides how many workgroups the
    --  dispatch asks for and that one decides how many each does.
-   Query_Block : constant := 4;
+   Query_Block : constant := 8;
 
    --  How a matrix's bytes are packed. The device decodes every one of these
    --  itself, which is every format this program reads: nothing has to be

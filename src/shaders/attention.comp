@@ -147,11 +147,11 @@ layout(push_constant) uniform Shape {
 //  The largest value width this kernel will take. A head wider than this is
 //  refused by the caller and done on the processor, which is better than a
 //  kernel that quietly writes past the end of what it kept.
-const uint room = 256;
+const uint room = 128;
 
 //  How many query positions a workgroup answers.
 #ifdef QUERY_TILE
-const uint QUERIES = 4u;
+const uint QUERIES = 8u;
 #else
 const uint QUERIES = 1u;
 #endif

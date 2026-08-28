@@ -5681,7 +5681,7 @@ reference 2FCFC881D721E2CF src/library/model_runner-backend-reference.adb src/li
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-device D129F9EE7629D361 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 76CF29BCC0D901AF src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -8605,7 +8605,7 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-outside D129F9EE7629D361 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside 76CF29BCC0D901AF src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -10347,4 +10347,70 @@ outside D129F9EE7629D361 src/shaders/row_product.comp src/shaders/matrix_product
 #   -- and it was caught only by going back to the committed tree and finding
 #   it stable at one. The three compilations are: plain -V, then --target-env
 #   vulkan1.1 -DSUBGROUPS, then the same with -DQUERY_TILE.
+
+# 2026-08-29  The words did not match the source, and eight queries a block
+#
+#   The note above said a shader change was blocked because this machine's
+#   glslang gave a set that ran seven per cent slower and answered
+#   differently. The toolchain was right and the source was wrong.
+#
+#   Compare the nine compiled shaders one at a time rather than diffing the
+#   generated file as a whole: seven reproduce byte for byte with glslang
+#   15.1.0 and the documented flags. Only matrix_product.spv and
+#   matrix_extra.spv differ, in thirty-six words, and disassembled the
+#   difference is one constant -- 64 in the committed words against 128 from
+#   the committed source. TILE_V in matrix_product.comp says 128 and the
+#   words were built from 64. Somebody changed it and never regenerated.
+#
+#   EVERY DEVICE FIGURE THIS FILE HAS PUBLISHED DESCRIBES TILE_V = 64. The
+#   edit that says 128 has never run, and compiling it makes a device prompt
+#   seven per cent slower. The source is set back to 64 and all nine now
+#   reproduce exactly.
+#
+#   The shader check cannot catch this: it compares the source against a
+#   digest recorded when the words were made, so a stale .spv handed to
+#   'tests shader' updates the digest and leaves the words. It proves the
+#   source has not changed since somebody ran the tool, not that the words
+#   came from the source.
+#
+#   The compiler and flags, which were recorded nowhere:
+#     glslang 15.1.0 (Ubuntu glslang-tools 15.1.0-2)
+#     attention.comp      -V
+#     attention.comp      -V --target-env vulkan1.1 -DSUBGROUPS
+#     attention.comp      -V --target-env vulkan1.1 -DSUBGROUPS -DQUERY_TILE
+#     combine.comp        -V
+#     row_product.comp    -V
+#     row_product.comp    -V -DSINGLE
+#     half_batch.comp     -V
+#     matrix_product.comp --target-env vulkan1.3
+#     matrix_product.comp --target-env vulkan1.3 -DMORE_FORMATS
+#   and 'tests shader' takes them in that order, which is the order the
+#   generated file holds them in.
+#
+#   With the shaders reproducible, the attention change lands. QUERIES and
+#   room multiply into held[QUERIES][room/64]:
+#
+#     four queries, 256 window    0.931 s attending   2.427 s prompt
+#     eight queries, 256 window        --             26 per cent worse
+#     eight queries, 128 window   0.782 s attending   2.337 s prompt
+#
+#   Sixteen per cent off attention, three and seven tenths off the device
+#   prompt, better in three of three, digest unchanged. Query_Block in the
+#   engine moved with it; a repository check caught that the two had to agree
+#   and the conformance sweep did not, because the dispatch asked for blocks
+#   of four while the shader answered eight -- half the workgroups redoing
+#   work, and right answers either way.
+#
+#   The sitting, device and outside only; the other five groups did not move.
+#
+#   device: six tokens twelve generated, cpu 0.435 s (0.066 + 0.368, 1.60 s
+#     processor) against device 0.339 s (0.051 + 0.288, 0.03 s); 110 tokens
+#     cpu 0.411 s for 2.40 s against device 0.136 s for 0.15 s
+#
+#   outside: model_runner 110 in 0.408 s and 64 in 2.041 s on the
+#     processor, 0.136 s and 1.577 s on the device; llama-bench --device
+#     none pp110 326.34 tg64 39.80, -ngl 99 pp110 1679.07 tg64 56.28,
+#     -ngl 0 pp110 850.12 tg64 39.92
+#
+# THE DEVICE'S PROMPT GAP IS 2.1 TIMES, from 2.5, and the processor's is 1.2.
 
