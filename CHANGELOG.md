@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The interleaved layout is worth about 5 % and was not built.** Priced
+  before it was written, which is the whole point of the entry.
+
+  Rearranging rows' quants at load so a wide load is a wide operand — at
+  four-byte granularity, so the lanes alternate between two rows and the
+  scale becomes a `vbroadcastf32x2` rather than a cross-lane `vpermps`.
+  Both loop shapes written against synthetic data with nothing in the
+  engine touched: **127 and 130 giga-multiply-adds a second for the
+  committed shape, 137 and 137 for the interleaved one.**
+
+  Twenty-five instructions a block against thirty-nine, every cross-lane
+  instruction gone, and a twentieth of the speed. Under 2 % of a prompt for
+  a change to the loader, the packer, the kernel and a fallback. Not built.
+
+  **The experiment says more than its result.** That loop reaches 127 on hot
+  data and the real kernel manages about 67 — so the inner loop is already
+  at four-fifths of the instruction's isolated peak, and **half this
+  kernel's time is not in its inner loop.** Which contradicts the earlier
+  finding that halving the scale-table build measured level, and that
+  contradiction is now the sharpest open question in the file.
+
 - **The 512-bit byte dot product is 2.12x the 256-bit one, and the kernel
   built on it is 11.5 % slower.** Nothing kept; both measurements are.
 

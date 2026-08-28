@@ -9493,3 +9493,45 @@ outside 5CB684E62A2666B0 src/shaders/row_product.comp src/shaders/matrix_product
 #
 # No source changed.
 
+# 2026-08-28  The interleaving, priced and not built
+#
+# The entry above named the interleaved layout as the way to reach the wide
+# byte product. Done at four-byte granularity it removes the last
+# cross-lane instruction too: if a 512-bit lane alternates between two rows
+# then the scale operand is [sA, sB, sA, sB, ...], which is a
+# vbroadcastf32x2 from memory rather than the vpermps that cost the attempt
+# before this. The activations would carry each four-byte group twice,
+# written by the packing, which is parallel now and cheap.
+#
+# That is the loader, the packer, the kernel and a fallback path. So it was
+# priced first: both loop shapes written against synthetic data, sixty-four
+# blocks of a panel repeated, nothing in the engine touched.
+#
+#   two rows in two 256-bit registers, as committed   127, 130 giga-MACs/s
+#   interleaved into one 512-bit, no permutes         137, 137
+#
+# Five per cent. Twenty-five instructions a block against thirty-nine, the
+# cross-lane permute gone and the row pairing free, for a twentieth. Five
+# per cent of an inner loop that is about half the kernel, on a kernel that
+# is seventy per cent of a prompt, is under two per cent of a prompt. NOT
+# BUILT, and the hour it took to price it against the day it would have
+# taken to build is the argument for pricing things.
+#
+# AND THE PRICING SAYS MORE THAN ITS RESULT. That loop reaches 127 on hot
+# data where the real kernel manages about 67 -- the same instructions at
+# half the speed. The inner loop is therefore already at four-fifths of
+# what vpdpbusd does in isolation (152), and half of this kernel's time is
+# somewhere else. The annotation agrees: forty-seven per cent of the symbol
+# in the inner loop, about a third in the scale-table build.
+#
+# WHICH LEAVES A CONTRADICTION, and it is the sharpest open question here.
+# The 2026-08-27 entry halved the scale-table build's shuffle count and
+# measured level, and concluded those instructions overlap the dot products
+# and cost nothing. Both cannot be true: either the build is a third of the
+# symbol and halving it should have shown, or it is not and the missing
+# half is somewhere neither measurement has looked. Settling it is one
+# ablation -- take the build out entirely, accept wrong answers, and see
+# what the kernel does without it.
+#
+# No source changed.
+

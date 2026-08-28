@@ -3985,6 +3985,44 @@ file becomes at load, not to a loop.
 Reverted. The measurement is what is kept: **the wide instruction is worth
 2.12 times and this kernel cannot reach it from the layout it reads.**
 
+### The interleaving, priced before it was built
+
+The entry above ended by naming the interleaved layout as the way to reach
+the wide byte product: rows' quants rearranged at load so that one wide load
+is one wide operand. Done at *four-byte* granularity it removes the last
+cross-lane instruction as well -- if a 512-bit lane alternates between two
+rows, the scale operand is `[sA, sB, sA, sB, ...]`, which is a
+`vbroadcastf32x2` from memory and not a `vpermps`.
+
+That is a change to the loader, the packer, the kernel and a fallback path.
+**So it was priced first**, with both loop shapes written against synthetic
+data and nothing in the engine touched:
+
+| | giga-multiply-adds a second |
+|---|---:|
+| two rows in two 256-bit registers, as committed | 127, 130 |
+| **interleaved into one 512-bit, no permutes** | **137, 137** |
+
+**Five per cent.** Twenty-five instructions a block against thirty-nine, the
+cross-lane permute gone, the row pairing free -- and a twentieth. Five per
+cent of an inner loop that is about half the kernel, on a kernel that is
+seventy per cent of a prompt, is under two per cent of a prompt for a change
+to what a file becomes at load. **Not built.**
+
+**And the priced experiment says something worth more than its own result.**
+That same loop reaches 127 here and the real kernel manages about 67 -- the
+same instructions at half the speed. So the inner loop is already at
+four-fifths of what the byte dot product does in isolation, and **half of
+this kernel's time is not in its inner loop.** The annotation agrees: it put
+the inner loop at forty-seven per cent of the symbol and the scale-table
+build at about a third.
+
+Which leaves a contradiction, and it is now the sharpest open question here.
+`### The instructions that were free` halved the scale-table build's shuffles
+and measured level, concluding they overlap with the dot products and cost
+nothing. If that is right, the missing half is somewhere neither measurement
+has looked.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has
