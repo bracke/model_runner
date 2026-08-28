@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The scale-table build as two loops instead of one: 3.7 % of a processor
+  prompt, better in five of five.** A quarter of the seventeen per cent the
+  ablation priced.
+
+  The inner four turns did a store into `Scaling` and a read-modify-write
+  into `Undo` at once, and the second is what stopped the nest vectorizing —
+  which is why halving its shuffles did nothing. Apart, one is a map and the
+  other an accumulation and `-O3` takes both four at a time. The correction
+  now multiplies by the block's scale times its total, worked out once a
+  call rather than once a panel, so a turn multiplies by one number instead
+  of two.
+
+  Median **8.369 → 8.062 s**. Not bit for bit — the same three numbers in a
+  different order — and the sweep is clean.
+
+  The same restructuring measured level two days ago and was reverted. The
+  difference is the second multiply, and the entry recording that null did
+  not yet know the block was worth 17 %.
+
 - **The scale-table build is 17 % of a processor prompt, and an earlier
   entry here said it was free.** Nothing kept; the measurement corrects the
   record and names the largest item left.

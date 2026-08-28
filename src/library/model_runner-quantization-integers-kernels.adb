@@ -484,7 +484,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
       Vector_At    : Vector_Places;
       Vector_Scale : Vector_Numbers;
-      Vector_Total : Vector_Numbers;
+
+      --  The block's scale times its total, which is all the bias
+      --  correction wants of either and is the same for every row. Worked
+      --  out once a call, so that the panel loop below multiplies by one
+      --  number rather than by two.
+      Vector_Undo  : Vector_Numbers;
 
       --  Eight partial sums a piece, reduced when the row is done.
       type Strip_Lanes is array (0 .. Panel_Rows * Strip - 1) of Lanes_8;
@@ -517,8 +522,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
             begin
                Vector_Scale (Natural (Block) * Strip + Vector) :=
                  Scales (Scales'First + At_Scale);
-               Vector_Total (Natural (Block) * Strip + Vector) :=
-                 N.Real (Totals (Totals'First + At_Scale));
+               Vector_Undo (Natural (Block) * Strip + Vector) :=
+                 Scales (Scales'First + At_Scale)
+                 * N.Real (Totals (Totals'First + At_Scale));
             end;
          end loop;
       end loop;
@@ -544,17 +550,27 @@ package body Model_Runner.Quantization.Integers.Kernels is
                        + Natural (Row) * Strip;
                      At_Undo : constant Natural := Natural (Row) * Strip;
                   begin
+                     --  Two loops of four rather than one, because the
+                     --  correction was a read and a write into an array on
+                     --  every turn and that is what stopped the whole nest
+                     --  from vectorizing. Apart, the first is a map and
+                     --  the second an accumulation into four locals, and
+                     --  -O3 takes both four at a time.
+                     --
+                     --  The correction multiplies by a product worked out
+                     --  once a call rather than by this row's scale twice.
+                     --  It is the same three numbers multiplied in a
+                     --  different order, so it is not bit for bit and the
+                     --  sweep is what says whether that matters.
                      for Vector in 0 .. Strip - 1 loop
-                        declare
-                           Both : constant N.Real :=
-                             Scale * Vector_Scale (At_Vec + Vector);
-                        begin
-                           Scaling (At_Out + Vector) := Both;
+                        Scaling (At_Out + Vector) :=
+                          Scale * Vector_Scale (At_Vec + Vector);
+                     end loop;
 
-                           Undo (At_Undo + Vector) :=
-                             Undo (At_Undo + Vector)
-                             + Both * Vector_Total (At_Vec + Vector);
-                        end;
+                     for Vector in 0 .. Strip - 1 loop
+                        Undo (At_Undo + Vector) :=
+                          Undo (At_Undo + Vector)
+                          + Scale * Vector_Undo (At_Vec + Vector);
                      end loop;
                   end;
                end loop;

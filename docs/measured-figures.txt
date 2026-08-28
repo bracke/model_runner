@@ -1970,12 +1970,12 @@
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-28 entry below -- the packing of a batch
-#   shared between the workers instead of done on the task that
-#   submits the product.
+# Re-measured for the 2026-08-28 entry below -- the scale table built
+#   as two loops of four rather than one, and the bias correction
+#   multiplying by a product worked out once a call.
 # load: nothing else running, on a part that had stopped cooling -- it
-#   settled at 53 C before the first run.
-kernels 22372983BCF36187 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+#   settled at 51 C before the first run.
+kernels BB4C063B497E0149 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
@@ -3526,12 +3526,12 @@ kernels 22372983BCF36187 src/library/model_runner-quantization.adb src/library/m
 # No source changed. The dispatch counts were zeroed in a scratch build and
 # put back.
 
-# Re-measured for the 2026-08-28 entry below -- the packing of a batch
-#   shared between the workers instead of done on the task that
-#   submits the product.
+# Re-measured for the 2026-08-28 entry below -- the scale table built
+#   as two loops of four rather than one, and the bias correction
+#   multiplying by a product worked out once a call.
 # load: nothing else running, on a part that had stopped cooling -- it
-#   settled at 53 C before the first run.
-engine 0618AB05997D783C src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+#   settled at 51 C before the first run.
+engine D96BB07632C576E0 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -3839,12 +3839,12 @@ engine 0618AB05997D783C src/library/model_runner-llama.adb src/library/model_run
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-28 entry below -- the packing of a batch
-#   shared between the workers instead of done on the task that
-#   submits the product.
+# Re-measured for the 2026-08-28 entry below -- the scale table built
+#   as two loops of four rather than one, and the bias correction
+#   multiplying by a product worked out once a call.
 # load: nothing else running, on a part that had stopped cooling -- it
-#   settled at 53 C before the first run.
-reference 309C9917B0E5CABA src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+#   settled at 51 C before the first run.
+reference A4DB7D11E125155E src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -5680,12 +5680,12 @@ reference 309C9917B0E5CABA src/library/model_runner-backend-reference.adb src/li
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-28 entry below -- the packing of a batch
-#   shared between the workers instead of done on the task that
-#   submits the product.
+# Re-measured for the 2026-08-28 entry below -- the scale table built
+#   as two loops of four rather than one, and the bias correction
+#   multiplying by a product worked out once a call.
 # load: nothing else running, on a part that had stopped cooling -- it
-#   settled at 53 C before the first run.
-device 5CB684E62A2666B0 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+#   settled at 51 C before the first run.
+device 1D49306DA0BC65AC src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -6028,12 +6028,12 @@ device 5CB684E62A2666B0 src/shaders/row_product.comp src/shaders/matrix_product.
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-28 entry below -- the packing of a batch
-#   shared between the workers instead of done on the task that
-#   submits the product.
+# Re-measured for the 2026-08-28 entry below -- the scale table built
+#   as two loops of four rather than one, and the bias correction
+#   multiplying by a product worked out once a call.
 # load: nothing else running, on a part that had stopped cooling -- it
-#   settled at 53 C before the first run.
-drafting 6CEE6227EE22C907 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+#   settled at 51 C before the first run.
+drafting 0F1CE7062234DBC9 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -6278,12 +6278,12 @@ drafting 6CEE6227EE22C907 src/library/model_runner-generation.adb src/library/mo
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-28 entry below -- the packing of a batch
-#   shared between the workers instead of done on the task that
-#   submits the product.
+# Re-measured for the 2026-08-28 entry below -- the scale table built
+#   as two loops of four rather than one, and the bias correction
+#   multiplying by a product worked out once a call.
 # load: nothing else running, on a part that had stopped cooling -- it
-#   settled at 53 C before the first run.
-scaling 6629C79DC54761F3 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+#   settled at 51 C before the first run.
+scaling 0EFF5B39453EEABD src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker
@@ -8607,12 +8607,12 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 # more. Eight readings, both signs twice: the second worker on a core buys
 # nothing either way, and the paragraph says so rather than picking one.
 
-# Re-measured for the 2026-08-28 entry below -- the packing of a batch
-#   shared between the workers instead of done on the task that
-#   submits the product.
+# Re-measured for the 2026-08-28 entry below -- the scale table built
+#   as two loops of four rather than one, and the bias correction
+#   multiplying by a product worked out once a call.
 # load: nothing else running, on a part that had stopped cooling -- it
-#   settled at 53 C before the first run.
-outside 5CB684E62A2666B0 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+#   settled at 51 C before the first run.
+outside 1D49306DA0BC65AC src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -9580,4 +9580,78 @@ outside 5CB684E62A2666B0 src/shaders/row_product.comp src/shaders/matrix_product
 # byte dot product itself.
 #
 # No source changed.
+
+# 2026-08-28  The scale table, as two loops
+#
+# The ablation above priced the build at seventeen per cent of a prompt.
+# What it computes -- eight products a block, a weight scale times an
+# activation scale -- is irreducible, because the insertion reads every one
+# of them. What was not irreducible was the shape.
+#
+# The inner four turns did two things at once: a store into Scaling and a
+# read-modify-write into Undo. The second is what stopped the nest
+# vectorizing, and it is why halving the shuffles in it did nothing --
+# there was nothing wrong with the shuffles.
+#
+# Apart, the first is a map and the second an accumulation, and -O3 takes
+# both four at a time. And the correction now multiplies by Vector_Undo --
+# the block's scale times its total, worked out once a call rather than
+# once a panel -- so a turn multiplies by one number where it multiplied by
+# two.
+#
+#   round 1   8.383 -> 8.214      round 4   8.116 -> 8.064
+#   round 2   8.369 -> 7.760      round 5   8.264 -> 8.062
+#   round 3   8.436 -> 7.909
+#
+# Median 8.369 -> 8.062, three and seven tenths per cent, better in five of
+# five. That is about 0.31 s of the 1.358 the ablation priced: a quarter of
+# the block, and the other three quarters are the products and their stores
+# that the insertion needs.
+#
+# Not bit for bit: (Scale * Vector_Scale) * Vector_Total became Scale *
+# (Vector_Scale * Vector_Total), the same three numbers in a different
+# order. The sweep is the arbiter -- 28344 sequences, nothing outside
+# tolerance.
+#
+# The same restructuring measured level on 2026-08-27 and was reverted. The
+# difference is the second multiply: splitting the loops alone left every
+# turn multiplying twice, and the entry that recorded that null did not
+# know the block was worth seventeen per cent.
+#
+# THE SITTING, on a part that settled at 51 C, nothing refused.
+#
+#   engine, twelve tokens: 0.438 s wall -- 0.066 evaluating, 0.364
+#     generating, 1.60 s processor; --arith f32 1.181 s for 8.35 s;
+#     fourteen threads 0.473 s for 1.92 s against 0.438 and 1.60 at seven
+#
+#   reference, four tokens: cpu 0.067 + 0.125, reference 5.678 + 3.758 --
+#     forty-nine times in total, eighty-five on the prompt; serial 2.35x
+#     q8_0, 2.34x q4_k, 3.16x f32
+#
+#   device: six tokens twelve generated, cpu 0.438 s (0.072 + 0.364, 1.60 s
+#     processor) against device 0.325 s (0.049 + 0.278, 0.03 s); 110 tokens
+#     cpu 0.538 s for 3.29 s against device 0.148 s for 0.16 s
+#
+#   drafting: eight-bit 0.433 s, two-bit 1.535 s, drafted 3.575 s with 24
+#     proposed and 9 accepted -- 36 ms and 128 ms a token, 85 ms to check
+#     five positions, and at that cost no draft pays. Eleventh reading of a
+#     number that has never settled and a conclusion that has never moved.
+#
+#   scaling, pinned: q8_0 one vector 2565 at one share, 13170 at seven,
+#     14358 at eight; thirty-two per pass 4805, 24533, 26840. Unpinned
+#     13250 and 13600 with one vector, 24514 and 24889 batched.
+#
+#   kernels, ns an element: f32 0.25, q4_0 0.30, bf16 0.31, q8_0 0.36, q4_k
+#     0.38, q6_k 0.39, q5_k 0.41, q3_k 0.47, q4_1 0.49, iq4xs 0.50, q5_0
+#     0.53, f16 0.55, q5_1 0.57, iq4nl 0.63, q2_k 0.70
+#
+#   outside: model_runner 110 in 0.536 s and 64 in 1.967 s on the
+#     processor, 0.148 s and 1.545 s on the device; llama-bench --device
+#     none pp110 389.20 tg64 40.39, -ngl 99 pp110 1648.99 tg64 56.50,
+#     -ngl 0 pp110 776.28 tg64 40.36
+#
+# The processor's prompt reads 205.2 tokens a second against 206.8 in the
+# sitting before, which is level: this change is worth three and a half per
+# cent on a 1419-token prompt and the 110-token one is a tenth its length,
+# with a tenth its blocks to build scales for.
 
