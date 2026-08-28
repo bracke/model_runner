@@ -7,6 +7,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A run of attention scores in one call instead of one score at a time:
+  8.8 % of a processor prompt, better in five of five.** The largest single
+  change here since the batched product.
+
+  A profile after the exponential put `Kernels.Head_Dot` at 12 % — the
+  second largest symbol in the program, and one written three commits
+  earlier. A dot product is eight fused multiply-adds and then a fold, a
+  serial ~20-cycle chain behind arithmetic worth eight. Removing the fold
+  (wrong answers) cost **10.501 s against 10.076** — 4 % of the prompt — so
+  the premise was measured before the code was written.
+
+  `Kernels.Head_Scores` does eight keys at once: eight accumulators, the
+  whole query head in eight more registers, and **one twelve-instruction
+  reduction** in place of eight folds. Called in blocks of eight positions
+  so that neither the key-cache locality nor the shared fold is given up.
+
+  Median **10.286 s against 9.383**. The processor's prompt goes 167.4 to
+  **176.3 t/s** and the gap to llama.cpp 2.35 to **2.22 times**; unlike the
+  three changes before it, this one shows on the 110-token prompt too.
+
+  Not bit for bit — the lanes fold in a different order. The sweep is the
+  arbiter (28344 sequences, nothing outside tolerance) and a test compares
+  every score of a run against the one `Head_Dot` gives, which catches a
+  permutation of the fold where comparing totals would not.
+
 - **The strip kernel has issue slack, and filling it made things worse.**
   Nothing kept; the two measurements are the point.
 

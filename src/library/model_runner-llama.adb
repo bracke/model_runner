@@ -2971,20 +2971,58 @@ package body Model_Runner.Llama is
       --  Bit for bit what it replaces. Each score is the same expression
       --  over the same components in the same order; what changed is which
       --  score is computed when, and no two of them touch.
-      for Step in First .. Last loop
-         for Head in From_Head .. To_Head loop
+      --  A block of positions at a time, and every head across that block
+      --  before the next one.
+      --
+      --  Neither of the two obvious orders. Position outside head reads the
+      --  key cache once, which is what the paragraph above is about, but it
+      --  asks for one score at a time and a score costs a horizontal fold
+      --  of about twenty cycles standing behind eight multiply-adds worth
+      --  eight -- four per cent of a prompt, measured by removing it. Head
+      --  outside position lets eight keys share one fold, and walks the
+      --  whole cache again for every head.
+      --
+      --  Eight positions at a time has both: the eight key rows a block
+      --  needs are eight kilobytes for this architecture and stay in the
+      --  nearest cache while all thirty-two heads read them, and each head
+      --  gets its eight scores from one call with one fold at the end.
+      declare
+         Block   : constant Element_Count := 8;
+         At_Step : Element_Count := First;
+      begin
+         while At_Step <= Last loop
             declare
-               Group  : constant Element_Count := Head / Group_Size;
-               Origin : constant Element_Count :=
-                 Keys'First + K_Base + Step * KV_Width + Group * Head_Size;
-               Q_At   : constant Element_Count :=
-                 Query'First + Head * Head_Size;
+               Take : constant Element_Count :=
+                 Element_Count'Min (Block, Last - At_Step + 1);
             begin
-               Scores (Scores'First + Head * Score_Room + Step) :=
-                 K.Head_Dot (Query, Q_At, Keys, Origin, Head_Size) * Scale;
+               for Head in From_Head .. To_Head loop
+                  declare
+                     Group  : constant Element_Count := Head / Group_Size;
+                     Origin : constant Element_Count :=
+                       Keys'First + K_Base + At_Step * KV_Width
+                       + Group * Head_Size;
+                     Q_At   : constant Element_Count :=
+                       Query'First + Head * Head_Size;
+                  begin
+                     K.Head_Scores
+                       (Query    => Query,
+                        At_Query => Q_At,
+                        Keys     => Keys,
+                        At_Key   => Origin,
+                        Stride   => KV_Width,
+                        Steps    => Take,
+                        Span     => Head_Size,
+                        Scale    => Scale,
+                        Scores   => Scores,
+                        At_Score =>
+                          Scores'First + Head * Score_Room + At_Step);
+                  end;
+               end loop;
+
+               At_Step := At_Step + Take;
             end;
          end loop;
-      end loop;
+      end;
 
       for Head in From_Head .. To_Head loop
          declare

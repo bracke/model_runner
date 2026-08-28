@@ -87,6 +87,58 @@ package Model_Runner.Kernels is
       At_Right : Element_Count;
       Span     : Element_Count) return Real;
 
+   --  A run of one head's attention scores: a query against many keys.
+   --
+   --  Scores (At_Score + j) becomes the dot product of the query head with
+   --  key row j, times Scale, for j in 0 .. Steps - 1. Key rows are Stride
+   --  elements apart, which is the cache's width rather than the head's.
+   --
+   --  Why this exists when Head_Dot already computes one of these. Head_Dot
+   --  ends every dot product with a horizontal fold -- extract the high
+   --  half, add, two pairwise adds, move out -- and that fold is a serial
+   --  chain of about twenty cycles standing behind eight fused
+   --  multiply-adds worth eight. Removing it entirely, which gives wrong
+   --  answers, takes four per cent off a 1419-token prompt, so it is worth
+   --  about that much to stop paying it once a score.
+   --
+   --  Eight keys at a time is what stops it. Eight accumulators, one a key,
+   --  and the whole query head held in eight more registers across all of
+   --  them: a key then costs eight fused multiply-adds reading it where it
+   --  lies and nothing else, and the eight folds become one twelve
+   --  instruction reduction of all eight accumulators together. The query
+   --  is loaded once for the run rather than once a score.
+   --
+   --  Bit for bit with Head_Dot it is not, and cannot be: a lane's products
+   --  are summed in the same order but the eight lanes are folded in a
+   --  different one. The conformance sweep is what decides about that, as
+   --  it did for Head_Dot itself.
+   --
+   --  A run shorter than eight keys, or a head that is not sixty-four wide,
+   --  goes to Head_Dot a score at a time -- which is what every host
+   --  without the wide lanes does with all of them.
+   --
+   --  @param Query Vector the query head is taken from.
+   --  @param At_Query Index of the head's first component.
+   --  @param Keys Vector the key rows are taken from.
+   --  @param At_Key Index of the first key row's first component.
+   --  @param Stride Elements between one key row and the next.
+   --  @param Steps How many keys.
+   --  @param Span Width of the head.
+   --  @param Scale Multiplied into every score.
+   --  @param Scores Receives the run.
+   --  @param At_Score Index of the first score.
+   procedure Head_Scores
+     (Query    : Real_Array;
+      At_Query : Element_Count;
+      Keys     : Real_Array;
+      At_Key   : Element_Count;
+      Stride   : Element_Count;
+      Steps    : Element_Count;
+      Span     : Element_Count;
+      Scale    : Real;
+      Scores   : in out Real_Array;
+      At_Score : Element_Count);
+
    --  One run of an attention head's output: a span of components summed
    --  over a span of positions, each position's values scaled by its score.
    --

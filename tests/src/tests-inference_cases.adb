@@ -5686,6 +5686,96 @@ package body Tests.Inference_Cases is
       Assert (Seen = Spans'Length, "a span was not compared");
    end Both_Blend_Runs_Agree;
 
+   --  A run of scores answers what one at a time answers.
+   --
+   --  Head_Scores folds eight accumulators together where Head_Dot folds
+   --  one, so the two are not bit for bit and the ordering of that fold is
+   --  exactly what could be silently wrong: a reduction that pairs the
+   --  wrong lanes gives plausible numbers in the wrong places. So this
+   --  checks every score of a run against the one Head_Dot gives for the
+   --  same key, which catches a permutation where a total would not.
+   --
+   --  Runs that are not a multiple of eight, and a head that is not
+   --  sixty-four wide, are here because both go down the tail path a score
+   --  at a time and that path is the one every host without the wide lanes
+   --  takes for all of them.
+   procedure Score_Runs_Agree
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package MK renames Model_Runner.Kernels;
+
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+
+      Stride : constant N.Element_Count := 80;
+      Steps  : constant N.Element_Count := 27;
+
+      Spans : constant array (1 .. 2) of N.Element_Count := [64, 40];
+
+      Query : N.Real_Array (0 .. 63);
+      Keys  : N.Real_Array (0 .. Stride * Steps - 1);
+
+      Seen : Natural := 0;
+   begin
+      for Index in Query'Range loop
+         Query (Index) :=
+           N.Real (Integer (Index) mod 11) * 0.25 - 1.5;
+      end loop;
+
+      for Index in Keys'Range loop
+         Keys (Index) :=
+           N.Real (Integer (Index) mod 17) * 0.125 - 1.0
+           + N.Real (Integer (Index) mod 5) * 0.03125;
+      end loop;
+
+      for Span of Spans loop
+         declare
+            Scale  : constant N.Real := 0.125;
+            Run    : N.Real_Array (0 .. Steps - 1) := [others => 0.0];
+            Bound  : constant N.Real := 1.0e-3;
+         begin
+            MK.Use_Wide_Lanes (Wide);
+            MK.Head_Scores
+              (Query, 0, Keys, 0, Stride, Steps, Span, Scale, Run, 0);
+
+            for Step in 0 .. Steps - 1 loop
+               declare
+                  Said : constant N.Real :=
+                    MK.Head_Dot (Query, 0, Keys, Step * Stride, Span) * Scale;
+               begin
+                  Assert (abs (Run (Step) - Said) <= Bound,
+                          "the run and the single dot disagree at span"
+                          & N.Element_Count'Image (Span) & " step"
+                          & N.Element_Count'Image (Step) & ":"
+                          & N.Real'Image (Run (Step)) & " against"
+                          & N.Real'Image (Said));
+                  Seen := Seen + 1;
+               end;
+            end loop;
+         end;
+      end loop;
+
+      --  A run that would read past the keys leaves the scores alone
+      --  rather than reading what it was not given.
+      declare
+         Run : N.Real_Array (0 .. Steps - 1) := [others => 9.0];
+
+         function Untouched return Boolean is
+           (for all Score of Run => Score = 9.0);
+      begin
+         MK.Head_Scores
+           (Query, 0, Keys, 0, Stride, Steps + 1, 64, 1.0, Run, 0);
+         Assert (Untouched, "a run past the end of the keys was taken");
+
+         MK.Head_Scores (Query, 0, Keys, 0, 32, Steps, 64, 1.0, Run, 0);
+         Assert (Untouched, "a stride narrower than the head was taken");
+      end;
+
+      Assert (Seen = Natural (Steps) * Spans'Length,
+              "a step was not compared");
+   end Score_Runs_Agree;
+
    --  The vectorized exponential answers what the library's does.
    --
    --  Not bit for bit and not meant to be: this is a degree five polynomial
@@ -5940,6 +6030,10 @@ package body Tests.Inference_Cases is
         (T, Device_Reads_A_Model_In_Any_Format'Access,
          "a model in any format the program reads loads on the device, "
          & "without being repacked first");
+      Register_Routine
+        (T, Score_Runs_Agree'Access,
+         "a run of attention scores answers what the same scores answer "
+         & "taken one at a time");
       Register_Routine
         (T, The_Exponential_Agrees'Access,
          "the vectorized exponential answers what the library's does, over "

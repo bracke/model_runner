@@ -174,6 +174,203 @@ package body Model_Runner.Kernels is
       end;
    end Head_Dot;
 
+   ------------------
+   -- Head_Scores --
+   ------------------
+
+   --  Sixty-four wide and eight keys a turn, which is what the insertion
+   --  below is written for.
+   Held_Span : constant Element_Count := 64;
+   Held_Keys : constant Element_Count := 8;
+
+   procedure Head_Scores
+     (Query    : Real_Array;
+      At_Query : Element_Count;
+      Keys     : Real_Array;
+      At_Key   : Element_Count;
+      Stride   : Element_Count;
+      Steps    : Element_Count;
+      Span     : Element_Count;
+      Scale    : Real;
+      Scores   : in out Real_Array;
+      At_Score : Element_Count)
+   is
+      Groups : Element_Count := 0;
+      Done   : Element_Count := 0;
+   begin
+      if Steps = 0
+        or else Span = 0
+        or else At_Query < Query'First
+        or else At_Key < Keys'First
+        or else At_Score < Scores'First
+        or else At_Query - Query'First + Span > Element_Count (Query'Length)
+        or else Stride < Span
+        or else At_Key - Keys'First + (Steps - 1) * Stride + Span
+                  > Element_Count (Keys'Length)
+        or else At_Score - Scores'First + Steps
+                  > Element_Count (Scores'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span = Held_Span then
+         Groups := Steps / Held_Keys;
+      end if;
+
+      if Groups > 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Key_At   : System.Address := Keys (At_Key)'Address;
+            Left     : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Groups);
+            Query_At : constant System.Address := Query (At_Query)'Address;
+            Out_At   : System.Address := Scores (At_Score)'Address;
+            Apart    : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Stride * (N.Real'Size / 8));
+            Times    : constant N.Real := Scale;
+         begin
+            System.Machine_Code.Asm
+              (--  The whole query head, once for the run.
+               "vmovups 0(%3), %%ymm8"            & LF
+               & "vmovups 32(%3), %%ymm9"           & LF
+               & "vmovups 64(%3), %%ymm10"           & LF
+               & "vmovups 96(%3), %%ymm11"           & LF
+               & "vmovups 128(%3), %%ymm12"          & LF
+               & "vmovups 160(%3), %%ymm13"          & LF
+               & "vmovups 192(%3), %%ymm14"          & LF
+               & "vmovups 224(%3), %%ymm15"          & LF
+               & "1:"                                    & LF
+               & "vxorps %%ymm0, %%ymm0, %%ymm0"  & LF
+               & "vxorps %%ymm1, %%ymm1, %%ymm1"  & LF
+               & "vxorps %%ymm2, %%ymm2, %%ymm2"  & LF
+               & "vxorps %%ymm3, %%ymm3, %%ymm3"  & LF
+               & "vxorps %%ymm4, %%ymm4, %%ymm4"  & LF
+               & "vxorps %%ymm5, %%ymm5, %%ymm5"  & LF
+               & "vxorps %%ymm6, %%ymm6, %%ymm6"  & LF
+               & "vxorps %%ymm7, %%ymm7, %%ymm7"  & LF
+               & "vfmadd231ps 0(%1), %%ymm8, %%ymm0"   & LF
+               & "vfmadd231ps 32(%1), %%ymm9, %%ymm0"   & LF
+               & "vfmadd231ps 64(%1), %%ymm10, %%ymm0"   & LF
+               & "vfmadd231ps 96(%1), %%ymm11, %%ymm0"   & LF
+               & "vfmadd231ps 128(%1), %%ymm12, %%ymm0"  & LF
+               & "vfmadd231ps 160(%1), %%ymm13, %%ymm0"  & LF
+               & "vfmadd231ps 192(%1), %%ymm14, %%ymm0"  & LF
+               & "vfmadd231ps 224(%1), %%ymm15, %%ymm0"  & LF
+               & "addq %4, %1"                          & LF
+               & "vfmadd231ps 0(%1), %%ymm8, %%ymm1"   & LF
+               & "vfmadd231ps 32(%1), %%ymm9, %%ymm1"   & LF
+               & "vfmadd231ps 64(%1), %%ymm10, %%ymm1"   & LF
+               & "vfmadd231ps 96(%1), %%ymm11, %%ymm1"   & LF
+               & "vfmadd231ps 128(%1), %%ymm12, %%ymm1"  & LF
+               & "vfmadd231ps 160(%1), %%ymm13, %%ymm1"  & LF
+               & "vfmadd231ps 192(%1), %%ymm14, %%ymm1"  & LF
+               & "vfmadd231ps 224(%1), %%ymm15, %%ymm1"  & LF
+               & "addq %4, %1"                          & LF
+               & "vfmadd231ps 0(%1), %%ymm8, %%ymm2"   & LF
+               & "vfmadd231ps 32(%1), %%ymm9, %%ymm2"   & LF
+               & "vfmadd231ps 64(%1), %%ymm10, %%ymm2"   & LF
+               & "vfmadd231ps 96(%1), %%ymm11, %%ymm2"   & LF
+               & "vfmadd231ps 128(%1), %%ymm12, %%ymm2"  & LF
+               & "vfmadd231ps 160(%1), %%ymm13, %%ymm2"  & LF
+               & "vfmadd231ps 192(%1), %%ymm14, %%ymm2"  & LF
+               & "vfmadd231ps 224(%1), %%ymm15, %%ymm2"  & LF
+               & "addq %4, %1"                          & LF
+               & "vfmadd231ps 0(%1), %%ymm8, %%ymm3"   & LF
+               & "vfmadd231ps 32(%1), %%ymm9, %%ymm3"   & LF
+               & "vfmadd231ps 64(%1), %%ymm10, %%ymm3"   & LF
+               & "vfmadd231ps 96(%1), %%ymm11, %%ymm3"   & LF
+               & "vfmadd231ps 128(%1), %%ymm12, %%ymm3"  & LF
+               & "vfmadd231ps 160(%1), %%ymm13, %%ymm3"  & LF
+               & "vfmadd231ps 192(%1), %%ymm14, %%ymm3"  & LF
+               & "vfmadd231ps 224(%1), %%ymm15, %%ymm3"  & LF
+               & "addq %4, %1"                          & LF
+               & "vfmadd231ps 0(%1), %%ymm8, %%ymm4"   & LF
+               & "vfmadd231ps 32(%1), %%ymm9, %%ymm4"   & LF
+               & "vfmadd231ps 64(%1), %%ymm10, %%ymm4"   & LF
+               & "vfmadd231ps 96(%1), %%ymm11, %%ymm4"   & LF
+               & "vfmadd231ps 128(%1), %%ymm12, %%ymm4"  & LF
+               & "vfmadd231ps 160(%1), %%ymm13, %%ymm4"  & LF
+               & "vfmadd231ps 192(%1), %%ymm14, %%ymm4"  & LF
+               & "vfmadd231ps 224(%1), %%ymm15, %%ymm4"  & LF
+               & "addq %4, %1"                          & LF
+               & "vfmadd231ps 0(%1), %%ymm8, %%ymm5"   & LF
+               & "vfmadd231ps 32(%1), %%ymm9, %%ymm5"   & LF
+               & "vfmadd231ps 64(%1), %%ymm10, %%ymm5"   & LF
+               & "vfmadd231ps 96(%1), %%ymm11, %%ymm5"   & LF
+               & "vfmadd231ps 128(%1), %%ymm12, %%ymm5"  & LF
+               & "vfmadd231ps 160(%1), %%ymm13, %%ymm5"  & LF
+               & "vfmadd231ps 192(%1), %%ymm14, %%ymm5"  & LF
+               & "vfmadd231ps 224(%1), %%ymm15, %%ymm5"  & LF
+               & "addq %4, %1"                          & LF
+               & "vfmadd231ps 0(%1), %%ymm8, %%ymm6"   & LF
+               & "vfmadd231ps 32(%1), %%ymm9, %%ymm6"   & LF
+               & "vfmadd231ps 64(%1), %%ymm10, %%ymm6"   & LF
+               & "vfmadd231ps 96(%1), %%ymm11, %%ymm6"   & LF
+               & "vfmadd231ps 128(%1), %%ymm12, %%ymm6"  & LF
+               & "vfmadd231ps 160(%1), %%ymm13, %%ymm6"  & LF
+               & "vfmadd231ps 192(%1), %%ymm14, %%ymm6"  & LF
+               & "vfmadd231ps 224(%1), %%ymm15, %%ymm6"  & LF
+               & "addq %4, %1"                          & LF
+               & "vfmadd231ps 0(%1), %%ymm8, %%ymm7"   & LF
+               & "vfmadd231ps 32(%1), %%ymm9, %%ymm7"   & LF
+               & "vfmadd231ps 64(%1), %%ymm10, %%ymm7"   & LF
+               & "vfmadd231ps 96(%1), %%ymm11, %%ymm7"   & LF
+               & "vfmadd231ps 128(%1), %%ymm12, %%ymm7"  & LF
+               & "vfmadd231ps 160(%1), %%ymm13, %%ymm7"  & LF
+               & "vfmadd231ps 192(%1), %%ymm14, %%ymm7"  & LF
+               & "vfmadd231ps 224(%1), %%ymm15, %%ymm7"  & LF
+               & "addq %4, %1"                          & LF
+               --  Eight accumulators folded together: pairs within each
+               --  half, then pairs of those, then the two halves added.
+               --  Twelve instructions where eight separate folds are
+               --  forty-eight, and two dependent chains where there are
+               --  eight.
+               & "vhaddps %%ymm1, %%ymm0, %%ymm0"        & LF
+               & "vhaddps %%ymm3, %%ymm2, %%ymm2"        & LF
+               & "vhaddps %%ymm5, %%ymm4, %%ymm4"        & LF
+               & "vhaddps %%ymm7, %%ymm6, %%ymm6"        & LF
+               & "vhaddps %%ymm2, %%ymm0, %%ymm0"        & LF
+               & "vhaddps %%ymm6, %%ymm4, %%ymm4"        & LF
+               & "vextractf128 $1, %%ymm0, %%xmm1"       & LF
+               & "vaddps %%xmm1, %%xmm0, %%xmm0"         & LF
+               & "vextractf128 $1, %%ymm4, %%xmm5"       & LF
+               & "vaddps %%xmm5, %%xmm4, %%xmm4"         & LF
+               & "vbroadcastss %5, %%xmm6"               & LF
+               & "vmulps %%xmm6, %%xmm0, %%xmm0"         & LF
+               & "vmulps %%xmm6, %%xmm4, %%xmm4"         & LF
+               & "vmovups %%xmm0, (%2)"                  & LF
+               & "vmovups %%xmm4, 16(%2)"                & LF
+               & "addq $32, %2"                          & LF
+               & "decq %0"                               & LF
+               & "jnz 1b"                                & LF
+               & "vzeroupper",
+               Outputs =>
+                 [Interfaces.Unsigned_64'Asm_Output ("+r", Left),
+                  System.Address'Asm_Output ("+r", Key_At),
+                  System.Address'Asm_Output ("+r", Out_At)],
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Query_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart),
+                  N.Real'Asm_Input ("m", Times)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, "
+                 & "ymm8, ymm9, ymm10, ymm11, ymm12, ymm13, ymm14, ymm15, "
+                 & "cc, memory",
+               Volatile => True);
+         end;
+
+         Done := Groups * Held_Keys;
+      end if;
+
+      --  Whatever the groups did not cover, a score at a time.
+      for Step in Done .. Steps - 1 loop
+         Scores (At_Score + Step) :=
+           Head_Dot (Query, At_Query, Keys, At_Key + Step * Stride, Span)
+           * Scale;
+      end loop;
+   end Head_Scores;
+
    ---------------
    -- Blend_Run --
    ---------------
