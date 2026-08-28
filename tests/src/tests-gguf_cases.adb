@@ -964,6 +964,93 @@ package body Tests.GGUF_Cases is
    --  wide instance is never entered: turning it on there would run
    --  instructions the processor has not got, so this asks the host the same
    --  question the backend asks and does nothing where the answer is no.
+   --  A run packed in pieces is the run packed whole.
+   --
+   --  Quantize_Blocks exists so that the packing can be shared between
+   --  tasks, and what makes that sound is that a block is independent of
+   --  every other -- its own scale, its own bytes, its own total. So the
+   --  assertion is equality and not a tolerance: cut anywhere, in any
+   --  number of pieces, the bytes are the same bytes.
+   --
+   --  The pieces here are deliberately uneven and one of them is empty,
+   --  because a share past the end of a short run is what a pool hands out
+   --  when there are more workers than blocks.
+   procedure Packing_In_Pieces_Is_Packing_Whole
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package QI renames Model_Runner.Quantization.Integers;
+      use type QI.Byte_Signed;
+
+      Count   : constant N.Element_Count := 6;
+      Columns : constant N.Element_Count := 128;
+      Room    : constant N.Element_Count := Count * Columns;
+      Blocks  : constant N.Element_Count :=
+        QI.Packed_Blocks (Count, Columns);
+
+      Vectors : N.Real_Array (0 .. Room - 1);
+
+      Whole_Values, Piece_Values : QI.Signed_Array (0 .. Room - 1);
+      Whole_Scales, Piece_Scales : N.Real_Array (0 .. Blocks - 1);
+      Whole_Totals, Piece_Totals : QI.Sum_Array (0 .. Blocks - 1);
+
+      Ok : Boolean;
+   begin
+      Assert (Blocks > 4, "the shape under test has too few blocks");
+
+      for Index in Vectors'Range loop
+         Vectors (Index) :=
+           N.Real (Integer (Index) mod 29) - 14.0
+           + N.Real (Integer (Index) mod 7) * 0.125;
+      end loop;
+
+      QI.Quantize_Vectors
+        (Vectors, Count, Columns,
+         Whole_Values, Whole_Scales, Whole_Totals, Ok);
+      Assert (Ok, "the whole run was refused");
+
+      --  Four pieces, uneven, the last of them empty.
+      declare
+         Cuts : constant array (1 .. 4) of N.Element_Count :=
+           [1, 2, Blocks - 3, 0];
+         From : N.Element_Count := 0;
+      begin
+         for Take of Cuts loop
+            QI.Quantize_Blocks
+              (Vectors, Count, Columns,
+               From,
+               (if Take = 0 then From - 1 else From + Take - 1),
+               Piece_Values, Piece_Scales, Piece_Totals, Ok);
+            Assert (Ok, "a piece of the run was refused");
+            From := From + Take;
+         end loop;
+
+         Assert (From = Blocks, "the pieces do not cover the run");
+      end;
+
+      for Index in Whole_Values'Range loop
+         Assert (Whole_Values (Index) = Piece_Values (Index),
+                 "a byte differs at element"
+                 & N.Element_Count'Image (Index));
+      end loop;
+
+      for Index in Whole_Scales'Range loop
+         Assert (Whole_Scales (Index) = Piece_Scales (Index),
+                 "a scale differs at block"
+                 & N.Element_Count'Image (Index));
+         Assert (Whole_Totals (Index) = Piece_Totals (Index),
+                 "a total differs at block"
+                 & N.Element_Count'Image (Index));
+      end loop;
+
+      --  And a range that leaves the run is refused rather than read.
+      QI.Quantize_Blocks
+        (Vectors, Count, Columns, 0, Blocks,
+         Piece_Values, Piece_Scales, Piece_Totals, Ok);
+      Assert (not Ok, "a range past the last block was accepted");
+   end Packing_In_Pieces_Is_Packing_Whole;
+
    procedure Both_Decoders_Answer_The_Same_Bits
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -6171,6 +6258,10 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Decoders_Produce_The_Documented_Values'Access,
          "each decoder produces the values its layout documents");
+      Register_Routine
+        (T, Packing_In_Pieces_Is_Packing_Whole'Access,
+         "a run of activations packed in pieces is the run packed whole, "
+         & "byte for byte");
       Register_Routine
         (T, Both_Decoders_Answer_The_Same_Bits'Access,
          "the two compilations of the decoders answer the same bits");

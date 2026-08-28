@@ -240,6 +240,53 @@ package body Model_Runner.Backend.CPU is
    --  or when the vector holds a value that has no nearest byte. The job
    --  then carries no quantized activations and every share runs the
    --  floating-point path.
+   --  A share of the packing, for the dispatch below.
+   --
+   --  Ok is set by every share and only ever to False, so the shares race
+   --  to write the same value and a caller reading it after they are all
+   --  collected sees True only where none of them refused.
+   type Packing_Share is limited new Task_Item with record
+      Vectors : Model_Runner.Tensors.Real_Array_Access;
+      Count   : Element_Count;
+      Columns : Element_Count;
+      Values  : Signed_Array_Access;
+      Scales  : Model_Runner.Tensors.Real_Array_Access;
+      Totals  : Sum_Array_Access;
+      Ok      : Boolean;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Packing_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Packing_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      Done : Boolean;
+   begin
+      if From > To then
+         return;
+      end if;
+
+      Model_Runner.Quantization.Integers.Quantize_Blocks
+        (Vectors => Share.Vectors.all,
+         Count   => Share.Count,
+         Columns => Share.Columns,
+         First   => From,
+         Last    => To,
+         Values  => Share.Values.all,
+         Scales  => Share.Scales.all,
+         Totals  => Share.Totals.all,
+         Ok      => Done);
+
+      if not Done then
+         Share.Ok := False;
+      end if;
+   end Run;
+
    function Prepare_Packed
      (Item   : in out Pool;
       Weight : T.View;
@@ -276,6 +323,56 @@ package body Model_Runner.Backend.CPU is
       then
          return False;
       end if;
+
+      --  Shared where there is enough of it to be worth a dispatch.
+      --
+      --  This runs before the workers are woken and cannot be folded into
+      --  the product's own shares: that job is cut by rows of the weight
+      --  matrix and every worker needs all of the activation, so none of
+      --  them can start until the whole of it is packed. Profiled by
+      --  thread on a 1419-token prompt it is one and a half per cent of
+      --  the program's samples and all of them on one thread of eight,
+      --  which is about nine per cent of the clock.
+      --
+      --  So it is a dispatch of its own, before the product's. A block is
+      --  independent of every other -- its own scale, its own bytes, its
+      --  own total -- so the split is exact and no digest moves.
+      --
+      --  The bound is what stops this costing more than it saves. A wake
+      --  and a barrier are not free, and a run of a few blocks is packed
+      --  faster than a pool can be told about it; a generated token is one
+      --  vector and is the case that bound is really keeping out.
+      declare
+         Blocks : constant Element_Count :=
+           QI.Packed_Blocks (Count, Columns);
+
+         Least : constant Element_Count := 256;
+
+         Share : aliased Packing_Share :=
+           (Vectors => Vector,
+            Count   => Count,
+            Columns => Columns,
+            Values  => Item.Values,
+            Scales  => Item.Scales,
+            Totals  => Item.Totals,
+            Ok      => True);
+
+         Sent : E.Error_Info;
+      begin
+         if Blocks >= Least then
+            Dispatch_Shares
+              (Item   => Item'Unchecked_Access,
+               Items  => Blocks,
+               Work   => Share'Unchecked_Access,
+               Status => Sent);
+
+            if E.Is_Error (Sent) then
+               return False;
+            end if;
+
+            return Share.Ok;
+         end if;
+      end;
 
       QI.Quantize_Vectors
         (Vectors => Vector.all,

@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The packing of a batch is shared between the workers: 6.3 % of a
+  processor prompt, bit for bit.** The prompt gap to llama.cpp goes under
+  two times for the first time — **206.8 t/s against 386.4, 1.87×**, from
+  2.5× when the day began.
+
+  `quantize_vectors` was the largest main-thread-only item: 1.54 % of
+  samples, all on one thread of eight, so about 9 % of the clock. Checked
+  before changed — the loop is already vectorized and its two calls are cold
+  check handlers, so the lever was parallelism, not lanes.
+
+  It has to be its own dispatch: packing runs before the workers are woken
+  and cannot join the product's shares, because that job is cut by rows and
+  every worker needs all of the activation. But its own loop is over blocks,
+  and a block is independent of every other, so `Quantize_Blocks` takes a
+  range and `Prepare_Packed` dispatches shares of the block count. Bounded
+  at 256 blocks, since a wake and a barrier are not free and a generated
+  token is one vector.
+
+  Median **8.911 → 8.350 s, better in five of five**, digest unchanged. A
+  test cuts a run into four uneven pieces including an empty one and
+  requires the bytes, scales and totals to equal the whole run's.
+
 - **The feed-forward gate's activation goes through the vectorized
   exponential: 3.5 % of a long prompt and 3.9 % of a short one.**
 

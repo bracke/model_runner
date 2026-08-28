@@ -159,6 +159,55 @@ package Model_Runner.Quantization.Integers is
       Totals  : out Sum_Array;
       Ok      : out Boolean);
 
+   --  How many blocks such a run is cut into.
+   --
+   --  A caller that means to quantize a run in pieces asks this first, so
+   --  that the pieces are counted the same way the quantizer counts them
+   --  rather than by arithmetic repeated at the call site.
+   --
+   --  @param Count Number of vectors.
+   --  @param Columns Width of one vector.
+   --  @return The block count, or zero for a shape this cannot pack.
+   function Packed_Blocks
+     (Count : Element_Count; Columns : Element_Count) return Element_Count;
+
+   --  Quantize the blocks from First to Last and no others.
+   --
+   --  Exactly what Quantize_Vectors does, over a range of its blocks. A
+   --  block is independent of every other -- its own scale, its own bytes,
+   --  its own total -- so the same run cut into pieces and quantized in any
+   --  order writes the same bytes as quantizing it whole, which is what
+   --  lets this be shared between tasks.
+   --
+   --  Why it exists. Quantizing a batch runs on the task that submits the
+   --  product, before the workers are woken, because every worker needs all
+   --  of the activation and none can start without it. Profiled by thread
+   --  on a 1419-token prompt, that is one and a half per cent of the
+   --  program's samples on one thread of eight -- small in a profile and
+   --  about nine per cent of the clock, for the reason `### The serial
+   --  half` in the README gives.
+   --
+   --  @param Vectors Count vectors laid end to end, each Columns wide.
+   --  @param Count Number of vectors.
+   --  @param Columns Width of one vector.
+   --  @param First First block to quantize, zero based.
+   --  @param Last Last block to quantize; Last < First does nothing.
+   --  @param Values Quantized elements; only this range's are written.
+   --  @param Scales One scale for every Activation_Block elements.
+   --  @param Totals One sum for every Activation_Block elements.
+   --  @param Ok True when the shape is packable, every buffer had room, and
+   --    every element this range read was finite.
+   procedure Quantize_Blocks
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      Count   : Element_Count;
+      Columns : Element_Count;
+      First   : Element_Count;
+      Last    : Element_Count;
+      Values  : out Signed_Array;
+      Scales  : out Model_Runner.Numerics.Real_Array;
+      Totals  : out Sum_Array;
+      Ok      : out Boolean);
+
    --  How many rows one call of Accumulate_Rows computes at once.
    --
    --  Four, and measured rather than reasoned: a 110-token prompt takes

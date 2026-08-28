@@ -1970,12 +1970,12 @@
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-27 entry below, on a part that had stopped
-#   cooling: two readings twenty seconds apart within a degree, starting
-#   at 47 C and ending at 89.
-# load: the benchmark was given --wait 10 and started when the processors
-#   said the machine was quiet.
-kernels 09669C7DFDBA0142 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-28 entry below -- the packing of a batch
+#   shared between the workers instead of done on the task that
+#   submits the product.
+# load: nothing else running, on a part that had stopped cooling -- it
+#   settled at 53 C before the first run.
+kernels 22372983BCF36187 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
@@ -3526,11 +3526,12 @@ kernels 09669C7DFDBA0142 src/library/model_runner-quantization.adb src/library/m
 # No source changed. The dispatch counts were zeroed in a scratch build and
 # put back.
 
-# Re-measured for the 2026-08-28 entry below -- the gate activation
-#   through the same exponential the softmax uses.
-# load: nothing else running, and taken on a part that had stopped
-#   cooling -- it settled at 53 C before the first run.
-engine 852356F5D44375E6 src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-28 entry below -- the packing of a batch
+#   shared between the workers instead of done on the task that
+#   submits the product.
+# load: nothing else running, on a part that had stopped cooling -- it
+#   settled at 53 C before the first run.
+engine 0618AB05997D783C src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -3838,11 +3839,12 @@ engine 852356F5D44375E6 src/library/model_runner-llama.adb src/library/model_run
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-28 entry below -- the gate activation
-#   through the same exponential the softmax uses.
-# load: nothing else running, and taken on a part that had stopped
-#   cooling -- it settled at 53 C before the first run.
-reference 8D62CC5E9455BCC4 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-28 entry below -- the packing of a batch
+#   shared between the workers instead of done on the task that
+#   submits the product.
+# load: nothing else running, on a part that had stopped cooling -- it
+#   settled at 53 C before the first run.
+reference 309C9917B0E5CABA src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -5678,11 +5680,12 @@ reference 8D62CC5E9455BCC4 src/library/model_runner-backend-reference.adb src/li
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-28 entry below -- the gate activation
-#   through the same exponential the softmax uses.
-# load: nothing else running, and taken on a part that had stopped
-#   cooling -- it settled at 53 C before the first run.
-device D1EC0DD717A779FA src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-28 entry below -- the packing of a batch
+#   shared between the workers instead of done on the task that
+#   submits the product.
+# load: nothing else running, on a part that had stopped cooling -- it
+#   settled at 53 C before the first run.
+device 5CB684E62A2666B0 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -6025,11 +6028,12 @@ device D1EC0DD717A779FA src/shaders/row_product.comp src/shaders/matrix_product.
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-28 entry below -- the gate activation
-#   through the same exponential the softmax uses.
-# load: nothing else running, and taken on a part that had stopped
-#   cooling -- it settled at 53 C before the first run.
-drafting F86FE763EC57B60F src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-28 entry below -- the packing of a batch
+#   shared between the workers instead of done on the task that
+#   submits the product.
+# load: nothing else running, on a part that had stopped cooling -- it
+#   settled at 53 C before the first run.
+drafting 6CEE6227EE22C907 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -6274,12 +6278,12 @@ drafting F86FE763EC57B60F src/library/model_runner-generation.adb src/library/mo
 # advances having become two, which is the only arithmetic difference and is
 # below what any figure here resolves.
 
-# Re-measured for the 2026-08-27 entry below -- the value blend held
-#   in registers, and the load gate that stopped waiting for an
-#   average to decay.
-# load: the two benchmark runs were given --wait 10 and started when
-#   the processors said the machine was quiet.
-scaling C07D542BB5DA9351 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-28 entry below -- the packing of a batch
+#   shared between the workers instead of done on the task that
+#   submits the product.
+# load: nothing else running, on a part that had stopped cooling -- it
+#   settled at 53 C before the first run.
+scaling 6629C79DC54761F3 src/library/model_runner-backend-cpu.adb src/library/model_runner-tensors.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the tokenizer's cost on hostile text -- 0.039 s for sixty thousand
 # ordinary characters, 25.5 s for sixty thousand brackets before the marker
@@ -8603,11 +8607,12 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 # more. Eight readings, both signs twice: the second worker on a core buys
 # nothing either way, and the paragraph says so rather than picking one.
 
-# Re-measured for the 2026-08-28 entry below -- the gate activation
-#   through the same exponential the softmax uses.
-# load: nothing else running, and taken on a part that had stopped
-#   cooling -- it settled at 53 C before the first run.
-outside D1EC0DD717A779FA src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Re-measured for the 2026-08-28 entry below -- the packing of a batch
+#   shared between the workers instead of done on the task that
+#   submits the product.
+# load: nothing else running, on a part that had stopped cooling -- it
+#   settled at 53 C before the first run.
+outside 5CB684E62A2666B0 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -9351,4 +9356,76 @@ outside D1EC0DD717A779FA src/shaders/row_product.comp src/shaders/matrix_product
 #
 # The processor's prompt reads 183.6 tokens a second and the gap to
 # llama.cpp on a prompt is 2.09 times, from 2.5 when the day began.
+
+# 2026-08-28  The packing, shared
+#
+# quantize_vectors was the largest of the main-thread-only items the entry
+# above named: 1.54 per cent of the program's samples and all of them on
+# one thread of eight, which is about nine per cent of the clock.
+#
+# CHECKED FIRST, because the last two wins came from checking and the loss
+# came from not. The loop is already vectorized -- 16 cvttps2dq, 16 addps,
+# 8 mulps -- and its two calls are cold check handlers rather than anything
+# per element. So there were no lanes to win and the lever was parallelism.
+#
+# WHY IT IS ITS OWN DISPATCH. Packing runs before the workers are woken and
+# cannot be folded into the product's shares: that job is cut by rows of
+# the weight matrix and every worker needs all of the activation, so none
+# can start until the whole of it is packed. But its own loop is over
+# blocks, and a block is independent of every other -- its own scale, its
+# own bytes, its own total. So Quantize_Blocks takes a range of them and
+# Prepare_Packed dispatches shares of the block count before posting the
+# product.
+#
+# The bound is 256 blocks. A wake and a barrier are not free and a run of a
+# few blocks is packed faster than a pool can be told about it; a generated
+# token is one vector and is the case the bound is really keeping out.
+#
+#   round 1   9.221 -> 8.478      round 4   8.911 -> 8.350
+#   round 2   8.506 -> 8.258      round 5   8.947 -> 8.401
+#   round 3   8.546 -> 8.139
+#
+# Median 8.911 -> 8.350, six and three tenths per cent, better in five of
+# five. Bit for bit -- the digest is cbf29ce484222325 either way -- because
+# splitting independent blocks between tasks cannot change what any of them
+# writes. A test asserts exactly that, cutting a run into four uneven
+# pieces including an empty one and requiring the bytes, scales and totals
+# to equal the whole run's.
+#
+# THE SITTING, on a part that settled at 53 C, nothing refused.
+#
+#   engine, twelve tokens: 0.423 s wall -- 0.062 evaluating, 0.361
+#     generating, 1.59 s processor; --arith f32 1.193 s for 8.37 s;
+#     fourteen threads 0.463 s for 1.89 s against 0.423 and 1.59 at seven
+#
+#   reference, four tokens: cpu 0.062 + 0.124, reference 5.662 + 3.763 --
+#     fifty-one times in total, ninety-one on the prompt; serial on
+#     synthetic tensors 2.34x q8_0, 2.34x q4_k, 3.11x f32
+#
+#   device: six tokens twelve generated, cpu 0.446 s (0.069 + 0.373, 1.61 s
+#     processor) against device 0.340 s (0.056 + 0.283, 0.03 s); 110 tokens
+#     cpu 0.534 s for 3.38 s against device 0.170 s for 0.17 s
+#
+#   drafting: eight-bit 0.435 s, two-bit 1.626 s, drafted 3.305 s with 24
+#     proposed and 7 accepted -- 36 ms and 136 ms a token, 7 ms to check
+#     five positions, threshold about 18 ms a token. Tenth reading of a
+#     number that has never settled and a conclusion that has never moved.
+#
+#   scaling, pinned: q8_0 one vector 2566 at one share, 13238 at seven,
+#     14338 at eight; thirty-two per pass 4803, 24404, 26841. Unpinned
+#     12722 and 13672 with one vector, 24456 and 26605 batched.
+#
+#   kernels, row dot product in ns an element: f32 0.25, q4_0 0.30, bf16
+#     0.31, q8_0 0.37, q6_k 0.38, q4_k 0.38, q5_k 0.41, q3_k 0.47, iq4xs
+#     0.49, q4_1 0.49, q5_0 0.53, f16 0.54, q5_1 0.57, iq4nl 0.62, q2_k
+#     0.70
+#
+#   outside: model_runner 110 in 0.532 s and 64 in 1.968 s on the
+#     processor, 0.170 s and 1.539 s on the device; llama-bench --device
+#     none pp110 386.43 tg64 40.40, -ngl 99 pp110 1657.52 tg64 56.37,
+#     -ngl 0 pp110 770.65 tg64 40.43
+#
+# The processor's prompt reads 206.8 tokens a second and the gap to
+# llama.cpp on a prompt is 1.87 times -- under two for the first time, from
+# 2.5 when the day began.
 

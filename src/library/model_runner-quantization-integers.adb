@@ -66,10 +66,50 @@ package body Model_Runner.Quantization.Integers is
    -- Quantize_Vectors --
    ----------------------
 
+   function Packed_Blocks
+     (Count : Element_Count; Columns : Element_Count) return Element_Count
+   is
+      Elements : constant Element_Count :=
+        (if Count > 0 and then Columns > 0 then Count * Columns else 0);
+   begin
+      if Count = 0 or else not Is_Packable (Columns) then
+         return 0;
+      end if;
+
+      return Elements / Activation_Block;
+   end Packed_Blocks;
+
    procedure Quantize_Vectors
      (Vectors : Model_Runner.Numerics.Real_Array;
       Count   : Element_Count;
       Columns : Element_Count;
+      Values  : out Signed_Array;
+      Scales  : out Model_Runner.Numerics.Real_Array;
+      Totals  : out Sum_Array;
+      Ok      : out Boolean)
+   is
+      Blocks : constant Element_Count := Packed_Blocks (Count, Columns);
+   begin
+      --  A shape this cannot pack has no blocks, and asking for its last
+      --  one would take one from zero.
+      if Blocks = 0 then
+         Ok := False;
+         return;
+      end if;
+
+      --  The whole of it is the first block to the last, which is the one
+      --  place the two entry points differ.
+      Quantize_Blocks
+        (Vectors, Count, Columns, 0, Blocks - 1,
+         Values, Scales, Totals, Ok);
+   end Quantize_Vectors;
+
+   procedure Quantize_Blocks
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      Count   : Element_Count;
+      Columns : Element_Count;
+      First   : Element_Count;
+      Last    : Element_Count;
       Values  : out Signed_Array;
       Scales  : out Model_Runner.Numerics.Real_Array;
       Totals  : out Sum_Array;
@@ -87,14 +127,22 @@ package body Model_Runner.Quantization.Integers is
         or else Values'Length < Elements
         or else Scales'Length < Blocks
         or else Totals'Length < Blocks
+        or else Last >= Blocks
       then
+         return;
+      end if;
+
+      --  An empty range is not a refusal: a share past the end of a short
+      --  run has nothing to do and has done it.
+      if First > Last then
+         Ok := True;
          return;
       end if;
 
       --  Two passes over a block: the largest magnitude, then the rounding.
       --  Every index below is inside the lengths proved above, which is what
       --  lets the rounding loop run without a check per element.
-      for Block in 0 .. Blocks - 1 loop
+      for Block in First .. Last loop
          declare
             pragma Suppress (Index_Check);
             pragma Suppress (Range_Check);
@@ -155,7 +203,7 @@ package body Model_Runner.Quantization.Integers is
       end loop;
 
       Ok := True;
-   end Quantize_Vectors;
+   end Quantize_Blocks;
 
    ----------------------
    -- Accumulate_Rows --
