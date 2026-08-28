@@ -5,6 +5,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured and not kept
+
+- **The redundant attention reads were removed, and it bought nothing.** A
+  head-major copy of one layer's committed keys and values, built once before
+  that layer's attention, with the loop reordered to hold a head still and
+  walk the positions through it. **Cache misses 7.57 G to 1.47 — five times
+  fewer — and the prompt 6.802 s against 6.788**, better in two rounds of
+  four.
+
+  The copy adds about 1.4 GB of traffic over the prompt and removes about
+  130. The 130 were free: eight fused multiply-adds a position against eight
+  independent accumulators is enough in flight to cover a second-level miss
+  that the third level answers, and one layer's committed cache is under
+  3 MB against 16 of it.
+
+  Five things have now been tried against the value blend's 7 % — prefetching
+  it near, prefetching it far, unrolling it, halving its bytes, and removing
+  five sixths of its reads. None moved it. The memory is not what it costs,
+  and "two thirds of the program's fetches happen here" was an answer to the
+  wrong question. What is left is twelve instructions a position.
+
 ### Added
 
 - **`--kv-cache q8` is 2.3x faster: 18.263 s to 7.971**, from 2.7x slower

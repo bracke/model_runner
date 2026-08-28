@@ -4566,11 +4566,50 @@ cheap because they are sequential; the reused ones would be expensive because
 they are not.
 
 **Which puts the two halves of this together.** The traffic is redundant, and
-removing the redundancy needs the cache laid out head-major -- the same
-change `### Three questions asked of the hardware` priced as crossing into
-the device and its shaders, and declined on the evidence available then. The
-evidence now is better and it points at the same place. It is the next thing
-here, and it is a bigger thing than a loop.
+removing the redundancy needs a head-major order to read it in. That was the
+conclusion, and `### The traffic was free` below is what happened when it was
+built: the redundancy went, and the time did not.
+
+### The traffic was free
+
+The section above ends by saying the redundant reads need the cache laid out
+head-major, and that this is the next thing. It was built, and it is not.
+
+The stored order stays as it is -- the writers want it, the device wants it,
+a saved session is it. What was added is a head-major *copy* of one layer,
+built once before that layer's attention: a pass over what is committed,
+against the hundred and twenty-eight passes the order otherwise costs. Then
+attention holds a head still and walks the positions through it, which is the
+reorder that made things worse before and is right here, because now a head's
+run of positions is contiguous.
+
+| | cache misses | prompt |
+| --- | ---: | ---: |
+| as it is | 7.57 G | 6.802 s |
+| head-major copy | **1.47 G** | 6.788 s |
+
+**Five times fewer misses and the same time.** Better in two rounds of four,
+which is nothing.
+
+The arithmetic of it is worth writing down, because it is unusually clean.
+The copy adds about 1.4 gigabytes of traffic over the prompt and removes
+about 130. **The hundred and thirty were free**, and the reason is what the
+loop is: eight fused multiply-adds a position against eight independent
+accumulators, which is enough work in flight to cover a second-level miss
+that the third level answers -- and the third level does answer them, because
+one layer's committed keys and values are under three megabytes against
+sixteen of it.
+
+So five things have now been tried against the value blend's seven per cent:
+prefetching it one position ahead, prefetching it eight, sixteen and
+twenty-four, unrolling it two positions a turn, halving its bytes, and
+removing five sixths of its reads outright. **None of them moved it.** The
+memory is not what it costs, and the counter that said two thirds of the
+program's fetches happen there was answering a question nobody should have
+asked: where the fetches are, not what they cost.
+
+That leaves the seven per cent standing on twelve instructions a position,
+and the next person to look at it should start from the instructions.
 
 ### A slower day, measured on both sides
 

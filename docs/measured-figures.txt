@@ -10170,3 +10170,29 @@ outside E44CC8956C67054B src/shaders/row_product.comp src/shaders/matrix_product
 # THE PROCESSOR'S PROMPT READS 237.6 TOKENS A SECOND and the gap to
 # llama.cpp on a prompt is 1.40 times, from 2.5 when this began.
 
+# 2026-08-28  The traffic was free
+#
+#   No code changed, so no figure group moved.
+#
+#   The head-major order the commit before called for was built: the stored
+#   cache left alone, and a head-major copy of one layer made once before
+#   that layer's attention, with the loop reordered to hold a head still and
+#   walk the positions through it.
+#
+#     as it is           7.57 G misses   6.802 s
+#     head-major copy    1.47 G misses   6.788 s
+#
+#   Five times fewer misses and the same time, better in two rounds of four.
+#   The copy adds about 1.4 GB of traffic over the prompt and removes about
+#   130, and the 130 were free -- eight fused multiply-adds a position
+#   against eight independent accumulators covers a second-level miss that
+#   the third level answers, and one layer's committed cache is under three
+#   megabytes against sixteen of it.
+#
+#   Five things have now been tried against the value blend's seven per cent:
+#   prefetching one position ahead, prefetching eight, sixteen and
+#   twenty-four, unrolling two positions a turn, halving its bytes, and
+#   removing five sixths of its reads. None of them moved it. The memory is
+#   not what it costs. What is left is twelve instructions a position, and
+#   that is where the next attempt should start.
+
