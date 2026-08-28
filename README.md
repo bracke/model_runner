@@ -4110,6 +4110,51 @@ multiplying twice, and the entry that recorded that null did not yet know
 the block was worth seventeen per cent, so it read a small null as a closed
 question.
 
+### One multiply-add against thirty-two
+
+The scale table's remaining cost was split by two more ablations, each
+keeping one half of the block and dropping the other. Four rounds, three
+builds alternated inside each round so drift touches all three alike:
+
+| | median | worth |
+|---|---:|---:|
+| as committed | 8.113 s | |
+| the table's multiply and its load gone | 7.646 s | 0.466 s, 5.7 % |
+| **the correction's accumulation gone** | **6.186 s** | **1.927 s, 23.7 %** |
+
+**The correction is a quarter of the prompt.** It is one multiply-add per
+block, row and vector, standing beside a byte dot product that does
+thirty-two -- a thirty-second of the arithmetic taking half the time. That
+is not a cost, it is a symptom, and `addr2line` names it: the four turns
+write `Undo (At_Undo + Vector)`, an array read and written in place, and
+`-O3` builds a shuffle network around it. `vunpcklps`, `valignd` and
+`vaddps` come to **eighteen per cent of the symbol** for four additions.
+
+**Two ways around it were tried and neither works.**
+
+*The row outside the block*, so the four corrections live in registers.
+That halves the shuffles -- `vunpcklps` 95 to 48, `valignd` 72 to 36 -- and
+measures **eight per cent worse, in five of five**, because the scale table
+is then written with a stride of eight floats in two passes where it was
+written straight through. Getting one of the two things right is worse than
+getting neither.
+
+*The block still outermost, both inner loops written out*, eight named
+scalars across the whole block loop and the table still written in order.
+The object file comes back with **exactly the baseline's shuffle counts** --
+94, 72, 64, 50 -- and it measures level. GNAT is vectorizing across the
+block loop, not within the four turns, and neither shape reaches that.
+
+So the correction's cost is real, large, and out of reach from Ada as
+written. What is left is to compute it where the code is not the compiler's:
+the insertion already reads the scale table a block at a time, and could
+accumulate the correction with one more fused multiply-add and one more
+broadcast per dot product. That is about a wash by instruction count and it
+moves eighteen per cent of a symbol out of a shuffle network, which is the
+whole of the argument for trying it.
+
+Nothing kept.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has

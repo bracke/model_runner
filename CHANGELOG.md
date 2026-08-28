@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The bias correction is a quarter of a processor prompt, for one
+  multiply-add against the byte dot product's thirty-two.** Nothing kept;
+  two ways around it failed and the measurement names the third.
+
+  Two ablations split the scale table's remaining cost: dropping the
+  table's multiply and load is worth **0.466 s (5.7 %)**; dropping the
+  correction's accumulation is worth **1.927 s (23.7 %)**. A thirty-second
+  of the arithmetic taking half the time is a symptom, and `addr2line`
+  names it — the four turns write `Undo (At_Undo + Vector)` in place and
+  `-O3` builds a shuffle network around it, `vunpcklps`, `valignd` and
+  `vaddps` coming to 18 % of the symbol for four additions.
+
+  Row outside block puts the corrections in registers, halves the shuffles,
+  and measures **8 % worse in five of five** — the scale table is then
+  written with a stride in two passes instead of straight through. Block
+  outermost with eight named scalars produces **exactly the baseline's
+  shuffle counts** and measures level: GNAT vectorizes across the block
+  loop, not within the four turns.
+
+  What is left is to compute the correction where the code is not the
+  compiler's — the insertion already reads the table a block at a time and
+  could accumulate it with one more broadcast and one more fused
+  multiply-add per dot product.
+
 - **The scale-table build as two loops instead of one: 3.7 % of a processor
   prompt, better in five of five.** A quarter of the seventeen per cent the
   ablation priced.

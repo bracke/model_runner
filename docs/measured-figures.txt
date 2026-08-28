@@ -9655,3 +9655,47 @@ outside 1D49306DA0BC65AC src/shaders/row_product.comp src/shaders/matrix_product
 # cent on a 1419-token prompt and the 110-token one is a tenth its length,
 # with a tenth its blocks to build scales for.
 
+# 2026-08-28  One multiply-add against thirty-two
+#
+# The scale table's remaining cost, split by two ablations that each keep
+# one half of the block and drop the other. Four rounds, three builds
+# alternated inside each round so drift touches all three alike.
+#
+#   as committed                              8.113 s
+#   the table's multiply and its load gone    7.646 s   0.466 s,  5.7 %
+#   the correction's accumulation gone        6.186 s   1.927 s, 23.7 %
+#
+# The correction is a quarter of the prompt. It is one multiply-add per
+# block, row and vector, beside a byte dot product that does thirty-two: a
+# thirty-second of the arithmetic taking half the time. That is a symptom
+# and not a cost, and addr2line names it -- the four turns write
+# Undo (At_Undo + Vector), an array read and written in place, and -O3
+# builds a shuffle network around it. vunpcklps, valignd and vaddps come to
+# eighteen per cent of the symbol for four additions.
+#
+# TWO WAYS AROUND IT, NEITHER OF WHICH WORKS.
+#
+#   Row outside block, so the four corrections live in registers. Halves
+#   the shuffles -- vunpcklps 95 to 48, valignd 72 to 36 -- and measures
+#   eight per cent worse in five of five, because the scale table is then
+#   written with a stride of eight floats in two passes where it was
+#   written straight through. Getting one of the two right is worse than
+#   getting neither, which is also why the same restructuring measured
+#   level on 2026-08-27.
+#
+#   Block outermost with both inner loops written out, eight named scalars
+#   across the whole block loop and the table still written in order. The
+#   object file comes back with exactly the baseline's shuffle counts --
+#   94, 72, 64, 50 -- and it measures level, better in one of three. GNAT
+#   is vectorizing across the block loop and not within the four turns, and
+#   neither shape reaches that.
+#
+# WHAT IS LEFT is to compute the correction where the code is not the
+# compiler's. The insertion already reads the scale table a block at a time
+# and could accumulate Sum over blocks of Scaling times Vector_Total with
+# one more broadcast and one more fused multiply-add a dot product. That is
+# about a wash by instruction count and it moves eighteen per cent of a
+# symbol out of a shuffle network, which is the whole argument for it.
+#
+# No source changed.
+
