@@ -473,9 +473,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  single-vector kernel uses. It is a correction of about a
       --  thousandth of the sum it corrects; the sweep's bound is what says
       --  whether that is close enough, and it says it is.
-      type Undo_Table is
-        array (0 .. Panel_Rows * Strip - 1) of N.Real;
-      Undo : Undo_Table;
+      --  Both of them are the insertion's business now and neither is
+      --  declared here: the sums land in the first eight of Landed and the
+      --  corrections in the eight after them.
 
       --  Where each vector of the strip keeps its scales, and the two
       --  numbers read from there for every block of every row.
@@ -485,15 +485,26 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Vector_At    : Vector_Places;
       Vector_Scale : Vector_Numbers;
 
-      --  The block's scale times its total, which is all the bias
-      --  correction wants of either and is the same for every row. Worked
-      --  out once a call, so that the panel loop below multiplies by one
-      --  number rather than by two.
-      Vector_Undo  : Vector_Numbers;
+      --  The block's total, written twice over: eight to a block rather
+      --  than four, so that a thirty-two byte read of it lines up lane for
+      --  lane with the eight scales the insertion reads at the same block,
+      --  the first four being the panel's first row and the second four
+      --  its second. That is what lets one fused multiply-add a block
+      --  accumulate all eight corrections at once.
+      type Doubled_Numbers is
+        array (0 .. 2 * Strip * Scale_Room - 1) of N.Real;
+      Vector_Total : Doubled_Numbers;
 
-      --  Eight partial sums a piece, reduced when the row is done.
-      type Strip_Lanes is array (0 .. Panel_Rows * Strip - 1) of Lanes_8;
-      Landed : Strip_Lanes := [others => [others => 0.0]];
+      --  Eight sums and eight corrections, both folded by the insertion
+      --  rather than by a loop here. What Ada did with these was a quarter
+      --  of a prompt between them: the correction's array read-and-write
+      --  became a shuffle network -O3 built and no arrangement of Ada
+      --  could talk it out of, and the reduction widened eight binary32
+      --  lanes to binary64 one at a time. The insertion already holds both
+      --  in registers when its block loop ends.
+      type Landing is array (0 .. 2 * Panel_Rows * Strip - 1) of N.Real
+        with Alignment => 32;
+      Landed : Landing := [others => 0.0];
 
    begin
       Taken := False;
@@ -522,9 +533,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
             begin
                Vector_Scale (Natural (Block) * Strip + Vector) :=
                  Scales (Scales'First + At_Scale);
-               Vector_Undo (Natural (Block) * Strip + Vector) :=
-                 Scales (Scales'First + At_Scale)
-                 * N.Real (Totals (Totals'First + At_Scale));
+               Vector_Total (Natural (Block) * 2 * Strip + Vector) :=
+                 N.Real (Totals (Totals'First + At_Scale));
+               Vector_Total
+                 (Natural (Block) * 2 * Strip + Strip + Vector) :=
+                 N.Real (Totals (Totals'First + At_Scale));
             end;
          end loop;
       end loop;
@@ -535,8 +548,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
             Base   : constant B.Byte_Index :=
               Data'First + Offset + Row_Bytes * B.Byte_Count (At_Row);
          begin
-            Undo := [others => 0.0];
-
             for Block in 0 .. Blocks - 1 loop
                for Row in Element_Count range 0 .. Panel_Rows - 1 loop
                   declare
@@ -548,48 +559,32 @@ package body Model_Runner.Quantization.Integers.Kernels is
                      At_Out : constant Natural :=
                        Natural (Block) * (Panel_Rows * Strip)
                        + Natural (Row) * Strip;
-                     At_Undo : constant Natural := Natural (Row) * Strip;
                   begin
-                     --  Two loops of four rather than one, because the
-                     --  correction was a read and a write into an array on
-                     --  every turn and that is what stopped the whole nest
-                     --  from vectorizing. Apart, the first is a map and
-                     --  the second an accumulation into four locals, and
-                     --  -O3 takes both four at a time.
-                     --
-                     --  The correction multiplies by a product worked out
-                     --  once a call rather than by this row's scale twice.
-                     --  It is the same three numbers multiplied in a
-                     --  different order, so it is not bit for bit and the
-                     --  sweep is what says whether that matters.
+                     --  A map and nothing else. The correction that used
+                     --  to share these four turns is the insertion's now.
                      for Vector in 0 .. Strip - 1 loop
                         Scaling (At_Out + Vector) :=
                           Scale * Vector_Scale (At_Vec + Vector);
-                     end loop;
-
-                     for Vector in 0 .. Strip - 1 loop
-                        Undo (At_Undo + Vector) :=
-                          Undo (At_Undo + Vector)
-                          + Scale * Vector_Undo (At_Vec + Vector);
                      end loop;
                   end;
                end loop;
             end loop;
 
-            Landed := [others => [others => 0.0]];
+            Landed := [others => 0.0];
 
             System.Machine_Code.Asm
               ("movl $0x80808080, %%eax" & LF &
                "vmovd %%eax, %%xmm3" & LF &
                "vpbroadcastd %%xmm3, %%ymm3" & LF &
-               "vpxord %%ymm16, %%ymm16, %%ymm16" & LF &
-               "vpxord %%ymm17, %%ymm17, %%ymm17" & LF &
-               "vpxord %%ymm18, %%ymm18, %%ymm18" & LF &
-               "vpxord %%ymm19, %%ymm19, %%ymm19" & LF &
-               "vpxord %%ymm20, %%ymm20, %%ymm20" & LF &
-               "vpxord %%ymm21, %%ymm21, %%ymm21" & LF &
-               "vpxord %%ymm22, %%ymm22, %%ymm22" & LF &
-               "vpxord %%ymm23, %%ymm23, %%ymm23" & LF &
+               "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
+               "vpxord %%ymm9, %%ymm9, %%ymm9" & LF &
+               "vpxord %%ymm10, %%ymm10, %%ymm10" & LF &
+               "vpxord %%ymm11, %%ymm11, %%ymm11" & LF &
+               "vpxord %%ymm12, %%ymm12, %%ymm12" & LF &
+               "vpxord %%ymm13, %%ymm13, %%ymm13" & LF &
+               "vpxord %%ymm14, %%ymm14, %%ymm14" & LF &
+               "vpxord %%ymm15, %%ymm15, %%ymm15" & LF &
+               "vpxord %%ymm24, %%ymm24, %%ymm24" & LF &
                "xorq %%rcx, %%rcx" & LF &
                "xorq %%rdx, %%rdx" & LF &
                "movq %8, %%rax" & LF &
@@ -601,47 +596,54 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
                "vpdpbusd (%3,%%rdx,1), %%ymm0, %%ymm2" & LF &
                "vcvtdq2ps %%ymm2, %%ymm2" & LF &
-               "vfmadd231ps 0(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm16" & LF &
+               "vfmadd231ps 0(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm8" & LF &
                "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
                "vpdpbusd (%4,%%rdx,1), %%ymm0, %%ymm2" & LF &
                "vcvtdq2ps %%ymm2, %%ymm2" & LF &
-               "vfmadd231ps 4(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm17" & LF &
+               "vfmadd231ps 4(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm9" & LF &
                "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
                "vpdpbusd (%5,%%rdx,1), %%ymm0, %%ymm2" & LF &
                "vcvtdq2ps %%ymm2, %%ymm2" & LF &
-               "vfmadd231ps 8(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm18" & LF &
+               "vfmadd231ps 8(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm10" & LF &
                "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
                "vpdpbusd (%6,%%rdx,1), %%ymm0, %%ymm2" & LF &
                "vcvtdq2ps %%ymm2, %%ymm2" & LF &
-               "vfmadd231ps 12(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm19" & LF &
+               "vfmadd231ps 12(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm11" & LF &
                "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
                "vpdpbusd (%3,%%rdx,1), %%ymm1, %%ymm2" & LF &
                "vcvtdq2ps %%ymm2, %%ymm2" & LF &
-               "vfmadd231ps 16(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm20" & LF &
+               "vfmadd231ps 16(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm12" & LF &
                "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
                "vpdpbusd (%4,%%rdx,1), %%ymm1, %%ymm2" & LF &
                "vcvtdq2ps %%ymm2, %%ymm2" & LF &
-               "vfmadd231ps 20(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm21" & LF &
+               "vfmadd231ps 20(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm13" & LF &
                "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
                "vpdpbusd (%5,%%rdx,1), %%ymm1, %%ymm2" & LF &
                "vcvtdq2ps %%ymm2, %%ymm2" & LF &
-               "vfmadd231ps 24(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm22" & LF &
+               "vfmadd231ps 24(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm14" & LF &
                "vpxor %%ymm2, %%ymm2, %%ymm2" & LF &
                "vpdpbusd (%6,%%rdx,1), %%ymm1, %%ymm2" & LF &
                "vcvtdq2ps %%ymm2, %%ymm2" & LF &
-               "vfmadd231ps 28(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm23" & LF &
+               "vfmadd231ps 28(%7,%%rdx,1)%{1to8%}, %%ymm2, %%ymm15" & LF &
+               "vmovups (%7,%%rdx,1), %%ymm4" & LF &
+               "vfmadd231ps (%9,%%rdx,1), %%ymm4, %%ymm24" & LF &
                "addq $34, %%rcx" & LF &
                "addq $32, %%rdx" & LF &
                "decq %%rax" & LF &
                "jnz 1b" & LF &
-               "vmovaps %%ymm16, 0(%0)" & LF &
-               "vmovaps %%ymm17, 32(%0)" & LF &
-               "vmovaps %%ymm18, 64(%0)" & LF &
-               "vmovaps %%ymm19, 96(%0)" & LF &
-               "vmovaps %%ymm20, 128(%0)" & LF &
-               "vmovaps %%ymm21, 160(%0)" & LF &
-               "vmovaps %%ymm22, 192(%0)" & LF &
-               "vmovaps %%ymm23, 224(%0)",
+               "vhaddps %%ymm9, %%ymm8, %%ymm8" & LF &
+               "vhaddps %%ymm11, %%ymm10, %%ymm10" & LF &
+               "vhaddps %%ymm13, %%ymm12, %%ymm12" & LF &
+               "vhaddps %%ymm15, %%ymm14, %%ymm14" & LF &
+               "vhaddps %%ymm10, %%ymm8, %%ymm8" & LF &
+               "vhaddps %%ymm14, %%ymm12, %%ymm12" & LF &
+               "vextractf128 $1, %%ymm8, %%xmm1" & LF &
+               "vaddps %%xmm1, %%xmm8, %%xmm8" & LF &
+               "vextractf128 $1, %%ymm12, %%xmm5" & LF &
+               "vaddps %%xmm5, %%xmm12, %%xmm12" & LF &
+               "vmovups %%xmm8, 0(%0)" & LF &
+               "vmovups %%xmm12, 16(%0)" & LF &
+               "vmovups %%ymm24, 32(%0)",
                Inputs =>
                  [System.Address'Asm_Input ("r", Landed'Address),
                   System.Address'Asm_Input ("r", Data (Base + 2)'Address),
@@ -660,10 +662,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                     ("r", Values (Values'First + First
                                   + (At_Vector + 3) * Stride)'Address),
                   System.Address'Asm_Input ("r", Scaling (0)'Address),
-                  Element_Count'Asm_Input ("r", Blocks)],
+                  Element_Count'Asm_Input ("r", Blocks),
+                  System.Address'Asm_Input
+                    ("r", Vector_Total (0)'Address)],
                Clobber  =>
-                 "rax,rcx,rdx,ymm0,ymm1,ymm2,ymm3,ymm16,ymm17,ymm18,ymm19,"
-                 & "ymm20,ymm21,ymm22,ymm23,memory",
+                 "rax,rcx,rdx,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,"
+                 & "ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,ymm14,ymm15,"
+                 & "ymm24,memory",
                Volatile => True);
 
             for Row in Element_Count range 0 .. Panel_Rows - 1 loop
@@ -671,17 +676,17 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   declare
                      Which : constant Natural :=
                        Natural (Row) * Strip + Natural (Vector);
-                     Total : N.Wide_Real := 0.0;
                      At_It : constant Element_Count :=
                        (At_Row + Row) * Count + At_Vector + Vector;
                   begin
-                     for Lane in Landed (Which)'Range loop
-                        Total := Total + N.Wide_Real (Landed (Which) (Lane));
-                     end loop;
-
+                     --  Both already folded: the sum in the first eight of
+                     --  Landed and the correction in the eight after them.
                      Sums (Sums'First + At_It) :=
                        Sums (Sums'First + At_It)
-                       + Total - 128.0 * N.Wide_Real (Undo (Which));
+                       + N.Wide_Real (Landed (Which))
+                       - 128.0
+                         * N.Wide_Real
+                             (Landed (Panel_Rows * Strip + Which));
                   end;
                end loop;
             end loop;

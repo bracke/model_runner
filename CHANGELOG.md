@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The bias correction and the eight-lane fold moved into the insertion:
+  14 % of a processor prompt, better in three of three.** The largest single
+  change measured on the processor here. **Prompt 254.6 t/s against
+  llama.cpp's 385.0 — 1.51x**, from 2.5x when this work began.
+
+  The accounting priced the correction at 23.7 % and the reduction at 3.9,
+  both of them shuffle networks and widening loops `-O3` built around Ada
+  that no arrangement of Ada could escape.
+
+  The correction costs three instructions a block. The insertion already
+  reads the eight scales it needs, one per dot product as a `{1to8}`
+  broadcast; read instead as one 32-byte `vmovups` they are eight lanes in
+  the order `[row0 v0..v3, row1 v0..v3]`, and the block totals — written
+  twice over, eight to a block — line up lane for lane. One `vmovups`, one
+  `vfmadd231ps`, and all eight corrections advance together.
+
+  The fold costs twelve at the end, the same `vhaddps` reduction
+  `Head_Scores` uses. The accumulators moved from `ymm16`–`23` to
+  `ymm8`–`15`: `vhaddps` has no EVEX encoding and cannot reach the high
+  sixteen.
+
+  Median **8.144 → 7.005 s**. The answers move and the sweep is clean.
+
 - **The bias correction is a quarter of a processor prompt, for one
   multiply-add against the byte dot product's thirty-two.** Nothing kept;
   two ways around it failed and the measurement names the third.
