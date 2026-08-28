@@ -485,6 +485,194 @@ package body Model_Runner.Kernels is
       end loop;
    end Blend_Run;
 
+   ---------------------
+   -- Head_Dot_Halved --
+   ---------------------
+
+   function Head_Dot_Halved
+     (Left     : Real_Array;
+      At_Left  : Element_Count;
+      Right    : Half_Array;
+      At_Right : Element_Count;
+      Span     : Element_Count) return Real is
+   begin
+      if Span = 0
+        or else At_Left < Left'First
+        or else At_Right < Right'First
+        or else At_Left - Left'First + Span > Element_Count (Left'Length)
+        or else At_Right - Right'First + Span > Element_Count (Right'Length)
+      then
+         return 0.0;
+      end if;
+
+      if Wide_Lanes and then Span mod 8 = 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Left_At  : System.Address := Left (At_Left)'Address;
+            Right_At : System.Address := Right (At_Right)'Address;
+            Blocks   : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Span / 8);
+            Result   : N.Real;
+         begin
+            System.Machine_Code.Asm
+              ("vxorps %%ymm0, %%ymm0, %%ymm0"           & LF
+               & "1:"                                    & LF
+               & "vmovups (%1), %%ymm1"                  & LF
+               & "vcvtph2ps (%2), %%ymm2"                & LF
+               & "vfmadd231ps %%ymm1, %%ymm2, %%ymm0"    & LF
+               & "addq $32, %1"                          & LF
+               & "addq $16, %2"                          & LF
+               & "decq %3"                               & LF
+               & "jnz 1b"                                & LF
+
+               & "vextractf128 $1, %%ymm0, %%xmm1"       & LF
+               & "vaddps %%xmm1, %%xmm0, %%xmm0"         & LF
+               & "vhaddps %%xmm0, %%xmm0, %%xmm0"        & LF
+               & "vhaddps %%xmm0, %%xmm0, %%xmm0"        & LF
+               & "vmovss %%xmm0, %0"                     & LF
+               & "vzeroupper",
+               Outputs =>
+                 [N.Real'Asm_Output ("=m", Result),
+                  System.Address'Asm_Output ("+r", Left_At),
+                  System.Address'Asm_Output ("+r", Right_At),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Blocks)],
+               Clobber  => "ymm0, ymm1, ymm2, cc, memory",
+               Volatile => True);
+
+            return Result;
+         end;
+      end if;
+
+      declare
+         Sum : N.Wide_Real := 0.0;
+      begin
+         for Index in 0 .. Span - 1 loop
+            Sum := Sum
+              + N.Wide_Real (Left (At_Left + Index))
+                * N.Wide_Real (N.To_Real (Right (At_Right + Index)));
+         end loop;
+
+         return N.Real (Sum);
+      end;
+   end Head_Dot_Halved;
+
+   ----------------------
+   -- Blend_Run_Halved --
+   ----------------------
+
+   procedure Blend_Run_Halved
+     (Sums      : in out Real_Array;
+      Weights   : Real_Array;
+      At_Weight : Element_Count;
+      Values    : Half_Array;
+      At_Value  : Element_Count;
+      Stride    : Element_Count;
+      Steps     : Element_Count)
+   is
+      Span : constant Element_Count := Element_Count (Sums'Length);
+   begin
+      if Steps = 0
+        or else Span = 0
+        or else At_Weight < Weights'First
+        or else At_Value < Values'First
+        or else At_Weight - Weights'First + Steps
+                  > Element_Count (Weights'Length)
+        or else Stride < Span
+        or else At_Value - Values'First + (Steps - 1) * Stride + Span
+                  > Element_Count (Values'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span = Held_Run then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Sums_At   : constant System.Address := Sums (Sums'First)'Address;
+            Weight_At : System.Address := Weights (At_Weight)'Address;
+            Value_At  : System.Address := Values (At_Value)'Address;
+            Left      : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Steps);
+            Apart     : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Stride * 2);
+         begin
+            System.Machine_Code.Asm
+              ("vmovups 0(%3), %%ymm0"                   & LF
+               & "vmovups 32(%3), %%ymm1"                & LF
+               & "vmovups 64(%3), %%ymm2"                & LF
+               & "vmovups 96(%3), %%ymm3"                & LF
+               & "vmovups 128(%3), %%ymm4"               & LF
+               & "vmovups 160(%3), %%ymm5"               & LF
+               & "vmovups 192(%3), %%ymm6"               & LF
+               & "vmovups 224(%3), %%ymm7"               & LF
+
+               --  One position a turn: its score into all eight lanes,
+               --  then eight converts and eight fused multiply-adds. The
+               --  convert is what the narrow cache costs and the sixteen
+               --  bytes it reads instead of thirty-two are what it buys.
+               & "1:"                                    & LF
+               & "vbroadcastss (%0), %%ymm8"             & LF
+               & "vcvtph2ps 0(%1), %%ymm9"               & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm0"    & LF
+               & "vcvtph2ps 16(%1), %%ymm9"              & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm1"    & LF
+               & "vcvtph2ps 32(%1), %%ymm9"              & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm2"    & LF
+               & "vcvtph2ps 48(%1), %%ymm9"              & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm3"    & LF
+               & "vcvtph2ps 64(%1), %%ymm9"              & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm4"    & LF
+               & "vcvtph2ps 80(%1), %%ymm9"              & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm5"    & LF
+               & "vcvtph2ps 96(%1), %%ymm9"              & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm6"    & LF
+               & "vcvtph2ps 112(%1), %%ymm9"             & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm7"    & LF
+               & "addq $4, %0"                           & LF
+               & "addq %4, %1"                           & LF
+               & "decq %2"                               & LF
+               & "jnz 1b"                                & LF
+
+               & "vmovups %%ymm0, 0(%3)"                 & LF
+               & "vmovups %%ymm1, 32(%3)"                & LF
+               & "vmovups %%ymm2, 64(%3)"                & LF
+               & "vmovups %%ymm3, 96(%3)"                & LF
+               & "vmovups %%ymm4, 128(%3)"               & LF
+               & "vmovups %%ymm5, 160(%3)"               & LF
+               & "vmovups %%ymm6, 192(%3)"               & LF
+               & "vmovups %%ymm7, 224(%3)"               & LF
+               & "vzeroupper",
+               Outputs =>
+                 [System.Address'Asm_Output ("+r", Weight_At),
+                  System.Address'Asm_Output ("+r", Value_At),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Left)],
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Sums_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, ymm8, "
+                 & "ymm9, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Step in 0 .. Steps - 1 loop
+         declare
+            Weight : constant N.Real := Weights (At_Weight + Step);
+            Here   : constant Element_Count := At_Value + Step * Stride;
+         begin
+            for Index in 0 .. Span - 1 loop
+               Sums (Sums'First + Index) :=
+                 Sums (Sums'First + Index)
+                 + Weight * N.To_Real (Values (Here + Index));
+            end loop;
+         end;
+      end loop;
+   end Blend_Run_Halved;
+
    --------------
    -- RMS_Norm --
    --------------
@@ -761,9 +949,133 @@ package body Model_Runner.Kernels is
       --  walks the array it was given.
       pragma Suppress (Overflow_Check);
       pragma Suppress (Range_Check);
+
+      Count : constant Element_Count := Element_Count (Target'Length);
+      Whole : constant Element_Count := (Count / 8) * 8;
+      Index : Element_Count := 0;
    begin
-      for Index in Target'Range loop
-         Target (Index) := Raised (Target (Index) - Less);
+      --  Raised written out over eight lanes. This unit is compiled for
+      --  baseline x86-64, so what the compiler makes of the loop below is
+      --  four lanes and separate multiplies and adds; written out it is
+      --  eight and the polynomial is five fused multiply-adds. Everything
+      --  in it is arithmetic on lanes already -- the clamp is a minimum and
+      --  a maximum, the round is the magic constant added and taken away,
+      --  and the power of two is a convert, an add and a shift -- so there
+      --  is nothing here that had to stay narrow and nothing that a branch
+      --  makes awkward.
+      --
+      --  The polynomial rounds once a term where the compiled form rounds
+      --  twice, which is the more accurate of the two and still a different
+      --  answer: the sweep is what decides about that, as it did for the
+      --  head dot product.
+      if Wide_Lanes and then Whole > 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            type Constants is array (0 .. 10) of N.Real
+              with Alignment => 32;
+
+            Held : constant Constants :=
+              [0  => Less,
+               1  => 87.0,
+               2  => -87.0,
+               3  => 1.44269504088896,
+               4  => 12_582_912.0,
+               5  => 0.693147180559945,
+               6  => 0.240226506959101,
+               7  => 0.055504108664822,
+               8  => 0.009618129107629,
+               9  => 0.001333355814643,
+               10 => 1.0];
+
+            At_It   : System.Address := Target (Target'First)'Address;
+            At_Held : constant System.Address := Held (0)'Address;
+            Blocks  : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Whole / 8);
+         begin
+            System.Machine_Code.Asm
+              ("vbroadcastss 0(%2), %%ymm10"             & LF
+               & "vbroadcastss 4(%2), %%ymm11"           & LF
+               & "vbroadcastss 8(%2), %%ymm12"           & LF
+               & "vbroadcastss 12(%2), %%ymm13"          & LF
+               & "vbroadcastss 16(%2), %%ymm14"          & LF
+               & "vbroadcastss 20(%2), %%ymm2"           & LF
+               & "vbroadcastss 24(%2), %%ymm3"           & LF
+               & "vbroadcastss 28(%2), %%ymm4"           & LF
+               & "vbroadcastss 32(%2), %%ymm5"           & LF
+               & "vbroadcastss 36(%2), %%ymm6"           & LF
+               & "vbroadcastss 40(%2), %%ymm9"           & LF
+               & "movl $127, %%eax"                      & LF
+               & "vmovd %%eax, %%xmm7"                   & LF
+               & "vpbroadcastd %%xmm7, %%ymm7"           & LF
+
+               & "1:"                                    & LF
+               & "vmovups (%0), %%ymm0"                  & LF
+               & "vsubps %%ymm10, %%ymm0, %%ymm0"        & LF
+               & "vminps %%ymm11, %%ymm0, %%ymm0"        & LF
+               & "vmaxps %%ymm12, %%ymm0, %%ymm0"        & LF
+               & "vmulps %%ymm13, %%ymm0, %%ymm0"        & LF
+
+               --  The magic constant added and taken away, which is a
+               --  round to nearest without a rounding instruction.
+               & "vaddps %%ymm14, %%ymm0, %%ymm1"        & LF
+               & "vsubps %%ymm14, %%ymm1, %%ymm1"        & LF
+               & "vsubps %%ymm1, %%ymm0, %%ymm0"         & LF
+
+               --  Horner, innermost first, and *not* fused. A fused
+               --  multiply-add rounds once a term where this rounds twice,
+               --  which is the more accurate of the two and a different
+               --  answer -- and the difference showed up somewhere no
+               --  tolerance would have caught it. A drafted run is
+               --  published here as producing exactly the text the model
+               --  produces alone, and it does so by two evaluations of the
+               --  same positions agreeing to the last bit: one a batch and
+               --  one a token at a time. Rounding the exponential
+               --  differently moved a near-tie across, and the drafted run
+               --  stopped matching. The conformance sweep passed it, the
+               --  suite passed it, and the sitting's digest is what caught
+               --  it. So the lanes are the change and the arithmetic is
+               --  the arithmetic that was there.
+               & "vmulps %%ymm0, %%ymm6, %%ymm8"         & LF
+               & "vaddps %%ymm5, %%ymm8, %%ymm8"         & LF
+               & "vmulps %%ymm0, %%ymm8, %%ymm8"         & LF
+               & "vaddps %%ymm4, %%ymm8, %%ymm8"         & LF
+               & "vmulps %%ymm0, %%ymm8, %%ymm8"         & LF
+               & "vaddps %%ymm3, %%ymm8, %%ymm8"         & LF
+               & "vmulps %%ymm0, %%ymm8, %%ymm8"         & LF
+               & "vaddps %%ymm2, %%ymm8, %%ymm8"         & LF
+               & "vmulps %%ymm0, %%ymm8, %%ymm8"         & LF
+               & "vaddps %%ymm9, %%ymm8, %%ymm8"         & LF
+
+               --  And the power of two, built in the exponent field.
+               & "vcvttps2dq %%ymm1, %%ymm1"             & LF
+               & "vpaddd %%ymm7, %%ymm1, %%ymm1"         & LF
+               & "vpslld $23, %%ymm1, %%ymm1"            & LF
+               & "vmulps %%ymm1, %%ymm8, %%ymm8"         & LF
+               & "vmovups %%ymm8, (%0)"                  & LF
+
+               & "addq $32, %0"                          & LF
+               & "decq %1"                               & LF
+               & "jnz 1b"                                & LF
+               & "vzeroupper",
+               Outputs =>
+                 [System.Address'Asm_Output ("+r", At_It),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Blocks)],
+               Inputs   => [System.Address'Asm_Input ("r", At_Held)],
+               Clobber  =>
+                 "rax, ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, "
+                 & "ymm8, ymm9, ymm10, ymm11, ymm12, ymm13, ymm14, "
+                 & "cc, memory",
+               Volatile => True);
+
+            Index := Whole;
+         end;
+      end if;
+
+      while Index < Count loop
+         Target (Target'First + Index) :=
+           Raised (Target (Target'First + Index) - Less);
+         Index := Index + 1;
       end loop;
    end Exponentiate;
 

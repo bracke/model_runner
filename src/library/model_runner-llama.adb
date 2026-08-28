@@ -3565,15 +3565,15 @@ package body Model_Runner.Llama is
                declare
                   Origin : constant Element_Count :=
                     Keys'First + K_Base + Step * KV_Width + Group * Head_Size;
-                  Sum    : N.Wide_Real := 0.0;
                begin
-                  for Component in 0 .. Head_Size - 1 loop
-                     Sum := Sum
-                       + N.Wide_Real (Query (Q_Origin + Component))
-                         * N.Wide_Real
-                             (N.To_Real (Keys (Origin + Component)));
-                  end loop;
-                  Scores (At_Score + Step) := Real (Sum) * Scale;
+                  Scores (At_Score + Step) :=
+                    K.Head_Dot_Halved
+                      (Left     => Query,
+                       At_Left  => Q_Origin,
+                       Right    => Keys,
+                       At_Right => Origin,
+                       Span     => Head_Size)
+                    * Scale;
                end;
             end loop;
 
@@ -3623,21 +3623,16 @@ package body Model_Runner.Llama is
                        Element_Count'Min (Run, Value_Size - At_Component);
                      Sums : Real_Array (0 .. Here - 1) := [others => 0.0];
                   begin
-                     for Step in First .. Last loop
-                        declare
-                           Weight : constant Real :=
-                             Scores (At_Score + Step);
-                           At_Value : constant Element_Count :=
-                             Values'First + V_Base + Step * V_Width
-                             + Group * Value_Size + At_Component;
-                        begin
-                           for Component in 0 .. Here - 1 loop
-                              Sums (Component) := Sums (Component)
-                                + Weight
-                                  * N.To_Real (Values (At_Value + Component));
-                           end loop;
-                        end;
-                     end loop;
+                     K.Blend_Run_Halved
+                       (Sums      => Sums,
+                        Weights   => Scores,
+                        At_Weight => At_Score + First,
+                        Values    => Values,
+                        At_Value  =>
+                          Values'First + V_Base + First * V_Width
+                          + Group * Value_Size + At_Component,
+                        Stride    => V_Width,
+                        Steps     => Last - First + 1);
 
                      for Component in 0 .. Here - 1 loop
                         Target (Target'First + Head * Value_Size

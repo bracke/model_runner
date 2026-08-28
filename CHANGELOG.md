@@ -5,6 +5,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`--kv-cache f16` is 3.4x faster and usable now.** The half-precision and
+  byte context storages have been here for a while and nothing wide read
+  them: a prompt taking 6.9 s at full precision took **26.9 at half**, with
+  81 % of it in one scalar loop. `Blend_Run_Halved` and `Head_Dot_Halved` are
+  the exact kernels with a convert in front — a position's values as eight
+  16-byte loads converted to eight lanes, then the same eight fused
+  multiply-adds, so 128 bytes a position rather than 256.
+
+  **f16 goes from 4.0x slower than f32 to 1.17x.** The byte cache is the same
+  fix again and has not had it; `q8` is still 2.7x.
+
+  Halving the bytes did not halve the time, which is a third piece of
+  evidence — after the prefetch and the unroll — that the value blend is not
+  simply short of bandwidth.
+
+- **`Exponentiate` written out over eight lanes**: 390.2 G instructions to
+  381.9. A clamp, a magic-constant round, a degree-five polynomial and a
+  power of two in the exponent field are all lane arithmetic, and this unit
+  is compiled for baseline x86-64, so the compiler was making four lanes of
+  it with separate multiplies and adds.
+
+  **The polynomial is deliberately not fused.** Fused it is one instruction a
+  term and rounds once instead of twice — more accurate, and a different
+  answer. The conformance sweep passed it at 28344 sequences and the suite at
+  286 tests; what caught it was a digest in the sitting, where **the drafted
+  run stopped matching the undrafted one**. That identity is a published
+  claim, and it holds because a batched evaluation and a token-at-a-time one
+  agree to the last bit. No tolerance question, so no tolerance caught it.
+
 ### Measured
 
 - **Two thirds of everything this program fetches from memory is fetched by

@@ -5686,6 +5686,113 @@ package body Tests.Inference_Cases is
       Assert (Seen = Spans'Length, "a span was not compared");
    end Both_Blend_Runs_Agree;
 
+   --  The same, for a cache kept at half precision: the narrow kernels
+   --  answer what the scalar path answers, within what half precision can
+   --  say.
+   procedure Both_Halved_Kernels_Agree
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package MK renames Model_Runner.Kernels;
+
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+
+      Stride : constant N.Element_Count := 96;
+      Steps  : constant N.Element_Count := 40;
+      Span   : constant N.Element_Count := 64;
+
+      Weights : N.Real_Array (0 .. Steps - 1);
+      Values  : N.Half_Array (0 .. Stride * Steps - 1);
+      Query   : N.Real_Array (0 .. Span - 1);
+
+      Seen : Natural := 0;
+   begin
+      for Index in Weights'Range loop
+         Weights (Index) :=
+           N.Real (Integer (Index) mod 9) * 0.125 - 0.5;
+      end loop;
+
+      for Index in Query'Range loop
+         Query (Index) := N.Real (Integer (Index) mod 11) * 0.25 - 1.25;
+      end loop;
+
+      --  Values a half can hold exactly, so that the two paths differ only
+      --  in how they add and not in what they were given.
+      for Index in Values'Range loop
+         Values (Index) :=
+           N.To_Half (N.Real (Integer (Index) mod 17) * 0.5 - 4.0);
+      end loop;
+
+      declare
+         Plain, Chosen : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+         Bound : constant N.Real := 1.0e-3 * N.Real (Steps);
+      begin
+         MK.Use_Wide_Lanes (False);
+         MK.Blend_Run_Halved (Plain, Weights, 0, Values, 0, Stride, Steps);
+
+         MK.Use_Wide_Lanes (Wide);
+         MK.Blend_Run_Halved (Chosen, Weights, 0, Values, 0, Stride, Steps);
+
+         for Component in Plain'Range loop
+            Assert (abs (Plain (Component) - Chosen (Component)) <= Bound,
+                    "the two halved blends disagree at component"
+                    & N.Element_Count'Image (Component) & ":"
+                    & N.Real'Image (Plain (Component)) & " against"
+                    & N.Real'Image (Chosen (Component)));
+         end loop;
+
+         Seen := Seen + 1;
+      end;
+
+      declare
+         Bound : constant N.Real := 1.0e-2;
+         Flat, Lane : N.Real;
+      begin
+         MK.Use_Wide_Lanes (False);
+         Flat := MK.Head_Dot_Halved (Query, 0, Values, 0, Span);
+
+         MK.Use_Wide_Lanes (Wide);
+         Lane := MK.Head_Dot_Halved (Query, 0, Values, 0, Span);
+
+         Assert (abs (Flat - Lane) <= Bound,
+                 "the two halved dot products disagree:"
+                 & N.Real'Image (Flat) & " against" & N.Real'Image (Lane));
+
+         Seen := Seen + 1;
+      end;
+
+      --  And the refusals, which are the exact kernels' refusals: a run
+      --  past the end of the values, a stride narrower than the run, and no
+      --  positions at all leave the sums alone on either path.
+      for Allowed in Boolean'Range loop
+         MK.Use_Wide_Lanes (Allowed and Wide);
+
+         declare
+            Sums : N.Real_Array (0 .. Span - 1) := [others => 7.0];
+
+            function Untouched return Boolean is
+              (for all Component of Sums => Component = 7.0);
+         begin
+            MK.Blend_Run_Halved
+              (Sums, Weights, 0, Values, 0, Stride, Steps + 1);
+            Assert (Untouched, "a halved run past the values was taken");
+
+            MK.Blend_Run_Halved (Sums, Weights, 0, Values, 0, 32, Steps);
+            Assert (Untouched, "a halved stride under the run was taken");
+
+            MK.Blend_Run_Halved (Sums, Weights, 0, Values, 0, Stride, 0);
+            Assert (Untouched, "a halved run of no positions was taken");
+
+            Assert (MK.Head_Dot_Halved (Query, 0, Values, 0, 0) = 0.0,
+                    "a halved dot product of no components was taken");
+         end;
+      end loop;
+
+      MK.Use_Wide_Lanes (Wide);
+      Assert (Seen = 2, "a halved kernel was not compared");
+   end Both_Halved_Kernels_Agree;
+
    --  A run of scores answers what one at a time answers.
    --
    --  Head_Scores folds eight accumulators together where Head_Dot folds
@@ -6042,6 +6149,10 @@ package body Tests.Inference_Cases is
         (T, Both_Blend_Runs_Agree'Access,
          "one run of an attention head's output is the same whether the "
          & "host's wide lanes are used or not");
+      Register_Routine
+        (T, Both_Halved_Kernels_Agree'Access,
+         "the kernels that read a half-precision context answer what the "
+         & "scalar path answers, wide lanes or not");
       Register_Routine
         (T, Both_Head_Dots_Agree'Access,
          "the attention dot product answers the same whether the host's "

@@ -25,6 +25,7 @@ package Model_Runner.Kernels is
    subtype Wide_Real is Model_Runner.Numerics.Wide_Real;
    subtype Element_Count is Model_Runner.Numerics.Element_Count;
    subtype Real_Array is Model_Runner.Numerics.Real_Array;
+   subtype Half_Array is Model_Runner.Numerics.Half_Array;
 
    --  Add Addend into Target element-wise.
    --
@@ -175,6 +176,52 @@ package Model_Runner.Kernels is
       Weights   : Real_Array;
       At_Weight : Element_Count;
       Values    : Real_Array;
+      At_Value  : Element_Count;
+      Stride    : Element_Count;
+      Steps     : Element_Count);
+
+   --  What Head_Dot does, reading a key cache kept at half precision.
+   --  Same shape, same fold, one convert for every eight pairs and half the
+   --  bytes read on the key side.
+   --
+   --  @param Left Vector the query is taken from.
+   --  @param At_Left Index of the query's first component.
+   --  @param Right Half-precision vector the key is taken from.
+   --  @param At_Right Index of the key's first component.
+   --  @param Span How many components.
+   --  @return The dot product of the two.
+   function Head_Dot_Halved
+     (Left     : Real_Array;
+      At_Left  : Element_Count;
+      Right    : Half_Array;
+      At_Right : Element_Count;
+      Span     : Element_Count) return Real;
+
+   --  What Blend_Run does, reading a value cache kept at half precision.
+   --
+   --  The narrow cache existed before this and nothing wide read it: a
+   --  prompt with --kv-cache f16 spent eighty-one per cent of itself in one
+   --  scalar loop and took four times as long as the same prompt at full
+   --  precision, which is a storage saving nobody could afford to take.
+   --
+   --  A position is a hundred and twenty-eight bytes here rather than two
+   --  hundred and fifty-six, which is the point: the value blend is two
+   --  thirds of everything this program fetches from memory. It pays one
+   --  convert for every eight components to get them, so the instruction
+   --  count a position goes from twelve to twenty and the bytes halve.
+   --
+   --  @param Sums Run of sums, added to in place.
+   --  @param Weights Vector the scores are taken from.
+   --  @param At_Weight Index of the first position's score.
+   --  @param Values Half-precision vector the values are taken from.
+   --  @param At_Value Index of the first position's first component.
+   --  @param Stride Elements between one position's values and the next's.
+   --  @param Steps How many positions.
+   procedure Blend_Run_Halved
+     (Sums      : in out Real_Array;
+      Weights   : Real_Array;
+      At_Weight : Element_Count;
+      Values    : Half_Array;
       At_Value  : Element_Count;
       Stride    : Element_Count;
       Steps     : Element_Count);
