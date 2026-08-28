@@ -10535,3 +10535,36 @@ outside EEA9637909B87018 src/shaders/row_product.comp src/shaders/matrix_product
 #     llama-bench --device none pp1419 282.18 tg64 39.83, -ngl 99 pp1419
 #     1791.52 tg64 56.04
 
+# 2026-08-29  The device broken down again, and the score tile refused
+#
+#   No code changed.
+#
+#   A device prompt after eight queries a workgroup and one table of angles,
+#   long prompt with a generation-only run subtracted:
+#
+#                    before            now
+#     attending    0.907 s  40%     0.690 s  35%
+#     feeding      0.520 s  23%     0.505 s  26%
+#     projecting   0.375 s  16%     0.367 s  19%
+#     rotating     0.206 s   9%     0.158 s   8%
+#     joining      0.176 s   8%     0.165 s   8%
+#     normalizing  0.084 s   4%     0.079 s   4%
+#
+#   Attention a quarter cheaper and still the largest phase, but the two
+#   matrix phases are forty-five per cent together against its thirty-five.
+#   llama.cpp reads this prompt in 0.79 s on the same device and this program
+#   in 1.98: with attention free this would be 1.29 s and still 1.6 times
+#   behind, so what is next on the device is not only attention.
+#
+#   And the score loop's tile, swept because the blend had just gone from no
+#   tiling to sixteen for three and seven tenths of a prompt:
+#
+#     eight positions   6.423 s      sixteen   6.461 s      thirty-two  6.510 s
+#
+#   Eight is best and the others are inside its noise. The reuse is complete
+#   at eight -- eight key rows are eight kilobytes and all thirty-two heads
+#   read them from the nearest cache before the next eight arrive -- so a
+#   wider tile gains nothing and pays a longer live range. What the blend
+#   gained was tiling where there was none, and that does not generalise to a
+#   loop already tiled.
+

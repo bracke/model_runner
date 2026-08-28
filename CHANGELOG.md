@@ -5,6 +5,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **A device prompt re-broken-down after the two attention changes**:
+  attending 0.907 s to **0.690** (40 % of the prompt to 35), feeding 0.505
+  (26 %), projecting 0.367 (19 %), rotating 0.206 to 0.158 (8 %), joining
+  0.165 (8 %), normalizing 0.079 (4 %). Attention is a quarter cheaper and
+  still the largest phase, but **the two matrix phases together are 45 %
+  now** against its 35. llama.cpp reads the same prompt in 0.79 s and this
+  program in 1.98 — so with attention free this would be 1.29 s and still
+  1.6x behind. Whatever is next on the device is not only attention.
+
+- **The score loop's tile of eight is already its optimum**: 6.423 s at
+  eight, 6.461 at sixteen, 6.510 at thirty-two. Eight key rows are 8 KB and
+  every one of thirty-two heads reads them from the nearest cache before the
+  next eight arrive, so a wider tile has nothing left to gain and a longer
+  live range to pay for. The blend's move from no tiling to sixteen does not
+  generalise to a loop that was already tiled.
+
 ### Changed
 
 - **The llama.cpp comparison now publishes the 1419-token prompt beside the

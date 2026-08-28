@@ -4869,6 +4869,53 @@ cent. Five alternated rounds of three said one and a half per cent better in
 four of five. A change worth one per cent of a prompt cannot be seen at all
 by the method that reads five per cent as signal.
 
+### Where a device prompt's time goes now
+
+Two changes have gone into attention since it was last broken down -- eight
+queries a workgroup, and one table of angles for a position's two rotations
+-- so it is worth asking again. Same method: the long prompt with a
+generation-only run subtracted.
+
+| | before | now |
+| --- | ---: | ---: |
+| attending | 0.907 s, 40 % | **0.690 s, 35 %** |
+| feeding | 0.520 s, 23 % | 0.505 s, 26 % |
+| projecting | 0.375 s, 16 % | 0.367 s, 19 % |
+| rotating | 0.206 s, 9 % | 0.158 s, 8 % |
+| joining | 0.176 s, 8 % | 0.165 s, 8 % |
+| normalizing | 0.084 s, 4 % | 0.079 s, 4 % |
+
+**Attention is a quarter cheaper in absolute terms and still the largest
+phase.** What has changed is that it is no longer the obvious answer: the two
+matrix phases together are forty-five per cent now, against attention's
+thirty-five.
+
+And the arithmetic of the gap is worth doing. llama.cpp reads this prompt in
+0.79 s on the same device and this program in 1.98. **If attention were free
+this program would be at 1.29 s and still 1.6 times behind**, so whatever is
+next on the device is not only attention.
+
+### The score loop was already right
+
+`head_scores` is six per cent of a processor prompt and reads eight positions
+at a time, and the value blend had just been taken from no tiling to sixteen
+for three and seven tenths of a prompt. The same argument at eight seemed
+worth pushing to sixteen.
+
+| tile | prompt |
+| --- | ---: |
+| eight positions | **6.423 s** |
+| sixteen | 6.461 s |
+| thirty-two | 6.510 s |
+
+**Eight is the best of the three and the other two are inside the noise of
+it.** The reuse is already complete at eight: eight key rows are eight
+kilobytes and every one of thirty-two heads reads them from the nearest cache
+before the next eight arrive, so a wider tile has nothing left to gain and a
+longer live range to pay for. The paragraph above that loop says it was
+chosen by measurement, and this is that measurement taken again with a
+different number in mind and landing in the same place.
+
 ### A slower day, measured on both sides
 
 The figures in this section were re-taken twice, because the first sitting
