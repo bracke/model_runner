@@ -9699,3 +9699,35 @@ outside 1D49306DA0BC65AC src/shaders/row_product.comp src/shaders/matrix_product
 #
 # No source changed.
 
+# 2026-08-28  And the reduction, which completes the accounting
+#
+# The last unpriced block of the strip kernel: the eight lanes the
+# insertion leaves, summed into a binary64 accumulator once a row-vector
+# pair. Ablated by summing one lane instead of eight, which keeps the
+# structure and the store so that nothing downstream goes dead.
+#
+#   as committed          7.953 s
+#   one lane not eight    7.643 s     0.310 s, 3.9 %
+#
+# Less than the 8.6 per cent of samples addr2line put at that line, which
+# is the same lesson this file keeps writing down.
+#
+# THE ACCOUNTING IS NOW COMPLETE for the symbol that is sixty-nine per cent
+# of a processor prompt:
+#
+#   the bias correction              23.7 %   1.927 s
+#   the table's multiply and load     5.7 %   0.466 s
+#   the Landed reduction              3.9 %   0.310 s
+#   the byte dot products             the rest
+#
+# AND TWO OF THE THREE WANT THE SAME FIX. The insertion holds its eight
+# accumulators in registers when the block loop ends. It could fold them
+# there -- the twelve-instruction reduction Head_Scores already uses, two
+# dependent chains instead of eight separate folds -- and it could
+# accumulate the correction with one more broadcast and one more fused
+# multiply-add a dot product. One change, twenty-seven and a half per cent
+# of a prompt in reach, and both blocks out of the shuffle network that
+# neither Ada restructuring could escape.
+#
+# No source changed.
+

@@ -4153,6 +4153,29 @@ broadcast per dot product. That is about a wash by instruction count and it
 moves eighteen per cent of a symbol out of a shuffle network, which is the
 whole of the argument for trying it.
 
+**And the reduction, which completes the accounting.** The last unpriced
+block is the eight lanes the insertion leaves, summed into a binary64
+accumulator once a row-vector pair. Ablated by summing one lane instead of
+eight -- which keeps the structure and the store, so nothing downstream goes
+dead -- it is **0.310 s, three and nine tenths per cent**, against the eight
+and a half per cent of samples `addr2line` put at that line.
+
+| | of a prompt |
+|---|---:|
+| the bias correction | **23.7 %** |
+| the table's multiply and load | 5.7 % |
+| the `Landed` reduction | 3.9 % |
+| the byte dot products | the rest |
+
+**Two of the three want the same fix.** The insertion holds its eight
+accumulators in registers when the block loop ends: it could fold them there
+-- the twelve-instruction reduction `Head_Scores` already uses, two dependent
+chains instead of eight separate folds -- and it could accumulate the
+correction with one more broadcast and one more fused multiply-add a dot
+product. One change, twenty-seven and a half per cent of a prompt in reach,
+and both blocks out of the shuffle network that neither Ada restructuring
+could escape.
+
 Nothing kept.
 
 ### Against llama.cpp
