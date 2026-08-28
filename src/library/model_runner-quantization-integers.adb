@@ -1,3 +1,6 @@
+with System;
+with System.Machine_Code;
+
 with Model_Runner.Quantization.Integers.Deep;
 with Model_Runner.Quantization.Integers.Plain;
 with Model_Runner.Quantization.Integers.Wide;
@@ -104,6 +107,103 @@ package body Model_Runner.Quantization.Integers is
          Values, Scales, Totals, Ok);
    end Quantize_Vectors;
 
+   --  The largest magnitude of one activation block and whether every one
+   --  of its thirty-two numbers is finite, in four reads of eight lanes.
+   --
+   --  Written out for the reason softmax's first pass was: the finiteness
+   --  test is an integer test of the exponent field, and a compiler that
+   --  sees a float turned into bits one element at a time will not make
+   --  eight lanes of it -- so it made none, and a profile found this loop
+   --  running a magnitude, a maximum and a bit test one number at a time.
+   --  As lanes both questions are lane work: a bitwise and for the
+   --  magnitude, an ordered compare of it against infinity whose mask is
+   --  accumulated, and a maximum. A value that is not finite fails that
+   --  compare whether it is an infinity or a NaN.
+   --
+   --  Entered only where the host said it has the instructions, which this
+   --  package is told rather than asks.
+   procedure Block_Extent
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Largest : out N.Real;
+      Finite  : out Boolean)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+   begin
+      if Wider then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            At_Value : constant System.Address :=
+              Vectors (Vectors'First + At_It)'Address;
+            Top      : N.Real;
+            Flags    : Interfaces.Unsigned_32;
+         begin
+            System.Machine_Code.Asm
+              ("movl $0x7fffffff, %%eax"                  & LF
+               & "vmovd %%eax, %%xmm3"                    & LF
+               & "vbroadcastss %%xmm3, %%ymm3"            & LF
+               & "movl $0x7f800000, %%eax"                & LF
+               & "vmovd %%eax, %%xmm4"                    & LF
+               & "vbroadcastss %%xmm4, %%ymm4"            & LF
+               & "vandps 0(%2), %%ymm3, %%ymm0"           & LF
+               & "vandps 32(%2), %%ymm3, %%ymm1"          & LF
+               & "vandps 64(%2), %%ymm3, %%ymm2"          & LF
+               & "vandps 96(%2), %%ymm3, %%ymm5"          & LF
+               & "vcmpltps %%ymm4, %%ymm0, %%ymm6"        & LF
+               & "vcmpltps %%ymm4, %%ymm1, %%ymm7"        & LF
+               & "vandps %%ymm7, %%ymm6, %%ymm6"          & LF
+               & "vcmpltps %%ymm4, %%ymm2, %%ymm7"        & LF
+               & "vandps %%ymm7, %%ymm6, %%ymm6"          & LF
+               & "vcmpltps %%ymm4, %%ymm5, %%ymm7"        & LF
+               & "vandps %%ymm7, %%ymm6, %%ymm6"          & LF
+               & "vmaxps %%ymm1, %%ymm0, %%ymm0"          & LF
+               & "vmaxps %%ymm5, %%ymm2, %%ymm2"          & LF
+               & "vmaxps %%ymm2, %%ymm0, %%ymm0"          & LF
+               & "vextractf128 $1, %%ymm0, %%xmm1"        & LF
+               & "vmaxps %%xmm1, %%xmm0, %%xmm0"          & LF
+               & "vmovhlps %%xmm0, %%xmm0, %%xmm1"        & LF
+               & "vmaxps %%xmm1, %%xmm0, %%xmm0"          & LF
+               & "vshufps $1, %%xmm0, %%xmm0, %%xmm1"     & LF
+               & "vmaxps %%xmm1, %%xmm0, %%xmm0"          & LF
+               & "vmovss %%xmm0, %0"                      & LF
+               & "vmovmskps %%ymm6, %%eax"                & LF
+               & "movl %%eax, %1"                         & LF
+               & "vzeroupper",
+               Outputs =>
+                 [N.Real'Asm_Output ("=m", Top),
+                  Interfaces.Unsigned_32'Asm_Output ("=m", Flags)],
+               Inputs   => [System.Address'Asm_Input ("r", At_Value)],
+               Clobber  =>
+                 "rax, ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7,"
+                 & " cc, memory",
+               Volatile => True);
+
+            Largest := Top;
+            Finite  := Interfaces."=" (Flags, 255);
+            return;
+         end;
+      end if;
+
+      Largest := 0.0;
+      Finite  := True;
+
+      for Index in 0 .. Element_Count (Activation_Block) - 1 loop
+         declare
+            Value : constant N.Real :=
+              Vectors (Vectors'First + At_It + Index);
+         begin
+            if not N.Is_Finite (Value) then
+               Finite := False;
+            elsif abs Value > Largest then
+               Largest := abs Value;
+            end if;
+         end;
+      end loop;
+   end Block_Extent;
+
    procedure Quantize_Blocks
      (Vectors : Model_Runner.Numerics.Real_Array;
       Count   : Element_Count;
@@ -150,28 +250,21 @@ package body Model_Runner.Quantization.Integers is
 
             At_Element : constant Element_Count :=
               Block * Activation_Block;
-            Largest    : N.Real := 0.0;
+            Largest    : N.Real;
+            Finite     : Boolean;
             Scale      : N.Real;
             Inverse    : N.Real;
             Total      : Interfaces.Integer_32 := 0;
          begin
-            for Index in 0 .. Element_Count (Activation_Block) - 1 loop
-               declare
-                  Value : constant N.Real :=
-                    Vectors (Vectors'First + At_Element + Index);
-               begin
-                  --  A block holding anything that is not finite has no
-                  --  nearest byte. Refusing here rather than clamping is
-                  --  what keeps the caller's own finiteness checks the
-                  --  place such a value is reported.
-                  if not N.Is_Finite (Value) then
-                     return;
-                  end if;
-                  if abs Value > Largest then
-                     Largest := abs Value;
-                  end if;
-               end;
-            end loop;
+            --  A block holding anything that is not finite has no nearest
+            --  byte. Refusing here rather than clamping is what keeps the
+            --  caller's own finiteness checks the place such a value is
+            --  reported.
+            Block_Extent (Vectors, At_Element, Largest, Finite);
+
+            if not Finite then
+               return;
+            end if;
 
             Scale := Largest / 127.0;
             Inverse := (if Scale > 0.0 then 1.0 / Scale else 0.0);

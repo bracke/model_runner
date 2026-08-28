@@ -547,12 +547,29 @@ package body Model_Runner.Tensors is
                --  The same values reach the same places; a profile put
                --  this procedure at five per cent of a prompt and this
                --  loop at most of it.
-               for Which in 0 .. Count - 1 loop
-                  for Row in 0 .. Here - 1 loop
-                     Target (Target'First + Which * Item.Rows + At_Row + Row)
-                       := Real (Tiled (Row * Count + Which));
+               --  The checks are suppressed and the vector's base is
+               --  worked out once: a profile found the index compares
+               --  costing more than the narrowing convert they guard,
+               --  around a loop whose bounds this procedure has already
+               --  proved.
+               declare
+                  pragma Suppress (Index_Check);
+                  pragma Suppress (Range_Check);
+                  pragma Suppress (Overflow_Check);
+               begin
+                  for Which in 0 .. Count - 1 loop
+                     declare
+                        Out_At : constant Element_Count :=
+                          Target'First + Which * Item.Rows + At_Row;
+                        In_At  : constant Element_Count := Which;
+                     begin
+                        for Row in 0 .. Here - 1 loop
+                           Target (Out_At + Row) :=
+                             Real (Tiled (In_At + Row * Count));
+                        end loop;
+                     end;
                   end loop;
-               end loop;
+               end;
 
                At_Row := At_Row + Here;
             end;

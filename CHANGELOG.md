@@ -7,6 +7,45 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The two symbols nobody had opened: 10.5 % of a 1419-token prompt, better
+  in four of four.** Instructions 410.2 G to 390.2. No digest moves.
+
+  The tile write-back in `Mat_Mul_Range_Packed` narrows binary64 answers to
+  binary32, and what a profile put on top were the index compares guarding a
+  loop whose bounds the procedure proves at entry. Suppressed, with the
+  vector's base lifted out: **2.8 % of a prompt to 1.3**.
+
+  `Quantize_Blocks` scanned every block of activations for its largest
+  magnitude and for whether all thirty-two numbers are finite, one number at
+  a time — the same failure softmax's first pass had, in a different unit.
+  Written out as four reads of eight lanes: a bitwise and for the magnitude,
+  an ordered compare against infinity whose mask is accumulated, and a
+  maximum. **3.0 % to 1.8**.
+
+  Five per cent of the instructions bought ten of the time, which is what
+  removing scalar code from an otherwise wide program looks like.
+
+### Measured and not kept
+
+- **Prefetching the value cache: no effect** (6.927 s against 6.846, better
+  in two of four). **Two positions a turn in `Blend_Run`: worse in four of
+  four** (6.729 against 6.925) despite fewer instructions. `Blend_Run` takes
+  7 % of the samples on 2.4 % of the instructions and both attempts at the
+  memory-latency explanation failed, so the layout change they were run to
+  justify is not justified. The 7 % stands unexplained.
+
+- **A strip of twelve: priced at 1.5 %, not built.** The corrections grow
+  with the strip: twelve vectors is 113 instructions for 24 dot products
+  against 77 for 16, which is 4.71 per dot against 4.81 — two per cent of
+  the kernel for a shape needing fifteen of the sixteen general-purpose
+  registers. Eight vectors against two rows is a local optimum.
+
+- **A sixteen-bit load for the half-precision scales: fewer instructions, no
+  time.** Three instructions where six read the two bytes; 390.2 G to 386.5.
+  The symbol did not move (7.0 % to 7.3), so that loop is bound by its
+  strided reads and not by the instructions around them. Reverted rather
+  than carried.
+
 - **A strip of eight vectors instead of four: 8.5 % of a 1419-token prompt,
   better in four of four.** Instructions 449.2 G to 410.2. Every digest
   unchanged.
