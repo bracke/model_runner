@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The feed-forward gate's activation goes through the vectorized
+  exponential: 3.5 % of a long prompt and 3.9 % of a short one.**
+
+  Profiling by thread named the serial work: the main thread is busy 9.46 s
+  of a 9.54 s prompt against each worker's 6.24, and `SiLU` with its libm
+  calls is ~2 % of all samples on one thread — paid whole on the clock
+  rather than divided by eight.
+
+  The obvious remedy failed first and usefully. Giving the submitting task
+  half a share measured **3 % worse in five of five**, because the serial
+  work happens *between* dispatches, not inside one: a share cannot fix what
+  is not in a share. Reverted.
+
+  `SiLU` now uses the same polynomial as the softmax, hoisted into one
+  body-local `Raised` — inline, checks suppressed *inside* it, clamped at
+  both ends since its argument is unbounded. Suppressing in the callers left
+  a check and a call in the loop and cost both loops their vectorization.
+
+  **9.384 → 9.057 s (5 of 5) and 0.843 → 0.810 s (4 of 4).** Processor
+  prompt **183.6 t/s**, gap to llama.cpp **2.09×**, from 2.5 when the day
+  began. Sweep clean.
+
+- **Two instrument corrections.** A 110-token prompt reading 0.84 s against
+  0.62 was blamed on the gate change removing an accidental cool-down; it
+  was **two copies of the sitting script running at once**. The part sat at
+  95 °C while they fought and fell to 63 within twenty-five seconds of
+  killing them. And the repository checks can be run alone — `tests check ..
+  --repository`, eleven seconds against five minutes — which was in the
+  usage line all along.
+
 - **More than half of a processor prompt is what one core does alone, and a
   profile cannot see it.** Nothing changed; the measurement redirects the
   work.

@@ -1221,8 +1221,8 @@ All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself and at the arithmetic it chooses for itself. From the
 six-token prompt in `tests/fixtures/speed-prompt-short.txt`, twelve tokens
-take **0.455 s** -- 0.078 s evaluating the prompt and 0.377 s generating --
-and **1.65 s** of processor time, the median of three runs. Loading the model
+take **0.425 s** -- 0.067 s evaluating the prompt and 0.362 s generating --
+and **1.59 s** of processor time, the median of three runs. Loading the model
 costs a further **0.068 s** of wall that this figure does not include, and it
 used to cost 0.6 s: the weights are the file's own pages now rather than a
 copy of them, so what loading does is open a mapping and what reading them
@@ -1230,7 +1230,7 @@ costs is paid as they are touched.
 
 The arithmetic is half of that. `--arith int8` is the default and rounds the
 vector a product multiplies to a byte an element; the same run at `--arith
-f32`, taken back to back in the same sitting, is **1.304 s** for 8.62 s of
+f32`, taken back to back in the same sitting, is **1.136 s** for 8.34 s of
 processor time. What that costs is measured and bounded in `### Quantized
 activations` below, and it is why every figure in this section is worth
 reading twice: once as a time, and once as a statement about which of the two
@@ -1284,9 +1284,9 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. Taken back to back
-in the same sitting, the same run at fourteen threads takes **0.460 s** of
-wall against **0.455 s** at seven, and 1.88 s of processor time against
-1.65 s.
+in the same sitting, the same run at fourteen threads takes **0.452 s** of
+wall against **0.425 s** at seven, and 1.89 s of processor time against
+1.59 s.
 
 That is two per cent *worse* on the wall for fifteen per cent more processor
 time, where the sitting before read four per cent *off* the wall for ten per
@@ -1498,9 +1498,9 @@ tests speed --model MODEL --backend reference --max-tokens 4
 ```
 
 Four tokens from the short prompt, medians of three, taken back to back at a
-`cpu` spends 0.067 s evaluating the prompt and
-0.125 s generating; `reference` spends 5.671 s and 3.783 s. That is
-**forty-nine times** the work in total, eighty-five times on the prompt
+`cpu` spends 0.063 s evaluating the prompt and
+0.122 s generating; `reference` spends 5.726 s and 3.840 s. That is
+**fifty-two times** the work in total, ninety-one times on the prompt
 and thirty-one times on the generation, and the two print the same digest.
 
 The ratio doubled when the default arithmetic changed, and it is worth being
@@ -1545,12 +1545,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.445 s | **0.356 s** |
-| -- evaluating the prompt | 0.071 s | 0.064 s |
-| -- generating | 0.370 s | **0.291 s** |
-| -- processor time | 1.61 s | **0.04 s** |
-| 110-token prompt, nothing generated | 0.626 s | **0.140 s** |
-| -- processor time | 3.44 s | 0.16 s |
+| 6-token prompt, 12 generated | 0.439 s | **0.339 s** |
+| -- evaluating the prompt | 0.073 s | 0.057 s |
+| -- generating | 0.367 s | **0.281 s** |
+| -- processor time | 1.62 s | **0.02 s** |
+| 110-token prompt, nothing generated | 0.601 s | **0.155 s** |
+| -- processor time | 3.37 s | 0.17 s |
 
 All six cells were taken in one sitting on 2026-08-27, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -3821,6 +3821,65 @@ those two rather than as a constant of the program.
 Nothing was changed here. The next thing to do on the processor is in the
 serial half, and this is the measurement that says so.
 
+### The gate's activation, and what a share cannot fix
+
+`### The serial half` put fifteen per cent of a prompt in a part seven
+workers cannot reach. Profiling **by thread** says which part: the main
+thread is busy for 9.46 seconds of a 9.54 second prompt and each worker for
+6.24, and outside the strip kernel the main thread carries 8.7 per cent of
+all samples against a worker's 3.2. Named:
+
+| main thread only | share of all samples |
+|---|---:|
+| `quantize_vectors` | 1.54 % |
+| `SiLU` and the exponentials it calls | ~2.0 % |
+| `Multiply`, `mat_mul_range_packed` | 0.63 % |
+| `Apply_Rotary`, `RMS_Norm`, `Add` | 0.25 % |
+
+Small shares of a profile and large shares of a clock, because they are paid
+whole rather than divided among eight.
+
+**The obvious remedy is wrong, and its failure found the right one.** If the
+submitting task carries more than a worker, give it a smaller share -- half
+of one, the rest spread over the workers. That measured **three per cent
+worse, in five of five**. The reason is worth keeping: the serial work
+happens *between* dispatches, not inside one, so shrinking the submitter's
+share overlaps it with nothing and merely gives the workers more to do. A
+share cannot fix what is not in a share. Reverted.
+
+**What was kept.** `SiLU` is `Value / (1 + exp (-Value))` in binary64 with a
+library call an element. It now goes through the same polynomial the softmax
+got in `### The exponential the compiler could not see past`, hoisted into
+one body-local `Raised` so the constants exist once -- inline, and with the
+checks suppressed *inside* it. Suppressing them in the callers instead left
+an overflow check and a call in the loop and cost both of them their
+vectorization; the object file caught that before any measurement did.
+Clamped at both ends rather than one, because SiLU's argument is unbounded
+where a softmax's is not.
+
+| | before | after | |
+|---|---:|---:|---|
+| 1419-token prompt | 9.384 s | **9.057 s** | 3.5 %, five of five |
+| 110-token prompt | 0.843 s | **0.810 s** | 3.9 %, four of four |
+
+The processor's prompt reads **183.6 tokens a second** and the gap to
+llama.cpp on a prompt is **2.09 times**, from 2.5 when the day began.
+
+**And two mistakes about the instrument, both nearly published.** The
+110-token prompt read 0.84 s in one alternation and 0.62 in the sitting
+before it, and the conclusion drawn was that removing the load-average wait
+from the gate had removed an accidental cool-down. It had not: **two copies
+of the sitting script were running at once**, and the part sat at 95 degrees
+while they fought and fell to 63 within twenty-five seconds of killing them.
+Contention, not temperature. That is the third measurement this session
+spoiled by running something beside it, and the gate caught two of the three
+by refusing outright.
+
+The second: the repository checks can be run alone -- `tests check ..
+--repository`, eleven seconds against five minutes -- and that flag was in
+the usage line the whole time. A conformance sweep was run after every
+restamp for no reason at all.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has
@@ -3833,10 +3892,10 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **176.3 t/s** | 31.7 t/s |
-| llama.cpp, processor | 391.6 t/s | 40.4 t/s |
-| model_runner, device | 785.7 t/s | **40.8 t/s** |
-| llama.cpp, device | 1658.3 t/s | 56.4 t/s |
+| model_runner, processor | **183.6 t/s** | 32.6 t/s |
+| llama.cpp, processor | 383.2 t/s | 40.2 t/s |
+| model_runner, device | 709.7 t/s | **41.4 t/s** |
+| llama.cpp, device | 1652.8 t/s | 56.4 t/s |
 
 On the processor: **1.3 times slower generating and 2.3 times slower reading
 a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
@@ -3899,8 +3958,8 @@ llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.624 s
-and 64 in 2.017 s on the processor, 0.140 s and 1.568 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.599 s
+and 64 in 1.965 s on the processor, 0.155 s and 1.546 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -3913,8 +3972,8 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 762.8 t/s rather
-than 391.6 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 758.9 t/s rather
+than 383.2 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
@@ -3985,9 +4044,9 @@ All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.440 s | 37 ms a token |
-| the same model at two bits | 1.534 s | 128 ms a token |
-| the first, drafted by the second | 3.589 s | 24 proposed, 9 accepted |
+| TinyLlama-1.1B at eight bits | 0.449 s | 37 ms a token |
+| the same model at two bits | 1.616 s | 135 ms a token |
+| the first, drafted by the second | 3.456 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking
@@ -4000,19 +4059,19 @@ times, then three and a quarter, then three and two thirds, and is now
 three and a half; widening it does not change the sign either.
 
 The arithmetic, from the same three figures. Six rounds of four proposals
-cost 3.589 s, of which the draft's own twenty-four passes are 24 × 128 ms =
-3.07 s, leaving 0.52 s for six checks -- **87 ms to check five positions**,
+cost 3.456 s, of which the draft's own twenty-four passes are 24 × 135 ms =
+3.24 s, leaving 0.22 s for six checks -- **36 ms to check five positions**,
 against 37 ms for one token generated normally. A batch is one pass over the
 weights and the extra work is the output projection per position, which is
 why five positions cost about two tokens rather than five.
 
-So a round of K proposals costs `K × d + 87 ms` and yields `1 + a` tokens,
+So a round of K proposals costs `K × d + 36 ms` and yields `1 + a` tokens,
 against `(1 + a) × 36 ms` without a draft. At the acceptance measured here,
 about 1.2 of four, a round yields 2.2 tokens worth 79 ms and the check alone
-costs 87: no draft could pay at this acceptance, because the check alone
-costs more than the two and a half tokens a round yields. **That threshold
-has read 17, 10, 6, 9, 6, 4, 7 ms a token and now nothing at all across
-eight sittings of the same code**, because it is a difference of
+costs 36: a draft would have to cost under about 11 ms a token to pay, and
+the one here costs 135. **That threshold has read 17, 10, 6, 9, 6, 4, 7 ms
+a token, then nothing at all, and now 11 across nine sittings of the same
+code**, because it is a difference of
 two twelve-token runs and a twelve-token run is a third loading and warm-up.
 The conclusion is stable and the number is not: this draft costs an order of
 magnitude more than any of them. The check got a great

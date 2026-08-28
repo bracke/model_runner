@@ -608,58 +608,67 @@ package body Model_Runner.Kernels is
    -- Exponentiate --
    --------------------
 
-   procedure Exponentiate (Target : in out Real_Array; Less : Real) is
+   --  Two raised to a fraction in [-0.5, 0.5], to about the last bit
+   --  binary32 keeps, with the whole part built as an exponent field.
+   --
+   --  Shared by Exponentiate and SiLU rather than written twice, and inline
+   --  so that the loops around it stay one basic block and keep vectorizing:
+   --  a call in either would put them back on one lane, which is the whole
+   --  point of not calling the library's.
+   --
+   --  Clamped at both ends. Past eighty-seven either way the result is
+   --  outside what binary32 holds, and the exponent this builds would wrap
+   --  rather than saturate -- which for the softmax means a score far
+   --  behind the leader coming back ahead of it, and for SiLU a large
+   --  negative input coming back large instead of at zero.
+   function Raised (X : N.Real) return N.Real with Inline;
+
+   function Raised (X : N.Real) return N.Real is
       use type Interfaces.Unsigned_32;
 
-      --  Neither check can fire here and both stop the loop vectorizing:
-      --  the exponent is built from a value the floor below bounds, and the
-      --  index walks the array it was given.
+      --  Neither check can fire and both stop the loops around this
+      --  vectorizing: the clamp bounds what the exponent is built from,
+      --  and an overflow check is a branch and a call.
       pragma Suppress (Overflow_Check);
       pragma Suppress (Range_Check);
 
       function To_Real is
         new Ada.Unchecked_Conversion (Interfaces.Unsigned_32, N.Real);
 
-      --  One over the natural logarithm of two, and the floor below which
-      --  binary32 has nothing left to say.
       Log2_E : constant N.Real := 1.44269504088896;
-      Floor  : constant N.Real := -87.0;
+      Edge   : constant N.Real := 87.0;
+      Magic  : constant N.Real := 12_582_912.0;
 
-      --  Three halves of two raised to twenty-three. Adding it to a number
-      --  of this size and taking it away again rounds to the nearest whole
-      --  one, which is what the library call this replaces was doing and
-      --  the only part of it that could not be vectorized.
-      Magic : constant N.Real := 12_582_912.0;
-
-      --  Two raised to a fraction in [-0.5, 0.5], to about the last bit
-      --  binary32 keeps.
       C1 : constant N.Real := 0.693147180559945;
       C2 : constant N.Real := 0.240226506959101;
       C3 : constant N.Real := 0.055504108664822;
       C4 : constant N.Real := 0.009618129107629;
       C5 : constant N.Real := 0.001333355814643;
+
+      Held  : constant N.Real :=
+        N.Real'Min (N.Real'Max (X, -Edge), Edge) * Log2_E;
+      Whole : constant N.Real := (Held + Magic) - Magic;
+      F     : constant N.Real := Held - Whole;
+
+      P : constant N.Real :=
+        1.0 + F * (C1 + F * (C2 + F * (C3 + F * (C4 + F * C5))));
+
+      Bits : constant Interfaces.Unsigned_32 :=
+        Interfaces.Shift_Left
+          (Interfaces.Unsigned_32 (Integer (Whole) + 127), 23);
+   begin
+      return P * To_Real (Bits);
+   end Raised;
+
+   procedure Exponentiate (Target : in out Real_Array; Less : Real) is
+      --  Neither check can fire here and both stop the loop vectorizing:
+      --  the exponent is built from a value Raised bounds, and the index
+      --  walks the array it was given.
+      pragma Suppress (Overflow_Check);
+      pragma Suppress (Range_Check);
    begin
       for Index in Target'Range loop
-         declare
-            X : constant N.Real :=
-              N.Real'Max (Target (Index) - Less, Floor) * Log2_E;
-
-            Whole : constant N.Real := (X + Magic) - Magic;
-            F     : constant N.Real := X - Whole;
-
-            --  Two raised to the fraction, Horner from the top.
-            P : constant N.Real :=
-              1.0 + F * (C1 + F * (C2 + F * (C3 + F * (C4 + F * C5))));
-
-            --  And two raised to the whole part, built as an exponent.
-            --  Whole is between -126 and 0 for every value the floor lets
-            --  through, so the sum stays inside what the field holds.
-            Bits : constant Interfaces.Unsigned_32 :=
-              Interfaces.Shift_Left
-                (Interfaces.Unsigned_32 (Integer (Whole) + 127), 23);
-         begin
-            Target (Index) := P * To_Real (Bits);
-         end;
+         Target (Index) := Raised (Target (Index) - Less);
       end loop;
    end Exponentiate;
 
@@ -733,12 +742,23 @@ package body Model_Runner.Kernels is
    --  than the build allows or an approximation loose enough to change what
    --  models say, and the second is a decision rather than an optimization.
    procedure SiLU (Target : in out Real_Array) is
+      --  As in Exponentiate, and for the same reason.
+      pragma Suppress (Overflow_Check);
+      pragma Suppress (Range_Check);
    begin
+      --  In binary32 through the exponential above rather than in binary64
+      --  through the library's.
+      --
+      --  This one is worth more than its share of a profile suggests. The
+      --  gate's activation runs on the calling task while the workers wait,
+      --  so what it costs is paid once on the clock rather than divided
+      --  among eight: it is about two per cent of a prompt's samples and
+      --  eleven per cent of a prompt's seconds.
       for Index in Target'Range loop
          declare
-            Value : constant Wide_Real := Wide_Real (Target (Index));
+            Value : constant Real := Target (Index);
          begin
-            Target (Index) := Real (Value / (1.0 + N.Exp (-Value)));
+            Target (Index) := Value / (1.0 + Raised (-Value));
          end;
       end loop;
    end SiLU;
