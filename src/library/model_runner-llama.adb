@@ -3026,7 +3026,6 @@ package body Model_Runner.Llama is
 
       for Head in From_Head .. To_Head loop
          declare
-            Group    : constant Element_Count := Head / Group_Size;
             At_Score : constant Element_Count :=
               Scores'First + Head * Score_Room;
             Usable   : Boolean;
@@ -3069,56 +3068,101 @@ package body Model_Runner.Llama is
                return;
             end if;
 
-            --  A component at a time was one pass over the whole cache per
-            --  component: the values of a position are contiguous, so
-            --  holding the component still and walking the steps reads
-            --  every V_Width'th element and touches a cache line for each
-            --  one of them. Holding a run of components instead and walking
-            --  the steps once reads them where they lie.
-            --
-            --  A run at a time rather than all of them because the run is
-            --  on the stack and a head's width is a model's to choose.
-            --
-            --  Summed in binary32 and not the binary64 this once kept. The
-            --  loop is a map, which -O3 vectorizes unasked, so here the
-            --  format is the lane count: mulps and addps do eight where
-            --  mulpd and addpd did four. It is the argument the score dot
-            --  product above makes and it is answered the same way -- the
-            --  device has always blended these values in binary32, and one
-            --  bound holds both backends.
-            declare
-               Run : constant Element_Count := 64;
-               At_Component : Element_Count := 0;
-            begin
-               while At_Component < Value_Size loop
-                  declare
-                     Here : constant Element_Count :=
-                       Element_Count'Min (Run, Value_Size - At_Component);
-                     Sums : Real_Array (0 .. Here - 1) := [others => 0.0];
-                  begin
-                     K.Blend_Run
-                       (Sums      => Sums,
-                        Weights   => Scores,
-                        At_Weight => At_Score + First,
-                        Values    => Values,
-                        At_Value  =>
-                          Values'First + V_Base + First * V_Width
-                          + Group * Value_Size + At_Component,
-                        Stride    => V_Width,
-                        Steps     => Last - First + 1);
+         end;
+      end loop;
 
+      --  The blend, with the positions outside the heads.
+      --
+      --  Eight heads share one key head's values -- that is what a grouped
+      --  query is -- so the shape this replaces read the same values eight
+      --  times over, once for each head that wanted them, and a whole
+      --  position range is far larger than the nearest cache. A tile of
+      --  sixteen positions is sixteen kilobytes of values against
+      --  thirty-two of cache, and every head after the first reads them
+      --  where the first left them.
+      --
+      --  It is the same argument the score loop above makes about eight
+      --  positions at a time, made about the other half of attention. What
+      --  it costs is the accumulators: they live in memory between tiles
+      --  rather than only at the ends, which is a load and a store of each
+      --  every sixteen positions.
+      --
+      --  A run of components at a time rather than all of them because the
+      --  run is on the stack and a head's width is a model's to choose;
+      --  summed in binary32 and not the binary64 this once kept, for the
+      --  reason the score dot product gives.
+      declare
+         Run   : constant Element_Count := 64;
+         Rooms : constant Element_Count := To_Head - From_Head + 1;
+
+         --  A tile only where there is something to reuse. A tile costs a
+         --  load and a store of every accumulator at each of its ends, and
+         --  buys the second and later heads their values out of the nearest
+         --  cache; a range short enough to sit in that cache whole has
+         --  nothing to buy and pays anyway. Generating is the case: a run
+         --  of sixty-four tokens looks back over seventy positions and lost
+         --  a fifth of itself to tiles it did not need.
+         Tile  : constant Element_Count :=
+           (if Last - First + 1 <= 128 then Last - First + 1 else 16);
+
+         At_Component : Element_Count := 0;
+      begin
+         while At_Component < Value_Size loop
+            declare
+               Here : constant Element_Count :=
+                 Element_Count'Min (Run, Value_Size - At_Component);
+
+               Sums : Real_Array (0 .. Rooms * Here - 1) := [others => 0.0];
+
+               At_Step : Element_Count := First;
+            begin
+               while At_Step <= Last loop
+                  declare
+                     Take : constant Element_Count :=
+                       Element_Count'Min (Tile, Last - At_Step + 1);
+                  begin
+                     for Head in From_Head .. To_Head loop
+                        declare
+                           Group : constant Element_Count :=
+                             Head / Group_Size;
+                           Mine  : constant Element_Count :=
+                             (Head - From_Head) * Here;
+                        begin
+                           K.Blend_Run
+                             (Sums      => Sums (Mine .. Mine + Here - 1),
+                              Weights   => Scores,
+                              At_Weight =>
+                                Scores'First + Head * Score_Room + At_Step,
+                              Values    => Values,
+                              At_Value  =>
+                                Values'First + V_Base + At_Step * V_Width
+                                + Group * Value_Size + At_Component,
+                              Stride    => V_Width,
+                              Steps     => Take);
+                        end;
+                     end loop;
+
+                     At_Step := At_Step + Take;
+                  end;
+               end loop;
+
+               for Head in From_Head .. To_Head loop
+                  declare
+                     Mine : constant Element_Count :=
+                       (Head - From_Head) * Here;
+                  begin
                      for Component in 0 .. Here - 1 loop
                         Target (Target'First + Head * Value_Size
                                 + At_Component + Component) :=
-                          Sums (Component);
+                          Sums (Mine + Component);
                      end loop;
-
-                     At_Component := At_Component + Here;
                   end;
                end loop;
+
+               At_Component := At_Component + Here;
             end;
-         end;
-      end loop;
+         end loop;
+      end;
    end Blend_Exact;
 
    --  Put one position's keys and values where a device can read them.

@@ -5,6 +5,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **The blend reads a tile of positions with the heads inside: 3.7 % of a
+  1419-token prompt, better in four of four.** Cache misses 2.56 G to 1.48,
+  instructions +1.7 %, `blend_run` from 7.8 % of the prompt's cycles to 5.6.
+  No digest moves.
+
+  Eight heads share one key head's values, so the shape this replaces read
+  the same values eight times over, once for each head that wanted them, over
+  a range far larger than L1. A tile of sixteen positions is 16 KB of values
+  against 32 of cache, and every head after the first reads them where the
+  first left them. It is the argument the score loop has made about eight
+  positions at a time since long before this, made about the other half of
+  attention.
+
+  This is what the head-major copy of the previous commit was missing: that
+  also cut the misses, to within noise of this, and bought nothing — because
+  1.45 MB is L2 and this is L1. The counter run that told them apart was the
+  one showing 79 % of the blend's slots stalled behind dispatch with the
+  front end idle.
+
+  **Generating pays 1 %**, worse in three of three: a tile costs a load and a
+  store of every accumulator at each end and buys nothing where the range
+  already sits in cache. The first version lost a fifth of the generating run
+  before a guard was put on ranges under 128 positions.
+
 ### Measured
 
 - **The strip kernel is at its arithmetic floor.** IPC 3.25, with 0.6 % of
