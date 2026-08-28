@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The 512-bit byte dot product is 2.12x the 256-bit one, and the kernel
+  built on it is 11.5 % slower.** Nothing kept; both measurements are.
+
+  A scratch program timing nothing but byte dot products: **152 giga
+  multiply-adds a second at 256 bits, 324 at 512**, for the same instruction
+  count in the same time. It is *not* double-pumped — which the earlier
+  entry on this idea guessed and got wrong — and the kernel had room for it,
+  issuing 39 instructions per 256 multiply-adds where the peak is one per
+  32.
+
+  So it was built: two rows into one register with `vinserti64x4`, the
+  activation duplicated with `vbroadcasti64x4`, and the per-block scale
+  expanded by `vpermps` rather than by a table sixteen times the size.
+  **Median 8.275 → 9.228 s, worse in five of five.**
+
+  The counters rule out the obvious excuse. 190.1 G cycles and 550.0 G
+  instructions become **206.7 G cycles and 532.5 G instructions** — fewer
+  instructions in more cycles, IPC 2.89 → 2.58 — and cycles a second is
+  1.3 % *higher* on the wide build, so there is no AVX-512 throttling here.
+  The instructions that feed the wide dot product cost more than the dot
+  products they save.
+
+  Same shape as the device's cooperative matrix: an instruction worth having
+  that the data's layout cannot feed. Making it pay means interleaving
+  several rows' quants at load — a change to what a file becomes, not to a
+  loop.
+
 - **The packing of a batch is shared between the workers: 6.3 % of a
   processor prompt, bit for bit.** The prompt gap to llama.cpp goes under
   two times for the first time — **206.8 t/s against 386.4, 1.87×**, from

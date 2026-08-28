@@ -9429,3 +9429,67 @@ outside 5CB684E62A2666B0 src/shaders/row_product.comp src/shaders/matrix_product
 # llama.cpp on a prompt is 1.87 times -- under two for the first time, from
 # 2.5 when the day began.
 
+# 2026-08-28, last.  The wide byte product: 2.12x in isolation, slower in place
+#
+# The strip kernel is sixty-nine and a half per cent of a processor prompt
+# and four changes have failed to move it. What had never been asked is
+# whether the instruction itself is the ceiling.
+#
+# THE PROBE, a scratch program outside the repository timing nothing but
+# byte dot products, four independent chains, two hundred million turns:
+#
+#   256-bit vpdpbusd   152 giga-multiply-adds a second   0.168 s
+#   512-bit vpdpbusd   324                               0.158 s
+#
+# The same instruction count in the same time for twice the bytes: 2.12x,
+# agreeing to six tenths of a per cent across rounds. It is NOT
+# double-pumped, which the 2026-08-27 entry on the 512-bit idea guessed
+# without measuring and got wrong.
+#
+# And the kernel had room. 3.1e12 multiply-adds in a 1419-token prompt over
+# eight cores is about 67 giga a core inside this symbol against the
+# instruction's 152; it issues thirty-nine instructions for two hundred and
+# fifty-six multiply-adds where the peak is one for thirty-two.
+#
+# THE KERNEL, AND IT LOST. Two rows' blocks into one register with
+# vinserti64x4 taking its second operand from memory, the activation
+# duplicated into both halves with vbroadcasti64x4, and the per-block scale
+# -- a broadcast for one row and impossible as one for two -- expanded from
+# the existing eight-float table by vpermps rather than by storing sixteen
+# floats a vector, which would have made the table a quarter of a megabyte
+# on the stack.
+#
+#   round 1   8.271 -> 8.823      round 4   8.790 -> 9.228
+#   round 2   8.275 -> 9.243      round 5   8.327 -> 9.265
+#   round 3   8.130 -> 9.180
+#
+# Median 8.275 -> 9.228, eleven and a half per cent worse, worse in five of
+# five. Bit for bit -- cbf29ce484222325 -- because the products and their
+# grouping into lanes are unchanged.
+#
+# AND THE COUNTERS RULE OUT THE OBVIOUS EXCUSE:
+#
+#                cycles      instructions     IPC     time
+#   256-bit      190.1 G     550.0 G          2.89    9.051 s
+#   512-bit      206.7 G     532.5 G          2.58    9.718 s
+#
+# Fewer instructions in more cycles. And cycles a second is 21.27 G against
+# 21.00 -- one and a third per cent HIGHER on the wide build -- so there is
+# no AVX-512 frequency penalty on this part for this code, which was the
+# first thing to suspect and is not what happened.
+#
+# What happened is that the instructions feeding the wide dot product cost
+# more than the dot products they save: vpermps is a cross-lane permute and
+# there are four of those a block, beside four vbroadcasti64x4 and a
+# vinserti64x4.
+#
+# THE SHAPE OF THIS RESULT is the device's cooperative matrix again -- an
+# instruction worth having that the layout cannot feed. Making it pay means
+# interleaving several rows' quants so that one wide load is one wide
+# operand, which is what the other runtime's repacked formats are for, and
+# that is a change to what a file becomes at load rather than to a loop. It
+# is the largest thing this file has left to try on the processor and it is
+# not started.
+#
+# No source changed.
+

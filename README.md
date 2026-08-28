@@ -3923,6 +3923,68 @@ whole.
 llama.cpp on a prompt is 1.87 times** -- under two for the first time, from
 2.5 when the day began.
 
+### The instruction is twice as fast and the kernel is slower
+
+The strip kernel is **sixty-nine and a half per cent** of a processor prompt
+and four changes have failed to move it. `### What the strip kernel is short
+of` established what it is not bound by; what it had never been asked is
+whether the *instruction* is the ceiling.
+
+**It is not, and by a wide margin.** A scratch program timing nothing but
+byte dot products, four independent chains, on this host:
+
+| | giga-multiply-adds a second | time for the same instruction count |
+|---|---:|---:|
+| 256-bit `vpdpbusd` | 152 | 0.168 s |
+| **512-bit `vpdpbusd`** | **324** | 0.158 s |
+
+**A `zmm` byte dot product costs what a `ymm` one costs and does twice the
+work** -- 2.12 times, agreeing to six tenths of a per cent across rounds. It
+is not double-pumped, which is what the entry on the 512-bit idea guessed
+without measuring and got wrong.
+
+And the arithmetic said the kernel had room for it: 3.1e12 multiply-adds in
+a 1419-token prompt over eight cores is about 67 giga a core inside this
+symbol, against the instruction's 152. It issues **thirty-nine instructions
+for two hundred and fifty-six multiply-adds** where the peak is one for
+thirty-two.
+
+**So it was built, and it lost.** Two rows' blocks into one register with
+`vinserti64x4`, the activation duplicated into both halves with
+`vbroadcasti64x4`, and the per-block scale -- which is a broadcast for one
+row and cannot be for two -- expanded from the existing table by `vpermps`
+rather than by storing a table sixteen times the size.
+
+| | before | after |
+| --- | ---: | ---: |
+| median of five | 8.275 s | **9.228 s** |
+| | | worse in five of five |
+
+**Eleven and a half per cent slower.** And the counters say exactly why, and
+rule out the obvious excuse:
+
+| | cycles | instructions | IPC |
+|---|---:|---:|---:|
+| 256-bit | 190.1 G | 550.0 G | 2.89 |
+| 512-bit | 206.7 G | **532.5 G** | 2.58 |
+
+**Fewer instructions in more cycles, and no clock effect at all** --
+cycles a second is one and a third per cent *higher* on the wide build, so
+Zen 4 is not throttling for AVX-512 here. The instructions that feed the
+wide dot product simply cost more than the dot products they save:
+`vpermps` is a cross-lane permute, and there are four of those, four
+`vbroadcasti64x4` and a `vinserti64x4` for every block.
+
+That is the same shape as `### And the matrix instruction, which lost` on
+the device: an instruction worth having that the data's layout cannot feed.
+Making it pay would mean changing the layout -- interleaving several rows'
+quants so that one wide load is one wide operand, which is what the other
+runtime's repacked formats are for -- and that is a change to what a
+file becomes at load, not to a loop.
+
+Reverted. The measurement is what is kept: **the wide instruction is worth
+2.12 times and this kernel cannot reach it from the layout it reads.**
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has
