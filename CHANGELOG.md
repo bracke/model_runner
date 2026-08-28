@@ -5,6 +5,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **A device prompt is 40 % attention.** The first look inside the device
+  path, using the per-phase times the engine has always kept and `--budget`
+  prints, with a generation-only run subtracted: attending 0.907 s (40 %),
+  feeding 0.520 (23 %), projecting 0.375 (16 %), rotating 0.206 (9 %),
+  joining 0.176 (8 %), normalizing 0.084 (4 %) on the 1419-token prompt.
+
+  Not where the processor's shape would suggest — there the matrix products
+  are two thirds and attention a seventh. The device turns the products into
+  one matrix multiply a layer against its matrix instruction and they fall to
+  a third between them, leaving attention, which is quadratic in the context.
+
+  **And 9 % of a device prompt runs on the processor**: a profile of the run
+  shows `rms_norm`, `memmove`, `add` and `apply_rotary` and no attention
+  symbols at all — so attention is on the device where it belongs, and the
+  rotation and the cache writes are not.
+
 ### Added
 
 - **The blend reads a tile of positions with the heads inside: 3.7 % of a

@@ -10285,3 +10285,31 @@ outside D129F9EE7629D361 src/shaders/row_product.comp src/shaders/matrix_product
 # THE PROCESSOR'S PROMPT READS 252.9 TOKENS A SECOND and the gap to
 # llama.cpp on a prompt is 1.32 times, from 2.5 when this began.
 
+# 2026-08-28  Where a device prompt's time goes
+#
+#   No code changed, so no figure group moved.
+#
+#   The device's gap on a prompt is 2.48 times against the processor's 1.32,
+#   and nobody had opened it because perf cannot see inside a device. The
+#   engine's own per-phase times can, and --budget prints them. A device run
+#   of the 1419-token prompt generates twelve tokens after it; subtracting a
+#   six-token prompt with the same twelve leaves the prompt.
+#
+#     attending     0.907 s   40%
+#     feeding       0.520 s   23%
+#     projecting    0.375 s   16%
+#     rotating      0.206 s    9%
+#     joining       0.176 s    8%
+#     normalizing   0.084 s    4%
+#
+#   Attention is the largest phase and not close, which is not the
+#   processor's shape at all -- there the matrix products are two thirds and
+#   attention a seventh. The device turns the products into one matrix
+#   multiply a layer against its matrix instruction and they fall to a third
+#   between them, leaving attention and its square.
+#
+#   A perf record of the same run shows what the processor does during it:
+#   rms_norm 23.8 per cent, memmove 13.6, add 10.7, apply_rotary 4.7,
+#   encode_plain 3.3. No attention symbols, so attention is on the device;
+#   the rotation and the cache writes are not, and that is the nine per cent.
+

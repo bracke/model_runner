@@ -4706,6 +4706,46 @@ guard was put on it; what is left is the shape of the loop rather than the
 tiles, and the trade is three and seven tenths per cent of a prompt for one
 of a token.
 
+### Where a device prompt's time goes
+
+The processor's gap to llama.cpp on a prompt is 1.32 times and the device's
+is 2.48. That has been the widest number in this file for a while and nobody
+had opened it, because `perf` cannot see inside a device and the reflex is to
+reach for `perf`. The engine has kept per-phase times all along, and
+`--budget` prints them.
+
+A device run of the 1419-token prompt generates twelve tokens after it, so
+the phases are the two together. Subtracting a six-token prompt with the same
+twelve generated leaves the prompt:
+
+| | prompt | share |
+| --- | ---: | ---: |
+| attending | **0.907 s** | **40 %** |
+| feeding | 0.520 s | 23 % |
+| projecting | 0.375 s | 16 % |
+| rotating | 0.206 s | 9 % |
+| joining | 0.176 s | 8 % |
+| normalizing | 0.084 s | 4 % |
+
+**Attention is the largest phase of a device prompt and it is not close.**
+That is not where the reading of the last several sections would have put it:
+on the processor the matrix products are two thirds of a prompt and attention
+is a seventh. The device turns the products into one matrix multiply per
+layer against its matrix instruction and they fall to a third between them,
+which leaves attention -- quadratic in the context, and the one part of a
+layer that a longer prompt makes worse rather than merely bigger.
+
+**And a device prompt still spends nine per cent of itself on the
+processor.** A profile of the run agrees: what the processor does during it
+is `rms_norm`, `memmove`, `add` and `apply_rotary` -- normalization, the
+residual adds, the cache writes and the rotation. Attention itself does not
+appear, so it is on the device where it should be; the rotation and the cache
+write are not, and that is nine per cent sitting in the wrong place.
+
+Two things to try, in that order, and neither is small: attention as one
+shader over a tile of queries rather than what it is now, and the rotation
+moved to where the values it rotates already are.
+
 ### A slower day, measured on both sides
 
 The figures in this section were re-taken twice, because the first sitting
