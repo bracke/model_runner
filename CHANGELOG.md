@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **More than half of a processor prompt is what one core does alone, and a
+  profile cannot see it.** Nothing changed; the measurement redirects the
+  work.
+
+  The same 1419-token prompt at one, two, four and seven workers: **34.606,
+  16.860, 12.249 and 9.540 s**, for speedups of 1.00, 2.05, 2.83 and 3.63.
+  Amdahl fitted to the four- and seven-worker points gives a **15 % serial
+  fraction** and predicts 3.63x at seven — exactly what it reaches, so the
+  wall clock is fully explained and the run is at its ceiling.
+
+  Fifteen per cent of the one-worker time is 5.19 s against a 9.54 s prompt,
+  so **54 % of a seven-worker prompt is one core working alone**. Halving
+  the strip kernel — which four changes have now failed to do — would buy
+  22 %; removing the serial part would buy 54 %.
+
+  `perf` reports where instructions are, summed over eight threads, and by
+  that measure the strip kernel is 61 % and the serial loops are a few per
+  cent each. That is why those four changes went to the wrong place.
+
+  The two-worker row is superlinear (2.05x on two) and the model
+  under-predicts it, which is a second core's share of cache; the fit is to
+  four and seven for that reason.
+
 - **A run of attention scores in one call instead of one score at a time:
   8.8 % of a processor prompt, better in five of five.** The largest single
   change here since the batched product.

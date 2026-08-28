@@ -3766,6 +3766,61 @@ The sweep is the arbiter, and a test compares **every score of a run**
 against the one `Head_Dot` gives for the same key -- which catches a
 permutation of the fold, where a comparison of totals would not.
 
+### The serial half
+
+`### The instructions that were free` and `### What the strip kernel is
+short of` between them established that the largest symbol in the program --
+sixty-one per cent of a prompt's samples -- is bound by neither its
+instruction count, nor its chain latency, nor the weight bytes, and that the
+machine runs it at three instructions a cycle without stalling. Every
+attempt to make it faster has measured level or worse.
+
+This asks a question none of those did: **how much of a prompt can seven
+workers reach at all.** The same 1419-token prompt at one, two, four and
+seven:
+
+| workers | wall | processor | speedup | efficiency |
+|---|---:|---:|---:|---:|
+| 1 | 34.606 s | 35.58 s | 1.00x | 100 % |
+| 2 | 16.860 s | 45.45 s | 2.05x | 103 % |
+| 4 | 12.249 s | 50.77 s | 2.83x | 71 % |
+| 7 | **9.540 s** | 53.12 s | **3.63x** | 52 % |
+
+Amdahl fitted to the four- and seven-worker points gives a **serial fraction
+of fifteen per cent** and predicts 3.63 times at seven, which is exactly
+what it reaches. The prompt is *at* its ceiling: the wall clock is fully
+explained by the part that does not share.
+
+**And that part is now the larger half of the run.** Fifteen per cent of the
+one-worker time is 5.19 s, and the whole prompt at seven workers is 9.54 s:
+
+| | of a seven-worker prompt |
+|---|---:|
+| what one core does alone | **54 %** |
+| what seven cores do together | 46 % |
+
+Halving the strip kernel -- the thing four changes have now failed to do --
+would take the prompt from 9.54 s to about 7.4. Removing the serial part
+would take it to 4.35.
+
+**A profile cannot see this**, which is why those four changes went to the
+wrong place. `perf` reports where instructions are, summed over eight
+threads, and by that measure the strip kernel is sixty-one per cent and the
+serial loops are a few per cent each. The serial part is one thread's worth
+of samples and more than half of the clock. `### One core, and seven idle`
+found the same shape on the device and named the blocker as one scratch
+array shared between shares; the joining phase has had per-share scratch
+since, and this says there is more of it left than that entry accounted for.
+
+The two-worker row is worth a note: 2.05 times on two workers is superlinear
+and the model under-predicts it by three seconds, which is what a second
+core's share of cache looks like. The fit is to four and seven for that
+reason, and the fifteen per cent should be read as the number that explains
+those two rather than as a constant of the program.
+
+Nothing was changed here. The next thing to do on the processor is in the
+serial half, and this is the measurement that says so.
+
 ### Against llama.cpp
 
 Nothing here delegates to another runtime, and the comparison with one has

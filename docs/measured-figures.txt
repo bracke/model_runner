@@ -9221,3 +9221,55 @@ outside BD668BE86FABDA09 src/shaders/row_product.comp src/shaders/matrix_product
 # before it this one does show on the 110-token prompt as well, because a
 # fold is paid once a score whatever the context length is.
 
+# 2026-08-28, last.  The serial half
+#
+# The plan was a shorter dependent chain in the strip kernel. It does not
+# survive: the chain is per block because the scale is per block, and a
+# scale every thirty-two quants is what Q8_0 is -- sharing one across
+# blocks means requantizing, which is a different format and not a
+# different kernel. The same wall the 512-bit idea hit. And the ablation in
+# the entry above already argues the chain is not binding, since lengthening
+# it by a whole extra vpdpbusd cost no measurable cycles.
+#
+# So the question became one none of the four attempts on that kernel had
+# asked: how much of a prompt can seven workers reach at all. The same
+# 1419-token prompt at one, two, four and seven:
+#
+#   workers   wall        processor   speedup   efficiency
+#   1         34.606 s    35.58 s     1.00x     100 %
+#   2         16.860 s    45.45 s     2.05x     103 %
+#   4         12.249 s    50.77 s     2.83x      71 %
+#   7          9.540 s    53.12 s     3.63x      52 %
+#
+# Amdahl fitted to the four and seven worker points gives a serial fraction
+# of fifteen per cent and predicts 3.63x at seven, which is what it reaches.
+# The prompt is at its ceiling and the wall clock is fully explained by the
+# part that does not share.
+#
+# THAT PART IS THE LARGER HALF. Fifteen per cent of the one-worker time is
+# 5.19 s and the whole seven-worker prompt is 9.54 s, so fifty-four per cent
+# of it is one core working alone and forty-six is seven cores together.
+# Halving the strip kernel -- which four changes have failed to do -- would
+# take 9.54 s to about 7.4. Removing the serial part would take it to 4.35.
+#
+# WHY FOUR CHANGES WENT TO THE WRONG PLACE. perf reports where instructions
+# are, summed over eight threads. By that measure the strip kernel is
+# sixty-one per cent and the serial loops are a few per cent each. The
+# serial part is one thread's worth of samples and more than half of the
+# clock, and no profile taken this way can say so. That is the fourth
+# instrument this file has had to correct, after the phase counters, the
+# load average, and the doubling.
+#
+# The two-worker row is superlinear -- 2.05x on two workers, three seconds
+# faster than the model -- which is a second core's share of cache. The fit
+# is to four and seven for that reason, and fifteen per cent should be read
+# as the number explaining those two rather than a constant of the program.
+#
+# A NOTE ON HOW NEARLY THIS WAS SPOILED. The first attempt at this sweep ran
+# beside two `tests check` runs and every one of its twelve runs was refused
+# by the gate rewritten earlier today. That is the gate working: it declined
+# to publish a figure taken on a machine this session was itself keeping
+# busy, and the numbers above were taken again with nothing else running.
+#
+# No source changed.
+
