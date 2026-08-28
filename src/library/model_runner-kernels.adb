@@ -1478,9 +1478,11 @@ package body Model_Runner.Kernels is
    -- Apply_Rotary --
    -------------------
 
-   procedure Apply_Rotary
+   procedure Apply_Rotary_Pair
      (Vector          : in out Real_Array;
       Heads           : Element_Count;
+      Second          : in out Real_Array;
+      Second_Heads    : Element_Count;
       Head_Size       : Element_Count;
       Rotary          : Element_Count;
       Position        : Natural;
@@ -1529,12 +1531,22 @@ package body Model_Runner.Kernels is
       Pairs   : constant Element_Count := Rotary / 2;
       Run     : constant Element_Count := 128;
       At_Pair : Element_Count := 0;
+
    begin
       if Heads = 0 or else Head_Size = 0 or else Rotary = 0
         or else Rotary > Head_Size
         or else Rotary mod 2 /= 0
         or else Vector'Length /= Heads * Head_Size
         or else Base <= 0.0
+      then
+         return;
+      end if;
+
+      --  A second vector of no heads is the single-vector call, which is
+      --  what Apply_Rotary below asks for. One of the wrong length is a
+      --  caller's mistake and refuses the whole call rather than half of it.
+      if Second_Heads /= 0
+        and then Second'Length /= Second_Heads * Head_Size
       then
          return;
       end if;
@@ -1663,9 +1675,78 @@ package body Model_Runner.Kernels is
                end;
             end loop;
 
+            --  And the second vector against the same table, written out
+            --  rather than shared with the loop above.
+            --
+            --  The two vectors a position rotates -- its queries and its
+            --  keys -- turn by the same angles, and the table is the
+            --  expensive part: a power, a cosine and a sine a pair, which
+            --  is a third of what the rotation costs. Computing it once
+            --  rather than twice is what this is for.
+            --
+            --  Factored into a procedure the two could share, the
+            --  processor's prompt lost six per cent and inlining it did not
+            --  give them back: the loop stopped being one the compiler
+            --  could see the bounds of. So the loop is written twice and
+            --  the table once, which is the way round that measures.
+            for Head in 0 .. Second_Heads - 1 loop
+               declare
+                  Origin : constant Element_Count :=
+                    Second'First + Head * Head_Size;
+               begin
+                  for Index in 0 .. Here - 1 loop
+                     declare
+                        Pair   : constant Element_Count := At_Pair + Index;
+                        Even   : constant Element_Count :=
+                          (if Pairing = Interleaved
+                           then Origin + 2 * Pair
+                           else Origin + Pair);
+                        Odd    : constant Element_Count :=
+                          (if Pairing = Interleaved
+                           then Even + 1
+                           else Even + Pairs);
+                        Ahead  : constant Wide_Real :=
+                          Wide_Real (Second (Even));
+                        Behind : constant Wide_Real :=
+                          Wide_Real (Second (Odd));
+                     begin
+                        Second (Even) :=
+                          Real (Ahead * Cosines (Index)
+                                - Behind * Sines (Index));
+                        Second (Odd) :=
+                          Real (Ahead * Sines (Index)
+                                + Behind * Cosines (Index));
+                     end;
+                  end loop;
+               end;
+            end loop;
+
             At_Pair := At_Pair + Here;
          end;
       end loop;
+   end Apply_Rotary_Pair;
+
+   ------------------
+   -- Apply_Rotary --
+   ------------------
+
+   procedure Apply_Rotary
+     (Vector          : in out Real_Array;
+      Heads           : Element_Count;
+      Head_Size       : Element_Count;
+      Rotary          : Element_Count;
+      Position        : Natural;
+      Base            : Wide_Real;
+      Scaling         : Rotary_Scaling := No_Scaling;
+      Factors         : Real_Array := No_Factors;
+      Pairing         : Rotary_Pairing := Interleaved;
+      Backwards       : Boolean := False)
+   is
+      Nothing : Real_Array (1 .. 0);
+   begin
+      Apply_Rotary_Pair
+        (Vector, Heads, Nothing, 0, Head_Size, Rotary, Position, Base,
+         Scaling, Factors, Pairing, Backwards);
    end Apply_Rotary;
 
    -----------------

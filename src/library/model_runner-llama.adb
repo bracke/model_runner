@@ -6583,16 +6583,14 @@ package body Model_Runner.Llama is
                         Settings.Epsilon, Item.Head_Row.all);
                   end if;
 
-                  K.Apply_Rotary
-                    (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
-                     Element_Count (Settings.Rotary),
-                     Item.Committed + Natural (Which),
-                     Turn_Base (Settings, Natural (Index)),
-                     Settings.Scaling, Turns (Source),
-                     Settings.Pairing);
-                  K.Apply_Rotary
-                    (Keys.all (KV_At .. KV_At + KV_Width - 1),
-                     KV_Heads, Head_Size, Element_Count (Settings.Rotary),
+                  --  The queries and the keys of this position turn by
+                  --  the same angles, so the table is computed once for
+                  --  both. Two calls computed it twice, and the table is
+                  --  a power, a cosine and a sine a pair.
+                  K.Apply_Rotary_Pair
+                    (Query.all (Q_At .. Q_At + Wide - 1), Heads,
+                     Keys.all (KV_At .. KV_At + KV_Width - 1), KV_Heads,
+                     Head_Size, Element_Count (Settings.Rotary),
                      Item.Committed + Natural (Which),
                      Turn_Base (Settings, Natural (Index)),
                      Settings.Scaling, Turns (Source),

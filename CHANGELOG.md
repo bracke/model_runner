@@ -5,6 +5,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **One table of angles for a position's two rotations: 23 % off the rotating
+  phase and 6.5 % off a device prompt**, better in three of three, with 1.5 %
+  off the processor's prompt too. Every digest unchanged — the same angles by
+  the same expressions, and a pair touches two elements of one head that no
+  other pair or head touches.
+
+  A position rotates its queries and its keys by the same angles and each
+  call computed the table again; a power, a cosine and a sine a pair are the
+  most expensive arithmetic in that package.
+
+  **The loop is written out twice on purpose.** Factored into a nested
+  procedure the two vectors share, the processor lost 6 % of a prompt and
+  `pragma Inline_Always` did not give it back: the loop stopped being one the
+  compiler could see the bounds of. The comment beside it says so.
+
 ### Measured
 
 - **A device prompt's 9 % on the processor is arithmetic, not transfer.**

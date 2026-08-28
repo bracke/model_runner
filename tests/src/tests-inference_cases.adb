@@ -5900,6 +5900,97 @@ package body Tests.Inference_Cases is
       Assert (Seen = 2, "a byte kernel was not compared");
    end Both_Byte_Kernels_Agree;
 
+   --  Rotating a position's queries and its keys together is what rotating
+   --  them apart gives, to the bit: the angles are the same for both and the
+   --  pair call computes them once.
+   procedure Both_Rotations_Agree
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package MK renames Model_Runner.Kernels;
+
+      Heads     : constant N.Element_Count := 4;
+      Key_Heads : constant N.Element_Count := 2;
+      Head_Size : constant N.Element_Count := 16;
+      Rotary    : constant N.Element_Count := 16;
+
+      function Made (Count : N.Element_Count) return N.Real_Array;
+
+      function Made (Count : N.Element_Count) return N.Real_Array is
+         Out_Of : N.Real_Array (0 .. Count * Head_Size - 1);
+      begin
+         for Index in Out_Of'Range loop
+            Out_Of (Index) :=
+              N.Real (Integer (Index) mod 13) * 0.25 - 1.5;
+         end loop;
+         return Out_Of;
+      end Made;
+
+      Seen : Natural := 0;
+   begin
+      for Place in 0 .. 3 loop
+         for Pairing in MK.Rotary_Pairing'Range loop
+            declare
+               Query_Apart : N.Real_Array := Made (Heads);
+               Key_Apart   : N.Real_Array := Made (Key_Heads);
+               Query_Pair  : N.Real_Array := Made (Heads);
+               Key_Pair    : N.Real_Array := Made (Key_Heads);
+
+               Position : constant Natural := Place * 37;
+            begin
+               MK.Apply_Rotary
+                 (Query_Apart, Heads, Head_Size, Rotary, Position,
+                  10_000.0, Pairing => Pairing);
+               MK.Apply_Rotary
+                 (Key_Apart, Key_Heads, Head_Size, Rotary, Position,
+                  10_000.0, Pairing => Pairing);
+
+               MK.Apply_Rotary_Pair
+                 (Query_Pair, Heads, Key_Pair, Key_Heads, Head_Size, Rotary,
+                  Position, 10_000.0, Pairing => Pairing);
+
+               for Index in Query_Apart'Range loop
+                  Assert (Query_Pair (Index) = Query_Apart (Index),
+                          "the paired rotation moved a query at position"
+                          & Natural'Image (Position) & " element"
+                          & N.Element_Count'Image (Index));
+               end loop;
+
+               for Index in Key_Apart'Range loop
+                  Assert (Key_Pair (Index) = Key_Apart (Index),
+                          "the paired rotation moved a key at position"
+                          & Natural'Image (Position) & " element"
+                          & N.Element_Count'Image (Index));
+               end loop;
+
+               Seen := Seen + 1;
+            end;
+         end loop;
+      end loop;
+
+      --  And a second vector of no heads, which is what the single-vector
+      --  call asks for: the first is rotated and nothing else is touched.
+      declare
+         One     : N.Real_Array := Made (Heads);
+         Another : N.Real_Array := Made (Heads);
+         Empty   : N.Real_Array (1 .. 0);
+      begin
+         MK.Apply_Rotary (One, Heads, Head_Size, Rotary, 5, 10_000.0);
+         MK.Apply_Rotary_Pair
+           (Another, Heads, Empty, 0, Head_Size, Rotary, 5, 10_000.0);
+
+         for Index in One'Range loop
+            Assert (One (Index) = Another (Index),
+                    "a pair with no second vector rotated the first "
+                    & "differently at element"
+                    & N.Element_Count'Image (Index));
+         end loop;
+      end;
+
+      Assert (Seen = 8, "a position or pairing was not compared");
+   end Both_Rotations_Agree;
+
    --  A run of scores answers what one at a time answers.
    --
    --  Head_Scores folds eight accumulators together where Head_Dot folds
@@ -6256,6 +6347,10 @@ package body Tests.Inference_Cases is
         (T, Both_Blend_Runs_Agree'Access,
          "one run of an attention head's output is the same whether the "
          & "host's wide lanes are used or not");
+      Register_Routine
+        (T, Both_Rotations_Agree'Access,
+         "rotating a position's queries and keys together answers what "
+         & "rotating them apart answers, to the bit");
       Register_Routine
         (T, Both_Byte_Kernels_Agree'Access,
          "the kernels that read a byte context answer what the scalar path "

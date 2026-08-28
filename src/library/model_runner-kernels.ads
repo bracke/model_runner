@@ -449,6 +449,45 @@ package Model_Runner.Kernels is
    --  carries them. A model that does not is every element one.
    No_Factors : constant Real_Array (1 .. 0) := [others => 0.0];
 
+   --  Two vectors rotated at one position, by one table of angles.
+   --
+   --  A position rotates its queries and its keys, and the angles are the
+   --  same for both: they depend on the pair and the position and on
+   --  nothing else. Rotating them apart computed the table twice, and a
+   --  power, a cosine and a sine a pair are the most expensive arithmetic
+   --  in this package -- a third of what the rotation costs, measured by
+   --  taking the transcendentals out.
+   --
+   --  Bit for bit what two separate calls give: the same angles by the same
+   --  expressions, and a pair touches two elements of one head that no
+   --  other pair or head touches.
+   --
+   --  @param Vector First vector, rotated in place.
+   --  @param Heads Heads it holds.
+   --  @param Second Second vector, rotated in place; may hold no heads.
+   --  @param Second_Heads Heads it holds, or zero for none.
+   --  @param Head_Size Elements a head holds in either.
+   --  @param Rotary Elements of a head the rotation reaches.
+   --  @param Position Where in the context both vectors sit.
+   --  @param Base The angle base the architecture states.
+   --  @param Scaling How the context was stretched, if it was.
+   --  @param Factors A frequency divisor a pair, where the file carries one.
+   --  @param Pairing Whether a pair is adjacent or half a head apart.
+   --  @param Backwards Whether to turn the other way.
+   procedure Apply_Rotary_Pair
+     (Vector          : in out Real_Array;
+      Heads           : Element_Count;
+      Second          : in out Real_Array;
+      Second_Heads    : Element_Count;
+      Head_Size       : Element_Count;
+      Rotary          : Element_Count;
+      Position        : Natural;
+      Base            : Wide_Real;
+      Scaling         : Rotary_Scaling := No_Scaling;
+      Factors         : Real_Array := No_Factors;
+      Pairing         : Rotary_Pairing := Interleaved;
+      Backwards       : Boolean := False);
+
    --  Rotary positional encoding, in place.
    --
    --  Elements beyond Rotary are left unchanged.
