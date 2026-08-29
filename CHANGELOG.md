@@ -5,6 +5,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`tests shader` refuses a compiled file older than its source.** The stale
+  words found two commits ago were possible because nothing looked: the check
+  compares a source against a digest recorded when the words were made, which
+  proves the source has not changed since somebody ran the tool, not that the
+  words came from the source. Compiling at check time would settle it and
+  would put a shader compiler in the way of running the tests; a modification
+  time is the weak thing that knows, and it catches the case that happened.
+
+### Open
+
+- **`TILE_V` and `Tile_Vectors` do not agree, and it is not clear which is
+  right.** `matrix_product.comp` says 64; its own comment two lines away says
+  "all eight vector matrices", which is 128; and `Tile_Vectors` in the engine
+  says 128 beside a comment reading "The shader states both and this has to
+  agree". The previous commit concluded the committed words were
+  authoritative and set the source to 64 — **that conclusion now looks
+  wrong.**
+
+  Not in doubt: the shipped path runs the words built at 64, passes the sweep
+  at 28344 sequences, and compiling the source at 128 measures 7 % slower.
+  Those do not fit the reading that 128 is simply correct. The tile sweep is
+  not attempted until somebody explains why a dispatch of `Room / 128`
+  workgroups against a shader answering 64 vectors each is conformant.
+
 ### Measured
 
 - **A device prompt re-broken-down after the two attention changes**:

@@ -4916,6 +4916,64 @@ longer live range to pay for. The paragraph above that loop says it was
 chosen by measurement, and this is that measurement taken again with a
 different number in mind and landing in the same place.
 
+### A compiled file older than its source
+
+The stale words two sections above were possible because nothing looked. The
+check compares a shader's source against a digest recorded when the words
+were made, which proves the source has not changed since somebody ran the
+tool -- not that the words came from the source. Handing `tests shader` a
+`.spv` built before the last edit updates the digest and leaves the words,
+and neither the tool nor the check can tell.
+
+Compiling the source at check time would settle it and would put a shader
+compiler in the way of running the tests, which is a large thing to require
+for a small thing to catch. **A modification time is the weak thing that
+knows.** `tests shader` now refuses a compiled file older than the source it
+claims to come from, and says which:
+
+```
+shader: .../matrix_product.spv is older than ../src/shaders/matrix_product.comp;
+        compile it again before naming it here
+```
+
+That is exactly the case that happened -- the source edited, the compiler not
+run, the tool run -- and it is caught at the only moment anybody could act on
+it. It does not catch a `.spv` compiled from a *different* source of the same
+age, and nothing short of compiling would.
+
+### The tile constants do not agree, and I do not know which is right
+
+Then the matrix shader's tile, which is where the device's remaining gap
+lives. Opening it turned up something that stops the work rather than
+starting it.
+
+| | says |
+| --- | ---: |
+| `matrix_product.comp` | `TILE_V = 64` |
+| its own comment, two lines from the constant | "all eight vector matrices", which is 128 |
+| `Model_Runner.Platform.Device.Products` | `Tile_Vectors : constant := 128` |
+
+and the Ada comment beside that constant says **"The shader states both and
+this has to agree."** They do not agree, and the dispatch immediately after
+the matrix pipeline is bound asks for `Room / Tile_Vectors` workgroups.
+
+`### The words did not match the source` above concluded that the committed
+words were authoritative and set the source to 64 to match them. **That
+conclusion now looks wrong**: two other statements in the repository say 128,
+and one of them is a sentence three lines from the constant I changed.
+
+What is not in doubt: the shipped device path has always run the words built
+at 64, it passes the sweep at 28344 sequences with nothing outside tolerance,
+and compiling the source at 128 measures seven per cent slower. Those three
+facts do not fit the reading that 128 is simply correct, and I could not make
+them fit by reading further.
+
+So the tile is not swept and the constant is left where it is, which is
+where the shipped words have always been. **What this wants is the author's
+eye on why a dispatch of `Room / 128` workgroups against a shader that
+answers 64 vectors each is conformant**, because until that is understood any
+number put in either place is a guess.
+
 ### A slower day, measured on both sides
 
 The figures in this section were re-taken twice, because the first sitting

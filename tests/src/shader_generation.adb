@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
@@ -174,6 +175,33 @@ package body Shader_Generation is
 
          Digest := Source_Digest (Pair.Source.all, Marked);
          if not Marked then
+            return;
+         end if;
+
+         --  A compiled file older than the source it claims to be compiled
+         --  from is a compiled file somebody forgot to make again.
+         --
+         --  This tool took the words on trust, and the check beside it
+         --  compares the source against a digest recorded here -- so
+         --  handing it a stale .spv updated the digest and left the words,
+         --  and neither of them could tell. It happened: matrix_product.comp
+         --  said a tile of a hundred and twenty-eight and the words
+         --  committed beside it were built from sixty-four, and every device
+         --  figure this repository published described the sixty-four. The
+         --  edit had never once run.
+         --
+         --  A modification time is a weak thing to lean on and it is the
+         --  only thing here that knows. It catches the case that happened:
+         --  the source is edited, the compiler is not run, and the tool is.
+         if Ada.Calendar."<"
+              (Ada.Directories.Modification_Time (Pair.Compiled.all),
+               Ada.Directories.Modification_Time (Pair.Source.all))
+         then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "shader: " & Pair.Compiled.all & " is older than "
+               & Pair.Source.all
+               & "; compile it again before naming it here");
             return;
          end if;
 

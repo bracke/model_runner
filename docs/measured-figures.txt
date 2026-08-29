@@ -10568,3 +10568,37 @@ outside EEA9637909B87018 src/shaders/row_product.comp src/shaders/matrix_product
 #   gained was tiling where there was none, and that does not generalise to a
 #   loop already tiled.
 
+# 2026-08-29  A staleness refusal, and a tile that does not add up
+#
+#   tests shader now refuses a compiled file older than the source it claims
+#   to come from. That is the case that happened -- source edited, compiler
+#   not run, tool run -- and it is caught where somebody can act on it. It
+#   does not catch a .spv compiled from a different source of the same age,
+#   and nothing short of compiling would.
+#
+#   And then the matrix tile, which is where the device's remaining gap
+#   lives. It was not swept, because opening it turned up this:
+#
+#     matrix_product.comp        TILE_V = 64
+#     its comment, two lines on  "all eight vector matrices" -- 128
+#     Products                   Tile_Vectors : constant := 128
+#                                "The shader states both and this has to
+#                                 agree."
+#
+#   and the dispatch after the matrix pipeline is bound asks for
+#   Room / Tile_Vectors workgroups.
+#
+#   The note above concluded the committed words were authoritative and set
+#   the source to 64. THAT CONCLUSION NOW LOOKS WRONG: two other statements
+#   in the repository say 128 and one is three lines from the constant.
+#
+#   Not in doubt: the shipped device path has always run the words built at
+#   64; it passes the sweep at 28344 sequences with nothing outside
+#   tolerance; and compiling the source at 128 measures seven per cent
+#   slower. Those three do not fit the reading that 128 is simply right.
+#
+#   The tile is left where the shipped words have always been. What this
+#   wants is somebody who knows why a dispatch of Room / 128 workgroups
+#   against a shader answering 64 vectors each is conformant, because until
+#   that is understood any number put in either place is a guess.
+
