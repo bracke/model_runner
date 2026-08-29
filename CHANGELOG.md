@@ -5,6 +5,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **A device prompt is not waiting for its weights, and uploading them
+  already decoded is priced out before it is built.** Three ablations of the
+  matrix shader, each replacing one thing with a constant: the weights never
+  read or unpacked is **1.815 s against 1.939** (−6.4 %), the activations
+  never loaded 1.752 (−9.6 %), and every operand gone 1.673 and 1.720 in two
+  readings — so **the whole handling of both operands is fourteen per cent of
+  a device prompt** and the decode alone is six and a half.
+
+  An f16 copy would still have to be read and is nearly twice the bytes, so
+  it would buy less than six and a half per cent — for double what a model
+  costs on the device, which is what decides whether a model runs there at
+  all.
+
+  Where the time is instead (`--budget`): feeding 40.2 %, attending 24.6,
+  projecting 19.6, joining 5.7, rotating 5.6, normalizing 2.6, reading out
+  1.6. The two matrix phases are sixty per cent and the operands fourteen, so
+  **three quarters of the matrix phase is the instruction itself**.
+
 ### Changed
 
 - **A tile of thirty-two rows rather than eight, which is 5.9 % of a

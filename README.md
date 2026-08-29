@@ -5095,6 +5095,52 @@ out to be, and knowing which it is was the point of looking. It was done,
 in `### The tile made a number, swept, and put back` below, and the answer
 was that this tile is the right one.
 
+### What a device prompt is not waiting for
+
+The matrix shader unpacks Q8_0 into half precision in shared memory on every
+dispatch -- twelve times over for a 1419-token prompt, since a batch is a
+hundred and twenty-eight vectors and the tile is a hundred and twenty-eight.
+The obvious answer is to upload the model already decoded and let the shader
+read half precision, which it already does for `F16` files. It costs two
+bytes a weight against 1.06, so it is worth knowing what it would buy before
+it is built.
+
+Three ablations say. Each replaces one thing with a constant; the answers are
+wrong on purpose and what is measured is the time. Device long prompt,
+medians of three:
+
+| | |
+|---|---:|
+| as it is | 1.939 s |
+| the weights never read or unpacked | 1.815 s (**−6.4 %**) |
+| the activations never loaded | 1.752 s (−9.6 %) |
+| the weights gone from the tile as well | 1.673 s (−13.7 %) |
+| all three | 1.720 s (−11.3 %) |
+
+The last two bracket each other, so with every operand removed the prompt
+still takes about 1.70 s of 1.94. **The whole handling of both operands is
+fourteen per cent of a device prompt and the decode alone is six and a half.**
+
+So the upload is priced out without being written. Deleting the decode cannot
+buy more than six and a half per cent, and would buy less -- an f16 copy
+still has to be read and is nearly twice the bytes -- in exchange for
+doubling what a model costs on the device, which is the resource that decides
+whether a model runs there at all.
+
+Where the time is instead, from `--budget` on the same prompt: **feeding 40.2
+per cent, attending 24.6, projecting 19.6**, joining 5.7, rotating 5.6,
+normalizing 2.6, reading out 1.6. The two matrix phases are sixty per cent
+and their operands are fourteen, so **three quarters of the matrix phase is
+the instruction itself and the loop around it.**
+
+Which is the third thing this section and the sweep below agree on, and
+together they are a shape. The weights are not the wall: reading them half as
+often costs sixty per cent, and not reading them at all buys six. Occupancy
+is not the wall: more subgroups sharing one tile is worse at every count. The
+operands are not the wall: fourteen per cent between them. What is left is
+the rate this part retires cooperative-matrix multiplies at, and nothing
+tried here has moved it.
+
 ### The tile made a number, swept, and put back
 
 `### The tile sweep, and why there was almost nothing to sweep` ended by

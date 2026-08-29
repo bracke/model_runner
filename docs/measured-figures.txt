@@ -11213,3 +11213,50 @@ outside F95C80A16066CE28 src/shaders/row_product.comp src/shaders/matrix_product
 #          pinned and 1.82 unpinned
 #   model: TinyLlama-1.1B-Chat Q8_0, Q2_K for the draft pair, Q4_K_M for the
 #          four-bit comparison
+
+# 2026-08-29  What a device prompt is not waiting for
+#
+#   No code changed. Three ablations of the matrix shader, to price the
+#   decode before building anything that would delete it.
+#
+#   The proposal was to upload a model to the device already decoded to half
+#   precision, so that the shader would stop unpacking Q8_0 into shared
+#   memory on every dispatch -- twelve times over for a 1419-token prompt.
+#   It costs two bytes a weight against 1.06, so it is worth knowing what it
+#   would buy before it is built.
+#
+#   Each ablation replaces one thing with a constant. The answers are wrong
+#   on purpose; what is measured is the time. Device long prompt, medians of
+#   three:
+#
+#     as it is                                    1.939 s
+#     the weights never read or unpacked          1.815    -6.4%
+#     the activations never loaded                1.752    -9.6%
+#     the weights gone from the tile as well      1.673   -13.7%
+#     all three                                   1.720   -11.3%
+#
+#   The last two bracket each other, so with every operand removed the
+#   prompt still takes about 1.70 s of 1.94: **the whole handling of both
+#   operands is fourteen per cent of a device prompt**, and the decode alone
+#   -- every byte of the weights read and all the arithmetic to unpack them
+#   -- is six and a half.
+#
+#   So the upload is priced out. Deleting the decode cannot buy more than
+#   six and a half per cent and would buy less, because an f16 copy still
+#   has to be read and is nearly twice the bytes; and it would double what a
+#   model costs on the device, which is the resource that decides whether a
+#   model runs there at all.
+#
+#   Where the time is instead, from --budget on the same prompt: feeding
+#   40.2 per cent, attending 24.6, projecting 19.6, joining 5.7, rotating
+#   5.6, normalizing 2.6, reading out 1.6. The two matrix phases are sixty
+#   per cent and the operands are fourteen, so **three quarters of the
+#   matrix phase is the instruction itself and the loop around it**.
+#
+#   Which is the third thing the sweep of 2026-08-29 and these ablations
+#   agree on. The weights are not the wall: reading them half as often costs
+#   sixty per cent, and not reading them at all buys six. The occupancy is
+#   not the wall: more subgroups sharing a tile is worse at every count. The
+#   operands are not the wall: fourteen per cent between them. What is left
+#   is the rate the part retires cooperative-matrix multiplies at, and
+#   nothing tried here moves it.
