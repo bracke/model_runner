@@ -37,6 +37,31 @@ Keep a Changelog and the project uses semantic versioning.
   The prompt is level: a batch amortizes a submission over its positions
   already, and its normalization is real work rather than a fixed cost.
 
+- **Attention's two inner loops unrolled by eight: 34 % of attention on the
+  device and 7 % of a 1419-token prompt**, at the same digest. Attention was
+  31 % of that prompt and the one phase running at about processor speed —
+  0.754 s on the device against 0.894 s on eight cores, where the
+  feed-forward beside it is 4.6 times faster there. Measured against the
+  part rather than against the processor it read 236 Gflop/s of 4150.
+
+  The loop was **one memory operation per multiply-add**: per component the
+  dot product reads one key, reads a query component for each of the eight
+  queries in the block, and does eight multiply-adds. A query's components
+  lie together, so eight a turn is one fetch rather than eight; the value
+  phase's weights lie together too and take the same treatment. Each dot
+  product still accumulates over the components in increasing order, so this
+  is a different schedule and the same arithmetic.
+
+  **Four things measured first, and none of them was it.** The block's
+  queries staged in shared memory: 2 % slower, because the query address is
+  workgroup-uniform and was already a scalar load. A block of sixteen
+  queries: level; of four: 10 % worse. Both reductions batched across the
+  block: level, because this device gives a 64-lane workgroup one subgroup
+  and the barriers were never there. What priced it was three probes reading
+  the wrong operands from the right places — the key reads are a fifth of
+  attention, the value reads a quarter, shared memory a tenth, and half of it
+  is none of those.
+
 ### Fixed
 
 - **A sequence could evict a matrix it was about to read.** A sequence

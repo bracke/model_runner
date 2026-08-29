@@ -344,7 +344,36 @@ void main() {
             uint k_at = shape.k_base + step * shape.kv_width
                         + group * shape.head_size;
 
-            for (uint c = 0; c < shape.head_size; c++) {
+            //  Eight components a turn, so that a query's components are
+            //  fetched together.
+            //
+            //  A component at a time is one load an operation: the key is
+            //  read once and multiplied into every query of the block, but
+            //  each query's own component is read for its own multiply and
+            //  the address is uniform across the workgroup, which makes it
+            //  a scalar load and one of them a multiply-add. Eight at a
+            //  time are eight consecutive words of one query, which is one
+            //  fetch rather than eight.
+            //
+            //  Each dot product still accumulates over the components in
+            //  increasing order, so nothing moves.
+            uint whole = shape.head_size & ~7u;
+
+            for (uint c = 0; c < whole; c += 8u) {
+                float kc[8];
+
+                for (uint e = 0u; e < 8u; e++) {
+                    kc[e] = kv[k_at + c + e];
+                }
+
+                for (uint i = 0u; i < QUERIES; i++) {
+                    for (uint e = 0u; e < 8u; e++) {
+                        dot[i] += q[q_of[i] + c + e] * kc[e];
+                    }
+                }
+            }
+
+            for (uint c = whole; c < shape.head_size; c++) {
                 float kc = kv[k_at + c];
                 for (uint i = 0u; i < QUERIES; i++) {
                     dot[i] += q[q_of[i] + c] * kc;
@@ -436,7 +465,27 @@ void main() {
                 got[i] = 0.0;
             }
 
-            for (uint j = 0; j < span; j++) {
+            //  Eight cached positions a turn, for the same reason the
+            //  dot product takes eight components a turn: a query's eight
+            //  weights lie together in the tile and are read as one.
+            uint run = span & ~7u;
+
+            for (uint j = 0; j < run; j += 8u) {
+                float v[8];
+
+                for (uint e = 0u; e < 8u; e++) {
+                    v[e] = kv[shape.v_base + (base + j + e) * shape.v_width
+                              + group * shape.value_size + c];
+                }
+
+                for (uint i = 0u; i < QUERIES; i++) {
+                    for (uint e = 0u; e < 8u; e++) {
+                        got[i] += tile[i * 64u + j + e] * v[e];
+                    }
+                }
+            }
+
+            for (uint j = run; j < span; j++) {
                 float v = kv[shape.v_base + (base + j) * shape.v_width
                              + group * shape.value_size + c];
 
