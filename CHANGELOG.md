@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The matrix tile sweep bought nothing, and three of six shapes do not
+  run.** With the engine's `Tile_Rows` and `Tile_Vectors` moved to match:
+  32x128 chunk 32 is **2.34 s**, 32x64 is 2.45, 16x128 is 2.56, and 64x64,
+  64x128 and 32x128-chunk-64 all fail before an answer comes back.
+
+  Every shape that fails moves `TILE_R` or `KCH`; every shape that runs
+  leaves both alone. The staging loop maps lanes onto `wt[TILE_R * KCH]` by
+  hand, so moving either end leaves a kernel that compiles and does not work.
+  **It is one free parameter, not three** — and `TILE_V` is already at its
+  best, 128 beating 64 by 5 %, which is what a batch of 128 vectors predicts.
+
+  The matrix shader is not a kernel with a tunable tile; it is a kernel
+  written for one tile.
+
+### Measured
+
 - **The device breakdown, re-taken on a device that was working.** The
   previous one was measured on the path that skipped half of every matrix
   tile, so it was wrong about the shape of a device prompt. Four runs, prompt

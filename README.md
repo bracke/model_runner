@@ -5050,6 +5050,42 @@ prompt in 0.79 s where this program reads it in 1.99. **With attention free
 this program would be at 1.40 s and still 1.8 times behind** -- which was
 1.6 when the products were doing half their work.
 
+### The tile sweep, and why there was almost nothing to sweep
+
+The matrix phases are half a device prompt, the constants are three numbers
+at the top of one file, and the attention sweep next door had just paid
+sixteen per cent for changing two. Six shapes, all with the engine's
+`Tile_Rows` and `Tile_Vectors` moved to match so the new check is satisfied:
+
+| rows x vectors, chunk | device prompt |
+| --- | ---: |
+| **32 x 128, 32** | **2.34 s** |
+| 32 x 64, 32 | 2.45 s |
+| 16 x 128, 32 | 2.56 s |
+| 64 x 64, 32 | *does not run* |
+| 64 x 128, 32 | *does not run* |
+| 32 x 128, 64 | *does not run* |
+
+**Three of the six do not run at all** -- "a run did not complete; nothing
+published", before any answer comes back. Every one of those three moves
+`TILE_R` or `KCH`; every one that runs leaves both alone. So the shape is not
+three free parameters. It is one free parameter, `TILE_V`, and two numbers
+that other arithmetic in the shader depends on: the staging loop maps lanes
+onto `wt[TILE_R * KCH]` by hand, and moving either end of that leaves a
+kernel that compiles and does not work.
+
+**And the one free parameter is already at its best.** A hundred and
+twenty-eight beats sixty-four by five per cent, which is what the batch size
+predicts: a batch is a hundred and twenty-eight vectors and a tile of a
+hundred and twenty-eight is exactly one of them, where sixty-four is two
+dispatches for the same work.
+
+So the sweep bought nothing, which is worth as much as if it had. **The
+matrix shader is not a kernel with a tunable tile; it is a kernel written for
+one tile**, and making it take another means rewriting the staging, not
+changing a constant. That is a different piece of work from the one this set
+out to be, and knowing which it is was the point of looking.
+
 ### A slower day, measured on both sides
 
 The figures in this section were re-taken twice, because the first sitting
