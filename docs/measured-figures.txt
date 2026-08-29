@@ -11260,3 +11260,45 @@ outside F95C80A16066CE28 src/shaders/row_product.comp src/shaders/matrix_product
 #   operands are not the wall: fourteen per cent between them. What is left
 #   is the rate the part retires cooperative-matrix multiplies at, and
 #   nothing tried here moves it.
+
+# 2026-08-29  The floor was mis-counted
+#
+#   No code changed. The entry of 2026-08-28 said the strip kernel issues
+#   thirty-six multiply-add-class operations a block onto two pipes --
+#   eighteen cycles of floor against twenty-four taken -- and left a third
+#   unaccounted for. Part of that third was the staging the entry above
+#   removed. The rest was the count.
+#
+#   Disassembled rather than described, the block loop is seventy-seven
+#   instructions:
+#
+#     vpxor, zeroing an accumulator or flipping the bias    18
+#     vpdpbusd, the byte dot product                        16
+#     vcvtdq2ps, the integer sum made a float               16
+#     vfmadd231ps, scaled and accumulated                   18
+#     loads, pointer arithmetic and the branch               9
+#
+#   The sixteen conversions were never counted. A dot product here is three
+#   operations and not two -- multiply the bytes, convert the sum, scale and
+#   add -- because every block carries its own scale and an integer sum
+#   cannot be scaled until it is a float. Fifty pipe-bound operations a
+#   block, and the floor is twenty-five cycles.
+#
+#   And the kernel is on it. rows_by_strips retires 243.9 G ops in 76.8 G
+#   cycles -- 58.5 per cent of the run's cycles and 71.1 of its retired ops,
+#   on a whole of 131.2 G cycles and 343.2 G ops -- which is 3.17 ops a
+#   cycle. Seventy-seven ops a block over 243.9 G is 3.17 thousand million
+#   block iterations, and 76.8 G cycles over those is 24.2 cycles a block
+#   against a floor of twenty-five: under it, because the renamed vpxor
+#   retire without occupying a pipe.
+#
+#   Forty-two per cent of the kernel's cycles retire nothing because an
+#   operation is not complete and a quarter of those are loads, which is
+#   what a loop at its issue limit looks like from the retire side.
+#
+#   So there is no third missing. What the count does say is where the cost
+#   is: sixteen of the fifty, thirty-two per cent of the kernel's
+#   arithmetic, are format conversion rather than multiply-add, and they are
+#   there because Q8_0 puts a scale on every thirty-two elements. A wider
+#   block would pay fewer of them a weight. This one cannot be made to, and
+#   no rewriting of the kernel reaches them.

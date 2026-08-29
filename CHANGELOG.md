@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The strip kernel's published floor was mis-counted, and the kernel is on
+  the real one.** Four sittings of this file have said it issues 36
+  multiply-add-class operations a block — 18 cycles of floor against 24
+  taken — and wondered where the third went. Disassembling the loop rather
+  than describing it: 77 instructions, of which 16 `vpdpbusd`, **16
+  `vcvtdq2ps`** and 18 `vfmadd231ps` contend for the two pipes. **The
+  conversions were never counted**, because a dot product here is three
+  operations and not two: every block carries its own scale and an integer
+  sum cannot be scaled until it is a float.
+
+  Fifty pipe-bound operations a block is a floor of **25 cycles, not 18**.
+  The kernel retires 243.9 G ops in 76.8 G cycles — 3.17 a cycle — which is
+  **24.2 cycles a block**, under the floor because the renamed `vpxor` retire
+  without occupying a pipe. There is no third missing.
+
+  What the count does say: **32 % of the kernel's arithmetic is format
+  conversion**, not multiply-add, and it is there because `Q8_0` puts a scale
+  on every 32 elements. No rewriting of the kernel reaches it.
+
+### Measured
+
 - **A device prompt is not waiting for its weights, and uploading them
   already decoded is priced out before it is built.** Three ablations of the
   matrix shader, each replacing one thing with a constant: the weights never

@@ -4636,11 +4636,16 @@ a slot is either an operation or a stall, and the stall has a side:
 
 **The strip kernel is at its arithmetic floor, and that is the end of it.**
 Three and a quarter instructions a cycle, six tenths of one per cent lost to
-the front end. Per block it issues thirty-six multiply-add-class operations
--- sixteen byte dot products, sixteen scaled accumulations and four
-corrections -- onto the two pipes that can take them, which is eighteen
-cycles of floor against the twenty-four it takes. Every one of the
-thirty-six is arithmetic the answer needs.
+the front end. Per block it issues **fifty** multiply-add-class operations
+-- sixteen byte dot products, sixteen integer-to-float conversions and
+eighteen scaled accumulations -- onto the two pipes that can take them, which
+is twenty-five cycles of floor against the twenty-four and a fifth it takes.
+Every one of the fifty is arithmetic the answer needs.
+
+*(This paragraph said thirty-six and eighteen for four sittings, because it
+counted the conversions as free. They are not: see `### The floor was
+mis-counted, and the kernel is on it` below, which disassembled the loop
+rather than describing it.)*
 
 That also kills the one idea left for it. Sixteen of the seventy-seven
 instructions a block are `vpxor` zeroing an accumulator, which looked like
@@ -6444,12 +6449,59 @@ workers: the first version of this test hung where it meant to fail, for ten
 minutes, until it was killed. `Parallel_Matches_Serial` beside it had the
 same shape and now does not.
 
+### The floor was mis-counted, and the kernel is on it
+
+`### What the counters say` above has said for four sittings that the strip
+kernel issues thirty-six multiply-add-class operations a block onto two
+pipes -- eighteen cycles of floor against twenty-four taken -- and that the
+third left over was somewhere. Part of it was the staging the section below
+removes. The rest was a counting error, and disassembling the loop rather
+than describing it is what found it.
+
+The block loop is **seventy-seven instructions**:
+
+| | |
+|---|---:|
+| `vpxor`, zeroing an accumulator or flipping the bias | 18 |
+| `vpdpbusd`, the byte dot product | 16 |
+| `vcvtdq2ps`, the integer sum made a float | **16** |
+| `vfmadd231ps`, scaled and accumulated | 18 |
+| loads, pointer arithmetic and the branch | 9 |
+
+The sixteen conversions were never counted. A dot product here is not two
+operations but **three** -- multiply the bytes, convert the sum, scale and
+add -- because every block carries its own scale and an integer sum cannot be
+scaled until it is a float. So the pipe-bound count is 16 + 16 + 18 = **fifty
+a block, and the floor is twenty-five cycles, not eighteen**. The eighteen
+`vpxor` are a zeroing idiom eliminated at rename and never reach a pipe,
+which the earlier paragraph got right.
+
+And the kernel is on that floor. Counting retired operations rather than
+instructions, `rows_by_strips` retires **243.9 G ops in 76.8 G cycles, 3.17 a
+cycle**, on a run whose whole is 351.2 G instructions in 131.2 G. Seventy-seven
+ops a block over 243.9 G is 3.17 thousand million block iterations, and 76.8 G
+cycles over those is **24.2 cycles a block against a floor of 25** -- under it,
+because the renamed `vpxor` retire without ever occupying a pipe.
+
+**So there is no third missing.** Forty-two per cent of the kernel's cycles
+retire nothing because an operation is not complete, and a quarter of those
+are loads, which is what a loop running at its issue limit looks like from
+the retire side rather than a symptom of anything.
+
+What the count does say is where the cost comes from. **Sixteen of the fifty
+-- thirty-two per cent of the kernel's arithmetic -- are format conversion**,
+not multiply-add, and they are there because `Q8_0` puts a scale on every
+thirty-two elements. A format with a wider block would pay fewer of them per
+weight; this one cannot be made to. That is the price of the file's own
+shape, and it is not a thing the kernel can be written out of.
+
 ### A tile of thirty-two rows, and the table it stops rebuilding
 
 The strip kernel is sixty-two per cent of a prompt and this file has called
 it finished twice: thirty-six multiply-add-class operations a block onto the
 two pipes that take them, eighteen cycles of floor against twenty-four taken,
-five changes in, done. A third of the hottest symbol in the program was
+five changes in, done. (Thirty-six was a miscount; see `### The floor was
+mis-counted, and the kernel is on it`.) A third of the hottest symbol in the program was
 outside that argument, and this is where it was.
 
 At the top of every call the kernel stages the batch's own numbers -- each of
