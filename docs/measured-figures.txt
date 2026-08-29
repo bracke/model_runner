@@ -10663,3 +10663,33 @@ outside 151FA7EE821FA58A src/shaders/row_product.comp src/shaders/matrix_product
 #   against 2.3 and 2.4 published for a computation that skipped half of
 #   every tile.
 
+# 2026-08-29  The device breakdown, taken on a device that was working
+#
+#   No code changed. The breakdown two notes above was measured on the path
+#   that skipped half of every matrix tile. Four runs, prompt only, with a
+#   generation-only run subtracted:
+#
+#                  broken path        corrected
+#     feeding     0.505 s  26%      0.650 s  33%
+#     attending   0.690 s  35%      0.590 s  30%
+#     projecting  0.367 s  19%      0.370 s  19%
+#     joining     0.165 s   8%      0.156 s   8%
+#     rotating    0.158 s   8%      0.145 s   7%
+#     normalizing 0.079 s   4%      0.082 s   4%
+#
+#   Feeding is the largest phase and it was never attention. It grew
+#   twenty-nine per cent when it began computing the tiles it had been
+#   skipping, which is the shape of the bug: the products are what the matrix
+#   shader does and the feed-forward holds the biggest of them.
+#
+#   Attention fell fifteen per cent and does not use the matrix shader at
+#   all. What changed is what it was fed: the old path handed it the output
+#   of half a product and the rest of a buffer, and that arithmetic was
+#   slower than arithmetic on real numbers. A phase timed on noise is not
+#   timing anything.
+#
+#   The two matrix phases are fifty-two per cent of a device prompt against
+#   attention's thirty. llama.cpp reads this prompt in 0.79 s and this
+#   program in 1.99: with attention free this would be 1.40 s and still 1.8
+#   times behind, where the broken measurement said 1.6.
+

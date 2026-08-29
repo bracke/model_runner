@@ -5015,6 +5015,41 @@ instance, and it would cost the gate real time. That is a decision about what
 a test suite is for, and it is not one to make quietly at the end of a
 commit.
 
+### The device breakdown, taken on a device that was working
+
+`### Where a device prompt's time goes now` two sections above was measured
+on the path that skipped half of every matrix tile. Its numbers are not
+wrong about what the program was doing; they are wrong about what the
+program is for. Taken again, four runs, prompt only:
+
+| | on the broken path | corrected |
+| --- | ---: | ---: |
+| feeding | 0.505 s, 26 % | **0.650 s, 33 %** |
+| attending | 0.690 s, 35 % | 0.590 s, 30 % |
+| projecting | 0.367 s, 19 % | 0.370 s, 19 % |
+| joining | 0.165 s, 8 % | 0.156 s, 8 % |
+| rotating | 0.158 s, 8 % | 0.145 s, 7 % |
+| normalizing | 0.079 s, 4 % | 0.082 s, 4 % |
+
+**Feeding is the largest phase and it was never attention.** The feed-forward
+grew twenty-nine per cent when it started computing the tiles it had been
+skipping, which is the shape of the bug: the products are what the matrix
+shader does and the feed-forward is where the biggest of them are.
+
+**Attention fell fifteen per cent, and that is the stranger half.** Attention
+does not use the matrix shader, so nothing about the fix should touch it --
+except what it was being fed. The old path handed it the output of half a
+product and the rest of a buffer, and whatever that arithmetic was, it was
+slower than arithmetic on real numbers. A phase timed on noise is not
+timing anything.
+
+So the ordering that section drew, and the sentence built on it, are both
+withdrawn. What replaces them: **the two matrix phases are fifty-two per cent
+of a device prompt against attention's thirty**, and llama.cpp reads the same
+prompt in 0.79 s where this program reads it in 1.99. **With attention free
+this program would be at 1.40 s and still 1.8 times behind** -- which was
+1.6 when the products were doing half their work.
+
 ### A slower day, measured on both sides
 
 The figures in this section were re-taken twice, because the first sitting

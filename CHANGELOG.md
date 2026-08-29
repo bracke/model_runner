@@ -5,6 +5,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The device breakdown, re-taken on a device that was working.** The
+  previous one was measured on the path that skipped half of every matrix
+  tile, so it was wrong about the shape of a device prompt. Four runs, prompt
+  only: feeding 0.505 s to **0.650 (26 % to 33 %)**, attending 0.690 to 0.590
+  (35 % to 30), projecting 0.370 (19 %), joining 0.156, rotating 0.145,
+  normalizing 0.082.
+
+  **Feeding is the largest phase and it was never attention.** It grew 29 %
+  when it started computing the tiles it had been skipping. Attention fell
+  15 % and does not use the matrix shader — what changed is what it was fed:
+  the old path handed it half a product and the rest of a buffer, and that
+  arithmetic was slower than arithmetic on real numbers.
+
+  The two matrix phases are **52 % of a device prompt against attention's
+  30**. llama.cpp reads the prompt in 0.79 s against this program's 1.99, so
+  with attention free this would be 1.40 s and still **1.8x** behind — which
+  was 1.6 when the products were doing half their work.
+
 ### Fixed
 
 - **`tests shader` refuses a compiled file older than its source.** The stale
