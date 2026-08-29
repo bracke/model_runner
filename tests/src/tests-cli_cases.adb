@@ -973,15 +973,18 @@ package body Tests.CLI_Cases is
                              & " normalization and the join after it by"
                              & N.Real'Image (Worst));
 
-                     --  Both need something behind them.
+                     --  A normalization first in a sequence reads what the
+                     --  caller handed in, as a product first in one does.
                      Products.Open_Sequence (Layer);
                      Products.Add_Norm
                        (Layer, Held_Gain.all'Address,
                         Model_Runner.Bytes.Byte_Count (Held_Gain.all'Length),
                         0, Rows, Epsilon, Added);
-                     Assert (not Added,
-                             "a sequence normalized nothing");
+                     Assert (Added,
+                             "a sequence refused to normalize what it was "
+                             & "handed");
 
+                     --  A join has nothing to add to.
                      Products.Open_Sequence (Layer);
                      Products.Add_Join (Layer, Added);
                      Assert (not Added, "a sequence joined nothing");

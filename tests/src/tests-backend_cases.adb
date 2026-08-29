@@ -2396,6 +2396,168 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Fused_Layer_Says_What_The_Parts_Say;
 
+   ----------------------------------------------
+   -- Normalized_Group_Says_What_The_Parts_Say --
+   ----------------------------------------------
+
+   --  A normalization and the three matrices that read it, named as one
+   --  sequence, against the same four done one at a time.
+   --
+   --  What the fusing is for is three submissions and a normalization the
+   --  host used to do, not a different answer -- within a tolerance rather
+   --  than exactly, because the device folds a position's squares in a tree
+   --  and the processor here walks them in order.
+   procedure Normalized_Group_Says_What_The_Parts_Say
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      use type N.Wide_Real;
+
+      Width     : constant N.Element_Count := 64;
+      Positions : constant N.Element_Count := 3;
+
+      Rows : constant array (1 .. 3) of N.Element_Count := [48, 16, 16];
+
+      Epsilon : constant N.Real := 1.0e-5;
+      Near    : constant N.Real := 1.0e-3;
+
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      Source : N.Real_Array (0 .. Positions * Width - 1);
+      Gain   : N.Real_Array (0 .. Width - 1);
+
+      Held  : array (1 .. 3) of Model_Runner.Bytes.Byte_Array_Access :=
+        [others => null];
+      Views : T.View_Group (1 .. 3);
+      Apart : T.Target_Group (1 .. 3) := [others => null];
+      Whole : T.Target_Group (1 .. 3) := [others => null];
+
+      Normed : T.Real_Array_Access;
+
+      Status : E.Error_Info;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
+
+      if not Ready then
+         return;
+      end if;
+
+      for Index in Source'Range loop
+         Source (Index) := N.Real (Index mod 11) / 11.0 - 0.4;
+      end loop;
+      for Index in Gain'Range loop
+         Gain (Index) := 0.5 + N.Real (Index mod 5) / 8.0;
+      end loop;
+
+      T.Allocate (Positions * Width, Normed);
+
+      for Which in 1 .. 3 loop
+         Model_Runner.Bytes.Allocate
+           (Model_Runner.Bytes.Byte_Count (Rows (Which) * Width) * 4,
+            Held (Which));
+         T.Allocate (Positions * Rows (Which), Apart (Which));
+         T.Allocate (Positions * Rows (Which), Whole (Which));
+      end loop;
+
+      Assert (Normed /= null and then Held (1) /= null
+              and then Held (2) /= null and then Held (3) /= null
+              and then Apart (1) /= null and then Whole (1) /= null,
+              "no room for the test");
+
+      for Which in 1 .. 3 loop
+         for Row in 0 .. Rows (Which) - 1 loop
+            for Column in 0 .. Width - 1 loop
+               declare
+                  Value : constant N.Real :=
+                    N.Real ((Natural (Row) + 2 * Natural (Column) + Which)
+                            mod 11) / 29.0 - 0.17;
+
+                  At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count (Row * Width + Column) * 4
+                    + 1;
+               begin
+                  Held (Which).all (At_Byte .. At_Byte + 3) :=
+                    Model_Runner.Bytes.Put_F32 (Value);
+               end;
+            end loop;
+         end loop;
+
+         Views (Which) :=
+           (Format => Model_Runner.GGUF.Type_F32,
+            Rows => Rows (Which), Columns => Width,
+            Base => Held (Which).all'Address,
+            Span => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length),
+            Offset => 0,
+            Length =>
+              Model_Runner.Bytes.Byte_Count (Held (Which).all'Length));
+      end loop;
+
+      --  The parts: normalize here, then each matrix on its own.
+      for Slot in 0 .. Positions - 1 loop
+         declare
+            At_Slot : constant N.Element_Count := Slot * Width;
+            Square  : N.Wide_Real := 0.0;
+            Scale   : N.Wide_Real;
+         begin
+            for Index in 0 .. Width - 1 loop
+               Square := Square
+                 + N.Wide_Real (Source (At_Slot + Index))
+                   * N.Wide_Real (Source (At_Slot + Index));
+            end loop;
+
+            Scale := 1.0 / N.Sqrt
+              (Square / N.Wide_Real (Width) + N.Wide_Real (Epsilon));
+
+            for Index in 0 .. Width - 1 loop
+               Normed.all (At_Slot + Index) :=
+                 N.Real (N.Wide_Real (Source (At_Slot + Index)) * Scale)
+                 * Gain (Index);
+            end loop;
+         end;
+      end loop;
+
+      for Which in 1 .. 3 loop
+         Model_Runner.Backend.Device.Dispatch_Batch
+           (Views (Which), Normed, Positions, Apart (Which), Status);
+         Assert (not E.Is_Error (Status),
+                 "a matrix of the group was refused on its own");
+      end loop;
+
+      --  And the four as one sequence.
+      declare
+         Given : T.Real_Array_Access := new N.Real_Array'(Source);
+      begin
+         Model_Runner.Backend.Device.Normalize_And_Project
+           (Views, Given, Gain, Epsilon, Whole, Ok,
+            Spread => Positions);
+
+         if Ok then
+            for Which in 1 .. 3 loop
+               for Index in 0 .. Positions * Rows (Which) - 1 loop
+                  Assert (abs (Apart (Which).all (Index)
+                               - Whole (Which).all (Index)) <= Near,
+                          "a normalization named with the matrices that "
+                          & "read it differs from the four done apart at "
+                          & "component" & N.Element_Count'Image (Index));
+               end loop;
+            end loop;
+         end if;
+
+         T.Free (Given);
+      end;
+
+      T.Free (Normed);
+      for Which in 1 .. 3 loop
+         T.Free (Apart (Which));
+         T.Free (Whole (Which));
+         Model_Runner.Bytes.Free (Held (Which));
+      end loop;
+      Model_Runner.Backend.Device.Close;
+   end Normalized_Group_Says_What_The_Parts_Say;
+
    ----------
    -- Name --
    ----------
@@ -2772,6 +2934,10 @@ package body Tests.Backend_Cases is
         (T, Fused_Layer_Says_What_The_Parts_Say'Access,
          "a layer's second half named as one sequence says what its nine "
          & "steps done apart say");
+      Register_Routine
+        (T, Normalized_Group_Says_What_The_Parts_Say'Access,
+         "a normalization named with the matrices that read it says what "
+         & "the four done apart say");
    end Register_Tests;
 
 end Tests.Backend_Cases;

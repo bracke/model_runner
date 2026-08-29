@@ -433,6 +433,41 @@ package Model_Runner.Backend.Device is
       Status  : out Model_Runner.Errors.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null);
 
+   --  A normalization and the products that read it, in one submission.
+   --
+   --  The other half of what `Attend_And_Feed` does. A layer normalizes its
+   --  input and then multiplies that by three matrices -- the queries, the
+   --  keys and the values -- and those were four submissions: the host
+   --  normalized and each product went on its own. Normalizing here makes
+   --  them one, and the normalized value never leaves the device.
+   --
+   --  The caller keeps the rotation and the cache write, which is why this
+   --  is not the whole first half of a layer: a rotation carries the
+   --  architecture's scaling, its ramp and its pairing, and those are not
+   --  worth restating in a shader for what they cost.
+   --
+   --  @param Weights The matrices, in the order their results are wanted.
+   --  @param Vector The layer's input, Spread positions of it.
+   --  @param Norm_Weight The normalization's weight.
+   --  @param Epsilon The floor under its mean square.
+   --  @param Lifted True where that weight is lifted by one first.
+   --  @param Spread How many positions the input holds.
+   --  @param Into Receives each matrix's result, one array apiece and in the
+   --    same order, Spread positions of each.
+   --  @param Ok False when the device did not run it, which leaves the
+   --    caller to normalize and multiply as it did before.
+   --  @param Cancel Token a caller may set to ask for a stop.
+   procedure Normalize_And_Project
+     (Weights     : Model_Runner.Tensors.View_Group;
+      Vector      : Model_Runner.Tensors.Real_Array_Access;
+      Norm_Weight : Model_Runner.Tensors.Real_Array;
+      Epsilon     : Model_Runner.Numerics.Real;
+      Into        : Model_Runner.Tensors.Target_Group;
+      Ok          : out Boolean;
+      Spread      : Model_Runner.Numerics.Element_Count := 1;
+      Lifted      : Boolean := False;
+      Cancel      : Model_Runner.Cancellation.Token_Reference := null);
+
    --  A gated feed-forward block, whole, in one submission.
    --
    --  The gate and up projections read the same normalized input; a unit is

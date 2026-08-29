@@ -6406,6 +6406,10 @@ package body Model_Runner.Llama is
             --  which is a loop later.
             Resident : Boolean := False;
 
+            --  Whether a device took the normalization and the three
+            --  matrices that read it as one sequence.
+            Projected : Boolean := False;
+
             --  And whether the whole of the layer's second half went over
             --  as one sequence, as it does when a single position is
             --  generated: attention, its projection, the join, the
@@ -6558,17 +6562,46 @@ package body Model_Runner.Llama is
             --  on the way in except Bert, whose block reads the residual as
             --  it stands -- the normalization it has was applied on the way
             --  out of the block before this one.
-            if Current.Attention_Norm = null then
-               Norm.all (0 .. Count * Width - 1) :=
-                 Acts.all (0 .. Count * Width - 1);
-            else
-               declare
-                  Share  : aliased Norm_Share;
-                  Shared : E.Error_Info;
-               begin
-                  Workers_CPU.Dispatch_Shares
-                    (Team, Count, Share'Unchecked_Access, Shared);
-               end;
+            --  Where a device takes the normalization together with the
+            --  three matrices that read it, none of this happens here: the
+            --  layer's input goes over as it stands and what comes back is
+            --  the queries, the keys and the values.
+            Projected := False;
+
+            if Model_Runner.Backend."="
+                 (Item.Owner.Able.Kind,
+                  Model_Runner.Backend.Backend_Device)
+              and then Current.Attention_Norm /= null
+              and then Current.Attention_Norm_Bias = null
+              and then Current.Feed_Norm /= null
+              and then Current.Query_Bias = null
+              and then Current.Query_Norm = null
+              and then Source.Settings.Kind not in Falcon | Phi2
+            then
+               Charge (Item, Normalizing, Mark);
+
+               Model_Runner.Backend.Device.Normalize_And_Project
+                 ([Current.Query, Current.Key, Current.Value],
+                  Acts, Current.Attention_Norm.all, Settings.Epsilon,
+                  [Query, Keys, Values], Projected,
+                  Spread => Count,
+                  Lifted => Lifted_Norms (Source),
+                  Cancel => Item.Stopping);
+            end if;
+
+            if not Projected then
+               if Current.Attention_Norm = null then
+                  Norm.all (0 .. Count * Width - 1) :=
+                    Acts.all (0 .. Count * Width - 1);
+               else
+                  declare
+                     Share  : aliased Norm_Share;
+                     Shared : E.Error_Info;
+                  begin
+                     Workers_CPU.Dispatch_Shares
+                       (Team, Count, Share'Unchecked_Access, Shared);
+                  end;
+               end if;
             end if;
 
             --  Kept where the architecture runs its two sublayers from the
@@ -6588,18 +6621,20 @@ package body Model_Runner.Llama is
                  Norm.all (0 .. Count * Width - 1);
             end if;
 
-            Charge (Item, Normalizing, Mark);
-
             --  One pass over each weight for the whole batch.
-            Product_Batch
-              (Item, Current.Query, Norm, Count, Query, Status);
-            exit when E.Is_Error (Status);
-            Product_Batch
-              (Item, Current.Key, Norm, Count, Keys, Status);
-            exit when E.Is_Error (Status);
-            Product_Batch
-              (Item, Current.Value, Norm, Count, Values, Status);
-            exit when E.Is_Error (Status);
+            if not Projected then
+               Charge (Item, Normalizing, Mark);
+
+               Product_Batch
+                 (Item, Current.Query, Norm, Count, Query, Status);
+               exit when E.Is_Error (Status);
+               Product_Batch
+                 (Item, Current.Key, Norm, Count, Keys, Status);
+               exit when E.Is_Error (Status);
+               Product_Batch
+                 (Item, Current.Value, Norm, Count, Values, Status);
+               exit when E.Is_Error (Status);
+            end if;
 
             Charge (Item, Projecting, Mark);
 

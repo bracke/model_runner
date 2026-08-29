@@ -3531,11 +3531,12 @@ package body Model_Runner.Platform.Device.Products is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
    begin
-      --  Source is zero only on an empty sequence, which is a
-      --  normalization of nothing.
+      --  Source is zero only on an empty sequence, where it means the
+      --  caller's own activation -- which is what a product first in a
+      --  sequence reads too. A layer's second half normalizes a step and
+      --  its first half normalizes what it was handed.
       if Steps.Held = Sequence_Limit
         or else Width = 0
-        or else Source = 0
         or else Source > Steps.Held
       then
          Added := False;

@@ -1035,6 +1035,151 @@ package body Model_Runner.Backend.Device is
       end;
    end Dispatch_Group;
 
+   ---------------------------
+   -- Normalize_And_Project --
+   ---------------------------
+
+   procedure Normalize_And_Project
+     (Weights     : T.View_Group;
+      Vector      : T.Real_Array_Access;
+      Norm_Weight : T.Real_Array;
+      Epsilon     : Model_Runner.Numerics.Real;
+      Into        : T.Target_Group;
+      Ok          : out Boolean;
+      Spread      : Model_Runner.Numerics.Element_Count := 1;
+      Lifted      : Boolean := False;
+      Cancel      : Model_Runner.Cancellation.Token_Reference := null)
+   is
+
+      Slots : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count'Max (Spread, 1);
+
+      Steps  : Products.Sequence;
+      Wanted : Model_Runner.Numerics.Element_Count := 0;
+      Added  : Boolean;
+      Ran    : Boolean;
+      Cancelled : Boolean := False;
+
+      Width : Model_Runner.Numerics.Element_Count := 0;
+   begin
+      Ok := False;
+
+      if not Ready_Now
+        or else Weights'Length = 0
+        or else Weights'Length /= Into'Length
+        or else Vector = null
+        or else Norm_Weight'Length = 0
+      then
+         return;
+      end if;
+
+      Width := Model_Runner.Numerics.Element_Count (Norm_Weight'Length);
+
+      if Vector.all'Length < Slots * Width then
+         return;
+      end if;
+
+      --  The normalization's own room comes first in the answer, because
+      --  every step of a sequence is given room whether the host reads it
+      --  back or not: what a caller indexes does not depend on what it kept.
+      Wanted := Slots * Width;
+
+      Products.Open_Sequence (Steps);
+
+      declare
+         At_Norm : constant System.Address :=
+           Norm_Weight (Norm_Weight'First)'Address;
+      begin
+         Products.Add_Norm
+           (Steps, At_Norm,
+            Model_Runner.Bytes.Byte_Count (Norm_Weight'Length) * 4, 0,
+            Natural (Width), Epsilon, Added,
+            Lifted => Lifted, Key => At_Norm, Kept => False);
+      end;
+
+      if not Added then
+         return;
+      end if;
+
+      --  Every matrix reads the normalization rather than the step before
+      --  it, which for the second and third of them is another matrix.
+      for Index in Weights'Range loop
+         declare
+            This : T.View renames Weights (Index);
+
+            Mine : T.Real_Array_Access renames
+              Into (Into'First + (Index - Weights'First));
+
+            Packing : Products.Weight_Packing;
+            Known   : Boolean;
+         begin
+            Packing_Of (This, Packing, Known);
+
+            if not Known
+              or else This.Base = System.Null_Address
+              or else This.Columns /= Width
+              or else Mine = null
+              or else Mine.all'Length < Slots * This.Rows
+            then
+               return;
+            end if;
+
+            Products.Add_Chained_Product
+              (Steps, This.Base, This.Span, This.Offset, Packing,
+               Natural (This.Rows), Natural (This.Columns), Added,
+               Key => At_Offset (This.Base, This.Offset),
+               From_Step => 1);
+
+            if not Added then
+               return;
+            end if;
+
+            Wanted := Wanted + This.Rows * Slots;
+         end;
+      end loop;
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps, Vector.all (Vector.all'First
+                                    .. Vector.all'First + Slots * Width - 1),
+         Positive (Slots),
+         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ran, Cancelled, Cancel);
+
+      if Cancelled or else not Ran then
+         return;
+      end if;
+
+      declare
+         --  Past the normalization's room, which nothing here reads.
+         At_Value : Model_Runner.Numerics.Element_Count :=
+           Landing.all'First + Slots * Width;
+      begin
+         for Index in Weights'Range loop
+            declare
+               Mine : T.Real_Array_Access renames
+                 Into (Into'First + (Index - Weights'First));
+
+               Take : constant Model_Runner.Numerics.Element_Count :=
+                 Weights (Index).Rows * Slots;
+            begin
+               Mine.all (Mine.all'First .. Mine.all'First + Take - 1) :=
+                 Landing.all (At_Value .. At_Value + Take - 1);
+               At_Value := At_Value + Take;
+            end;
+         end loop;
+      end;
+
+      Ok := True;
+   end Normalize_And_Project;
+
    --------------------
    -- Dispatch_Gated --
    --------------------

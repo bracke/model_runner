@@ -37,6 +37,27 @@ Keep a Changelog and the project uses semantic versioning.
   The prompt is level: a batch amortizes a submission over its positions
   already, and its normalization is real work rather than a fixed cost.
 
+- **A layer's first half fuses as well: 5 % of a 1419-token device prompt,
+  and 70 % of the processor time it had left.** The host normalized the
+  layer's input and then sent the queries, the keys and the values as three
+  submissions of their own — four round trips a layer for a normalization
+  and three matrices that all read it. A normalization first in a sequence
+  now reads what the caller handed in, as a product first in one already
+  did, so the three chain to it: one submission, and the normalized value
+  never leaves the device.
+
+  A 1419-token device prompt spent 3.30 s of processor two commits ago and
+  spends 0.65; a 110-token one spends 0.04 s where it spent 0.32. What the
+  host still does during a device prompt is the rotation, the sampler and
+  the reading out.
+
+  **The rotation is left on purpose** — 7 % of the prompt, and not the
+  upload it looks like: `Put_Cache` is a copy into a standing mapping. What
+  costs is the arithmetic, and that is where architectures differ most:
+  Yarn's ramp, a per-dimension divisor table, an attenuation, two pairings.
+  A second implementation of the most variable part of the program, for 7 %,
+  with only the conformance sweep to catch a mistake in it.
+
 - **A prompt's layers fuse too: 6 % of a 110-token device prompt, 1.5 % of a
   1419-token one, and a third of the processor time either way.** The
   fusing landed for a single generated position and a prompt has its own
