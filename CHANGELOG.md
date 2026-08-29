@@ -5,6 +5,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The engine asks a fence whether it is finished before it waits for one**,
+  which is **5 % of a generated token on the device and 4.5 % of a device
+  prompt**. The entry below prices a token's sixty-seven submissions at 23 %;
+  the three a layer are structural, but the waiting is not — `vkWaitForFences`
+  blocks in the driver and a short dispatch pays the wake-up rather than the
+  device's work, which is the worker pool's own finding this sitting.
+
+  64 generated **1.667 s to 1.583**, the 1419-token prompt **1.975 to 1.886**,
+  six alternated rounds three each way, better in 6 of 6 both, digests
+  unchanged. **The device's gap goes 2.52 to 2.32 on a prompt and 1.41 to
+  1.34 generating**, and its generating row is ahead of llama.cpp's processor
+  row by more than a rounding for the first time: 42.3 against 40.4.
+
+  The budget was swept and matters: `vkGetFenceStatus` goes into the driver,
+  so forty thousand turns costs a prompt twenty per cent while still gaining
+  on generation. A thousand covers a generated token's dispatches and gives
+  up long before a prompt's, for 0.48 s of host time against 0.22 on a
+  64-token run.
+
+- **`Waited` counts the asking as well as the waiting.** A spin that covers a
+  short dispatch reaches the wait with the fence already signalled, so a
+  standing stop request was never seen — the spin now asks every sixty-four
+  turns, and the companion assertion that the wait "went round" is answered
+  by either stage, because a product the asking answered has waited.
+
 ### Measured
 
 - **A generated token on the device is sixty-seven submissions, and that is

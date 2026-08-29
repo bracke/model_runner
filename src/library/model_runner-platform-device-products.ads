@@ -110,14 +110,21 @@ package Model_Runner.Platform.Device.Products is
 
    --  How many slices the last product spent waiting for the device.
    --
-   --  One is a product the device answered inside the first slice. More
-   --  than one means the wait went round, which is where a stop request
-   --  made while a product is running is seen -- so this is how a test can
-   --  tell that a cancelled product was cancelled there rather than by the
-   --  check before anything was submitted.
+   --  One is a product the device answered at once. More than one means the
+   --  engine went round waiting for it, which is where a stop request made
+   --  while a product is running is seen -- so this is how a test can tell
+   --  that a cancelled product was cancelled there rather than by the check
+   --  before anything was submitted.
+   --
+   --  Turns rather than slices since the engine asks a fence whether it is
+   --  finished before it waits for one: a short product is answered inside
+   --  the asking and never reaches the wait at all, and both places count
+   --  here and both notice a request. Counting only the slices would say a
+   --  product that the asking answered had not waited, which is the thing
+   --  this exists to distinguish and would have been false.
    --
    --  @param Item Engine to ask about.
-   --  @return Slices taken by the last product, or zero before any.
+   --  @return Turns taken by the last product, or zero before any.
    function Waited (Item : Engine) return Natural;
 
    --  Whether a dispatch was left unfinished on this engine.

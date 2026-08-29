@@ -5681,7 +5681,7 @@ reference 7889C19A99EDE596 src/library/model_runner-backend-reference.adb src/li
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-device F95C80A16066CE28 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device A88D74630234D5B6 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -8605,7 +8605,7 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-outside F95C80A16066CE28 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside A88D74630234D5B6 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -11614,3 +11614,66 @@ outside F95C80A16066CE28 src/shaders/row_product.comp src/shaders/matrix_product
 #
 #   Not built. Cutting to one a layer would be about fifteen per cent of a
 #   generated token; cutting to one a token, twenty-two.
+
+# 2026-08-29  The engine asks the fence before it waits for one
+#
+#   The entry above counts sixty-seven submissions a generated token, three
+#   a layer, and prices them at twenty-three per cent. The three a layer are
+#   structural -- the host normalizes, rotates and joins between the
+#   products and holds the activations, so no two of the device's sequences
+#   are adjacent. What is not structural is the waiting.
+#
+#   vkWaitForFences blocks in the driver and what a short dispatch pays
+#   there is the wake-up rather than the device's work, which is the worker
+#   pool's own finding of this sitting. The engine now asks
+#   vkGetFenceStatus up to a thousand times before it waits, and waits as it
+#   did when the asking finds nothing.
+#
+#                                    before    after
+#     64 generated on the device     1.667 s   1.583 s   better in 6 of 6
+#     1419-token prompt, device      1.975 s   1.886 s   better in 6 of 6
+#
+#   Six alternated rounds of three, three each way. Five per cent generating
+#   and four and a half on a prompt; digests 448c2ed68ec342ee and
+#   1a26d24d33b8957b either way. The device's gap goes 2.52 to 2.32 on a
+#   prompt and 1.41 to 1.34 generating.
+#
+#   The budget is not free to choose. vkGetFenceStatus goes into the driver
+#   -- it is not a pause -- so a spin long enough to cover a prompt's
+#   dispatches costs more than it saves:
+#
+#     spin      64 generated    1419 prompt
+#      100      1.482 s         1.960 s
+#     1000      1.475           1.897
+#     8000      1.471           2.390
+#
+#   A thousand covers a generated token's dispatches and gives up long
+#   before a prompt's. What it costs is host time the device was not using:
+#   a sixty-four token run goes from 0.22 s of processor time to 0.48.
+#
+#   And it changed what a test could see. A standing stop request is noticed
+#   between slices of the wait; a spin that covers a whole short dispatch
+#   reaches the wait with the fence already signalled, so the request was
+#   never seen and the test said so. The spin now asks the same question
+#   every sixty-four turns. Its companion assertion -- that the wait went
+#   round more than once -- was written against slices, and the engine now
+#   waits in two stages: Waited counts both, because a product the asking
+#   answered has waited and saying otherwise would have been false.
+#
+#   The sitting, device and outside only; the other six groups did not move:
+#
+#   device: six tokens twelve generated, cpu 0.396 s (0.053 + 0.340, 1.78 s
+#     processor) against device 0.296 s (0.041 + 0.256, 0.07 s); 110 tokens
+#     cpu 0.385 s for 2.44 s against device 0.180 s for 0.35 s
+#
+#   outside: model_runner 110 in 0.382 s and 64 in 1.862 s on the processor,
+#     0.178 s and 1.514 s on the device; 1419 in 5.163 s and 1.808 s.
+#     llama-bench --device none pp110 364.70 pp1419 304.08 tg64 40.38,
+#     -ngl 99 pp110 1680.90 pp1419 1820.32 tg64 56.48, -ngl 0 pp110 752.66
+#     pp1419 1363.47 tg64 40.42
+#
+#   The device generating row is ahead of llama.cpp's processor row by more
+#   than a rounding for the first time: 42.3 against 40.4.
+#
+#   load:  0.19 rising to 3.93
+#   model: TinyLlama-1.1B-Chat Q8_0

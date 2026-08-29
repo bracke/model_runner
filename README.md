@@ -1567,12 +1567,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.395 s | **0.331 s** |
-| -- evaluating the prompt | 0.053 s | 0.050 s |
-| -- generating | 0.341 s | **0.280 s** |
-| -- processor time | 1.79 s | **0.03 s** |
-| 110-token prompt, nothing generated | 0.358 s | **0.187 s** |
-| -- processor time | 2.38 s | 0.39 s |
+| 6-token prompt, 12 generated | 0.396 s | **0.296 s** |
+| -- evaluating the prompt | 0.053 s | 0.041 s |
+| -- generating | 0.340 s | **0.256 s** |
+| -- processor time | 1.78 s | **0.07 s** |
+| 110-token prompt, nothing generated | 0.385 s | **0.180 s** |
+| -- processor time | 2.44 s | 0.35 s |
 
 All six cells were taken in one sitting on 2026-08-28, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -5256,6 +5256,50 @@ operands are not the wall: fourteen per cent between them. What is left is
 the rate this part retires cooperative-matrix multiplies at, and nothing
 tried here has moved it.
 
+### The engine asks the fence before it waits for one
+
+The section below counts sixty-seven submissions a generated token, three a
+layer, each a submit and a wait on a fence -- and prices them at
+twenty-three per cent of the token. The three a layer are structural: the
+host normalizes, rotates and joins between the products and holds the
+activations itself, so no two of the device's sequences are adjacent and
+merging them is a redesign rather than a change.
+
+**What is not structural is the waiting.** `vkWaitForFences` blocks in the
+driver, and what a short dispatch pays there is not the device's work but the
+wake-up at the end of it -- which is the same thing the worker pool's own
+wake cost, and answers the same way. The engine now asks
+`vkGetFenceStatus` up to a thousand times before it waits, and waits exactly
+as it did if the asking finds nothing.
+
+| medians of three, six alternated rounds | before | after | |
+|---|---:|---:|---:|
+| 64 generated on the device | 1.667 s | **1.583 s** | better in 6 of 6 |
+| 1419-token prompt on the device | 1.975 s | **1.886 s** | better in 6 of 6 |
+
+Five per cent generating and four and a half on a prompt, and the digests do
+not move: `448c2ed68ec342ee` and `1a26d24d33b8957b` either way. **The device's
+gap goes 2.52 times to 2.32 on a prompt and 1.41 to 1.34 generating.**
+
+The budget matters and was swept. Asking is not free -- `vkGetFenceStatus`
+goes into the driver, it is not a `pause` -- so a spin long enough to cover a
+*prompt's* dispatches costs more than it saves: at forty thousand turns the
+long prompt reads 2.39 s against 1.97, twenty per cent worse, while
+generating still gains. A thousand turns covers a generated token's
+dispatches and gives up long before a prompt's. What it costs is host time
+the device was not using: a sixty-four token run goes from 0.22 s of
+processor time to 0.48.
+
+**And it changed what one test could see, which is the part worth writing
+down.** A standing stop request is noticed between slices of the wait, and a
+spin that covers a whole short dispatch is a spin that reaches the wait with
+the fence already signalled -- so the request was never seen and the test
+said so. The spin now asks the same question every sixty-four turns. Its
+companion assertion, that the wait "went round more than once", was written
+against slices; the engine now waits in two stages and `Waited` counts both,
+because a product the asking answered has waited and saying otherwise would
+have been false.
+
 ### A generated token on the device is sixty-seven submissions
 
 The device generates at 1.41 times the other runtime and had had no work at
@@ -5575,33 +5619,33 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **299.7 t/s** | 34.2 t/s |
-| llama.cpp, processor | 385.3 t/s | 40.4 t/s |
-| model_runner, device | 635.8 t/s | **40.1 t/s** |
-| llama.cpp, device | 1653.8 t/s | 56.5 t/s |
+| model_runner, processor | **288.0 t/s** | 34.4 t/s |
+| llama.cpp, processor | 364.7 t/s | 40.4 t/s |
+| model_runner, device | 618.0 t/s | **42.3 t/s** |
+| llama.cpp, device | 1680.9 t/s | 56.5 t/s |
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **269.5 t/s** | 34.2 t/s |
-| llama.cpp, processor | 310.2 t/s | 40.4 t/s |
-| model_runner, device | **719.9 t/s** | 40.1 t/s |
-| llama.cpp, device | 1817.1 t/s | 56.5 t/s |
+| model_runner, processor | **274.8 t/s** | 34.4 t/s |
+| llama.cpp, processor | 304.1 t/s | 40.4 t/s |
+| model_runner, device | **784.8 t/s** | 42.3 t/s |
+| llama.cpp, device | 1820.3 t/s | 56.5 t/s |
 
 **The longer prompt is the harder one and the quieter one, and it took this
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The gap is wider on the device and **narrower on the processor for the first
-time**: 1.15 times there against 1.29 at the shorter length, and 2.5 on the
-device against 2.6. Attention grows with the square of the context and it
+The gap is wider on the device and narrower on the processor: **1.11 times
+there against 1.27 at the shorter length, and 2.3 on the device against
+2.7.** Attention grows with the square of the context and it
 is the part of a layer this program is furthest behind on, so a table taken
 at a hundred and ten tokens reads a little kinder than the work deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±0.5 on 310.2 at 1419 tokens against ±14 on 385.3 at
+three runs it is **±0.8 on 304.1 at 1419 tokens against ±10 on 364.7 at
 110** -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
 more between sittings than the change being measured moved it: the device row
@@ -5614,11 +5658,11 @@ comparing against somebody else's `pp110` needs it. But **the long one is the
 figure to argue about**.
 
 On the processor at 110 tokens: **1.2 times slower generating and 1.3 times
-slower reading a prompt** -- the generating figure has read 1.2 three times, 1.3 and 1.4 across sittings, the first three of them
+slower reading a prompt** -- the generating figure has read 1.2 four times, 1.3 and 1.4 across sittings, the first four of them
 after `### The wake, not the work`, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, **1.4** and **2.9**,
-where the sittings before this one said 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
+reading of this table said 3.3 and 16. On the device, **1.3** and **2.7**,
+where the sittings before this one said 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
 1.4 and 2.6, then 1.4 and 2.5, then 1.4 and 3.0, then 1.4 and 3.6, then 1.4 and 3.8, then 1.4
 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and
 10.1. Both device rows have moved for a named reason:
@@ -5637,8 +5681,9 @@ which numbers belong to which figure. Reading the table against its own
 prose is what caught it, which is a thing only a person does.
 
 **The device row and llama.cpp's processor row generate at about the same
-rate** -- 40.1 against 40.4 in this sitting, where the thirteen before read 40.3
-against 40.4, 39.8 against 40.3, 40.6 against 39.8, 40.5
+rate** -- 42.3 against 40.4 in this sitting, which is the first time the
+device row is clearly ahead, where the fourteen before read 40.1
+against 40.4, 40.3 against 40.4, 39.8 against 40.3, 40.6 against 39.8, 40.5
 against 39.9, 40.4 against 39.9, 40.2 against 39.9, 40.1 against 40.0, 40.7
 against 40.0, 38.9 against 40.0, 40.9 against 40.4, 41.0 against 40.4, 40.7
 against 40.7, and 41.6 against 40.0. Nine of those eleven put this program's
@@ -5693,8 +5738,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.367 s
-and 64 in 1.869 s on the processor, 0.173 s and 1.596 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.382 s
+and 64 in 1.862 s on the processor, 0.178 s and 1.514 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -5707,13 +5752,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 770.4 t/s rather
-than 385.3 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 752.7 t/s rather
+than 364.7 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 40.1 t/s
-now, against 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 42.3 t/s
+now, against 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the

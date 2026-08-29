@@ -647,6 +647,11 @@ package body Model_Runner.Platform.Device.Products is
                Fences : Address) return C.int
      with Convention => C;
 
+   --  Whether a fence has been signalled, asked without waiting.
+   type Fence_Status_Call is access
+     function (Device : Address; Fence : Address) return C.int
+     with Convention => C;
+
    function To_Create is
      new Ada.Unchecked_Conversion (Address, Create_Call);
    function To_Destroy is
@@ -681,6 +686,8 @@ package body Model_Runner.Platform.Device.Products is
      new Ada.Unchecked_Conversion (Address, Barrier_Call);
    function To_Submit is new Ada.Unchecked_Conversion (Address, Submit_Call);
    function To_Wait is new Ada.Unchecked_Conversion (Address, Wait_Call);
+   function To_Fence_Status is
+     new Ada.Unchecked_Conversion (Address, Fence_Status_Call);
    function To_Reset_Fences is
      new Ada.Unchecked_Conversion (Address, Reset_Fences_Call);
 
@@ -1872,6 +1879,22 @@ package body Model_Runner.Platform.Device.Products is
    --  only put the same question.
    Timeout_Result : constant Interfaces.C.int := 2;
 
+   --  How long to ask a fence whether it is finished before waiting for it.
+   --
+   --  A submission here is a submit and a wait, and a generated token makes
+   --  sixty-seven of them: three a layer, because the host normalizes,
+   --  rotates and joins between the products and holds the activations
+   --  itself. Waiting is a blocking call into the driver, and what it costs
+   --  is not the device's work but the wake-up at the end of it -- the same
+   --  thing the worker pool's own wake cost, and answered the same way.
+   --
+   --  Asked rather than waited for, up to this many turns, and then waited
+   --  for as before. A device that has not finished inside the spin costs
+   --  the spin and then blocks exactly as it used to; the cancellation
+   --  bound and the stall path below are untouched, because both live in
+   --  the wait that follows.
+   Fence_Spin : constant := 1000;
+
    ---------------------------------------------------------------------------
    --  One product
    ---------------------------------------------------------------------------
@@ -2242,6 +2265,9 @@ package body Model_Runner.Platform.Device.Products is
          Reset  : constant Reset_Fences_Call :=
            To_Reset_Fences (Point ("vkResetFences"));
 
+         Ready  : constant Fence_Status_Call :=
+           To_Fence_Status (Point ("vkGetFenceStatus"));
+
          Buffer_Handle : aliased Address := Item.Buffer;
          Fence_Handle  : aliased Address := Item.Fence;
          Request       : aliased Submit_Info;
@@ -2309,8 +2335,34 @@ package body Model_Runner.Platform.Device.Products is
          begin
             Item.Waited := 0;
 
+            --  Asked before it is waited for. A dispatch this engine sends
+            --  is tens of microseconds of work and the wait around it is a
+            --  blocking call; asking first is what the worker pool does for
+            --  the same reason and answers here for the same one.
+            if Ready /= null then
+               for Turn in 1 .. Fence_Spin loop
+                  Item.Waited := Turn;
+                  exit when Ready (Item.Logical, Item.Fence) = 0;
+
+                  --  The same question the wait below asks between its
+                  --  slices, asked here as well. Without it a spin that
+                  --  covers the whole of a short dispatch is a spin that
+                  --  never notices a caller has asked to stop -- which is
+                  --  what the test for a standing stop request found the
+                  --  first time this was built, and is the only thing the
+                  --  spin changed about what this procedure means.
+                  if not Stopped
+                    and then Turn mod 64 = 0
+                    and then Model_Runner.Cancellation."/=" (Cancel, null)
+                    and then Cancel.all.Is_Requested
+                  then
+                     Stopped := True;
+                  end if;
+               end loop;
+            end if;
+
             for Attempt in 1 .. Slices loop
-               Item.Waited := Attempt;
+               Item.Waited := Item.Waited + 1;
                declare
                   Answer : constant Interfaces.C.int :=
                     Wait (Item.Logical, 1, Fence_Handle'Address, 1,
