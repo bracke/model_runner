@@ -5090,7 +5090,70 @@ So the sweep bought nothing, which is worth as much as if it had. **The
 matrix shader is not a kernel with a tunable tile; it is a kernel written for
 one tile**, and making it take another means rewriting the staging, not
 changing a constant. That is a different piece of work from the one this set
-out to be, and knowing which it is was the point of looking.
+out to be, and knowing which it is was the point of looking. It was done,
+in `### The tile made a number, swept, and put back` below, and the answer
+was that this tile is the right one.
+
+### The tile made a number, swept, and put back
+
+`### The tile sweep, and why there was almost nothing to sweep` ended by
+saying the matrix shader is not a kernel with a tunable tile but a kernel
+written for one tile, and that changing it means rewriting the staging. So
+the staging was rewritten, the shapes it could not reach were swept, and the
+rewrite was taken out again.
+
+The staging was sixty-four invocations decoding thirty-two rows of a
+thirty-two column step, half a row each, with the invocation number cut in
+two to say which row and which half. The rewrite deals **sixteen-value units**
+round the workgroup instead -- a unit is half a thirty-two element block,
+which is the largest piece all fourteen formats decode the same way -- so
+the tile stops being an assumption. A workgroup of more than one subgroup
+became possible at the same time, each subgroup carrying its own slice of the
+vectors and all of them sharing one decode.
+
+Every shape then ran, where three of six used to produce a kernel that
+compiled and answered nothing. The long device prompt, medians of three:
+
+| | |
+|---|---:|
+| 32 x 128, step 32, one subgroup | **1.935 s** |
+| 64 x 128, step 32 | 2.058 s |
+| 32 x 128, step 64 | 2.062 s |
+| 32 x 128, step 128 | 2.122 s |
+| 32 x 128, step 32, two subgroups | 2.130 s |
+| 64 x 64, step 32 | 2.148 s |
+| 16 x 128, step 32 | 2.198 s |
+| 64 x 128, step 64 | 2.213 s |
+| 32 x 128, step 32, four subgroups | 2.461 s |
+| 32 x 256, step 32, two subgroups, batch 256 | 2.803 s |
+| 32 x 256, step 32, batch 256 | 3.207 s |
+
+All eleven answered `1a26d24d33b8957b`. **The shape that was already there is
+the best of them and it is not close** -- the nearest alternative is six per
+cent behind.
+
+Two of those rows say what this shader is *not* waiting for, which is worth
+more than the ranking. Raising the vector tile to 256 with the batch raised
+to match halves how often the weights are read, and costs sixty per cent:
+**the weights are not the wall.** More subgroups sharing one tile's decode is
+worse at two and worse again at four: **occupancy is not the wall either.**
+What is left is the register pressure of the accumulators against the cost of
+the decode, and thirty-two by a hundred and twenty-eight is where those two
+cross.
+
+**The rewrite itself costs one and a half per cent** -- 1.99 s against 1.965,
+better in three of eleven alternated rounds -- and it was written three ways
+to try to give that back: a strided loop, a counted loop, and a counted loop
+whose step arithmetic is guarded by constants so the kept shape folds back to
+a straight line. All three cost the same, so it is the loop and not the
+arithmetic in it.
+
+Generality that costs one and a half per cent and unlocks nothing is not
+kept. What is kept is **a repository check that `TILE_R` and `KCH` are
+thirty-two**, which is what the staging is written for, so that the next
+person to turn one of them gets a failure rather than a kernel that runs and
+answers nothing. The trap is what was worth removing; the tile was already
+right.
 
 ### What lengthening the sweep costs
 

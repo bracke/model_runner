@@ -10982,3 +10982,61 @@ outside E95EBFB8FC2E3DB3 src/shaders/row_product.comp src/shaders/matrix_product
 #          pinned and 1.98 unpinned, from a part at 50 C
 #   model: TinyLlama-1.1B-Chat Q8_0, Q2_K for the draft pair, Q4_K_M for the
 #          four-bit comparison
+
+# 2026-08-29  The tile made tunable, swept, and put back
+#
+#   The matrix shader's staging was rewritten so that TILE_R, TILE_V and KCH
+#   are numbers rather than assumptions, the shapes it could not reach were
+#   swept, and the rewrite was taken out again. Three things were learned
+#   and one of them is a check.
+#
+#   The staging was sixty-four invocations decoding thirty-two rows of a
+#   thirty-two column step, half a row each, with the invocation number cut
+#   in two to say which row and which half. The rewrite deals sixteen-value
+#   units round the workgroup instead: a unit is half a thirty-two element
+#   block, which is the largest piece every format here decodes the same
+#   way, and the units are dealt round however many invocations there are.
+#   A workgroup of more than one subgroup was made possible at the same
+#   time, each subgroup carrying its own slice of the vectors.
+#
+#   Every shape then ran, where the sweep of 2026-08-29 found three of six
+#   producing a kernel that compiled and answered nothing. The long device
+#   prompt, medians of three:
+#
+#     32 x 128, step 32, one subgroup      1.935 s   <- as it is
+#     64 x 128, step 32                    2.058
+#     32 x 128, step 64                    2.062
+#     64 x  64, step 32                    2.148
+#     16 x 128, step 32                    2.198
+#     32 x 128, step 128                   2.122
+#     64 x 128, step 64                    2.213
+#     32 x 128, step 32, two subgroups     2.130
+#     32 x 128, step 32, four subgroups    2.461
+#     32 x 256, step 32, batch 256         3.207
+#     32 x 256, step 32, two, batch 256    2.803
+#
+#   Every one of the eleven answered 1a26d24d33b8957b. The shape that was
+#   already there is the best of them, and it is not close: the nearest
+#   alternative is six per cent behind.
+#
+#   Raising the vector tile above a hundred and twenty-eight is worse even
+#   with the batch raised to match, which was the one combination the old
+#   sweep could not ask. So the weights are not what this shader is waiting
+#   for: reading them half as often costs sixty per cent. Nor is it
+#   occupancy -- more subgroups sharing a tile is worse at every count. What
+#   is left is the register pressure of the accumulators against the cost of
+#   the decode, and thirty-two by a hundred and twenty-eight is where those
+#   two cross.
+#
+#   The rewrite itself costs one and a half per cent of a device prompt --
+#   1.99 s against 1.965, better in three of eleven alternated rounds, in
+#   three forms: a strided loop, a counted loop, and a counted loop with the
+#   step arithmetic guarded by constants so the kept shape folds back to a
+#   straight line. All three cost about the same, so it is the loop and not
+#   the arithmetic in it.
+#
+#   Generality that costs one and a half per cent and unlocks nothing is not
+#   kept. What is kept is a repository check that TILE_R and KCH are
+#   thirty-two, which is what the staging is written for, so that the next
+#   person to turn one of those two gets a failure rather than a kernel that
+#   runs and answers nothing.

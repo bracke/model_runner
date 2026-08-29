@@ -5,6 +5,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The matrix shader's tile is the best of eleven shapes, and making it
+  tunable costs one and a half per cent.** The staging was rewritten to deal
+  sixteen-value units round the workgroup instead of hand-mapping sixty-four
+  invocations onto thirty-two rows, which made `TILE_R`, `TILE_V`, `KCH` and
+  the subgroup count into numbers — every shape then ran, where the earlier
+  sweep found three of six producing a kernel that compiled and answered
+  nothing.
+
+  The long device prompt at **32x128 step 32 is 1.935 s**; the nearest of ten
+  alternatives is 2.058 and the furthest 3.207, all answering
+  `1a26d24d33b8957b`. Raising the vector tile with the batch raised to match
+  — the one combination the old sweep could not ask — costs sixty per cent,
+  so the weights are not what this shader waits for; more subgroups sharing a
+  tile is worse at every count, so neither is occupancy.
+
+  **The rewrite is not kept**: 1.99 s against 1.965 in three forms, better in
+  three of eleven alternated rounds. What is kept is a repository check that
+  `TILE_R` and `KCH` are thirty-two — the shape the staging is written for —
+  so the next person to turn one gets a failure rather than a kernel that
+  runs and answers nothing.
+
 ### Fixed
 
 - **A batched prompt did not give the same answer at every worker count**,

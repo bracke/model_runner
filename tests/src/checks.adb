@@ -5536,6 +5536,11 @@ package body Checks is
               Number_After (Engine, "Tile_Rows    : constant := ");
             Vecs_Asked : constant Natural :=
               Number_After (Engine, "Tile_Vectors : constant := ");
+
+            --  And the step, which nothing outside the shader reads and
+            --  which the staging is written to by hand.
+            Step_Said : constant Natural :=
+              Number_After (Shader, "const uint KCH    = ");
          begin
             Result.Performed := Result.Performed + 1;
 
@@ -5554,6 +5559,36 @@ package body Checks is
                      & Natural'Image (Vecs_Asked)
                      & "; whatever a workgroup does not reach is left "
                      & "uncomputed, which is noise and not an error");
+            end if;
+
+            --  And the shape the staging is written for, which is a
+            --  separate question from whether the two files agree.
+            --
+            --  Sixty-four invocations decode thirty-two rows of a
+            --  thirty-two column step, half a row each, and the invocation
+            --  number is cut in two to say which row and which half. Move
+            --  TILE_R or KCH and that mapping is wrong: the kernel still
+            --  compiles, the engine still dispatches it, and it computes
+            --  from the wrong place. A sweep of six shapes found exactly
+            --  that -- three of them produced a kernel that ran and
+            --  answered nothing, and every one of the three moved one of
+            --  these two.
+            --
+            --  So they are pinned here rather than left as a trap. The
+            --  staging was rewritten to deal its work round the workgroup,
+            --  which makes both of them free; it cost one and a half per
+            --  cent of a device prompt and the sweep it made possible found
+            --  no shape better than this one, so what is kept is this check
+            --  and the measurement in docs/measured-figures.txt.
+            Result.Performed := Result.Performed + 1;
+
+            if Rows_Said /= 32 or else Step_Said /= 32 then
+               Fail ("src/shaders/matrix_product.comp states TILE_R"
+                     & Natural'Image (Rows_Said) & " and KCH"
+                     & Natural'Image (Step_Said)
+                     & "; its staging loop is written by hand for thirty-two"
+                     & " of each and computes from the wrong place at any"
+                     & " other shape, without failing to compile or to run");
             end if;
          end;
 
