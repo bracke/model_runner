@@ -5100,6 +5100,49 @@ out to be, and knowing which it is was the point of looking. It was done,
 in `### The tile made a number, swept, and put back` below, and the answer
 was that this tile is the right one.
 
+### Device attention, priced, and the rate it runs at
+
+`--budget` puts attending at **24.6 per cent of a device prompt**, second
+only to the two matrix phases, and it had never been taken apart. Three
+ablations, each replacing one thing with a constant, the same instrument that
+priced the matrix shader above:
+
+| | |
+|---|---:|
+| as it is | 1.911 s |
+| the score half, the query against the keys, removed | 1.689 s (**−11.6 %**) |
+| the blend half, the weights against the values, removed | 1.759 s (−7.9 %) |
+| the subgroup reductions removed | does not run |
+
+The reductions cannot be ablated at all: without the running maximum a score
+of minus infinity reaches the exponential and the run refuses, which is the
+guard doing exactly what it is for.
+
+So **the two arithmetic halves are 19.5 per cent of a device prompt** of the
+24.6 that attending takes, and the softmax, the barriers and the stores are
+the remaining five. Nothing is hidden in attention. It is its two products.
+
+**And the rate they run at is the finding.** Attention is
+`pairs × heads × (head_size + value_size) × layers` = 1,007,490 × 32 × 128 ×
+22 = 90.8 thousand million multiply-adds, or 181.6 Gflop, done in 19.5 per
+cent of 1.911 s: **0.49 Tflops**. The weight product in the same run is 2.94
+Tflop in the 59.8 per cent the two matrix phases take: **2.57 Tflops**.
+Attention runs at **a fifth of the rate the same part reaches on the same
+prompt in the same second**.
+
+The reason is not subtle once it is written down. The weight product goes
+through `VK_KHR_cooperative_matrix`; attention does not. Both halves of
+attention *are* matrix products -- the query against the transpose of the
+keys, then the weights against the values -- and both are computed a lane at
+a time in binary32, which is what a fifth of the rate looks like.
+
+Which prices the next thing rather than doing it. **Attention at the matrix
+product's rate would be about five per cent of a device prompt rather than
+twenty-five: seventeen per cent of the prompt, and the largest single number
+left anywhere in this file.** It is also the change the other runtime has
+already made, which is part of why its device prompt is two and a half times
+this one.
+
 ### What a device prompt is not waiting for
 
 The matrix shader unpacks Q8_0 into half precision in shared memory on every

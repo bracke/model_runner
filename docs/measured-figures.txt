@@ -11360,3 +11360,47 @@ outside F95C80A16066CE28 src/shaders/row_product.comp src/shaders/matrix_product
 #   within twenty per cent of their present ceilings, so it could buy a few
 #   per cent -- against a third compilation of a unit that is not a generic
 #   today.
+
+# 2026-08-29  Device attention, priced, and the rate it runs at
+#
+#   No code changed. The budget puts attending at 24.6 per cent of a device
+#   prompt, second to the two matrix phases, and it had never been taken
+#   apart. Three ablations of attention.comp, each replacing one thing with
+#   a constant. Device long prompt, medians of three:
+#
+#     as it is                                    1.911 s
+#     the score half, q against k, removed        1.689   -11.6%
+#     the blend half, p against v, removed        1.759    -7.9%
+#     the subgroup reductions removed             does not run
+#
+#   The reductions cannot be ablated: without the running maximum a score of
+#   minus infinity reaches the exponential and the run refuses, which is the
+#   guard doing its job.
+#
+#   So the two arithmetic halves are 19.5 per cent of a device prompt of the
+#   24.6 attending takes, and the softmax, the barriers and the stores are
+#   the remaining five. There is nothing hidden in attention: it is its two
+#   products.
+#
+#   And the rate they run at is the finding. Attention is
+#
+#     pairs x heads x (head_size + value_size) x layers
+#       = 1,007,490 x 32 x 128 x 22 = 90.8 G multiply-adds = 181.6 Gflop
+#
+#   in 19.5 per cent of 1.911 s, which is 0.49 Tflops. The weight product in
+#   the same run is 2.94 Tflop in the 59.8 per cent the two matrix phases
+#   take, which is 2.57 Tflops. **Attention runs at a fifth of the rate the
+#   same part reaches on the same prompt in the same second.**
+#
+#   The reason is not subtle once it is written down: the weight product
+#   goes through VK_KHR_cooperative_matrix and attention does not. Both
+#   halves of attention are matrix products -- q against the transpose of k,
+#   then the weights against v -- and both are computed a lane at a time in
+#   binary32.
+#
+#   Which prices the next thing rather than doing it. Attention at the
+#   matrix product's rate would be about five per cent of a device prompt
+#   rather than twenty-five, which is seventeen per cent of the prompt and
+#   the largest single number left anywhere in this file. It is also the
+#   change llama.cpp already made, which is part of why its device prompt is
+#   two and a half times this one.

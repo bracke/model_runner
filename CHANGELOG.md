@@ -7,6 +7,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Device attention is its two products, and they run at a fifth of the rate
+  the same part reaches on the weight product.** Three ablations of
+  `attention.comp`: the score half removed is **1.689 s against 1.911**
+  (−11.6 %), the blend half removed 1.759 (−7.9 %), and the subgroup
+  reductions cannot be removed at all — without the running maximum a score
+  of minus infinity reaches the exponential and the run refuses, which is the
+  guard working.
+
+  So the two arithmetic halves are **19.5 % of a device prompt** of the 24.6
+  attending takes, and the softmax, barriers and stores are the other five:
+  nothing is hidden in attention, it is its two products.
+
+  Those products are 181.6 Gflop in 19.5 % of 1.911 s — **0.49 Tflops** —
+  against the weight product's 2.94 Tflop in the 59.8 % the matrix phases
+  take, **2.57 Tflops**. The weight product goes through
+  `VK_KHR_cooperative_matrix` and attention does not: both its halves are
+  matrix products computed a lane at a time in binary32.
+
+  **Attention at the matrix product's rate would be about five per cent of a
+  device prompt rather than twenty-five** — seventeen per cent of the prompt,
+  the largest single number left in this file, and the change llama.cpp
+  already made.
+
+### Measured
+
 - **The score half of attention is where the blend is, and for the same
   reason.** `head_scores` is 7 % of a prompt and its horizontal fold was the
   suspect; disassembled, the fold is **14 instructions of 129** and its six
