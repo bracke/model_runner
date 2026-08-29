@@ -5256,6 +5256,50 @@ operands are not the wall: fourteen per cent between them. What is left is
 the rate this part retires cooperative-matrix multiplies at, and nothing
 tried here has moved it.
 
+### A layer's second half in one submission: built, right, slower
+
+The section below names the three submissions a layer makes as structural --
+the host normalizes, rotates and joins between the products, so no two of the
+device's sequences are adjacent. One of the three was removed.
+
+What that took: `norm.comp`, the root-mean-square normalization with the sum
+walked in order and accumulated in binary64, which is what the processor does
+so that the two agree bit for bit; a third unit on `combine.comp`, where two
+is not a unit but an addition -- the residual join, in three lines rather
+than a kernel; `Add_Norm` and `Add_Join` on the sequence, with
+back-references so a step may read one it names rather than the one before
+it, which a fused layer needs because both arms of its feed-forward read the
+normalization four steps back and its second join reads the first; and
+`Attend_And_Feed`, nine steps in one submission where the engine made two.
+
+**It is right.** Twelve generated tokens on the device answer
+`5abff916f9d83ca6` and sixty-four answer `448c2ed68ec342ee`, which are the
+published digests -- so a normalization computed on the device in binary64
+agrees with the processor's to the last bit, which is what walking the sum in
+order was for.
+
+**And it is forty per cent slower**: 0.367 s against 0.256 for sixty-four
+generated. Two candidates were measured and neither is it. The binary64 sum
+is worth eight per cent of the difference -- the same kernel in binary32
+reads 0.365 and answers the same tokens. And the barriers are worth nothing:
+fencing every reader serialized the two arms of the feed-forward, which used
+to run together, and publishing instead -- one barrier makes every step
+before it visible, so a second reader of the same result needs none -- gave
+back four thousandths of a second.
+
+So a third of a generated token goes somewhere the submission count does not
+explain, and that is written down rather than guessed at. Not kept.
+
+**Three bugs on the way, none of which a type could have caught.** A pipeline
+created before its request had an entry point and a layout: the driver takes
+the module and faults later, with a stack in `libvulkan` and nothing in this
+program to look at. A barrier emitted only for a step chained to the one
+before it, where a step that names an earlier one needs it just as much --
+without it the sequence answers, and answers wrongly. And a normalization
+handed to the weight loader as its Rows by its Columns, which for a step
+whose Rows and Columns say what it reads and writes is a square: the loader
+was asked to upload four million values out of an array of two thousand.
+
 ### The engine asks the fence before it waits for one
 
 The section below counts sixty-seven submissions a generated token, three a

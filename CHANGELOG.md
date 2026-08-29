@@ -5,6 +5,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **A layer's second half in one submission: built, correct, and 40 %
+  slower.** The entry below names the three submissions a layer makes as
+  structural, because the host normalizes, rotates and joins between the
+  products. One of the three was removed: a `norm.comp` that walks the sum
+  in order in binary64, a third unit on `combine.comp` that adds its two
+  arms instead of gating them, back-references on the sequence so a step can
+  read one it names, and `Attend_And_Feed` — nine steps where the engine
+  made two submissions.
+
+  **It is right**: twelve generated tokens answer `5abff916f9d83ca6` and
+  sixty-four `448c2ed68ec342ee`, the published digests, so a device-side
+  normalization in binary64 agrees with the processor's to the last bit —
+  which is what walking the sum in order was for.
+
+  **And it is slower** — 0.367 s against 0.256 for 64 generated. Two
+  candidates were measured and neither is it: the binary64 sum is worth 8 %
+  of the difference, and the barriers nothing once a barrier publishes every
+  step before it rather than fencing each reader. So a third of a generated
+  token went somewhere the submission count does not explain. Not committed.
+
+  Three bugs found on the way, written down because none could have been
+  caught by a type: a pipeline created before its request had an entry point
+  and a layout, which faults inside the driver with nothing here to look at;
+  a barrier emitted only for a step chained to the one before it, where a
+  step naming an earlier one needs it just as much and without it the
+  sequence answers wrongly; and a normalization handed to the weight loader
+  as Rows by Columns, which asks it to upload four million values out of an
+  array of two thousand.
+
 ### Changed
 
 - **The engine asks a fence whether it is finished before it waits for one**,

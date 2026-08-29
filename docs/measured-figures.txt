@@ -11677,3 +11677,67 @@ outside A88D74630234D5B6 src/shaders/row_product.comp src/shaders/matrix_product
 #
 #   load:  0.19 rising to 3.93
 #   model: TinyLlama-1.1B-Chat Q8_0
+
+# 2026-08-29  A layer's second half in one submission: built, right, slower
+#
+#   The entry above prices a generated token's sixty-seven submissions at
+#   twenty-three per cent and names the three a layer as structural: the
+#   host normalizes, rotates and joins between the products, so no two of
+#   the device's sequences are adjacent. One of the three was removed. It
+#   works, it computes the same answers, and it is slower.
+#
+#   What was built:
+#
+#     norm.comp, the root-mean-square normalization, one invocation a
+#     position with the sum walked in order and accumulated in binary64 --
+#     which is what the processor does, so the two agree bit for bit.
+#
+#     A third unit on combine.comp: two is not a unit but an addition,
+#     which is the residual join. Three lines rather than a kernel, on the
+#     same layout and the same two arms in and one out.
+#
+#     Add_Norm and Add_Join on the sequence, and back-references -- Reads,
+#     Reads_Two, At_Vector -- so a step may read one it names rather than
+#     the one before it. A fused layer needs all three: both arms of the
+#     feed-forward read the normalization four steps back, and the second
+#     join reads the first.
+#
+#     Attend_And_Feed: attention, its projection, the join, the
+#     normalization, both arms, the combination, the projection down and
+#     the second join. Nine steps, one submission, where the engine made
+#     two.
+#
+#   It is right. Twelve generated tokens on the device answer
+#   5abff916f9d83ca6 and sixty-four answer 448c2ed68ec342ee, which are what
+#   the published figures answer -- so a normalization computed on the
+#   device in binary64 agrees with the processor's to the last bit, which is
+#   what walking the sum in order was for.
+#
+#   And it is forty per cent slower: sixty-four generated tokens 0.367 s
+#   against 0.256. Two candidates were measured and are not it. The binary64
+#   sum is worth eight per cent of the difference -- the same kernel in
+#   binary32 reads 0.365 against 0.398 and answers the same tokens. And the
+#   barriers are worth nothing: fencing every reader serialized the two arms
+#   of the feed-forward, which used to run together, and publishing instead
+#   -- one barrier makes every step before it visible, so a second reader of
+#   the same result needs none -- gave back four thousandths of a second.
+#
+#   So a third of a generated token went somewhere the submission count does
+#   not explain, and this is written down rather than guessed at. Not
+#   committed.
+#
+#   Three bugs found on the way, each of which cost an hour and none of
+#   which the type system could have caught:
+#
+#     A pipeline created before its request had an entry point and a layout
+#     -- the driver takes the module and faults later, with a stack in
+#     libvulkan and nothing in this program to look at.
+#
+#     A barrier emitted only for a step chained to the one before it, where
+#     a step that names an earlier one needs it just as much. Without it the
+#     sequence answers, and answers wrongly.
+#
+#     A normalization handed to the weight loader as its Rows by its
+#     Columns, which for a step whose Rows and Columns say what it reads and
+#     writes is a square: the loader was asked to upload four million values
+#     out of an array of two thousand.
