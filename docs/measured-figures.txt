@@ -10746,3 +10746,45 @@ outside 151FA7EE821FA58A src/shaders/row_product.comp src/shaders/matrix_product
 #   beside it do not, which is a fixture question and is unresolved. It is
 #   not committed.
 
+
+# 2026-08-29  The scale cache, and why deleting seven per cent bought nothing
+#
+#   Built, measured and taken out again. The kernel that reads a batch of
+#   vectors against a tile of rows begins by extracting every weight scale
+#   the tile needs -- a two-byte load at a thirty-four byte stride, once for
+#   every block of every row, once for every tile of every batch. A prompt of
+#   1419 tokens is eleven batches and reads the same numbers eleven times,
+#   and a profile put that loop at 7.6 per cent of the run.
+#
+#   So it was hoisted the whole way out: a table on the processor pool
+#   holding one Q8_0 tensor's scales, filled the first time a product asks
+#   for that tensor and read by every batch after, keyed by the tensor's own
+#   first byte -- its buffer's address and its offset into it, not the
+#   address, which every tensor of a mapped model shares.
+#
+#   The kernel's share fell as predicted and the run did not move:
+#
+#                             as it is        with the cache
+#     rows                       7.6%              4.7%
+#     instructions             388.6 G           384.3 G
+#     cycles                   132.9 G           132.4 G
+#     cache references          28.2 G            31.6 G
+#     wall, evaluating          6.733 s           6.786 s
+#     peak resident            1201 MB           1329 MB
+#
+#   Five alternated rounds of three, medians; the digest 1a26d24d33b8957b
+#   either way, so the table is right.
+#
+#   Four thousand million instructions gone and not one cycle. The reason is
+#   in the third row: the extraction is not a cost, it is a walk ahead of the
+#   strip kernel over the very lines the strip kernel is about to read, and
+#   the weights come from memory whether or not anything reads their scales
+#   first. Taking it away replaces a warm read with a cold one and adds three
+#   thousand million references to a hundred and twenty-eight megabytes of
+#   table that must itself be fetched. The entry of 2026-08-27 guessed
+#   "perhaps six per cent" for this; the guess was wrong, and it was wrong
+#   because it priced instructions in a place where the machine is priced in
+#   bytes -- the same mistake, and the same answer, as the prefetch and the
+#   two-a-turn unroll before it.
+#
+#   Nothing is committed. The measurement is what there is.

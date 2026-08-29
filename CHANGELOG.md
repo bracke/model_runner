@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Caching the weight scales across batches deletes 7.6 % of the run and
+  saves nothing.** The integer tile kernel re-extracts every weight scale for
+  every tile of every batch — a 2-byte load at a 34-byte stride — and a
+  1419-token prompt is eleven batches reading the same numbers eleven times.
+  Hoisting them onto the processor pool, one table per Q8_0 tensor, moved
+  that symbol's share from **7.6 % to 4.7 %** and instructions from
+  **388.6 G to 384.3 G** — and cycles from 132.9 G to 132.4 G, the wall from
+  6.733 s to 6.786 s: nothing, in five alternated rounds of three. Cache
+  references rose 28.2 G to 31.6 G and peak residency 1201 MB to 1329 MB.
+
+  The extraction is not a cost. It is a walk ahead of the strip kernel over
+  the lines the strip kernel is about to read, and the weights come from
+  memory whether or not their scales are read first; removing it trades a
+  warm read for a cold one plus 128 MiB of table. **Not committed** — an
+  earlier note priced this at "perhaps six per cent", which priced
+  instructions where the machine is priced in bytes.
+
+### Measured
+
 - **Lengthening the conformance sweep to cross a matrix tile costs it forty
   minutes**, against about five today. A fifth sequence of 72 tokens used by
   one comparison — the batched device one — was added and the sweep timed;
