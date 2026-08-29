@@ -10720,3 +10720,29 @@ outside 151FA7EE821FA58A src/shaders/row_product.comp src/shaders/matrix_product
 #   written for one tile, and making it take another means rewriting the
 #   staging rather than changing a constant.
 
+# 2026-08-29  What lengthening the sweep costs
+#
+#   No code changed. The blind spot has been named twice without a number on
+#   it; here it is.
+#
+#   A fifth sequence of seventy-two tokens, used by one comparison -- the
+#   batched device one, the only place it could have mattered -- and the
+#   sweep timed:
+#
+#     as it is                  about 5 minutes
+#     with the long sequence    over 40, stopped rather than finished
+#
+#   The cost is not the comparison. The sweep's expectations come from an
+#   independent implementation written for clarity, in binary64 and without a
+#   pool, and it computes every sequence for every fixture whether a
+#   comparison asks for it or not. Seventy-two positions of that, thirteen
+#   architectures and fifteen formats over, is the forty minutes.
+#
+#   So the sweep is the wrong instrument. What the missing test asks is
+#   whether two backends agree, not whether one agrees with an independent
+#   implementation, and two backends can be asked that for the price of
+#   running them. A test doing exactly that was written and does not run: the
+#   processor side returns BACKEND_CLOSED where the same calls in the harness
+#   beside it do not, which is a fixture question and is unresolved. It is
+#   not committed.
+

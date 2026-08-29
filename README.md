@@ -5086,6 +5086,37 @@ one tile**, and making it take another means rewriting the staging, not
 changing a constant. That is a different piece of work from the one this set
 out to be, and knowing which it is was the point of looking.
 
+### What lengthening the sweep costs
+
+The blind spot has been named twice without a number on it: the sweep's
+longest sequence is eight tokens, the matrix kernel is not entered below
+thirty-two, and its tile is a hundred and twenty-eight. Here is the number.
+
+A fifth sequence of seventy-two tokens was added, used by one comparison --
+the batched device one, which is the only place it could have mattered --
+and the sweep was timed. **It went from about five minutes to over forty**,
+and was stopped rather than finished.
+
+The cost is not the comparison. It is that the sweep's expectations come from
+an independent implementation written for clarity, in binary64 and without a
+pool, and it computes every sequence for every fixture whether a comparison
+asks for it or not. Seventy-two positions of that, thirteen architectures and
+fifteen formats over, is the forty minutes.
+
+**So the sweep is the wrong instrument for this**, and knowing why is worth
+the hour. What the missing test wants to ask is whether two backends agree,
+not whether one of them agrees with an independent implementation -- and two
+backends can be asked that for the price of running them. A test doing
+exactly that was written and does not yet run: the processor side comes back
+`BACKEND_CLOSED` where the same calls in the harness beside it do not, which
+is a fixture question and not an engine one. It is not committed, because a
+test that does not run is worse than a gap that is written down.
+
+**What is committed is the check that catches the case that happened** --
+the shader's tile against the engine's dispatch, which fails on the old
+numbers -- and this paragraph, which says what the remaining hole is and what
+it would cost to close it the obvious way.
+
 ### A slower day, measured on both sides
 
 The figures in this section were re-taken twice, because the first sitting

@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Lengthening the conformance sweep to cross a matrix tile costs it forty
+  minutes**, against about five today. A fifth sequence of 72 tokens used by
+  one comparison — the batched device one — was added and the sweep timed;
+  it was stopped rather than finished. The cost is not the comparison but the
+  independent implementation, which computes every sequence for every fixture
+  in binary64 without a pool whether a comparison asks for it or not.
+
+  So the sweep is the wrong instrument for this: what the missing test wants
+  to ask is whether two backends agree, which costs only running them. Such a
+  test was written and is not committed — the processor side returns
+  `BACKEND_CLOSED` where the same calls in the harness beside it do not,
+  which is a fixture question and unresolved. A test that does not run is
+  worse than a gap that is written down.
+
+### Measured
+
 - **The matrix tile sweep bought nothing, and three of six shapes do not
   run.** With the engine's `Tile_Rows` and `Tile_Vectors` moved to match:
   32x128 chunk 32 is **2.34 s**, 32x64 is 2.45, 16x128 is 2.56, and 64x64,
