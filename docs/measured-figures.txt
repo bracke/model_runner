@@ -11302,3 +11302,61 @@ outside F95C80A16066CE28 src/shaders/row_product.comp src/shaders/matrix_product
 #   there because Q8_0 puts a scale on every thirty-two elements. A wider
 #   block would pay fewer of them a weight. This one cannot be made to, and
 #   no rewriting of the kernel reaches them.
+
+# 2026-08-29  The score half of attention, and the registers again
+#
+#   No code changed. head_scores is seven per cent of a prompt and the one
+#   attention kernel nothing had been aimed at; its horizontal fold was the
+#   suspect and is not the answer.
+#
+#   One turn of its loop, disassembled, is a hundred and twenty-nine
+#   instructions and computes eight positions of one head:
+#
+#     vfmadd231ps, query against key read where it lies      64
+#     vxorps, zeroing an accumulator                          8
+#     the fold: 6 vhaddps, 2 vextractf128, 2 vaddps,
+#       2 vmulps, 2 stores                                   14
+#     pointer advances, the scale broadcast, the branch      43
+#
+#   Half the body is not the dot product, and the fold is fourteen of a
+#   hundred and twenty-nine. The profile agrees: its six vhaddps sample at
+#   1.2 to 1.4 per cent each, nine per cent of the symbol between them.
+#
+#   The counters, on the long prompt:
+#
+#                        cycles   ops    ops/cyc  ceiling  nothing retired
+#     rows_by_strips     76.8 G  243.9 G   3.17     3.08        41.7%
+#     head_scores         9.5 G   25.2 G   2.65     3.20        46.7%
+#
+#   The ceiling is the body's instructions over its pipe-bound ones, times
+#   two. rows_by_strips is above its own because the renamed vxorps retire
+#   without occupying a pipe; head_scores is at eighty-three per cent of
+#   its. Since the strip kernel is proved to be on its floor, forty-seven
+#   per cent of cycles retiring nothing is what a balanced loop looks like
+#   rather than a symptom.
+#
+#   What is left is the half of the body that is not arithmetic, and it is
+#   structural. Eight positions need eight accumulators and the
+#   sixty-four-component query needs eight more: sixteen registers exactly,
+#   with nothing left. A block of sixteen positions halves every one of
+#   those sixty-five instructions per position -- one fold and one query
+#   load for twice the work -- and needs twenty-four registers.
+#
+#   Which is the third time this session the answer is the register file.
+#   The paired blend needed sixteen accumulators and could not have them.
+#   The blend's own loop balances loads against multiplies at exactly eight.
+#   This needs twenty-four and has sixteen.
+#
+#   The processor has thirty-two under AVX-512 and the integer kernels use
+#   them -- rows_by_strips names ymm16 to ymm25. Model_Runner.Kernels cannot,
+#   because it is compiled for baseline x86-64 so the program runs where the
+#   wide instructions do not, and its insertions are reached through a
+#   run-time flag rather than a second compilation.
+#
+#   So the unlock is named and not written: a second instantiation of these
+#   kernels built for x86-64-v4, chosen by the host check that already
+#   chooses between three compilations of the integer product. Attention is
+#   twelve and a half per cent of a prompt across its two kernels, both
+#   within twenty per cent of their present ceilings, so it could buy a few
+#   per cent -- against a third compilation of a unit that is not a generic
+#   today.

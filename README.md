@@ -6449,6 +6449,63 @@ workers: the first version of this test hung where it meant to fail, for ten
 minutes, until it was killed. `Parallel_Matches_Serial` beside it had the
 same shape and now does not.
 
+### The score half of attention, and the sixteen registers again
+
+`head_scores` is seven per cent of a prompt and the one attention kernel
+nothing had ever been aimed at -- the blend has had six changes. Its
+horizontal fold was the suspect. It is not the fold.
+
+Disassembled, one turn of its loop is **a hundred and twenty-nine
+instructions** and computes eight positions' scores for one head:
+
+| | |
+|---|---:|
+| `vfmadd231ps`, the query against a key, reading it where it lies | 64 |
+| `vxorps`, zeroing an accumulator | 8 |
+| the fold: 6 `vhaddps`, 2 `vextractf128`, 2 `vaddps`, 2 `vmulps`, 2 stores | 14 |
+| pointer advances, the scale broadcast and the branch | 43 |
+
+**Half the body is not the dot product.** The fold that was suspected is
+fourteen instructions of a hundred and twenty-nine, and the profile agrees:
+its six `vhaddps` sample at 1.2 to 1.4 per cent each, about nine per cent of
+the symbol between them.
+
+Against the counters, `head_scores` retires **25.2 G operations in 9.53 G
+cycles, 2.65 a cycle**; sixty-two per cent of its body contends for the two
+pipes, so its own issue ceiling is about 3.2 and it is at **eighty-three per
+cent** of it. For comparison, `rows_by_strips` -- proved to be on its floor
+two sections above -- retires 3.17 a cycle against a ceiling of 3.08, and
+retires nothing at all for 41.7 per cent of its cycles where `head_scores`
+does for 46.7. **The two are in the same state**, and forty-seven per cent
+of cycles retiring nothing is what a balanced loop looks like from the retire
+side, not a symptom.
+
+What is left is the half of the body that is not arithmetic, and it is
+structural. Eight positions need eight accumulators; the query is sixty-four
+components and lives in eight more; sixteen registers is exactly what that
+is, with nothing left over. **A block of sixteen positions would halve every
+one of those sixty-five instructions per position** -- one fold and one query
+load for twice the work -- and it needs sixteen accumulators and eight query
+registers, which is twenty-four.
+
+Which is the third time this session the answer has been the register file.
+The paired blend needed sixteen accumulators and could not have them; the
+blend's own loop is balanced between its loads and its multiplies at eight
+accumulators exactly; and this needs twenty-four and has sixteen. The
+processor has thirty-two under `AVX-512`, and the integer kernels use them --
+`rows_by_strips` names `ymm16` to `ymm25`. These cannot, because
+`Model_Runner.Kernels` is compiled for baseline x86-64 so that the program
+runs where the wide instructions do not, and its insertions are reached
+through a run-time flag rather than a second compilation.
+
+So the unlock is named and is not written: **a second instantiation of these
+kernels built for `x86-64-v4`**, chosen by the host check that already
+chooses between three compilations of the integer product. Attention is
+twelve and a half per cent of a prompt across its two kernels, both within
+twenty per cent of their present ceilings, so what it could buy is a few per
+cent -- and what it costs is a third compilation of a unit that is not a
+generic today.
+
 ### The floor was mis-counted, and the kernel is on it
 
 `### What the counters say` above has said for four sittings that the strip

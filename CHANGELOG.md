@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The score half of attention is where the blend is, and for the same
+  reason.** `head_scores` is 7 % of a prompt and its horizontal fold was the
+  suspect; disassembled, the fold is **14 instructions of 129** and its six
+  `vhaddps` sample at nine per cent of the symbol between them. Sixty-four of
+  the 129 are the dot product, so **half the body is not arithmetic**.
+
+  It retires **25.2 G ops in 9.53 G cycles, 2.65 a cycle**, against an issue
+  ceiling of about 3.2 — eighty-three per cent of it. `rows_by_strips`, proved
+  on its floor, retires 3.17 against 3.08 and retires nothing for 41.7 % of
+  its cycles where `head_scores` does for 46.7: **the two are in the same
+  state**.
+
+  Eight positions need eight accumulators and the 64-component query needs
+  eight more — sixteen registers exactly, nothing left over. A block of
+  sixteen positions would halve the non-arithmetic half per position and
+  needs twenty-four. **Third time this session the answer is the register
+  file**; `Model_Runner.Kernels` is compiled for baseline x86-64 so the
+  program runs where the wide instructions do not. The unlock is named and
+  not written: a second instantiation built for `x86-64-v4`, chosen by the
+  host check that already picks between three compilations of the integer
+  product.
+
+### Measured
+
 - **The strip kernel's published floor was mis-counted, and the kernel is on
   the real one.** Four sittings of this file have said it issues 36
   multiply-add-class operations a block — 18 cycles of floor against 24
