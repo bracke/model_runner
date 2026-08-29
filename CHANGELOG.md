@@ -5,6 +5,42 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **A worker looks for its next job before it blocks for it**, which is worth
+  **seven per cent of a generated token** and one and a half of a prompt.
+  Generating 64 tokens goes **2.058 s to 1.906 s** and the 1419-token prompt
+  **6.549 s to 6.450 s**, better in four of four alternated rounds, and both
+  digests are unchanged — `3248ac1bb7011de0` and `1a26d24d33b8957b`.
+
+  A worker blocked on a protected entry is asleep in the kernel, and a
+  generated token posts a hundred and fifty-five products, so the wake is paid
+  a hundred and fifty-five times a token. Against llama.cpp on the same file
+  this program used **3.4 cores' worth of cycles to its 8.0** and took thirty
+  per cent longer — and two copies of this program running at once move 44
+  GB/s of the model where one moves 37, so the bus had a fifth left in it and
+  the pool was not asking. A ticket counter and a share counter beside the
+  coordinator let a worker spin about ten microseconds before it blocks, and
+  a submitting task spin before it waits. **Neither decides anything**: the
+  coordinator still opens the barrier, hands over the job, says when it is
+  done and says when the pool is closing.
+
+  It is paid for in processor time — the twelve-token run went 1.57 s to
+  1.85 s — and the spin budget is bounded so an idle pool stops burning a
+  core at once. The share count did not move: a generated token still asks
+  for four. What moved is the price of the wrong answer, eight shares costing
+  7.97 s of processor time against four shares' 7.23, where it was 12.68
+  against 7.28.
+
+### Measured
+
+- **The single-vector row tile is not the lever and contiguity is not
+  either.** Sweeping it at one, two, four and eight rows reads 2.17 s, 2.08,
+  2.04 and 2.04 for 64 generated tokens — and **one row at a time, which
+  walks the weights perfectly contiguously, is the worst of the four**. Both
+  were run against the idea that a generated token wants more misses in
+  flight per worker; the answer was in the pool rather than the kernel.
+
 ### Measured
 
 - **Caching the weight scales across batches deletes 7.6 % of the run and

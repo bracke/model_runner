@@ -1,5 +1,7 @@
 with Ada.Unchecked_Deallocation;
 
+with System.Machine_Code;
+
 with Model_Runner.Kernels;
 with Model_Runner.Platform;
 with Model_Runner.Quantization;
@@ -9,8 +11,84 @@ package body Model_Runner.Backend.CPU is
    use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.Tensors.Real_Array_Access;
 
+   package AC renames System.Atomic_Counters;
    package E renames Model_Runner.Errors;
    package T renames Model_Runner.Tensors;
+
+   --  How long a task looks before it blocks.
+   --
+   --  Long enough to cover the gap between one product and the next, which
+   --  on this machine is a few microseconds of host work -- normalizing,
+   --  rotating, quantizing the activation -- and short enough that a pool
+   --  with nothing coming stops burning a core almost at once. A worker
+   --  that spins the whole budget and finds nothing has cost one core about
+   --  ten microseconds and then goes to sleep exactly as it used to.
+   Spin_Budget : constant := 20_000;
+
+   --  Wait for a job without leaving the processor, for a while.
+   procedure Watch
+     (Waking : Wake_Access; Mine : AC.Atomic_Unsigned);
+
+   --  Wait for the shares to report without leaving the processor, for a
+   --  while.
+   procedure Settle (Waking : Wake_Access);
+
+   --  Say that a job of this many shares has been posted.
+   procedure Announce (Waking : Wake_Access; Shares : Natural);
+
+   -----------
+   -- Watch --
+   -----------
+
+   procedure Watch (Waking : Wake_Access; Mine : AC.Atomic_Unsigned) is
+      use type AC.Atomic_Unsigned;
+   begin
+      if Waking = null then
+         return;
+      end if;
+
+      for Turn in 1 .. Spin_Budget loop
+         exit when Waking.Ticket /= Mine;
+
+         --  The instruction that tells the processor this is a spin: it
+         --  frees the pipeline for the other thread on the core and takes
+         --  the memory-order penalty out of the loop's exit.
+         System.Machine_Code.Asm ("pause", Volatile => True);
+      end loop;
+   end Watch;
+
+   ------------
+   -- Settle --
+   ------------
+
+   procedure Settle (Waking : Wake_Access) is
+      use type AC.Atomic_Unsigned;
+   begin
+      if Waking = null then
+         return;
+      end if;
+
+      for Turn in 1 .. Spin_Budget loop
+         exit when Waking.Left = 0;
+         System.Machine_Code.Asm ("pause", Volatile => True);
+      end loop;
+   end Settle;
+
+   --------------
+   -- Announce --
+   --------------
+
+   procedure Announce (Waking : Wake_Access; Shares : Natural) is
+   begin
+      if Waking = null then
+         return;
+      end if;
+
+      --  The count first and the ticket second, so a worker that wakes on
+      --  the ticket cannot see a count belonging to the job before it.
+      Waking.Left := AC.Atomic_Unsigned (Shares);
+      AC.Increment (Waking.Ticket);
+   end Announce;
 
    --------------
    -- Describe --
@@ -513,6 +591,11 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
+      Announce
+        (Item.Waking'Unchecked_Access,
+         Natural (Share_Count'Min (Share_Count (Item.Workers),
+                                   Job_Of.Team - 1)));
+
       --  The submitting task takes the last share rather than waiting, for
       --  the reason written out above Mat_Vec.
       declare
@@ -527,6 +610,7 @@ package body Model_Runner.Backend.CPU is
             Mine := True;
       end;
 
+      Settle (Item.Waking'Unchecked_Access);
       Item.Control.Await (Failed);
 
       if Failed or else Mine then
@@ -579,26 +663,45 @@ package body Model_Runner.Backend.CPU is
    task body Worker is
       Position : Worker_Count := 1;
       Control  : Coordinator_Access := null;
+      Waking   : Wake_Access := null;
       Current  : Job;
       Closing  : Boolean := False;
       Failed   : Boolean;
+
+      --  The ticket this worker last saw a job under, so the spin below
+      --  knows what a new one looks like.
+      Mine     : AC.Atomic_Unsigned := 0;
    begin
       --  A pool can be created and then never used -- a command that fails
       --  while loading the model, for instance. The terminate alternative lets
       --  such a worker end with its master instead of waiting for a Start that
       --  will never come, which would hang the frame that declared the pool.
       select
-         accept Start (Index : Worker_Count; Owner : Coordinator_Access) do
+         accept Start
+           (Index  : Worker_Count;
+            Owner  : Coordinator_Access;
+            Waking : Wake_Access)
+         do
             Position := Index;
             Control := Owner;
+            Worker.Waking := Waking;
          end Start;
       or
          terminate;
       end select;
 
       loop
+         --  Look for the next job before blocking for it. The entry below
+         --  is what actually hands the job over and what says the pool is
+         --  closing; this only decides whether the task is awake when it
+         --  asks. A spin that finds nothing costs the budget below and then
+         --  blocks, which is what this did before it was here.
+         Watch (Waking, Mine);
+
          Control.Wait_For_Work (Position) (Current, Closing);
          exit when Closing;
+
+         Mine := Waking.Ticket;
 
          Failed := False;
 
@@ -619,11 +722,23 @@ package body Model_Runner.Backend.CPU is
          end;
 
          Control.Finished (Failed);
+
+         --  After the coordinator, never before: a submitting task that
+         --  sees this reach zero goes straight to Await, and Await opens on
+         --  what the line above wrote.
+         AC.Decrement (Waking.Left);
       end loop;
    exception
       when others =>
          if Control /= null then
             Control.Finished (True);
+         end if;
+
+         --  So that a task dying here does not leave every later Settle
+         --  spinning its whole budget against a count that will never
+         --  reach zero.
+         if Waking /= null then
+            AC.Decrement (Waking.Left);
          end if;
    end Worker;
 
@@ -638,7 +753,9 @@ package body Model_Runner.Backend.CPU is
       end if;
 
       for Index in 1 .. Item.Workers loop
-         Item.Team (Index).Start (Index, Item.Control'Unchecked_Access);
+         Item.Team (Index).Start
+           (Index, Item.Control'Unchecked_Access,
+            Item.Waking'Unchecked_Access);
       end loop;
       Item.Started := True;
    end Open;
@@ -744,6 +861,11 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
+      Announce
+        (Item.Waking'Unchecked_Access,
+         Natural (Share_Count'Min (Share_Count (Item.Workers),
+                                   Work.Team - 1)));
+
       --  The submitting task takes the last share rather than waiting for
       --  the workers to finish it. Waiting is what it used to do, and it
       --  cost a core: with one worker per core, the waiting task and the
@@ -778,6 +900,7 @@ package body Model_Runner.Backend.CPU is
             Mine_Failed := True;
       end;
 
+      Settle (Item.Waking'Unchecked_Access);
       Item.Control.Await (Failed);
 
       if Failed or else Mine_Failed then
@@ -857,6 +980,11 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
+      Announce
+        (Item.Waking'Unchecked_Access,
+         Natural (Share_Count'Min (Share_Count (Item.Workers),
+                                   Work.Team - 1)));
+
       --  The submitting task takes the last share rather than waiting for
       --  the workers to finish it. Waiting is what it used to do, and it
       --  cost a core: with one worker per core, the waiting task and the
@@ -891,6 +1019,7 @@ package body Model_Runner.Backend.CPU is
             Mine_Failed := True;
       end;
 
+      Settle (Item.Waking'Unchecked_Access);
       Item.Control.Await (Failed);
 
       if Failed or else Mine_Failed then

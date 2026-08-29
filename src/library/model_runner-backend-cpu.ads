@@ -1,4 +1,5 @@
 private with Ada.Finalization;
+private with System.Atomic_Counters;
 
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
@@ -315,11 +316,37 @@ private
 
    type Coordinator_Access is access all Coordinator;
 
+   --  The wake path, and nothing else.
+   --
+   --  A worker that blocks on the coordinator between jobs is asleep in the
+   --  kernel, and a job that only takes a couple of hundred microseconds
+   --  spends a tenth of that being woken. Generating a token is a hundred
+   --  and fifty-five products, so the wake is paid a hundred and fifty-five
+   --  times a token, which is what stopped this pool using more than four
+   --  shares to generate: past four the wakes cost more than the extra core
+   --  brings.
+   --
+   --  So a worker looks here first, and only blocks when nothing has come
+   --  for a while. Ticket counts jobs posted and Left counts the shares of
+   --  the current one that have yet to report. Neither decides anything:
+   --  the coordinator is still what opens the barrier and what says the job
+   --  is done, and a run with the spin never taken is the run this had
+   --  before.
+   type Wake_Signal is limited record
+      Ticket : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
+      Left   : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
+   end record;
+
+   type Wake_Access is access all Wake_Signal;
+
    --  A reusable worker. It blocks on the coordinator between jobs, so no task
    --  is created per unit of work.
    task type Worker is
       --  Bind the worker to its pool position. Called once, by the pool.
-      entry Start (Index : Worker_Count; Owner : Coordinator_Access);
+      entry Start
+        (Index  : Worker_Count;
+         Owner  : Coordinator_Access;
+         Waking : Wake_Access);
    end Worker;
 
    type Worker_Array is array (Worker_Count range <>) of Worker;
@@ -331,6 +358,7 @@ private
    type Pool (Workers : Worker_Count) is
      limited new Ada.Finalization.Limited_Controlled with record
       Control : aliased Coordinator (Workers);
+      Waking  : aliased Wake_Signal;
       Team    : Worker_Array (1 .. Workers);
       Started : Boolean := False;
 
