@@ -5558,6 +5558,43 @@ barriers and the pipelining -- and the only one that ever mattered was the
 tile it already had. The two and a half times is not in the shader's
 structure.
 
+**Asked again after attention was unrolled, and it closes the same way** --
+with one figure above corrected. The mix had moved: the matrix phases are
+sixty-two per cent of the device's long prompt where they were sixty, so
+the question was worth putting again with three ablations and a sweep.
+
+| 1419-token device prompt | feeding | projecting | whole prompt |
+| --- | ---: | ---: | ---: |
+| as it is | 0.900 s | 0.497 s | 1.953 s |
+| the weights neither read nor unpacked | **0.763 s** | 0.456 s | **1.752 s** |
+| the activation operand always from the first step | 0.807 s | 0.467 s | 1.807 s |
+| the row tile halved, sixteen rows | 1.116 s | 0.550 s | 2.246 s |
+
+**The decode is ten per cent of the prompt and not six and a half.** The
+earlier reading was taken with a probe that filled a hundred and twenty-eight
+of the tile's thousand and twenty-four entries and left the decode running
+underneath, which is a probe measuring nothing; this one guards the decode
+with a test on a push constant that is false at run time and not at compile
+time, so the code and its registers stay and only the work goes, and fills
+the tile with a constant so the answers are finite enough for the run to
+finish. That the correction is upward does not change what it decides:
+half precision is 1.9 times the bytes of Q8_0 and the read is part of what
+was ablated, so uploading the model decoded still buys less than it costs and
+still doubles what a model needs on the device.
+
+**The row tile is not starving the narrow matrices.** A layer's key and value
+projections are 256 rows against 2048 for the query -- eight workgroups of
+the tile it has -- and the projection phase runs at half the feed-forward's
+rate, so too few workgroups is the obvious explanation and it is wrong.
+Halving the tile doubles the workgroups and costs sixteen per cent of the
+prompt: what a workgroup loses in weight reuse is worth more than what the
+part gains in occupancy, on a phase that already reaches six subgroups a
+SIMD. And a deeper batch, which multiplies the workgroups the other way, is
+level at 256 and 384 against 128.
+
+So the wall is where it was, and it is the rate this part retires
+cooperative-matrix multiplies at.
+
 ### The tile made a number, swept, and put back
 
 `### The tile sweep, and why there was almost nothing to sweep` ended by

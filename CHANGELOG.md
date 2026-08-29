@@ -62,6 +62,25 @@ Keep a Changelog and the project uses semantic versioning.
   attention, the value reads a quarter, shared memory a tenth, and half of it
   is none of those.
 
+- **The matrix shader asked again and closed again, with one earlier figure
+  corrected.** After attention's unrolling the two matrix phases are 62 % of
+  the device's long prompt, so the question was put again: three ablations
+  and a batch sweep, none of which finds anything to take.
+
+  The decode is **10 % of the prompt, not the 6.4 % this file published** —
+  the earlier probe filled 128 of the tile's 1024 entries and left the
+  decode running underneath. The corrected one guards it with a push-constant
+  test that is false at run time and not at compile time. It does not change
+  the decision: f16 is 1.9× the bytes of Q8_0 and the read is part of what
+  was ablated, so uploading the model decoded still costs more than it saves
+  and still doubles what a model needs on the device.
+
+  The row tile is **not** starving the narrow matrices — a layer's key and
+  value projections are 256 rows against the query's 2048, eight workgroups,
+  and the projection phase does run at half the feed-forward's rate, but
+  halving the tile to double the workgroups costs 16 % of the prompt, and a
+  deeper batch is level at 256 and 384 against 128.
+
 ### Fixed
 
 - **A sequence could evict a matrix it was about to read.** A sequence
