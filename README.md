@@ -5100,6 +5100,69 @@ out to be, and knowing which it is was the point of looking. It was done,
 in `### The tile made a number, swept, and put back` below, and the answer
 was that this tile is the right one.
 
+### Attention through the matrix instruction, built and not kept
+
+The section below priced attention at the weight product's rate as seventeen
+per cent of a device prompt, on the ground that both are matrix products and
+only one of them uses the instruction. It was built. **It is correct and it is
+thirteen per cent slower**, and why is worth more than the number.
+
+`attention_matrix.comp`: a workgroup answers sixteen query positions of one
+head and walks the cache in tiles, doing the scores as the queries against
+the transpose of the keys and the blend as the weights against the values,
+both through `coopMatMulAdd` at sixteen by sixteen by sixteen. The online
+softmax is kept -- a running maximum and sum a query, the blend so far
+rescaled when a tile raises the maximum -- because storing a context length
+of scores is still what a device cannot afford.
+
+**It is correct, and more than correct: the published digests do not move.**
+1419 tokens with twelve generated answers `1a26d24d33b8957b`, and the
+110-token prompt `cbf29ce484222325`, which is what the lane-at-a-time kernel
+answers. Half-precision operands did not move a single token.
+
+The sweep, device long prompt, medians of three, against 1.911 s as it is:
+
+| | |
+|---|---:|
+| room 128, tile of 16 positions | 2.735 s |
+| room 128, tile of 32 | 3.215 s |
+| room 128, tile of 64 | 4.718 s |
+| room 64, tile of 16 | 2.307 s |
+| room 64, tile of 32 | 2.649 s |
+| room 64, tile of 64 | 2.917 s |
+| room 64, tile of 16, softmax across the workgroup | **2.157 s** |
+| room 64, tile of 32, softmax across the workgroup | 2.473 s |
+| room 64, tile of 64, softmax across the workgroup | 2.703 s |
+
+**Every shape runs the wrong way**: more for the instruction to chew on is
+worse, not better. That is the answer, and it is the opposite of what the
+matrix product's own sweep found.
+
+The instruction takes its operands from shared memory, and shared memory is
+what bounds how many workgroups a compute unit will hold. `attention.comp`
+uses **two kilobytes** a workgroup and reads a key and a value straight from
+the cache into the multiply-add; this one must stage them, and at its best
+shape uses **nine and a half**. Widening the room from this model's head of
+sixty-four to the hundred and twenty-eight the caller allows costs half a
+second on its own -- the first three rows against the second three -- which
+is occupancy and nothing else.
+
+The arithmetic did exactly what it was meant to. A tile of sixteen positions
+is **eight cooperative-matrix multiplies where the old kernel issues five
+hundred and twelve multiply-adds a lane** for the same thirty-two thousand
+products: sixty-four times fewer instructions. The arithmetic stopped being
+the cost, and the staging became it.
+
+What would be needed to win, in the order worth trying: stage the keys and
+the values together and lose a barrier a tile; keep the blend in accumulators
+rather than in shared memory, which needs a way to rescale an accumulator by
+a per-row factor -- a diagonal multiply, or a store and reload on the rare
+tile where a maximum moves; and answer thirty-two queries a workgroup rather
+than sixteen, to halve the staging a query. **Every one of those trades
+against the shared memory that is already what binds it**, which is why none
+of them is obviously the answer and why this is written down rather than
+tried on.
+
 ### Device attention, priced, and the rate it runs at
 
 `--budget` puts attending at **24.6 per cent of a device prompt**, second
@@ -5136,12 +5199,16 @@ attention *are* matrix products -- the query against the transpose of the
 keys, then the weights against the values -- and both are computed a lane at
 a time in binary32, which is what a fifth of the rate looks like.
 
-Which prices the next thing rather than doing it. **Attention at the matrix
-product's rate would be about five per cent of a device prompt rather than
-twenty-five: seventeen per cent of the prompt, and the largest single number
-left anywhere in this file.** It is also the change the other runtime has
-already made, which is part of why its device prompt is two and a half times
-this one.
+Which priced the next thing. **Attention at the matrix product's rate would
+be about five per cent of a device prompt rather than twenty-five: seventeen
+per cent of the prompt, and the largest single number left anywhere in this
+file.** It is also the change the other runtime has already made, which is
+part of why its device prompt is two and a half times this one.
+
+So it was built, and `### Attention through the matrix instruction, built and
+not kept` below is what happened: it is correct, it does not move a single
+token, and it is thirteen per cent slower. The seventeen per cent is not
+available this way.
 
 ### What a device prompt is not waiting for
 

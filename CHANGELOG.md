@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Attention through the matrix instruction: built, correct, and 13 %
+  slower.** The entry below priced it at seventeen per cent of a device
+  prompt. `attention_matrix.comp` does the scores as the queries against the
+  transpose of the keys and the blend as the weights against the values, both
+  through `coopMatMulAdd`, with the online softmax kept. **It does not move a
+  single token** — 1419 tokens with twelve generated still answers
+  `1a26d24d33b8957b` and the 110-token prompt `cbf29ce484222325`, with
+  half-precision operands.
+
+  Nine shapes swept against 1.911 s as it is; the best is **2.157 s** and
+  **every shape runs the wrong way** — more for the instruction to chew on is
+  worse. The instruction takes its operands from shared memory and shared
+  memory bounds occupancy: `attention.comp` uses **2 KB** a workgroup and
+  reads a key straight from the cache into the multiply-add, this one stages
+  them and uses **9.5 KB** at its best. The arithmetic did its part — eight
+  cooperative-matrix multiplies a tile where the old kernel issues 512
+  multiply-adds a lane — and the staging became the cost instead.
+
+  Not committed. The seventeen per cent is not available this way.
+
+### Measured
+
 - **Device attention is its two products, and they run at a fifth of the rate
   the same part reaches on the weight product.** Three ablations of
   `attention.comp`: the score half removed is **1.689 s against 1.911**
