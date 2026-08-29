@@ -5256,6 +5256,59 @@ operands are not the wall: fourteen per cent between them. What is left is
 the rate this part retires cooperative-matrix multiplies at, and nothing
 tried here has moved it.
 
+### A generated token on the device is sixty-seven submissions
+
+The device generates at 1.41 times the other runtime and had had no work at
+all this sitting. Where its token goes, from `--budget`: **feeding 63.1 per
+cent, projecting 16.9, attending 12.6**, reading out 4.8, normalizing 1.2,
+rotating 0.9, joining 0.5.
+
+**The products are pure streaming**, which two ablations of
+`row_product.comp` settle. Sixty-four generated tokens, medians of three:
+
+| | |
+|---|---:|
+| as it is | 1.549 s |
+| the activation never read | 1.528 s (−1.4 %) |
+| the weights never read | 0.011 s |
+
+So the weights are ninety-nine per cent of the row product and the activation
+is nothing. A token reads 1.09 GiB and the products take about eighty-five
+per cent of 24.4 ms, which is **55.5 GB/s** -- against the other runtime's
+whole token of 17.7 ms, which cannot be under 61.6 GB/s even with no overhead
+at all. Eleven per cent apart on the stream itself, and that is the half of
+the gap nothing here can reach.
+
+**The other half is attending, and it is not arithmetic.** Its cost against
+context:
+
+| context | a token |
+|---|---:|
+| about 40 | 3.6 ms |
+| about 1450 | 13.9 ms |
+
+Thirty-six times the work for three and nine tenths times the time. Fitting a
+line gives 0.0073 ms a position and **3.3 ms a token that does not depend on
+the context at all** -- thirteen and a half per cent of a generated token
+spent before a single position is read.
+
+What that fixed cost is: a counter on `vkQueueSubmit` says a run of six
+prompt tokens and sixty-four generated makes **4421 submissions**, and eight
+generated makes 669 -- so a generated token is **sixty-seven submissions,
+three a layer**. Every one is a submit and a wait on a fence, which this file
+measured at eighty-three microseconds before it computes anything. Sixty-seven
+of those is 5.6 ms of a 24.6 ms token: **twenty-three per cent**.
+
+Which is the largest single cost identified anywhere on the device, and no
+shader touches it. Everything a token does between the sampler at one end and
+the sampler at the other is device work -- the norms, the rotation, the
+attention, the blends and the joins are all dispatches -- so **a layer needs
+no round trip in principle and a token needs one**. Three a layer is what
+this engine does, not what the device asks for.
+
+Not built, and priced: one a layer would be about fifteen per cent of a
+generated token, one a token about twenty-two.
+
 ### Three more rearrangements, and the shader is closed
 
 After the tile sweep, the operand ablations and the attention kernel, three

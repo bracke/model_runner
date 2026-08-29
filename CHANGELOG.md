@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A generated token on the device is sixty-seven submissions, and that is
+  23 % of it.** Two ablations of `row_product.comp` settle the products
+  first: the activation never read saves 1.4 % and the weights never read
+  collapses the run to 0.011 s, so **the weights are 99 % of the row
+  product**. A token streams 1.09 GiB in about 85 % of 24.4 ms — 55.5 GB/s
+  against llama.cpp's whole token of 17.7 ms, which cannot be under 61.6
+  GB/s. Eleven per cent apart on the stream, and nothing here reaches it.
+
+  Attending is the other half and is not arithmetic: **3.6 ms a token at a
+  context of 40 and 13.9 at 1450** — thirty-six times the work for 3.9 times
+  the time, which fits 0.0073 ms a position and **3.3 ms a token that does
+  not depend on the context at all**. A counter on `vkQueueSubmit` says why:
+  4421 submissions for 64 generated tokens against 669 for eight, so
+  **sixty-seven submissions a token, three a layer**, each a submit and a
+  wait on a fence at the 83 µs this file has already measured.
+
+  Not built. Everything between one sampler call and the next is device
+  work, so a layer needs no round trip in principle and a token needs one.
+  One a layer would be about 15 % of a generated token; one a token, 22 %.
+
+### Measured
+
 - **Three more rearrangements of the matrix shader, all level.** The subgroup
   width — this part's matrix instruction is documented at wave32 and the
   shader asks for sixty-four — reads 1.926 s against 1.917. Replacing the two
