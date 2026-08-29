@@ -15,21 +15,39 @@ Keep a Changelog and the project uses semantic versioning.
   would put a shader compiler in the way of running the tests; a modification
   time is the weak thing that knows, and it catches the case that happened.
 
-### Open
+### Fixed
 
-- **`TILE_V` and `Tile_Vectors` do not agree, and it is not clear which is
-  right.** `matrix_product.comp` says 64; its own comment two lines away says
-  "all eight vector matrices", which is 128; and `Tile_Vectors` in the engine
-  says 128 beside a comment reading "The shader states both and this has to
-  agree". The previous commit concluded the committed words were
-  authoritative and set the source to 64 — **that conclusion now looks
-  wrong.**
+- **Every device prompt of more than 64 tokens was wrong, and is not any
+  more.** `matrix_product.comp` said a tile of 64 vectors and the engine
+  dispatched `Room / 128` workgroups, so a workgroup answered the first 64
+  vectors of every tile and **nothing answered the rest**. At greedy sampling
+  the device matched the processor at ~18 and ~36 tokens and returned
+  `usedovoovoovoo…` at ~72.
 
-  Not in doubt: the shipped path runs the words built at 64, passes the sweep
-  at 28344 sequences, and compiling the source at 128 measures 7 % slower.
-  Those do not fit the reading that 128 is simply correct. The tile sweep is
-  not attempted until somebody explains why a dispatch of `Room / 128`
-  workgroups against a shader answering 64 vectors each is conformant.
+  `TILE_V` is 128 now — what the shader's own comment two lines away has said
+  all along, "all eight vector matrices". The device now returns the
+  processor's digests to the bit: `cbf29ce484222325` at 110 tokens where it
+  returned `7614f34a26a84b3c`, and `1a26d24d33b8957b` at 1419. It also stops
+  generating when the processor stops; the old run read the noise, never
+  found its ending, and ran on to twelve tokens in every sitting recorded.
+
+  **The device figures get worse and are worth more**: a 110-token device
+  prompt reads 575.9 t/s where the broken path read 709.7, and the gap to
+  llama.cpp goes 2.3x to 2.9.
+
+- **A check that the matrix tile's four numbers agree**, reading `TILE_R` and
+  `TILE_V` from the shader and `Tile_Rows` and `Tile_Vectors` from the
+  engine. The same check exists for `attention.comp`'s `QUERIES` against
+  `Query_Block`, whose comment records that pair drifting within an hour of
+  being written; the matrix one was never written and its drift shipped.
+
+  Three things let it survive: the sweep's longest sequence is **eight
+  tokens**, so no comparison it makes crosses a tile of anything; a speed run
+  reports a device digest that nothing compares against the processor's; and
+  the check that would have caught it existed only for the other shader.
+  **The sweep's blind spot is still there** and lengthening it would cost the
+  gate real time — a decision to make deliberately, not at the end of a
+  commit.
 
 ### Measured
 

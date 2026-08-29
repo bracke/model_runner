@@ -5479,6 +5479,84 @@ package body Checks is
             end if;
          end;
 
+         --  And the matrix tile, stated twice for the same reason and never
+         --  checked until it had shipped wrong.
+         --
+         --  matrix_product.comp said a tile of sixty-four vectors and the
+         --  engine dispatched for a hundred and twenty-eight, so a workgroup
+         --  answered the first sixty-four of every tile and nothing answered
+         --  the rest. Every prompt of more than sixty-four tokens came back
+         --  as noise on the device. Nothing caught it: the sweep's longest
+         --  sequence is eight tokens, so no comparison it makes ever crosses
+         --  a tile at all, and a speed run reports a digest nobody compares.
+         --
+         --  Read both numbers out of both files. The engine's are in its
+         --  body rather than its specification, so they are read as text
+         --  like the shader's -- which is worse than naming them, and much
+         --  better than not looking.
+         declare
+            Shader : constant String :=
+              Contents ("src/shaders/matrix_product.comp");
+            Engine : constant String :=
+              Contents
+                ("src/library/model_runner-platform-device-products.adb");
+
+            function Number_After
+              (Text : String; Marker : String) return Natural;
+
+            function Number_After
+              (Text : String; Marker : String) return Natural
+            is
+               Found : Natural := 0;
+            begin
+               if Marker'Length > Text'Length then
+                  return 0;
+               end if;
+
+               for Index in Text'First .. Text'Last - Marker'Length + 1 loop
+                  if Text (Index .. Index + Marker'Length - 1) = Marker then
+                     for Digit in Index + Marker'Length .. Text'Last loop
+                        exit when Text (Digit) not in '0' .. '9';
+                        Found := Found * 10
+                                 + Character'Pos (Text (Digit))
+                                 - Character'Pos ('0');
+                     end loop;
+                     return Found;
+                  end if;
+               end loop;
+
+               return 0;
+            end Number_After;
+
+            Rows_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_R = ");
+            Vecs_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_V = ");
+            Rows_Asked : constant Natural :=
+              Number_After (Engine, "Tile_Rows    : constant := ");
+            Vecs_Asked : constant Natural :=
+              Number_After (Engine, "Tile_Vectors : constant := ");
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if Rows_Said = 0 or else Vecs_Said = 0
+              or else Rows_Asked = 0 or else Vecs_Asked = 0
+            then
+               Fail ("one of the matrix tile's four numbers could not be "
+                     & "read: the shader states TILE_R and TILE_V and the "
+                     & "engine states Tile_Rows and Tile_Vectors, and this "
+                     & "check reads all four as text");
+            elsif Rows_Said /= Rows_Asked or else Vecs_Said /= Vecs_Asked then
+               Fail ("src/shaders/matrix_product.comp answers a tile of"
+                     & Natural'Image (Rows_Said) & " rows by"
+                     & Natural'Image (Vecs_Said) & " vectors and the engine "
+                     & "dispatches for" & Natural'Image (Rows_Asked) & " by"
+                     & Natural'Image (Vecs_Asked)
+                     & "; whatever a workgroup does not reach is left "
+                     & "uncomputed, which is noise and not an error");
+            end if;
+         end;
+
          --  And the third, with QUERY_TILE beside it.
          Result.Performed := Result.Performed + 1;
 

@@ -1562,12 +1562,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.448 s | **0.335 s** |
-| -- evaluating the prompt | 0.060 s | 0.051 s |
-| -- generating | 0.386 s | **0.283 s** |
-| -- processor time | 1.58 s | **0.03 s** |
-| 110-token prompt, nothing generated | **0.411 s** | 0.155 s |
-| -- processor time | 2.43 s | 0.17 s |
+| 6-token prompt, 12 generated | 0.438 s | **0.337 s** |
+| -- evaluating the prompt | 0.068 s | 0.051 s |
+| -- generating | 0.369 s | **0.285 s** |
+| -- processor time | 1.59 s | **0.03 s** |
+| 110-token prompt, nothing generated | 0.430 s | **0.193 s** |
+| -- processor time | 2.48 s | 0.13 s |
 
 All six cells were taken in one sitting on 2026-08-28, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -4941,38 +4941,79 @@ run, the tool run -- and it is caught at the only moment anybody could act on
 it. It does not catch a `.spv` compiled from a *different* source of the same
 age, and nothing short of compiling would.
 
-### The tile constants do not agree, and I do not know which is right
+### Every device prompt over sixty-four tokens was wrong
 
-Then the matrix shader's tile, which is where the device's remaining gap
-lives. Opening it turned up something that stops the work rather than
-starting it.
+The tile constants disagreed -- `matrix_product.comp` said a tile of sixty-four
+vectors, the engine said a hundred and twenty-eight, and the Ada comment
+beside it said the two have to agree. The section that used to sit here said
+so and stopped, because the shipped words were the sixty-four and the sweep
+passed. **The sweep passing was the thing to disbelieve.**
 
-| | says |
-| --- | ---: |
-| `matrix_product.comp` | `TILE_V = 64` |
-| its own comment, two lines from the constant | "all eight vector matrices", which is 128 |
-| `Model_Runner.Platform.Device.Products` | `Tile_Vectors : constant := 128` |
+A workgroup answers `TILE_V` vectors. The dispatch asks for
+`Room / Tile_Vectors` workgroups. With sixty-four against a hundred and
+twenty-eight, **a workgroup answered the first sixty-four vectors of every
+tile and nothing answered the rest**. Ask the two backends the same question
+at greedy sampling and watch where they part:
 
-and the Ada comment beside that constant says **"The shader states both and
-this has to agree."** They do not agree, and the dispatch immediately after
-the matrix pipeline is bound asks for `Room / Tile_Vectors` workgroups.
+| prompt | device says |
+| --- | --- |
+| ~18 tokens | what the processor says |
+| ~36 tokens | what the processor says |
+| ~72 tokens | `usedovoovoovoovoovoovoo` |
+| ~180 tokens | `ielélélélélovoélélélél` |
 
-`### The words did not match the source` above concluded that the committed
-words were authoritative and set the source to 64 to match them. **That
-conclusion now looks wrong**: two other statements in the repository say 128,
-and one of them is a sentence three lines from the constant I changed.
+**Every prompt of more than sixty-four tokens came back as noise on the
+device**, and the figures published for that backend were timing it.
 
-What is not in doubt: the shipped device path has always run the words built
-at 64, it passes the sweep at 28344 sequences with nothing outside tolerance,
-and compiling the source at 128 measures seven per cent slower. Those three
-facts do not fit the reading that 128 is simply correct, and I could not make
-them fit by reading further.
+`TILE_V` is a hundred and twenty-eight now, which is what the shader's own
+comment two lines from the constant has said all along -- "all eight vector
+matrices". The device answers what the processor answers: the 110-token run
+returns `cbf29ce484222325` where it used to return `7614f34a26a84b3c`, and
+the 1419-token run returns `1a26d24d33b8957b`, both of them the processor's
+own digests to the bit. **It also stops generating when the processor stops**;
+the old run read the noise, never found its ending, and ran on to twelve
+tokens, which is visible in every sitting recorded in the figures file and
+which nobody read as a symptom.
 
-So the tile is not swept and the constant is left where it is, which is
-where the shipped words have always been. **What this wants is the author's
-eye on why a dispatch of `Room / 128` workgroups against a shader that
-answers 64 vectors each is conformant**, because until that is understood any
-number put in either place is a guess.
+**The figures get worse and they are worth more.** A 110-token device prompt
+reads 575.9 tokens a second where the broken path read 709.7, and the gap to
+llama.cpp goes 2.3 times to 2.9. What was being measured was a computation
+that skipped half of every tile.
+
+### How it survived, which is the part worth keeping
+
+Three things had to line up and all three did.
+
+**The sweep's longest sequence is eight tokens.** Every comparison it makes
+is against a batch of eight or of three, so no comparison it has ever made
+crosses a tile of anything. Twenty-eight thousand sequences and not one of
+them could see this.
+
+**A speed run reports a digest that nothing compares.** The device digest sat
+in the figures file, sitting after sitting, differing from the processor's --
+which is what a device is expected to do, within tolerance. It was not
+within tolerance. It was noise.
+
+**And the check that would have caught it exists, for the other shader.**
+`attention.comp`'s `QUERIES` is checked against the engine's `Query_Block`,
+and the comment above that check says the pair drifted within an hour of
+being written. The same check for the matrix tile was never written, and the
+same drift lasted until somebody went looking for a tile to tune. It is
+written now, and it fails on the old numbers:
+
+```
+fail: src/shaders/matrix_product.comp answers a tile of 32 rows by 64 vectors
+      and the engine dispatches for 32 by 128; whatever a workgroup does not
+      reach is left uncomputed, which is noise and not an error
+```
+
+**The sweep's blind spot is still there** and is worth naming rather than
+quietly fixing: its longest sequence is eight tokens against a tile of a
+hundred and twenty-eight, so nothing it does exercises a full tile, let alone
+a partial one. Lengthening it would catch this class rather than this
+instance, and it would cost the gate real time. That is a decision about what
+a test suite is for, and it is not one to make quietly at the end of a
+commit.
 
 ### A slower day, measured on both sides
 
@@ -5106,27 +5147,27 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **269.0 t/s** | 31.6 t/s |
-| llama.cpp, processor | 331.0 t/s | 40.0 t/s |
-| model_runner, device | 709.7 t/s | **40.6 t/s** |
-| llama.cpp, device | 1660.0 t/s | 55.9 t/s |
+| model_runner, processor | **257.0 t/s** | 31.7 t/s |
+| llama.cpp, processor | 329.4 t/s | 39.9 t/s |
+| model_runner, device | 575.9 t/s | **39.4 t/s** |
+| llama.cpp, device | 1677.0 t/s | 56.1 t/s |
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **214.8 t/s** | 31.6 t/s |
+| model_runner, processor | **216.8 t/s** | 31.7 t/s |
 | llama.cpp, processor | 282.2 t/s | 39.8 t/s |
-| model_runner, device | **743.7 t/s** | 40.6 t/s |
+| model_runner, device | **706.0 t/s** | 39.4 t/s |
 | llama.cpp, device | 1791.5 t/s | 56.0 t/s |
 
 **The longer prompt is the harder one and the quieter one, and it took this
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The gap is wider: **1.3 times on the processor against 1.2, and 2.4 on the
-device against 2.3.** Attention grows with the square of the context and it
+The gap is wider: **1.3 times on the processor and 2.5 on the device against
+2.9 at the shorter length.** Attention grows with the square of the context and it
 is the part of a layer this program is furthest behind on, so a table taken
 at a hundred and ten tokens reads a little kinder than the work deserves.
 
@@ -5143,12 +5184,12 @@ section were taken on and dropping it would throw that away, and a reader
 comparing against somebody else's `pp110` needs it. But **the long one is the
 figure to argue about**.
 
-On the processor at 110 tokens: **1.3 times slower generating and 1.2 times
+On the processor at 110 tokens: **1.3 times slower generating and 1.3 times
 slower reading a prompt** -- the generating figure has read 1.3 and 1.4 across sittings of
 code that did not change between them, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, **1.4** and **2.3**,
-where the sittings before this one said 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
+reading of this table said 3.3 and 16. On the device, **1.4** and **2.9**,
+where the sittings before this one said 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
 1.4 and 2.6, then 1.4 and 2.5, then 1.4 and 3.0, then 1.4 and 3.6, then 1.4 and 3.8, then 1.4
 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and
 10.1. Both device rows have moved for a named reason:
@@ -5177,8 +5218,8 @@ between it and llama.cpp's own device figure is 1.4 times.
 
 The processor's generating row is the other kind of gap. It reads every
 weight once a token and does one multiply with each, so the bus answers
-rather than the arithmetic: llama.cpp's 40.0 t/s is about 46 GB/s of this
-model and 31.6 is about 37. What is left there is a gap in the kernels --
+rather than the arithmetic: llama.cpp's 39.9 t/s is about 46 GB/s of this
+model and 31.7 is about 37. What is left there is a gap in the kernels --
 ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
 and this measures -- rather than a gap in what the program is doing.
 
@@ -5222,8 +5263,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.409 s
-and 64 in 2.025 s on the processor, 0.155 s and 1.578 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.428 s
+and 64 in 2.016 s on the processor, 0.191 s and 1.626 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -5236,13 +5277,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 824.0 t/s rather
-than 331.0 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 832.6 t/s rather
+than 329.4 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 40.6 t/s
-now, against 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 39.4 t/s
+now, against 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the

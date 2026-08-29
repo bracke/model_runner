@@ -5681,7 +5681,7 @@ reference 6D0F9D956827BB54 src/library/model_runner-backend-reference.adb src/li
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-device EEA9637909B87018 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 151FA7EE821FA58A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -8605,7 +8605,7 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-outside EEA9637909B87018 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside 151FA7EE821FA58A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -10601,4 +10601,65 @@ outside EEA9637909B87018 src/shaders/row_product.comp src/shaders/matrix_product
 #   wants is somebody who knows why a dispatch of Room / 128 workgroups
 #   against a shader answering 64 vectors each is conformant, because until
 #   that is understood any number put in either place is a guess.
+
+# 2026-08-29  Every device prompt over sixty-four tokens was wrong
+#
+#   The note above left the tile constants disagreeing and said so. The
+#   disagreement was a bug and the sweep passing was the thing to disbelieve.
+#
+#   A workgroup answers TILE_V vectors; the dispatch asks for
+#   Room / Tile_Vectors workgroups. Sixty-four against a hundred and
+#   twenty-eight means a workgroup answered the first sixty-four vectors of
+#   every tile and nothing answered the rest. Greedy, both backends, same
+#   prompt:
+#
+#     ~18 tokens    device says what the processor says
+#     ~36 tokens    device says what the processor says
+#     ~72 tokens    usedovoovoovoovoovoovoo
+#     ~180 tokens   ielélélélélovoélélélél
+#
+#   EVERY DEVICE PROMPT OF MORE THAN SIXTY-FOUR TOKENS CAME BACK AS NOISE,
+#   and every device figure in this file was timing it.
+#
+#   TILE_V is a hundred and twenty-eight now, which is what the shader's own
+#   comment two lines from the constant has said all along. The device
+#   returns the processor's digests to the bit: cbf29ce484222325 at 110
+#   tokens where it returned 7614f34a26a84b3c, 1a26d24d33b8957b at 1419
+#   where it returned b3d99fb4151edc6d. It also stops when the processor
+#   stops -- the old 110-token device run read the noise, never found its
+#   ending, and ran on to twelve tokens, which is written in every sitting
+#   above and which nobody read as a symptom.
+#
+#   How it survived, which is the part worth keeping:
+#
+#     the sweep's longest sequence is eight tokens, so no comparison it makes
+#       crosses a tile of anything;
+#     a speed run reports a device digest that nothing compares against the
+#       processor's, and a device differing from a processor is expected;
+#     and the check that would have caught it exists for attention.comp's
+#       QUERIES against Query_Block and was never written for the matrix
+#       tile. It is written now and fails on the old numbers.
+#
+#   THE SWEEP'S BLIND SPOT IS STILL THERE: eight tokens against a tile of a
+#   hundred and twenty-eight. Lengthening it catches the class rather than
+#   the instance and costs the gate real time.
+#
+#   The sitting, device and outside; the other groups did not move.
+#
+#   device: six tokens twelve generated, cpu 0.438 s (0.068 + 0.369, 1.59 s
+#     processor) against device 0.337 s (0.051 + 0.285, 0.03 s); 110 tokens
+#     cpu 0.430 s for 2.48 s against device 0.193 s for 0.13 s
+#
+#   outside, 110: model_runner 110 in 0.428 s and 64 in 2.016 s on the
+#     processor, 0.191 s and 1.626 s on the device; llama-bench --device
+#     none pp110 329.38 tg64 39.90, -ngl 99 pp110 1677.00 tg64 56.08,
+#     -ngl 0 pp110 832.55 tg64 39.91
+#
+#   outside, 1419: model_runner 6.546 s on the processor and 2.010 s on the
+#     device, both answering 1a26d24d33b8957b; llama.cpp's 1419 figures are
+#     the ones taken in the sitting before this and were not re-run.
+#
+#   The device's prompt gap is 2.9 times at 110 tokens and 2.5 at 1419,
+#   against 2.3 and 2.4 published for a computation that skipped half of
+#   every tile.
 

@@ -104,7 +104,7 @@ layout(push_constant) uniform Shape {
 //  is what makes the decode below a whole number of blocks; sixty-four and
 //  a hundred and twenty-eight were measured and are slower.
 const uint TILE_R = 32u;
-const uint TILE_V = 64u;
+const uint TILE_V = 128u;
 const uint KCH    = 32u;
 
 //  Which is two matrices of weights and eight of vectors, so sixteen
