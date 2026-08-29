@@ -4506,7 +4506,9 @@ What this does *not* do is make the default faster. Halving the bytes did not
 halve the time, which is the third piece of evidence -- after the prefetch and
 the unroll -- that the value blend is not simply short of bandwidth. Two
 thirds of the program's memory traffic is still there and still unexplained by
-anything that has been tried against it.
+anything that has been tried against it. `### The blend is not waiting for
+its loads` below is the fourth piece, and the one that says what the answer
+is not.
 
 ### The lanes are the change, the arithmetic is not
 
@@ -6395,6 +6397,58 @@ which skips `Close`, and the frame that declares a pool waits for its
 workers: the first version of this test hung where it meant to fail, for ten
 minutes, until it was killed. `Parallel_Matches_Serial` beside it had the
 same shape and now does not.
+
+### The blend is not waiting for its loads
+
+The value blend has been about five per cent of a prompt and unexplained
+since the counters were first read here: prefetching its next position did
+nothing, unrolling two positions a turn made it worse, halving its bytes made
+it worse, and a head-major copy of the layer changed nothing. Four
+measurements more, and this time the answer is what the loop is *not* waiting
+for.
+
+**The tile is flat.** Swept again now that everything around it has moved:
+8 positions is 6.161 s, 16 is 6.230, 32 is 6.222, 64 is 6.304. A per cent
+across a factor of eight is the noise floor.
+
+**It is not missing disproportionately.** Counting `dc_access_in_l2` by
+symbol on the long prompt puts `rows_by_strips` at 83.4 per cent of the
+first-level misses, `head_scores` at 6.2 and `blend_run` at 5.2 -- against
+5.0 per cent of the cycles. The tile of sixteen positions is what fixed that,
+and it stays fixed.
+
+**So the loads themselves were tried.** Eight heads share one key head's
+values, so two of them can be blended from one reading: load a position's
+values into registers once and multiply them into both accumulator sets.
+Half the loads for a fifth more instructions. On a bench reading from the
+second-level cache that kernel is **39867 Me/s against two single blends'
+29788, one and a third times faster**.
+
+In the engine it is worth nothing at all -- 4.92 per cent of the prompt where
+the single blend took 4.95, and a wall of 6.388 s against 6.309. The bench
+measured the wrong regime. With the heads walked *inside* a tile of positions
+every head after the first reads values the first left in the first-level
+cache, and there the load ports are not what the loop waits for.
+
+**And the pair is not free to try.** Two heads of sixty-four components is
+sixteen accumulators, which is every register the base encoding can name --
+with none left for the values, which is the whole point of pairing. So the
+component run has to halve and a head becomes two passes; that alone, with
+the pairing switched off, measures **6.454 s against 6.309, two and a third
+per cent worse in three of three**, paid in twice the calls and twice the
+tile bookkeeping.
+
+Which prices the family rather than one member of it. Any two-way pairing of
+this blend -- across heads, as here, or across query positions, which is what
+`docs/measured-figures.txt` proposed and has not been built -- needs sixteen
+accumulators, so it needs the narrow run, so it **starts two and a third per
+cent behind**. Query pairing would halve the first-level misses where head
+pairing only halves the loads, and halving those misses is what the tile did
+for three and seven tenths per cent; but it has to find that twice over
+before it is level.
+
+The constraint is the register file, not the cache and not the loads. Nothing
+here is kept.
 
 ### The wake, not the work
 

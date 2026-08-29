@@ -11040,3 +11040,65 @@ outside E95EBFB8FC2E3DB3 src/shaders/row_product.comp src/shaders/matrix_product
 #   thirty-two, which is what the staging is written for, so that the next
 #   person to turn one of those two gets a failure rather than a kernel that
 #   runs and answers nothing.
+
+# 2026-08-29  The blend is not waiting for its loads
+#
+#   Four measurements against the value blend, which has been five per cent
+#   of a prompt and unexplained since the counters were first read. Nothing
+#   is kept; what is kept is why.
+#
+#   The tile, swept again now that the wake change has moved everything
+#   around it. Long prompt, medians of three:
+#
+#     8 positions    6.161 s
+#     16             6.230      <- as it is
+#     32             6.222
+#     64             6.304
+#
+#   Flat. Eight is a per cent under sixteen and that is the noise floor.
+#
+#   Where the first-level misses are, by symbol, counting
+#   l2_cache_req_stat.dc_access_in_l2 on the long prompt:
+#
+#     rows_by_strips    83.4%
+#     head_scores        6.2%
+#     blend_run          5.2%
+#     rows               2.1%
+#
+#   The blend's share of the misses is its share of the cycles, near enough:
+#   5.2 against 5.0. It is not missing disproportionately, which the tile of
+#   sixteen positions is what fixed.
+#
+#   So the loads themselves were tried. Blend_Run_Twice takes two heads of
+#   one key head's group -- they read the same values and weight them
+#   differently -- loads a position's values into registers once and
+#   multiplies them into both, which is half the loads for a fifth more
+#   instructions. On a bench reading from the second-level cache it is 39867
+#   Me/s against two single blends' 29788, **one and a third times faster**.
+#
+#   In the engine it is worth nothing. blend_run_twice takes 4.92 per cent
+#   of the prompt where blend_run took 4.95, and the wall is level: 6.388 s
+#   against 6.309, worse in the median of seven alternated rounds. The bench
+#   measured the wrong regime -- in a tile of sixteen positions with the
+#   heads inside, every head after the first reads values the first left in
+#   the first-level cache, and there the load ports are not what the loop is
+#   waiting for.
+#
+#   And the pair is not free to try. Two heads of sixty-four components is
+#   sixteen accumulators, and sixteen is every register the base encoding
+#   can name -- with none left for the values, which is the whole point. So
+#   the component run must halve, from sixty-four to thirty-two, and a head
+#   becomes two passes. That alone, with the pairing switched off, measures
+#   6.454 s against 6.309: **two and a third per cent, worse in three of
+#   three**, paid in twice the calls and twice the tile bookkeeping.
+#
+#   Which prices the whole family. Any two-way pairing of this blend --
+#   across heads, as here, or across query positions, as the entry of
+#   2026-08-28 proposed -- needs sixteen accumulators, so it needs the
+#   narrow run, so it starts two and a third per cent behind. Query pairing
+#   would halve the first-level misses where head pairing only halves the
+#   loads, and halving those misses is what the tile did for three and
+#   seven tenths per cent; but it has to find that twice over before it is
+#   level.
+#
+#   The register file is the constraint, not the cache and not the loads.

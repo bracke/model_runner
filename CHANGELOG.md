@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The value blend is not waiting for its loads, and the register file
+  prices out the only fix left.** A kernel that blends two heads of one key
+  head's group from a single reading of the values — half the loads for a
+  fifth more instructions — is **1.34x faster on a bench reading from L2**
+  (39867 Me/s against 29788) and **exactly level in the engine**: 4.92 % of
+  a prompt where the single blend took 4.95, wall 6.388 s against 6.309.
+  With the heads walked inside a tile of sixteen positions, every head after
+  the first reads what the first left in L1, and there the load ports are
+  not the constraint.
+
+  Two heads of 64 components is sixteen accumulators, which is every
+  register the base encoding can name, so the component run has to halve and
+  a head becomes two passes. **That alone costs 2.3 %** (6.454 s against
+  6.309, worse in three of three) — so any two-way pairing of this blend,
+  across heads or across query positions, starts 2.3 % behind before it
+  gains anything.
+
+  Two more measurements beside it: the blend tile is flat from 8 to 64
+  positions (6.161, 6.230, 6.222, 6.304), and the blend's share of L1 misses
+  is its share of cycles — 5.2 % against 5.0 — so it is not missing
+  disproportionately either.
+
+### Measured
+
 - **The matrix shader's tile is the best of eleven shapes, and making it
   tunable costs one and a half per cent.** The staging was rewritten to deal
   sixteen-value units round the workgroup instead of hand-mapping sixty-four
