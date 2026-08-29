@@ -6559,6 +6559,53 @@ workers: the first version of this test hung where it meant to fail, for ten
 minutes, until it was killed. `Parallel_Matches_Serial` beside it had the
 same shape and now does not.
 
+### The registers were never the wall
+
+Three sittings running ended on the same sentence: sixteen registers is
+exactly what these kernels have and exactly what blocks the next step, and
+the thirty-two the processor offers under `AVX-512` are out of reach because
+`Model_Runner.Kernels` is compiled for baseline x86-64 so the program runs
+where the wide instructions do not. The unlock was named as a second
+compilation of the unit, gated by the host check the integer product already
+uses three times.
+
+It is two lines, not a second compilation:
+
+```ada
+procedure Probe_Wide (Sums : in out Real_Array);
+pragma Machine_Attribute (Probe_Wide, "target", "avx512f");
+```
+
+and what comes out of the baseline-compiled unit is
+
+```
+00000000000c5050 <probe_wide_x>:
+   c5050: 62 e1 7c 28 10 07    vmovups (%rdi),%ymm16
+   c5056: 62 e1 7c 28 11 07    vmovups %ymm16,(%rdi)
+```
+
+An `EVEX` prefix and the seventeenth register, in a unit every other
+subprogram of which is baseline. The attribute is per subprogram, so a kernel
+that names it can be reached through the same run-time flag its insertion
+already hides behind, and a machine without the instructions never enters it.
+**The register file is available for the asking.**
+
+And having asked, neither thing it was wanted for is worth doing. The score
+kernel's sixteen-position block saves four instructions in ninety-eight,
+because the fold and the zeroing scale with the accumulators rather than with
+the call -- that is the correction in the section below. The paired blend, at
+sixty-four components rather than the thirty-two the sixteen registers forced,
+loses the two and a third per cent the narrowing cost, but the pairing itself
+measured level in situ: halving the loads bought nothing because that loop is
+not load-bound either.
+
+So the wall these three sittings kept arriving at was never the register
+file. It is that both attention kernels are bound by the two multiply-add
+pipes, with a fold that is fifteen per cent of the loop and structural, and
+more registers do not move either of those. **The finding worth keeping is
+the two lines**: the next thing that wants the upper sixteen registers can
+have them, and does not have to restructure a compilation unit to get them.
+
 ### The score half of attention, and the sixteen registers again
 
 `head_scores` is seven per cent of a prompt and the one attention kernel
@@ -6590,31 +6637,30 @@ does for 46.7. **The two are in the same state**, and forty-seven per cent
 of cycles retiring nothing is what a balanced loop looks like from the retire
 side, not a symptom.
 
-What is left is the half of the body that is not arithmetic, and it is
-structural. Eight positions need eight accumulators; the query is sixty-four
-components and lives in eight more; sixteen registers is exactly what that
-is, with nothing left over. **A block of sixteen positions would halve every
-one of those sixty-five instructions per position** -- one fold and one query
-load for twice the work -- and it needs sixteen accumulators and eight query
-registers, which is twenty-four.
+What is left is the half of the body that is not arithmetic. Eight positions
+need eight accumulators; the query is sixty-four components and lives in
+eight more; sixteen registers is exactly what that is, with nothing left
+over.
 
-Which is the third time this session the answer has been the register file.
-The paired blend needed sixteen accumulators and could not have them; the
-blend's own loop is balanced between its loads and its multiplies at eight
-accumulators exactly; and this needs twenty-four and has sixteen. The
-processor has thirty-two under `AVX-512`, and the integer kernels use them --
-`rows_by_strips` names `ymm16` to `ymm25`. These cannot, because
-`Model_Runner.Kernels` is compiled for baseline x86-64 so that the program
-runs where the wide instructions do not, and its insertions are reached
-through a run-time flag rather than a second compilation.
+**And a block of sixteen positions would not help, which this section said
+first and had wrong.** The sixty-five instructions that are not the dot
+product do not divide into a fixed cost and a per-position one: eight of them
+zero an accumulator and fourteen fold the accumulators down, and *both scale
+with the accumulators*. Sixteen positions need sixteen accumulators, sixteen
+zeroing exclusive-ors and a fold of twelve `vhaddps` rather than six. Only
+four instructions a call are actually fixed -- the scale broadcast, the
+counter and the branch -- so doubling the block saves four instructions per
+sixteen positions out of ninety-eight per eight. **Two per cent of the
+kernel, which is a tenth of a per cent of a prompt.**
 
-So the unlock is named and is not written: **a second instantiation of these
-kernels built for `x86-64-v4`**, chosen by the host check that already
-chooses between three compilations of the integer product. Attention is
-twelve and a half per cent of a prompt across its two kernels, both within
-twenty per cent of their present ceilings, so what it could buy is a few per
-cent -- and what it costs is a third compilation of a unit that is not a
-generic today.
+The fold is the tax and it is fifteen per cent of the loop by count. Cutting
+it needs positions in the lanes rather than components -- broadcast a query
+component and multiply it against eight positions' keys -- which needs the
+keys component-major, which is the head-major order this file measured and
+recorded as buying nothing three sittings ago.
+
+`### The registers were never the wall` below is what came of asking whether
+the sixteen could be thirty-two.
 
 ### The floor was mis-counted, and the kernel is on it
 

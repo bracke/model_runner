@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The registers were never the wall, and they cost two lines rather than a
+  second compilation.** Three entries running ended on "sixteen registers is
+  what these kernels have"; `pragma Machine_Attribute (P, "target",
+  "avx512f")` on one subprogram of the baseline-compiled unit emits
+  `vmovups (%rdi),%ymm16` with an EVEX prefix, per subprogram, reachable
+  through the run-time flag the insertion already hides behind.
+
+  Having asked, neither thing it was wanted for pays. **Correcting this
+  file:** a sixteen-position block in `head_scores` was said to halve the 65
+  instructions that are not the dot product — it does not, because the eight
+  zeroing exclusive-ors and the fourteen of fold **scale with the
+  accumulators**. Only four instructions a call are fixed, so doubling the
+  block saves four per sixteen positions out of ninety-eight per eight: 2 %
+  of the kernel, a tenth of a per cent of a prompt. And the paired blend at
+  64 components would give back the 2.3 % the narrowing cost, but the pairing
+  itself measured level in situ.
+
+  Both attention kernels are bound by the two multiply-add pipes with a fold
+  that is 15 % of the loop and structural. More registers move neither.
+
+### Measured
+
 - **Attention through the matrix instruction: built, correct, and 13 %
   slower.** The entry below priced it at seventeen per cent of a device
   prompt. `attention_matrix.comp` does the scores as the queries against the

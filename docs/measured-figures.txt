@@ -11470,3 +11470,56 @@ outside F95C80A16066CE28 src/shaders/row_product.comp src/shaders/matrix_product
 #   The kernel and the plumbing are four hundred and eleven lines of GLSL
 #   and about eighty of Ada, and are not committed. The seventeen per cent
 #   the entry above priced is not available this way.
+
+# 2026-08-29  The registers were never the wall
+#
+#   No code changed. Three entries running ended on the same sentence --
+#   sixteen registers is what these kernels have and what blocks the next
+#   step, and the thirty-two AVX-512 offers are out of reach because
+#   Model_Runner.Kernels is compiled for baseline x86-64. The unlock was
+#   named as a second compilation of the unit.
+#
+#   It is two lines:
+#
+#     procedure Probe_Wide (Sums : in out Real_Array);
+#     pragma Machine_Attribute (Probe_Wide, "target", "avx512f");
+#
+#   and the baseline-compiled unit emits
+#
+#     c5050: 62 e1 7c 28 10 07    vmovups (%rdi),%ymm16
+#     c5056: 62 e1 7c 28 11 07    vmovups %ymm16,(%rdi)
+#
+#   An EVEX prefix and the seventeenth register. The attribute is per
+#   subprogram, so a kernel that names it is reached through the same
+#   run-time flag its insertion already hides behind and a machine without
+#   the instructions never enters it. Model_Runner.Platform.Byte_Products is
+#   the question already asked for the integer kernels' third compilation.
+#
+#   And having asked, neither thing it was wanted for is worth doing.
+#
+#   The score kernel's sixteen-position block: the entry of this date said a
+#   block of sixteen would halve the sixty-five instructions of the loop
+#   that are not the dot product. That is wrong and this corrects it. Eight
+#   of those zero an accumulator and fourteen fold the accumulators down,
+#   and both scale with the accumulators: sixteen positions need sixteen
+#   zeroing exclusive-ors and a fold of twelve vhaddps rather than six. Four
+#   instructions a call are fixed -- the scale broadcast, the counter, the
+#   branch -- so doubling the block saves four per sixteen positions out of
+#   ninety-eight per eight. Two per cent of the kernel, a tenth of a per
+#   cent of a prompt.
+#
+#   The paired blend at sixty-four components: the sixteen registers forced
+#   thirty-two components and the narrowing cost two and a third per cent,
+#   which the upper registers would give back -- but the pairing itself
+#   measured level in situ, 4.92 per cent of the prompt against 4.95,
+#   because that loop is not load-bound. Level plus 2.3 is still level.
+#
+#   So the wall three sittings kept arriving at was never the register file.
+#   Both attention kernels are bound by the two multiply-add pipes with a
+#   fold that is fifteen per cent of the loop by count and structural --
+#   cutting it needs positions in the lanes rather than components, which
+#   needs the keys component-major, which is the head-major order recorded
+#   as buying nothing. More registers move neither.
+#
+#   What is kept is the two lines. The next thing that wants the upper
+#   sixteen can have them without restructuring a compilation unit.
