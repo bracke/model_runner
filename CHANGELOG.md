@@ -37,6 +37,21 @@ Keep a Changelog and the project uses semantic versioning.
   The prompt is level: a batch amortizes a submission over its positions
   already, and its normalization is real work rather than a fixed cost.
 
+- **A prompt's layers fuse too: 6 % of a 110-token device prompt, 1.5 % of a
+  1419-token one, and a third of the processor time either way.** The
+  fusing landed for a single generated position and a prompt has its own
+  loop, which went on making three submissions a layer with the host
+  joining and normalizing between them — a quarter of a million elements a
+  layer for a batch of 128. Nothing new was needed: every kernel in the
+  sequence takes a position count already. The batched loop now calls
+  `Attend_And_Feed` under the same nine conditions and skips its tail.
+
+  The wall figure is the smaller half. Moving the join and the normalization
+  to the device does not make them free, it makes them the device's — what
+  it makes free is the two round trips a layer, and what it takes off the
+  machine is a third of the processor a device prompt was spending while the
+  device did the work.
+
 - **Attention's two inner loops unrolled by eight: 34 % of attention on the
   device and 7 % of a 1419-token prompt**, at the same digest. Attention was
   31 % of that prompt and the one phase running at about processor speed —

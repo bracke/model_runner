@@ -6406,6 +6406,13 @@ package body Model_Runner.Llama is
             --  which is a loop later.
             Resident : Boolean := False;
 
+            --  And whether the whole of the layer's second half went over
+            --  as one sequence, as it does when a single position is
+            --  generated: attention, its projection, the join, the
+            --  normalization, the feed-forward and the join after it.
+            --  Every step below is then already done.
+            Fused : Boolean := False;
+
             --  Set when a device took the whole gated feed-forward, its
             --  projection down included, so that the common tail does not
             --  project it a second time.
@@ -6713,22 +6720,70 @@ package body Model_Runner.Llama is
                      then Settings.Window
                      else 0);
 
-                  Usable : Boolean;
-               begin
                   --  The last position the batch may look at. Causally
                   --  that is the batch's first, and each position after it
                   --  moves its own end along; attending both ways it is the
                   --  batch's last, and every position shares it.
-                  Attend_There
-                    (Item, Source, Query.all (0 .. Count * Wide - 1),
-                     Heads, Head_Size, Value_Size,
-                     Earliest (Settings, Reserved, Natural (Index)),
-                     (if Settings.Causal
-                      then Reserved
-                      else Reserved + Count - 1),
-                     Base, V_Base, KV_Width, V_Width, Scale,
-                     Attend.all (0 .. Count * Blend - 1), Usable,
-                     Positions => Count, Window => Window_Here);
+                  First_Step : constant Element_Count :=
+                    Earliest (Settings, Reserved, Natural (Index));
+                  Last_Step  : constant Element_Count :=
+                    (if Settings.Causal
+                     then Reserved
+                     else Reserved + Count - 1);
+
+                  Usable : Boolean;
+               begin
+                  --  The whole of the layer's second half as one sequence,
+                  --  for a batch as for a single position.
+                  --
+                  --  A batch already paid three submissions a layer and had
+                  --  the host joining and normalizing between them, which
+                  --  for a hundred and twenty-eight positions is a quarter
+                  --  of a million elements a layer crossing the bus twice
+                  --  to be added up. The steps are the same nine; only the
+                  --  position count differs, and every kernel in them was
+                  --  written to take one.
+                  if Settings.Experts = 0
+                    and then T.Is_Present (Current.Gate)
+                    and then Current.Feed_Norm /= null
+                    and then Current.Out_Bias = null
+                    and then Current.Up_Bias = null
+                    and then Current.Down_Bias = null
+                    and then Current.Feed_Norm_Bias = null
+                    and then Current.Post_Attention_Norm = null
+                    and then Current.Post_Feed_Norm = null
+                  then
+                     Model_Runner.Backend.Device.Attend_And_Feed
+                       (Query.all (0 .. Count * Wide - 1),
+                        Acts.all (0 .. Count * Width - 1),
+                        Natural (Heads), Natural (Head_Size),
+                        Natural (Value_Size), Settings.Group_Size,
+                        Natural (First_Step), Natural (Last_Step),
+                        Natural (Base),
+                        Natural (Item.Keys.all'Length + V_Base),
+                        Natural (KV_Width), Natural (V_Width), Scale,
+                        Settings.Attention_Cap, Current.Attention_Out,
+                        Current.Feed_Norm.all, Settings.Epsilon,
+                        Current.Gate, Current.Up, Current.Down,
+                        Gate_Unit (Source), Acts, Fused,
+                        Positions => Natural (Count),
+                        Window    => Window_Here,
+                        Causal    => Settings.Causal,
+                        Lifted    => Lifted_Norms (Source),
+                        Max_Bias  => Settings.Max_Bias);
+                  end if;
+
+                  if Fused then
+                     Usable := True;
+                  else
+                     Attend_There
+                       (Item, Source, Query.all (0 .. Count * Wide - 1),
+                        Heads, Head_Size, Value_Size,
+                        First_Step, Last_Step,
+                        Base, V_Base, KV_Width, V_Width, Scale,
+                        Attend.all (0 .. Count * Blend - 1), Usable,
+                        Positions => Count, Window => Window_Here);
+                  end if;
 
                   if not Usable then
                      Item.Current := Failed;
@@ -6852,6 +6907,11 @@ package body Model_Runner.Llama is
             end if;
 
             Charge (Item, Attending, Mark);
+
+            --  Every step of the rest is a step of the sequence where the
+            --  layer's second half went over as one, so there is nothing
+            --  left here to do.
+            if not Fused then
 
             Product_Batch
               (Item, Current.Attention_Out, Attend, Count, Norm, Status);
@@ -7006,6 +7066,8 @@ package body Model_Runner.Llama is
             end;
 
             Charge (Item, Joining, Mark);
+
+            end if;
          end;
       end loop;
 
