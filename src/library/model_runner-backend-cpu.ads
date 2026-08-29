@@ -14,10 +14,20 @@ with Model_Runner.Tensors;
 --  matrix-vector product.
 --
 --  Determinism. Work is partitioned by a fixed formula over row indices, each
---  worker writes a disjoint range of the output, and every reduction
---  accumulates in the wide format. A result is therefore bit-identical
---  whatever the worker count, which is what makes `--threads` safe to change
---  without changing what a model produces. The tests assert this directly.
+--  worker writes a disjoint range of the output, every reduction accumulates
+--  in the wide format, and a share boundary falls on a multiple of the row
+--  tile. A result is therefore bit-identical whatever the worker count,
+--  which is what makes `--threads` safe to change without changing what a
+--  model produces. The tests assert this directly.
+--
+--  The tile is the part that was learned rather than designed. A batch is
+--  computed a tile of rows at a time and a tile of an odd size takes a
+--  different kernel from a full one, so cutting the rows without regard to
+--  the tile left a short tile at the end of every share and a batched prompt
+--  answered differently at four threads than at three or seven. The claim
+--  above stood for as long as the integer tile kernel did, and the test that
+--  asserted it used a binary32 weight and one vector, which is the one shape
+--  that kernel is never asked for.
 --
 --  Bounded queue. The pool holds exactly one job at a time and the caller
 --  blocks until it completes, so there is no queue that untrusted input can
@@ -125,8 +135,9 @@ package Model_Runner.Backend.CPU is
    --  Matrix product against several input vectors at once.
    --
    --  The rows are partitioned across workers exactly as Mat_Vec partitions
-   --  them, so the result does not depend on the worker count, and a batch of
-   --  one is the same computation as Mat_Vec.
+   --  them, on boundaries that fall where the row tile does, so the result
+   --  does not depend on the worker count, and a batch of one is the same
+   --  computation as Mat_Vec.
    --
    --  @param Item Pool to run on.
    --  @param Weight Weight view.
@@ -187,12 +198,16 @@ package Model_Runner.Backend.CPU is
    --  @param First First row, zero based.
    --  @param Last Last row, zero based; Last < First when the worker has no
    --    rows, which happens when there are fewer rows than workers.
+   --  @param Grain Rows a boundary must fall on. Every share but the last
+   --    holds a whole number of these, so a row's position inside its tile
+   --    does not depend on how many shares there are.
    procedure Partition
      (Rows    : Element_Count;
       Workers : Share_Count;
       Index   : Share_Count;
       First   : out Element_Count;
-      Last    : out Element_Count);
+      Last    : out Element_Count;
+      Grain   : Element_Count := 1);
 
    --  Something a share of an indexed job can be asked to do.
    --

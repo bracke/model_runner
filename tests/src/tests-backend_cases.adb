@@ -138,6 +138,12 @@ package body Tests.Backend_Cases is
       Vector  : T.Real_Array_Access;
       Serial  : T.Real_Array_Access;
       Status  : E.Error_Info;
+
+      Opened   : Boolean := False;
+      Ran      : Boolean := False;
+      Differed : Boolean := False;
+      At_Team  : CPU.Worker_Count := 1;
+      At_Row   : N.Element_Count := 0;
    begin
       Make_Weight (Storage, Weight);
       T.Allocate (Columns, Vector);
@@ -152,38 +158,168 @@ package body Tests.Backend_Cases is
       CPU.Dispatch (null, Weight, Vector, Serial, Status);
       Assert (E.Is_Ok (Status), "serial product failed");
 
+      --  Nothing is asserted while the pool is in scope, for the reason
+      --  written out over Batched_Product_Matches_Serial: a raised
+      --  assertion skips Close and the frame then waits for workers nobody
+      --  has told to finish, so the test hangs where it means to fail.
       for Team in CPU.Worker_Count range 1 .. 6 loop
          declare
             Pool     : aliased CPU.Pool (Team);
             Parallel : T.Real_Array_Access;
+            Wrong    : N.Element_Count := 0;
+            Found    : Boolean := False;
          begin
             T.Allocate (Rows, Parallel);
             CPU.Open (Pool);
-            Assert (CPU.Is_Open (Pool), "pool did not open");
-            Assert (CPU.Worker_Total (Pool) = Team, "wrong worker count");
+            Opened := CPU.Is_Open (Pool) and then CPU.Worker_Total (Pool) = Team;
 
             CPU.Mat_Vec (Pool, Weight, Vector, Parallel, Status);
-            Assert (E.Is_Ok (Status),
-                    "parallel product failed with"
-                    & CPU.Worker_Count'Image (Team) & " workers: "
-                    & E.Error_Code'Image (Status.Code));
+            Ran := E.Is_Ok (Status);
 
-            for Row in 0 .. Rows - 1 loop
-               Assert (Parallel.all (Row) = Serial.all (Row),
-                       "row" & N.Element_Count'Image (Row)
-                       & " differs with" & CPU.Worker_Count'Image (Team)
-                       & " workers");
-            end loop;
+            if Opened and then Ran then
+               for Row in 0 .. Rows - 1 loop
+                  if Parallel.all (Row) /= Serial.all (Row) then
+                     Wrong := Row;
+                     Found := True;
+                     exit;
+                  end if;
+               end loop;
+            end if;
 
             CPU.Close (Pool);
             T.Free (Parallel);
+
+            if Found and then not Differed then
+               Differed := True;
+               At_Team := Team;
+               At_Row := Wrong;
+            end if;
          end;
+
+         Assert (Opened, "pool did not open with the workers asked for");
+         Assert (Ran,
+                 "parallel product failed with"
+                 & CPU.Worker_Count'Image (Team) & " workers: "
+                 & E.Error_Code'Image (Status.Code));
       end loop;
+
+      Assert (not Differed,
+              "row" & N.Element_Count'Image (At_Row)
+              & " differs with" & CPU.Worker_Count'Image (At_Team)
+              & " workers");
 
       T.Free (Vector);
       T.Free (Serial);
       B.Free (Storage);
    end Parallel_Matches_Serial;
+
+   --  A batched product against quantized weights is the same at every share
+   --  count, bit for bit.
+   --
+   --  The test above it uses a binary32 weight and one vector, which is the
+   --  shape the integer tile kernel is never asked for, so it held while
+   --  this did not: a batch is computed a tile of rows at a time, a tile of
+   --  an odd size takes a different kernel from a full one, and cutting the
+   --  rows without regard to the tile left a short tile at the end of every
+   --  share. The same model, prompt and seed generated different text at
+   --  --threads 4 than at 3 or 7, from the forty-third token, while every
+   --  test here passed.
+   --
+   --  A hundred rows against a tile of eight is the point: it divides by
+   --  neither the tile nor most of the share counts, so a partition that
+   --  ignores the tile produces a different set of tiles at almost every one.
+   procedure Batched_Product_Matches_Serial
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Wide_Rows    : constant N.Element_Count := 100;
+      Wide_Columns : constant N.Element_Count := 256;
+      Batch        : constant N.Element_Count := 8;
+
+      Values  : constant N.Real_Array :=
+        Fixtures.Sequence (Wide_Rows * Wide_Columns, 7717, 1.0);
+      Bytes   : constant B.Byte_Array := Fixtures.Encode_Q8_0 (Values);
+      Storage : B.Byte_Array_Access;
+      Weight  : T.View;
+      Inputs  : T.Real_Array_Access;
+      Serial  : T.Real_Array_Access;
+      Status  : E.Error_Info;
+
+      Opened   : Boolean := False;
+      Ran      : Boolean := False;
+      Differed : Boolean := False;
+      At_Team  : CPU.Worker_Count := 1;
+      At_Index : N.Element_Count := 0;
+   begin
+      B.Allocate (Bytes'Length, Storage);
+      Storage.all := Bytes;
+      T.Make (G.Type_Q8_0, Wide_Rows, Wide_Columns, Storage, 0, Weight,
+              Status);
+      Assert (E.Is_Ok (Status), "the quantized weight view could not be built");
+
+      T.Allocate (Wide_Columns * Batch, Inputs);
+      T.Allocate (Wide_Rows * Batch, Serial);
+      Inputs.all := Fixtures.Sequence (Wide_Columns * Batch, 313, 1.0);
+
+      CPU.Dispatch_Batch (null, Weight, Inputs, Batch, Serial, Status);
+      Assert (E.Is_Ok (Status), "the serial batched product failed");
+
+      --  Nothing is asserted while the pool is in scope. A failed assertion
+      --  raises, which skips Close, and the frame that declares a pool waits
+      --  for its workers: the test would hang where it meant to fail, which
+      --  is what it did the first time it was run against the fault it is
+      --  for.
+      for Team in CPU.Worker_Count range 1 .. 8 loop
+         declare
+            Pool     : aliased CPU.Pool (Team);
+            Parallel : T.Real_Array_Access;
+            Wrong    : N.Element_Count := 0;
+            Found    : Boolean := False;
+         begin
+            T.Allocate (Wide_Rows * Batch, Parallel);
+            CPU.Open (Pool);
+            Opened := CPU.Is_Open (Pool);
+
+            CPU.Mat_Mul (Pool, Weight, Inputs, Batch, Parallel, Status);
+            Ran := E.Is_Ok (Status);
+
+            if Opened and then Ran then
+               for Index in 0 .. Wide_Rows * Batch - 1 loop
+                  if Parallel.all (Index) /= Serial.all (Index) then
+                     Wrong := Index;
+                     Found := True;
+                     exit;
+                  end if;
+               end loop;
+            end if;
+
+            CPU.Close (Pool);
+            T.Free (Parallel);
+
+            if Found and then not Differed then
+               Differed := True;
+               At_Team := Team;
+               At_Index := Wrong;
+            end if;
+         end;
+
+         Assert (Opened, "pool did not open");
+         Assert (Ran,
+                 "the batched product failed with"
+                 & CPU.Worker_Count'Image (Team) & " workers: "
+                 & E.Error_Code'Image (Status.Code));
+      end loop;
+
+      Assert (not Differed,
+              "element" & N.Element_Count'Image (At_Index)
+              & " differs with" & CPU.Worker_Count'Image (At_Team)
+              & " workers");
+
+      T.Free (Inputs);
+      T.Free (Serial);
+      B.Free (Storage);
+   end Batched_Product_Matches_Serial;
 
    --  More workers than rows is legal: the surplus workers get nothing and the
    --  result is still complete.
@@ -2281,6 +2417,9 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Partition_Covers_Rows'Access,
          "the partition covers every row exactly once for every worker count");
+      Register_Routine
+        (T, Batched_Product_Matches_Serial'Access,
+         "a batched quantized product is the same at every share count");
       Register_Routine
         (T, Parallel_Matches_Serial'Access,
          "a parallel product equals the serial one exactly");

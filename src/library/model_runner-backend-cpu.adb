@@ -181,11 +181,36 @@ package body Model_Runner.Backend.CPU is
       Workers : Share_Count;
       Index   : Share_Count;
       First   : out Element_Count;
-      Last    : out Element_Count)
+      Last    : out Element_Count;
+      Grain   : Element_Count := 1)
    is
-      Share : constant Element_Count := Rows / Element_Count (Workers);
-      Extra : constant Element_Count := Rows mod Element_Count (Workers);
+      --  Rows counted in whole grains, the last of them short where the
+      --  matrix does not end on one.
+      --
+      --  A product is computed a tile of rows at a time and a tile of an odd
+      --  size takes a different kernel from a full one, which sums the same
+      --  products in a different order. Cutting the rows without regard to
+      --  the tile put a short tile at the end of every share, so a row's
+      --  answer depended on how many shares there were: the same model, the
+      --  same prompt and the same seed generated different text at
+      --  --threads 4 than at 3 or 7, from the forty-third token, and the
+      --  claim beside this that a result is bit-identical whatever the
+      --  worker count was false for a batched prompt.
+      --
+      --  So a boundary falls on a grain. Every share but the last holds a
+      --  whole number of tiles, the tile grid is anchored at row zero
+      --  wherever the share boundaries land, and the only short tile in a
+      --  product is the one the matrix's own row count leaves -- which is
+      --  the same short tile the serial path has.
+      Units : constant Element_Count :=
+        (if Grain <= 1 then Rows else (Rows + Grain - 1) / Grain);
+
+      Share : constant Element_Count := Units / Element_Count (Workers);
+      Extra : constant Element_Count := Units mod Element_Count (Workers);
       Position : constant Element_Count := Element_Count (Index) - 1;
+
+      Step : constant Element_Count :=
+        (if Grain <= 1 then 1 else Grain);
    begin
       --  An empty range is reported as Last < First. It is produced without
       --  ever computing First + Share - 1 for Share = 0, which would underflow
@@ -206,11 +231,17 @@ package body Model_Runner.Backend.CPU is
       --  are contiguous and depend only on the indices, so the same worker
       --  count always produces the same split.
       if Position < Extra then
-         First := Position * (Share + 1);
-         Last := First + Share;
+         First := Position * (Share + 1) * Step;
+         Last := First + (Share + 1) * Step - 1;
       elsif Share > 0 then
-         First := Extra * (Share + 1) + (Position - Extra) * Share;
-         Last := First + Share - 1;
+         First :=
+           (Extra * (Share + 1) + (Position - Extra) * Share) * Step;
+         Last := First + Share * Step - 1;
+      end if;
+
+      --  The grain the matrix's own row count leaves short.
+      if Last > Rows - 1 then
+         Last := Rows - 1;
       end if;
    end Partition;
 
@@ -709,7 +740,12 @@ package body Model_Runner.Backend.CPU is
             declare
                First, Last : Element_Count;
             begin
-               Partition (Current.Rows, Current.Team, Position, First, Last);
+               Partition
+                 (Current.Rows, Current.Team, Position, First, Last,
+                  Grain =>
+                    (if Current.Work = null
+                     then Model_Runner.Quantization.Integers.Row_Tile
+                     else 1));
 
                Take_Share (Current, First, Last);
             end;
@@ -877,7 +913,9 @@ package body Model_Runner.Backend.CPU is
       declare
          First, Last : Element_Count;
       begin
-         Partition (Work.Rows, Work.Team, Work.Team, First, Last);
+         Partition
+           (Work.Rows, Work.Team, Work.Team, First, Last,
+            Grain => Model_Runner.Quantization.Integers.Row_Tile);
          if First <= Last
            and then Work.Vector /= null
            and then Work.Target /= null
@@ -996,7 +1034,9 @@ package body Model_Runner.Backend.CPU is
       declare
          First, Last : Element_Count;
       begin
-         Partition (Work.Rows, Work.Team, Work.Team, First, Last);
+         Partition
+           (Work.Rows, Work.Team, Work.Team, First, Last,
+            Grain => Model_Runner.Quantization.Integers.Row_Tile);
          if First <= Last
            and then Work.Vector /= null
            and then Work.Target /= null

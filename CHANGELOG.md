@@ -5,6 +5,42 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A batched prompt did not give the same answer at every worker count**,
+  which three places in the README said it did. `--threads 4` generated
+  different text from `--threads 3` and `--threads 7` on the same file, seed
+  and temperature — `3740ed87be385f2d` against `3248ac1bb7011de0` — from the
+  forty-third token, and `--batch-size 1` made it go away.
+
+  A batch is computed a tile of rows at a time and **a tile of an odd size
+  takes a different kernel from a full one**, which sums the same products in
+  a different order. The rows were cut into shares without regard to the
+  tile, so every share ended in a short tile and where those fell depended on
+  how many shares there were. A share boundary now falls on a multiple of the
+  row tile, so the tile grid is anchored at row zero however the rows are
+  cut, and the only short tile is the one the matrix's own row count leaves.
+
+  **No published figure or digest moves**: at the worker count the program
+  chooses for itself the partition is unchanged, because 2048, 5632, 256 and
+  32000 rows all divide by eight into eight shares. `--threads 2` through
+  `--threads 15` now all answer `3248ac1bb7011de0`.
+
+- **A pool test that failed would hang instead.** A raised assertion skips
+  `Close`, and the frame that declares a pool waits for its workers. Both
+  tests that compare a product across worker counts now collect the mismatch,
+  close the pool, and assert afterwards.
+
+### Added
+
+- **A test that a batched quantized product is the same at every share
+  count**, bit for bit — 100 rows of `Q8_0` against a batch of eight, share
+  counts one to eight, compared against the serial result. It fails on the
+  old partition at two workers. `Parallel_Matches_Serial` beside it did not,
+  because it uses a binary32 weight and one vector: the one shape the integer
+  tile kernel is never asked for, so the test named after the property tested
+  where the property could not break.
+
 ### Changed
 
 - **A worker looks for its next job before it blocks for it**, which is worth
