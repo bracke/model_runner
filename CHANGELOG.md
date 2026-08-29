@@ -5,6 +5,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **A tile of thirty-two rows rather than eight, which is 5.9 % of a
+  prompt.** The strip kernel stages the batch's own numbers at the top of
+  every call — where each vector's scales begin, the scale, and the block
+  total the bias correction wants — and **those are the batch's numbers, not
+  the row's**, so they are the same for every tile of rows a share is cut
+  into. A profile put that staging at **twelve per cent of the hottest symbol
+  in the program**, a scalar loop rebuilt for each of a share's tiles.
+
+  Long prompt, medians of three: 8 rows 6.244 s, 16 6.206, **32 5.874**, 64
+  6.059, 128 6.411 — better in three of three alternated rounds, digest
+  unchanged. The curve turns over at 64 because the tile's accumulators stop
+  fitting L1. No partition moves either: 2048, 5632, 256 and 32000 rows all
+  still divide by 32 into eight shares.
+
+### Measured
+
+- **Hoisting the rest of that staging out of the kernel buys nothing** —
+  5.926 s against 5.938, level in six alternated rounds — because the table
+  it saves building is 2 KB freshly written into L1 and the table it reads
+  instead is 32 KB walked eight strips apart.
+
+  The two shapes of it are worth more than the result. Reading the shared
+  table through **one name at a chosen address costs 7.256 s against 6.014**,
+  a fifth: an object at an address the compiler cannot reason about is one it
+  cannot prove does not alias the table being written, and the innermost loop
+  stops vectorizing. Written out twice, once against the parameter and once
+  against the local, both arms vectorize and the whole thing comes out level.
+
 ### Measured
 
 - **The value blend is not waiting for its loads, and the register file

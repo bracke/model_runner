@@ -231,7 +231,7 @@ package Model_Runner.Quantization.Integers is
    --  and in the nearest cache whatever the tile, and there eight is
    --  slightly worse than four -- 2.593 s against 2.545. The tile that
    --  suits a prompt is not the tile that suits a token.
-   Row_Tile : constant := 8;
+   Row_Tile : constant := 32;
 
    --  How many rows to ask for, given how many vectors are being multiplied.
    --
