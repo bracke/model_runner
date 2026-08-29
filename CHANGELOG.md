@@ -37,6 +37,20 @@ Keep a Changelog and the project uses semantic versioning.
   The prompt is level: a batch amortizes a submission over its positions
   already, and its normalization is real work rather than a fixed cost.
 
+- **The processor's strip kernel asked again and closed with a ceiling.** Its
+  feed-forward is 64.5 % of a 1419-token processor prompt, the largest single
+  number left in this file. The block loop still disassembles to 77
+  instructions of which 50 want one of the two vector pipes, so its floor is
+  25 cycles; `perf stat` over a whole prompt puts it at **25.2**. It is on
+  its floor.
+
+  **16 of those 50 pipe slots do the multiplying.** The other 34 are Q8_0's
+  per-32-element scale: a `vpdpbusd` covers exactly one block, so every
+  block's integer result is converted and scaled before it joins the row's
+  sum — one convert and one multiply-add per dot product, whatever the tile
+  is. The kernel therefore runs at about a third of what the part's byte dot
+  product could do, and the two thirds are the format rather than the loop.
+
 - **A layer's first half fuses as well: 5 % of a 1419-token device prompt,
   and 70 % of the processor time it had left.** The host normalized the
   layer's input and then sent the queries, the keys and the values as three

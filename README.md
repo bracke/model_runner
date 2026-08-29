@@ -3733,6 +3733,33 @@ does not answer whether that exists.
 
 Nothing kept.
 
+**Asked again after the device's fusings**, because the processor's
+feed-forward is 64.5 per cent of its 1419-token prompt and that is the
+largest single number left anywhere in this file. The answer is the same one
+and now has a ceiling attached to it.
+
+The block loop still disassembles to what it did: **seventy-seven
+instructions, of which fifty want one of the two vector pipes** -- eighteen
+`vfmadd231ps`, sixteen `vpdpbusd`, sixteen `vcvtdq2ps` -- so its floor is
+twenty-five cycles. What it achieves, taken from `perf stat` over a whole
+prompt rather than from a microbenchmark: 132.7 G cycles for the run, about
+fifty-eight per cent of them in this symbol, against 3.05 G iterations of
+the loop, is **25.2 cycles an iteration**. It is on its floor.
+
+**And sixteen of those fifty pipe slots do the multiplying.** The other
+thirty-four are the format: Q8_0 keeps one scale for every thirty-two
+elements, and a `vpdpbusd` covers exactly one block, so every block's
+integer result must be converted and scaled before it can join the row's
+running sum. One convert and one multiply-add for each dot product, forever,
+whatever the tile is.
+
+So this kernel runs at about a third of what the part's byte dot product
+could do, and the two thirds are not waste that a better loop recovers --
+they are what reading a per-thirty-two-element scale costs. Getting past it
+means a format with a coarser scale, which is the file's choice and not this
+program's. The strip is closed for the same reason the device's matrix
+shader is: the thing that is left is not in the loop's shape.
+
 ### The fold, paid once for eight scores instead of eight
 
 After the exponential landed, a fresh profile put `Kernels.Head_Dot` at
@@ -5370,6 +5397,14 @@ ago a 1419-token device prompt spent 3.30 s of processor; it spends 0.65,
 and a 110-token one spends 0.04 s where the table above published 0.32 in
 the morning. What the host does during a device prompt is now the rotation,
 the sampler and the reading out.
+
+**The queries, keys and values were the third thing this was going to look
+at, and this answers it.** They run at about half the feed-forward's rate on
+the device -- 1.27 teraflops against 2.48 -- and `### Three more
+rearrangements, and the shader is closed` establishes that the reason is
+neither too few workgroups nor the operands. What could be done for them was
+to stop paying four round trips for them, and that is what this is; the rate
+itself is the matrix instruction's.
 
 **The rotation is what is left, and it is left on purpose.** It is 0.128 s
 of a 1.78 s prompt -- seven per cent, the largest single thing still done on
