@@ -7,34 +7,52 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
-- **A layer's second half in one submission: built, correct, and 40 %
-  slower.** The entry below names the three submissions a layer makes as
-  structural, because the host normalizes, rotates and joins between the
-  products. One of the three was removed: a `norm.comp` that walks the sum
-  in order in binary64, a third unit on `combine.comp` that adds its two
-  arms instead of gating them, back-references on the sequence so a step can
-  read one it names, and `Attend_And_Feed` — nine steps where the engine
-  made two submissions.
+- **A layer's second half in one submission, kept: 64 generated tokens read
+  1.447 s against 1.476, and a token is 45 submissions where it was 67.**
+  The entry below names the three submissions a layer makes as structural,
+  because the host normalizes, rotates and joins between the products. One
+  of the three is gone: `norm.comp`, a third unit on `combine.comp` that
+  adds its two arms instead of gating them, back-references on the sequence
+  so a step can read one it names, and `Attend_And_Feed` — nine steps where
+  the engine made two submissions.
 
-  **It is right**: twelve generated tokens answer `5abff916f9d83ca6` and
-  sixty-four `448c2ed68ec342ee`, the published digests, so a device-side
-  normalization in binary64 agrees with the processor's to the last bit —
-  which is what walking the sum in order was for.
+  **The missing third was the normalization, and the bisect that found it
+  is the point.** The same sequence with the norm replaced by a join of the
+  same shape reads 1.370 s against 1.820 with it, and 1.48 unfused — so the
+  fusing was worth what the submission count said, and the kernel in the
+  middle was giving all of it back. Three shapes: the sum walked on one
+  invocation cost 320 µs a layer; the workgroup fetching each block together
+  with one lane adding it up cost 100, all of it the adds, with the other
+  255 lanes at a barrier; folding the sum eight times costs nothing
+  measurable.
 
-  **And it is slower** — 0.367 s against 0.256 for 64 generated. Two
-  candidates were measured and neither is it: the binary64 sum is worth 8 %
-  of the difference, and the barriers nothing once a barrier publishes every
-  step before it rather than fencing each reader. So a third of a generated
-  token went somewhere the submission count does not explain. Not committed.
+  **Folding gives up bit-exactness, and the sweep is what allows it.** A
+  tree associates differently from a walk, so this is one of the few places
+  on the device where the conformance sweep judges rather than a digest:
+  28344 sequences across 13 architectures and 15 formats, none outside
+  tolerance. The published digests did not move either — `5abff916f9d83ca6`
+  for twelve tokens and `448c2ed68ec342ee` for sixty-four — which is a fact
+  about this model and not a guarantee.
 
-  Three bugs found on the way, written down because none could have been
-  caught by a type: a pipeline created before its request had an entry point
-  and a layout, which faults inside the driver with nothing here to look at;
-  a barrier emitted only for a step chained to the one before it, where a
-  step naming an earlier one needs it just as much and without it the
-  sequence answers wrongly; and a normalization handed to the weight loader
-  as Rows by Columns, which asks it to upload four million values out of an
-  array of two thousand.
+  The prompt is level: a batch amortizes a submission over its positions
+  already, and its normalization is real work rather than a fixed cost.
+
+### Fixed
+
+- **A sequence could evict a matrix it was about to read.** A sequence
+  acquires every matrix it names before dispatching any of them, and
+  acquiring one can evict another to stay inside `--device-memory`. The
+  victim is the matrix wanted longest ago, which within a sequence is the
+  one acquired first — a matrix a later step is about to read, leaving a
+  descriptor pointing at a buffer that no longer exists. Three matrices
+  never reached it; the fused layer's five did, and the run produced a logit
+  that was not finite. A sequence now pins what it has taken, and a budget
+  too small for all of it takes the memory outside the budget and gives it
+  back at the end of the call — which is what the loader already did for a
+  single matrix larger than the whole budget.
+
+- **`Add_Norm` accepted a sequence with nothing to normalize** and recorded
+  a step reading step zero.
 
 ### Changed
 

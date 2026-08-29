@@ -673,6 +673,232 @@ package body Model_Runner.Backend.Device is
                      .. Landing.all'First + Wanted - 1);
    end Attend_And_Project;
 
+   ----------------------
+   -- Attend_And_Feed --
+   ----------------------
+
+   procedure Attend_And_Feed
+     (Query       : T.Real_Array;
+      Residual    : T.Real_Array;
+      Heads       : Natural;
+      Head_Size   : Natural;
+      Value_Size  : Natural;
+      Group_Size  : Natural;
+      First       : Natural;
+      Last        : Natural;
+      K_Base      : Natural;
+      V_Base      : Natural;
+      KV_Width    : Natural;
+      V_Width     : Natural;
+      Scale       : Model_Runner.Numerics.Real;
+      Cap         : Model_Runner.Numerics.Real;
+      Weight      : T.View;
+      Norm_Weight : T.Real_Array;
+      Epsilon     : Model_Runner.Numerics.Real;
+      Gate        : T.View;
+      Up          : T.View;
+      Down        : T.View;
+      Unit        : Natural;
+      Into        : T.Real_Array_Access;
+      Ok          : out Boolean;
+      Positions   : Natural := 1;
+      Window      : Natural := 0;
+      Causal      : Boolean := True;
+      Lifted      : Boolean := False;
+      Max_Bias    : Model_Runner.Numerics.Real := 0.0)
+   is
+      Slots : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
+
+      Wide  : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Heads)
+        * Model_Runner.Numerics.Element_Count (Head_Size);
+
+      --  Every step writes into the one array Run fills, and only the last
+      --  of them is wanted here. The rest stay on the device, which is what
+      --  the sequence is for.
+      Blend   : constant Model_Runner.Numerics.Element_Count :=
+        Slots * Model_Runner.Numerics.Element_Count (Heads)
+        * Model_Runner.Numerics.Element_Count (Value_Size);
+      Rest    : constant Model_Runner.Numerics.Element_Count :=
+        Slots * (Weight.Rows          --  the projection
+                 + Weight.Rows        --  the first join
+                 + Weight.Rows        --  the normalization
+                 + Gate.Rows          --  the gating arm
+                 + Up.Rows            --  the other arm
+                 + Gate.Rows          --  their combination
+                 + Down.Rows);        --  the projection down
+      Wanted  : constant Model_Runner.Numerics.Element_Count :=
+        Blend + Rest + Slots * Down.Rows;
+
+      Fed     : Model_Runner.Numerics.Real_Array
+                  (0 .. Slots * (Wide + Weight.Rows) - 1);
+
+      Steps   : Products.Sequence;
+      Packing : Products.Weight_Packing;
+      Gate_P, Up_P, Down_P : Products.Weight_Packing;
+      Known   : Boolean;
+      Added   : Boolean;
+      Halted  : Boolean := False;
+   begin
+      Ok := False;
+
+      --  Everything this needs to be true, asked once. A caller refused
+      --  here does the layer the way it did before, which is two
+      --  submissions and the joining and normalizing on the host.
+      if not Ready_Now or else Into = null
+        or else Weight.Base = System.Null_Address
+        or else Norm_Weight'Length
+                  /= Model_Runner.Numerics.Element_Count (Weight.Rows)
+        or else Gate.Base = System.Null_Address
+        or else Up.Base = System.Null_Address
+        or else Down.Base = System.Null_Address
+        or else Query'Length < Slots * Wide
+        or else Residual'Length < Slots * Weight.Rows
+        or else Into.all'Length < Slots * Down.Rows
+        or else Gate.Columns /= Weight.Rows
+        or else Up.Columns /= Weight.Rows
+        or else Up.Rows /= Gate.Rows
+        or else Down.Columns /= Gate.Rows
+        or else Down.Rows /= Weight.Rows
+        or else Weight.Columns
+                  /= Model_Runner.Numerics.Element_Count (Heads)
+                     * Model_Runner.Numerics.Element_Count (Value_Size)
+      then
+         return;
+      end if;
+
+      Packing_Of (Weight, Packing, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Gate, Gate_P, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Up, Up_P, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Down, Down_P, Known);
+      if not Known then
+         return;
+      end if;
+
+      Products.Open_Sequence (Steps);
+
+      Products.Add_Attention
+        (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
+         K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
+         Window => Window, Causal => Causal, Max_Bias => Max_Bias,
+         Kept => False);
+      if not Added then
+         return;
+      end if;
+
+      Products.Add_Chained_Product
+        (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
+         Natural (Weight.Rows), Natural (Weight.Columns), Added,
+         Key => At_Offset (Weight.Base, Weight.Offset), Kept => False);
+      if not Added then
+         return;
+      end if;
+
+      --  The residual join. Its residual is the second half of the
+      --  activation, which is why the two travel together.
+      Products.Add_Join
+        (Steps, Added, From_Step => 2,
+         From_Vector => Natural (Slots * Wide), Kept => False);
+      if not Added then
+         return;
+      end if;
+
+      declare
+         At_Norm : constant System.Address :=
+           Norm_Weight (Norm_Weight'First)'Address;
+      begin
+         Products.Add_Norm
+           (Steps, At_Norm,
+            Model_Runner.Bytes.Byte_Count (Norm_Weight'Length) * 4, 0,
+            Natural (Weight.Rows), Epsilon, Added,
+            From_Step => 3, Lifted => Lifted, Key => At_Norm,
+            Kept => False);
+      end;
+      if not Added then
+         return;
+      end if;
+
+      --  Both arms read the normalization, which is not the step before the
+      --  second of them.
+      Products.Add_Chained_Product
+        (Steps, Gate.Base, Gate.Span, Gate.Offset, Gate_P,
+         Natural (Gate.Rows), Natural (Gate.Columns), Added,
+         Key => At_Offset (Gate.Base, Gate.Offset), Kept => False,
+         From_Step => 4);
+      if not Added then
+         return;
+      end if;
+
+      Products.Add_Chained_Product
+        (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
+         Natural (Up.Rows), Natural (Up.Columns), Added,
+         Key => At_Offset (Up.Base, Up.Offset), Kept => False,
+         From_Step => 4);
+      if not Added then
+         return;
+      end if;
+
+      Products.Add_Combination (Steps, Unit, Added, Kept => False);
+      if not Added then
+         return;
+      end if;
+
+      Products.Add_Chained_Product
+        (Steps, Down.Base, Down.Span, Down.Offset, Down_P,
+         Natural (Down.Rows), Natural (Down.Columns), Added,
+         Key => At_Offset (Down.Base, Down.Offset), Kept => False);
+      if not Added then
+         return;
+      end if;
+
+      --  And the second join, whose residual is what the first one wrote.
+      Products.Add_Join
+        (Steps, Added, From_Step => 8, Residual_Step => 3);
+      if not Added then
+         return;
+      end if;
+
+      --  The queries and the residual, one after the other.
+      Fed (Fed'First .. Fed'First + Slots * Wide - 1) :=
+        Query (Query'First .. Query'First + Slots * Wide - 1);
+      Fed (Fed'First + Slots * Wide .. Fed'Last) :=
+        Residual (Residual'First
+                  .. Residual'First + Slots * Weight.Rows - 1);
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps, Fed, Natural'Max (Positions, 1),
+         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ok, Halted);
+
+
+      if Halted or else not Ok then
+         Ok := False;
+         return;
+      end if;
+
+      Into.all (Into.all'First .. Into.all'First + Slots * Down.Rows - 1) :=
+        Landing.all (Landing.all'First + Blend + Rest
+                     .. Landing.all'First + Wanted - 1);
+   end Attend_And_Feed;
+
    --------------------
    -- Dispatch_Group --
    --------------------

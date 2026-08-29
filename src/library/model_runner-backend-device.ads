@@ -329,6 +329,80 @@ package Model_Runner.Backend.Device is
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0);
 
+   --  A layer's second half, in one submission rather than two.
+   --
+   --  Attention, the projection that reads it, the residual join, the
+   --  normalization, the two arms of the gated feed-forward, their
+   --  combination, the projection down and the second join -- nine steps
+   --  that used to be two submissions with the host joining and normalizing
+   --  in between. A submission is a submit and a wait on a fence, and a
+   --  generated token made sixty-seven of them; this is one of the three a
+   --  layer made.
+   --
+   --  The activation is the queries and the residual, one after the other,
+   --  because the joins need the residual and Run is given one array.
+   --
+   --  @param Query The rotated queries, Positions of them.
+   --  @param Residual The layer's input, Positions of them, which the
+   --    first join adds to; the second adds to what the first wrote.
+   --  @param Heads How many heads.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @param Group_Size How many heads share one group of keys and values.
+   --  @param First First cached position the first position may look at.
+   --  @param Last Last cached position the first position may look at.
+   --  @param K_Base Where the keys begin.
+   --  @param V_Base Where the values begin.
+   --  @param KV_Width How far apart one position's keys are from the next.
+   --  @param V_Width How far apart one position's values are from the next.
+   --  @param Scale What a score is multiplied by.
+   --  @param Cap The bound on a score, or zero for none.
+   --  @param Weight The matrix the blend is projected through.
+   --  @param Positions How many positions the layer is given.
+   --  @param Norm_Weight The feed-forward normalization's weight.
+   --  @param Epsilon The floor under its mean square.
+   --  @param Lifted True where that weight is lifted by one first.
+   --  @param Gate The gating arm of the feed-forward.
+   --  @param Up The other arm, which the gate multiplies.
+   --  @param Down The projection back down to the layer's width.
+   --  @param Unit Which unit the combination applies.
+   --  @param Into Receives the layer's output, Positions of them.
+   --  @param Ok False when the device did not run it, which leaves the
+   --    caller to do the whole of it as it did before.
+   --  @param Window This layer's sliding window, or zero for none.
+   --  @param Causal True where a position may see only what precedes it.
+   --  @param Max_Bias How steeply a head's attention falls off with
+   --    distance, or zero for a model told where a token is otherwise.
+   procedure Attend_And_Feed
+     (Query       : Model_Runner.Tensors.Real_Array;
+      Residual    : Model_Runner.Tensors.Real_Array;
+      Heads       : Natural;
+      Head_Size   : Natural;
+      Value_Size  : Natural;
+      Group_Size  : Natural;
+      First       : Natural;
+      Last        : Natural;
+      K_Base      : Natural;
+      V_Base      : Natural;
+      KV_Width    : Natural;
+      V_Width     : Natural;
+      Scale       : Model_Runner.Numerics.Real;
+      Cap         : Model_Runner.Numerics.Real;
+      Weight      : Model_Runner.Tensors.View;
+      Norm_Weight : Model_Runner.Tensors.Real_Array;
+      Epsilon     : Model_Runner.Numerics.Real;
+      Gate        : Model_Runner.Tensors.View;
+      Up          : Model_Runner.Tensors.View;
+      Down        : Model_Runner.Tensors.View;
+      Unit        : Natural;
+      Into        : Model_Runner.Tensors.Real_Array_Access;
+      Ok          : out Boolean;
+      Positions   : Natural := 1;
+      Window      : Natural := 0;
+      Causal      : Boolean := True;
+      Lifted      : Boolean := False;
+      Max_Bias    : Model_Runner.Numerics.Real := 0.0);
+
    --  Several products of the same activation, in one submission.
    --
    --  A layer's queries, keys and values are three matrices read against one

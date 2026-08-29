@@ -853,6 +853,142 @@ package body Tests.CLI_Cases is
                              "a sequence combined with one step behind it");
                   end;
 
+                  --  A normalization and a residual join, which are what
+                  --  the host used to do between one submission and the
+                  --  next. Compared against the same arithmetic worked out
+                  --  here within a tolerance rather than exactly: the
+                  --  device folds a position's squares in a tree and the
+                  --  processor walks them in order, so the two agree to
+                  --  about the width of a binary32 and not further.
+                  declare
+                     Gain : constant N.Real_Array
+                       (0 .. N.Element_Count (Rows) - 1) :=
+                         [for Row in 0 .. N.Element_Count (Rows) - 1 =>
+                            0.5 + N.Real (Row mod 5) / 8.0];
+
+                     Held_Gain : Model_Runner.Bytes.Byte_Array_Access :=
+                       new Model_Runner.Bytes.Byte_Array
+                             (1 .. Model_Runner.Bytes.Byte_Count (Rows) * 4);
+
+                     Arm   : N.Real_Array (0 .. N.Element_Count (Rows) - 1);
+                     Whole : N.Real_Array
+                       (0 .. N.Element_Count (Rows) * 3 - 1);
+
+                     Wider : N.Real_Array
+                       (0 .. N.Element_Count (Cols)
+                             + N.Element_Count (Rows) - 1) :=
+                         [others => 0.0];
+
+                     Layer : Products.Sequence;
+                     Worst : N.Real := 0.0;
+                     Epsilon : constant N.Real := 1.0E-5;
+                  begin
+                     for Row in Gain'Range loop
+                        declare
+                           At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                             Model_Runner.Bytes.Byte_Count (Row) * 4 + 1;
+                        begin
+                           Held_Gain (At_Byte .. At_Byte + 3) :=
+                             Model_Runner.Bytes.Put_F32 (Gain (Row));
+                        end;
+                     end loop;
+
+                     --  The activation the sequence reads, with the
+                     --  residual the join adds behind it.
+                     Wider (0 .. N.Element_Count (Cols) - 1) := Vector;
+
+                     for Row in 0 .. N.Element_Count (Rows) - 1 loop
+                        Wider (N.Element_Count (Cols) + Row) :=
+                          N.Real (Row mod 7) / 9.0 - 0.3;
+                     end loop;
+
+                     Products.Multiply
+                       (Engine, Held.all, 0, Products.Values_F32, Rows, Cols,
+                        Vector, 1, Arm, Ok, Halted);
+                     Assert (Ok, "a device refused the product to normalize");
+
+                     Products.Open_Sequence (Layer);
+                     Products.Add_Product
+                       (Layer, Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                        0, Products.Values_F32, Rows, Cols,
+                        Added);
+                     Assert (Added, "a sequence refused its product");
+
+                     Products.Add_Norm
+                       (Layer, Held_Gain.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held_Gain.all'Length),
+                        0, Rows, Epsilon, Added);
+                     Assert (Added, "a sequence refused a normalization");
+
+                     Products.Add_Join
+                       (Layer, Added,
+                        From_Vector => Natural (N.Element_Count (Cols)));
+                     Assert (Added, "a sequence refused a join");
+
+                     Products.Run
+                       (Engine, Layer, Wider, 1, Whole, Ok, Halted);
+                     Assert (Ok, "a device refused a normalizing sequence");
+
+                     declare
+                        Square : N.Wide_Real := 0.0;
+                        Scale  : N.Wide_Real;
+                     begin
+                        for Row in Arm'Range loop
+                           Square := Square
+                             + N.Wide_Real (Arm (Row))
+                               * N.Wide_Real (Arm (Row));
+                        end loop;
+
+                        Scale := 1.0 / N.Sqrt
+                          (Square / N.Wide_Real (Rows)
+                           + N.Wide_Real (Epsilon));
+
+                        for Row in Arm'Range loop
+                           declare
+                              Normed : constant N.Real :=
+                                N.Real (N.Wide_Real (Arm (Row)) * Scale)
+                                * Gain (Row);
+
+                              Wanted : constant N.Real :=
+                                Normed
+                                + Wider (N.Element_Count (Cols) + Row);
+
+                              Said : constant N.Real :=
+                                Whole (Row + N.Element_Count (Rows));
+
+                              Got : constant N.Real :=
+                                Whole (Row + N.Element_Count (Rows) * 2);
+                           begin
+                              Worst := N.Real'Max
+                                (Worst, abs (Said - Normed));
+                              Worst := N.Real'Max
+                                (Worst, abs (Got - Wanted));
+                           end;
+                        end loop;
+                     end;
+
+                     Assert (Worst < 1.0E-4,
+                             "a device and the processor disagree about a"
+                             & " normalization and the join after it by"
+                             & N.Real'Image (Worst));
+
+                     --  Both need something behind them.
+                     Products.Open_Sequence (Layer);
+                     Products.Add_Norm
+                       (Layer, Held_Gain.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held_Gain.all'Length),
+                        0, Rows, Epsilon, Added);
+                     Assert (not Added,
+                             "a sequence normalized nothing");
+
+                     Products.Open_Sequence (Layer);
+                     Products.Add_Join (Layer, Added);
+                     Assert (not Added, "a sequence joined nothing");
+
+                     Model_Runner.Bytes.Free (Held_Gain);
+                  end;
+
                   --  A target too small is refused rather than filled as
                   --  far as it goes, which would hand back one product of
                   --  two and say nothing.

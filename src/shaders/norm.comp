@@ -1,0 +1,123 @@
+#version 450
+
+//  The root-mean-square normalization, on the device.
+//
+//  It is here for what it saves around it rather than for itself. A layer
+//  normalizes twice and each of those is a few thousand multiplications
+//  against products of millions -- but the host doing them is the host
+//  needing the products back, and that is a submission and a wait on a
+//  fence. With this on the device the join and the normalization stop being
+//  one of the three submissions a layer makes.
+//
+//  A workgroup a position, and the sum folded in a tree.
+//
+//  The processor adds a position's squares in order, and this does not: two
+//  hundred and fifty-six lanes each add a stride of the row and then fold
+//  those partials in eight halvings. A different association is a different
+//  sum in the last bits, and a layer's normalization feeds everything after
+//  it, so this is one of the few places on the device where the answer is
+//  the conformance sweep's to judge rather than a digest's. It is
+//  accumulated in binary64 all the way through the fold, which is what
+//  keeps the difference in the last bits rather than further up.
+//
+//  Two earlier shapes are what argue for this one. Having a single
+//  invocation walk the whole position -- loads and adds both -- cost three
+//  hundred and twenty microseconds a layer, a third of a generated token:
+//  one lane issuing two thousand dependent loads has nothing to hide their
+//  latency behind. Having the lanes fetch each block together and one of
+//  them add it up in order cost a hundred, and that hundred was the adds,
+//  because the other two hundred and fifty-five lanes spend the whole sum
+//  waiting at a barrier. Only the fold puts them to work.
+
+#extension GL_ARB_gpu_shader_fp64 : enable
+
+const uint LANES = 256u;
+
+layout(local_size_x = LANES) in;
+
+//  The weight, one element a component, which the device keeps resident the
+//  way it keeps a matrix: a normalization weight is a tensor of the model
+//  and reaches this the way every other tensor does.
+layout(std430, binding = 0) readonly  buffer Weight { float g[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+
+layout(push_constant) uniform Shape {
+    //  Components a position holds.
+    uint width;
+
+    //  Whether the weight is lifted by one before it multiplies, which is
+    //  what gemma states and no other architecture here does.
+    uint lifted;
+
+    //  Positions in this batch.
+    uint count;
+
+    //  Epsilon, as the bits of a binary32 rather than as a float, because
+    //  the block this shares with the other kernels is words.
+    uint epsilon;
+
+    uint unused_packing;
+
+    //  Where the weight begins in the buffer the device kept it in, in
+    //  elements: a kept weight shares its buffer with others.
+    uint base;
+} shape;
+
+shared double partial[LANES];
+
+void main() {
+    uint slot = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (slot >= shape.count) {
+        return;
+    }
+
+    uint at = slot * shape.width;
+
+    //  A stride a lane, so that the lanes of a turn read neighbours.
+    double mine = 0.0LF;
+
+    for (uint c = lane; c < shape.width; c += LANES) {
+        double v = double (x[at + c]);
+        mine += v * v;
+    }
+
+    partial[lane] = mine;
+
+    //  And fold, halving the live lanes each turn.
+    for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
+        barrier();
+
+        if (lane < reach) {
+            partial[lane] += partial[lane + reach];
+        }
+    }
+
+    barrier();
+
+    double gain =
+      sqrt (partial[0] / double (shape.width)
+            + double (uintBitsToFloat (shape.epsilon)));
+
+    //  A zero or non-finite scale means the input was degenerate. A unit
+    //  gain keeps the layer's output finite so that the caller's own
+    //  finiteness check reports the condition rather than the arithmetic
+    //  doing it here, which is what the processor's does and for the same
+    //  reason.
+    if (gain == 0.0LF || isinf (gain) || isnan (gain)) {
+        gain = 1.0LF;
+    } else {
+        gain = 1.0LF / gain;
+    }
+
+    //  And out, every lane at once: nothing here is serial either.
+    for (uint c = lane; c < shape.width; c += LANES) {
+        float scaled = float (double (x[at + c]) * gain);
+
+        y[at + c] = shape.lifted != 0u
+                    ? scaled * (1.0 + g[shape.base + c])
+                    : scaled * g[shape.base + c];
+    }
+}

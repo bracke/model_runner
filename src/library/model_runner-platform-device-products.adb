@@ -28,6 +28,7 @@ with Model_Runner.Shaders;
 --  is what that convention is for.
 package body Model_Runner.Platform.Device.Products is
 
+
    use type Interfaces.C.int;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
@@ -1186,6 +1187,23 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Item.Blender := Made;
+
+         --  And the normalization, from its own source. A device that
+         --  refuses it is left doing its normalizing on the host, which is
+         --  what every device did before this.
+         declare
+            Normed : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Norm;
+         begin
+            Request.Size := Interfaces.C.size_t (Normed'Length * 4);
+            Request.Code := Normed'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Normer := Made;
+            end if;
+         end;
       end;
 
       --  The third kernel's module.
@@ -1445,8 +1463,23 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         C.Strings.Free (Name);
          Item.Blend_Line := Made;
+
+         --  And the normalization's, on the same layout and after the
+         --  request has its entry point and its layout -- which is the
+         --  whole of what a pipeline needs and what creating one before
+         --  those were set does not have.
+         if Item.Normer /= Null_Handle then
+            Request.Stage.Module := Item.Normer;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Norm_Line := Made;
+            end if;
+         end if;
+
+         C.Strings.Free (Name);
       end;
 
       --  And the third kernel's pipeline, against the same layout.
@@ -1850,6 +1883,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");
+      Give_Back (Item.Norm_Line, "vkDestroyPipeline");
+      Give_Back (Item.Normer, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
       Item.Matrices := False;
@@ -1912,9 +1947,25 @@ package body Model_Runner.Platform.Device.Products is
    --  would release the one wanted after that. The one wanted longest ago is
    --  the one whose turn comes last.
    --
+   --  Pinned says which matrices this may not touch: those wanted since
+   --  that reading of the clock. A sequence acquires every matrix it names
+   --  before it dispatches any of them, and within one sequence the matrix
+   --  wanted longest ago is the one acquired first -- which is a matrix a
+   --  later step of the same sequence is about to read. Releasing it leaves
+   --  a descriptor pointing at a buffer that no longer exists, and the
+   --  answer that comes back is not an answer. So a sequence pins what it
+   --  has taken, and a budget too small for all of it fails to acquire
+   --  rather than quietly overwriting itself: the caller is told, and does
+   --  the work the way it did before.
+   --
    --  @param Item Engine holding them.
    --  @param Gone True when one was released.
-   procedure Give_Back_Least (Item : in out Engine; Gone : out Boolean) is
+   --  @param Pinned Clock reading before which a matrix may be released.
+   procedure Give_Back_Least
+     (Item   : in out Engine;
+      Gone   : out Boolean;
+      Pinned : Interfaces.Unsigned_64 := Interfaces.Unsigned_64'Last)
+   is
       Oldest : Natural := 0;
    begin
       Gone := False;
@@ -1924,6 +1975,7 @@ package body Model_Runner.Platform.Device.Products is
       --  memory and giving it back frees none of the device's.
       for Index in 1 .. Item.Used loop
          if not Item.Kept (Index).Own
+           and then Item.Kept (Index).Used_At <= Pinned
            and then (Oldest = 0
                      or else Item.Kept (Index).Used_At
                              < Item.Kept (Oldest).Used_At)
@@ -2089,7 +2141,9 @@ package body Model_Runner.Platform.Device.Products is
       Base         : out Interfaces.Unsigned_64;
       Borrowed     : out Boolean;
       Ok           : out Boolean;
-      Key          : System.Address)
+      Key          : System.Address;
+      Pinned       : Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64'Last)
    is
       Weight_Buffer : Address renames Buffer;
       Weight_Memory : Address renames Memory;
@@ -2177,7 +2231,7 @@ package body Model_Runner.Platform.Device.Products is
                     and then Item.Used > 0
                     and then Item.Kept_Bytes + Weight_Bytes > Item.Budget
                   loop
-                     Give_Back_Least (Item, Gone);
+                     Give_Back_Least (Item, Gone, Pinned);
                   end loop;
                end;
             end if;
@@ -3354,17 +3408,21 @@ package body Model_Runner.Platform.Device.Products is
       Columns : Natural;
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address;
-      Kept    : Boolean := True)
+      Kept    : Boolean := True;
+      From_Step : Natural := 0)
    is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
    begin
       --  Nothing to chain to, no room, or a width that does not meet the
-      --  one before it. Each is a refusal rather than something patched
+      --  step it reads. Each is a refusal rather than something patched
       --  over: a product reading the wrong number of values would compute
       --  and be wrong.
       if Steps.Held = 0
         or else Steps.Held = Sequence_Limit
         or else Base = System.Null_Address
-        or else Columns /= Steps.Items (Steps.Held).Rows
+        or else Source not in 1 .. Steps.Held
+        or else Columns /= Steps.Items (Source).Rows
       then
          Added := False;
          return;
@@ -3374,6 +3432,7 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => True,
+         Reads => (if From_Step = 0 then 0 else From_Step),
          Kept => Kept,
          Blends => False, Unit => 0, Attends => False,
          others => <>);
@@ -3410,6 +3469,90 @@ package body Model_Runner.Platform.Device.Products is
          others => <>);
       Added := True;
    end Add_Combination;
+
+   --------------
+   -- Add_Join --
+   --------------
+
+   procedure Add_Join
+     (Steps         : in out Sequence;
+      Added         : out Boolean;
+      From_Step     : Natural := 0;
+      From_Vector   : Natural := 0;
+      Residual_Step : Natural := 0;
+      Kept          : Boolean := True)
+   is
+      Other : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+   begin
+      if Steps.Held = 0
+        or else Steps.Held = Sequence_Limit
+        or else Other > Steps.Held
+        or else Residual_Step > Steps.Held
+      then
+         Added := False;
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => System.Null_Address, Span => 0, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => Steps.Items (Other).Rows,
+         Columns => Steps.Items (Other).Rows,
+         Key => System.Null_Address,
+         Chained => Residual_Step /= 0,
+         Reads => Residual_Step,
+         Reads_Two => Other,
+         At_Vector => From_Vector,
+         Kept => Kept,
+         Blends => True, Unit => 2, Attends => False,
+         others => <>);
+      Added := True;
+   end Add_Join;
+
+   --------------
+   -- Add_Norm --
+   --------------
+
+   procedure Add_Norm
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Width     : Natural;
+      Epsilon   : Model_Runner.Numerics.Real;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Lifted    : Boolean := False;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+   begin
+      --  Source is zero only on an empty sequence, which is a
+      --  normalization of nothing.
+      if Steps.Held = Sequence_Limit
+        or else Width = 0
+        or else Source = 0
+        or else Source > Steps.Held
+      then
+         Added := False;
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte,
+         Packing => Weight_Packing'First,
+         Rows => Width, Columns => Width, Key => Key,
+         Chained => Source /= 0, Reads => Source,
+         Kept => Kept, Norms => True, Lifted => Lifted,
+         Epsilon => Epsilon, Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Norm;
 
    -------------------
    -- Add_Attention --
@@ -3472,7 +3615,7 @@ package body Model_Runner.Platform.Device.Products is
          Group_Size => Group_Size, First => First, Last => Last,
          K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
          V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
-         Causal => Causal, Max_Bias => Max_Bias);
+         Causal => Causal, Max_Bias => Max_Bias, others => <>);
       Added := True;
    end Add_Attention;
 
@@ -3514,11 +3657,43 @@ package body Model_Runner.Platform.Device.Products is
 
       Places : array (1 .. Sequence_Limit) of Place;
 
+      --  What the activation buffer has to hold. The first step's own
+      --  reading of it, and past that whatever a step reading at an offset
+      --  needs -- a residual join reads the residual, which travels behind
+      --  the queries in the same array.
+      function Vector_Elements return Model_Runner.Numerics.Element_Count;
+
+      function Vector_Elements return Model_Runner.Numerics.Element_Count is
+         Most : Model_Runner.Numerics.Element_Count :=
+           Model_Runner.Numerics.Element_Count (Steps.Items (1).Columns)
+           * Model_Runner.Numerics.Element_Count (Count);
+      begin
+         for Index in 1 .. Steps.Held loop
+            if Steps.Items (Index).At_Vector > 0 then
+               Most := Model_Runner.Numerics.Element_Count'Max
+                 (Most,
+                  Model_Runner.Numerics.Element_Count
+                    (Steps.Items (Index).At_Vector)
+                  + Model_Runner.Numerics.Element_Count
+                      (Steps.Items (Index).Rows)
+                    * Model_Runner.Numerics.Element_Count (Count));
+            end if;
+         end loop;
+
+         return Most;
+      end Vector_Elements;
+
+      Vector_Room  : constant Model_Runner.Numerics.Element_Count :=
+        Vector_Elements;
+
       Vector_Bytes : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Steps.Items (1).Columns)
-        * Interfaces.Unsigned_64 (Count) * 4;
+        Interfaces.Unsigned_64 (Vector_Room) * 4;
 
       Result_Bytes : Interfaces.Unsigned_64 := 0;
+
+      --  The clock reading a sequence's matrices are pinned from, so that
+      --  acquiring the last of them cannot release the first.
+      Pinned : Interfaces.Unsigned_64 := Interfaces.Unsigned_64'Last;
 
       --  The largest half-precision copy any step of this sequence wants,
       --  which is what the one buffer holding it has to be. Zero when no
@@ -3585,7 +3760,24 @@ package body Model_Runner.Platform.Device.Products is
             --  A combining step carries no matrix: it reads the two
             --  results before it and writes its own. Everything the shape
             --  checks below say about a matrix is beside the point for it.
-            if This.Attends then
+            if This.Norms then
+               --  A normalizing step carries a weight of one element a
+               --  component, which the device keeps the way it keeps a
+               --  matrix -- so everything below about residency serves it
+               --  and only the shape check differs.
+               if This.Rows = 0
+                 or else This.Base = System.Null_Address
+                 or else This.Reads > Steps.Held
+                 or else Interfaces.Unsigned_64 (This.Span)
+                           < Interfaces.Unsigned_64 (This.At_Byte)
+                             + Interfaces.Unsigned_64 (This.Rows) * 4
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight :=
+                 Interfaces.Unsigned_64 (This.Rows) * 4;
+            elsif This.Attends then
                --  An attention step carries no matrix either, and reads a
                --  cache rather than a weight. What it needs that the shape
                --  checks below cannot say is that the cache is there: a
@@ -3606,20 +3798,40 @@ package body Model_Runner.Platform.Device.Products is
 
                Places (Index).Weight := 0;
             elsif This.Blends then
-               if This.Rows = 0
-                 or else Index < 3
-                 or else Steps.Items (Index - 1).Rows /= This.Rows
-                 or else Steps.Items (Index - 2).Rows /= This.Rows
-               then
-                  return;
-               end if;
+               --  Two arms in and one out. A combination takes the two
+               --  steps before it; a join names one of them and takes its
+               --  residual from a step it names or from the caller's
+               --  activation, which is what lets a layer's second join
+               --  reach back to its first.
+               declare
+                  Arm : constant Natural :=
+                    (if This.Reads_Two /= 0 then This.Reads_Two
+                     else Index - 1);
+                  Other : constant Natural :=
+                    (if This.Reads_Two /= 0 or else This.Reads /= 0
+                     then This.Reads
+                     else Index - 2);
+               begin
+                  if This.Rows = 0
+                    or else Arm not in 1 .. Index - 1
+                    or else Other > Index - 1
+                    or else Steps.Items (Arm).Rows /= This.Rows
+                    or else (Other /= 0
+                             and then Steps.Items (Other).Rows /= This.Rows)
+                  then
+                     return;
+                  end if;
+               end;
 
                Places (Index).Weight := 0;
             elsif This.Rows = 0
               or else (not This.Chained
                        and then This.Columns /= Steps.Items (1).Columns)
               or else (This.Chained
-                       and then This.Columns /= Steps.Items (Index - 1).Rows)
+                       and then This.Columns
+                                  /= Steps.Items
+                                       ((if This.Reads = 0 then Index - 1
+                                         else This.Reads)).Rows)
               or else Wide = 0
               or else Interfaces.Unsigned_64 (This.Rows)
                         * Interfaces.Unsigned_64 (This.Columns) > Max_Elements
@@ -3657,6 +3869,8 @@ package body Model_Runner.Platform.Device.Products is
 
       Item.Clock := Item.Clock + 1;
 
+      Pinned := Item.Clock;
+
       --  Every matrix in place before the first dispatch is written down.
       --  This is the whole point of the arrangement: acquiring a matrix can
       --  upload it, evict another, or take the host's own memory, and none
@@ -3679,11 +3893,20 @@ package body Model_Runner.Platform.Device.Products is
                goto Next_Step;
             end if;
 
+            --  A normalizing step's weight is one row of its width, not
+            --  the square its Rows and Columns describe -- those say what
+            --  it reads and writes, as they do for every step. Handing the
+            --  square to the loader is asking it to upload four million
+            --  values out of an array of two thousand, which faults in the
+            --  driver rather than anywhere this program can see.
             Acquire_Weights
               (Item, Held, This.At_Byte, This.Packing,
-               This.Rows, This.Columns, Places (Index).Weight,
+               (if This.Norms then 1 else This.Rows),
+               (if This.Norms then This.Rows else This.Columns),
+               Places (Index).Weight,
                Places (Index).Buffer, Places (Index).Memory,
-               Places (Index).Base, Places (Index).Borrowed, Good, This.Key);
+               Places (Index).Base, Places (Index).Borrowed, Good, This.Key,
+               Pinned => Pinned);
             if not Good then
                Release_All;
                return;
@@ -3732,11 +3955,7 @@ package body Model_Runner.Platform.Device.Products is
       declare
          Wanted : Model_Runner.Numerics.Real_Array
            renames Vectors (Vectors'First
-                            .. Vectors'First
-                               + Model_Runner.Numerics.Element_Count
-                                   (Steps.Items (1).Columns)
-                                 * Model_Runner.Numerics.Element_Count (Count)
-                               - 1);
+                            .. Vectors'First + Vector_Room - 1);
       begin
          Standing (Item, Item.Vector_Memory, Item.Vector_At,
                    Item.Vector_Bytes, Good);
@@ -3763,6 +3982,33 @@ package body Model_Runner.Platform.Device.Products is
 
          Told  : aliased Buffer_Info_Array;
          Notes : aliased Write_Array;
+
+         --  Where a step reads from: a step it names, the step before it
+         --  when it is chained, or the caller's activation -- at an offset
+         --  into it, because a residual travels beside the queries rather
+         --  than in a buffer of its own.
+         function Source_Of (Index : Positive; Named : Natural)
+           return Buffer_Info
+         is
+            This : Step renames Steps.Items (Index);
+
+            From : constant Natural :=
+              (if Named /= 0 then Named
+               elsif This.Chained then Index - 1
+               else 0);
+
+            Skip : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (This.At_Vector) * 4;
+         begin
+            if From = 0 then
+               return (Buffer => Item.Vector_Buffer, Offset => Skip,
+                       Extent => Vector_Bytes - Skip);
+            else
+               return (Buffer => Item.Result_Buffer,
+                       Offset => Places (From).At_Byte,
+                       Extent => Places (From).Bytes);
+            end if;
+         end Source_Of;
       begin
          if Update = null then
             Release_All;
@@ -3782,16 +4028,29 @@ package body Model_Runner.Platform.Device.Products is
                --  The queries: where the activation was written, or --
                --  for a chained attention -- what the step before it wrote,
                --  which never left the device.
-               if Steps.Items (Index).Chained then
-                  Told (2) :=
-                    (Buffer => Item.Result_Buffer,
-                     Offset => Places (Index - 1).At_Byte,
-                     Extent => Places (Index - 1).Bytes);
-               else
-                  Told (2) :=
-                    (Buffer => Item.Vector_Buffer, Offset => 0,
-                     Extent => Vector_Bytes);
-               end if;
+               Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
+               Told (4) := Half_Descriptor (Item);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
+            if Steps.Items (Index).Norms then
+               --  The weight, what it normalizes, and its own room out.
+               Told (1) :=
+                 (Buffer => Places (Index).Buffer, Offset => 0,
+                  Extent => Places (Index).Base + Places (Index).Weight);
+               Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
                Told (3) :=
                  (Buffer => Item.Result_Buffer,
                   Offset => Places (Index).At_Byte,
@@ -3809,16 +4068,26 @@ package body Model_Runner.Platform.Device.Products is
             end if;
 
             if Steps.Items (Index).Blends then
-               --  Two arms in, its own room out. Both arms are results that
-               --  never left the device.
+               --  Two arms in, its own room out. A combination's arms are
+               --  the two results before it; a join's are the ones it
+               --  names, one of which may be the caller's own activation.
                Told (1) :=
-                 (Buffer => Item.Result_Buffer,
-                  Offset => Places (Index - 2).At_Byte,
-                  Extent => Places (Index - 2).Bytes);
+                 (if Steps.Items (Index).Reads_Two = 0
+                    and then Steps.Items (Index).Reads = 0
+                  then (Buffer => Item.Result_Buffer,
+                        Offset => Places (Index - 2).At_Byte,
+                        Extent => Places (Index - 2).Bytes)
+                  else Source_Of (Index, Steps.Items (Index).Reads));
                Told (2) :=
-                 (Buffer => Item.Result_Buffer,
-                  Offset => Places (Index - 1).At_Byte,
-                  Extent => Places (Index - 1).Bytes);
+                 (if Steps.Items (Index).Reads_Two = 0
+                  then (Buffer => Item.Result_Buffer,
+                        Offset => Places (Index - 1).At_Byte,
+                        Extent => Places (Index - 1).Bytes)
+                  else (Buffer => Item.Result_Buffer,
+                        Offset =>
+                          Places (Steps.Items (Index).Reads_Two).At_Byte,
+                        Extent =>
+                          Places (Steps.Items (Index).Reads_Two).Bytes));
                Told (3) :=
                  (Buffer => Item.Result_Buffer,
                   Offset => Places (Index).At_Byte,
@@ -3841,16 +4110,7 @@ package body Model_Runner.Platform.Device.Products is
             --  What this product reads: the activation the caller sent,
             --  or -- for a chained one -- the result the product before it
             --  wrote, which never left the device.
-            if Steps.Items (Index).Chained then
-               Told (2) :=
-                 (Buffer => Item.Result_Buffer,
-                  Offset => Places (Index - 1).At_Byte,
-                  Extent => Places (Index - 1).Bytes);
-            else
-               Told (2) :=
-                 (Buffer => Item.Vector_Buffer, Offset => 0,
-                  Extent => Vector_Bytes);
-            end if;
+            Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
             Told (3) :=
               (Buffer => Item.Result_Buffer,
                Offset => Places (Index).At_Byte,
@@ -3879,6 +4139,9 @@ package body Model_Runner.Platform.Device.Products is
          Start : constant Begin_Call :=
            To_Begin (Point ("vkBeginCommandBuffer"));
          Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+         --  Steps whose results a barrier has already published.
+         Fenced : Natural := 0;
+
          Bind_Pipeline : constant Bind_Pipeline_Call :=
            To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
          Bind_Sets : constant Bind_Sets_Call :=
@@ -3940,12 +4203,37 @@ package body Model_Runner.Platform.Device.Products is
                --  reading. Products of the same activation share nothing and
                --  get no barrier, which is why this is here and not around
                --  the whole loop.
-               if This.Chained then
-                  Barrier
-                    (Item.Buffer, Pipeline_Stage_Compute,
-                     Pipeline_Stage_Compute, 0, 1, Wall'Address,
-                     0, Null_Handle, 0, Null_Handle);
-               end if;
+               --  A barrier before a step that reads something not yet
+               --  published, and not otherwise.
+               --
+               --  Every step that reads an earlier result needs one --
+               --  a join reading a projection two steps back exactly as a
+               --  chained product does -- but one barrier publishes every
+               --  step before it, so a second reader of the same result
+               --  needs nothing. Fencing every reader instead serialized the two
+               --  arms of a gated feed-forward, which used to run together
+               --  and are the bulk of a layer.
+               declare
+                  Source : constant Natural :=
+                    Natural'Max
+                      (Natural'Max
+                         (This.Reads,
+                          (if This.Reads_Two /= 0 then This.Reads_Two
+                           elsif This.Blends then Index - 1 else 0)),
+                       (if This.Blends and then This.Reads_Two = 0
+                        then Index - 1
+                        elsif This.Chained and then This.Reads = 0
+                        then Index - 1
+                        else 0));
+               begin
+                  if Source > Fenced then
+                     Barrier
+                       (Item.Buffer, Pipeline_Stage_Compute,
+                        Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                        0, Null_Handle, 0, Null_Handle);
+                     Fenced := Index - 1;
+                  end if;
+               end;
 
                Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                           Bound'Address, 0, Null_Handle);
@@ -3985,6 +4273,42 @@ package body Model_Runner.Platform.Device.Products is
                      Dispatch
                        (Item.Buffer, C.unsigned (This.Heads),
                         Attend_Groups (Item, Count), 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Norms then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Norm_Line);
+
+                  declare
+                     function Bits is new Ada.Unchecked_Conversion
+                       (Model_Runner.Numerics.Real, C.unsigned);
+
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => (if This.Lifted then 1 else 0),
+                        Count   => C.unsigned (Count),
+                        First   => Bits (This.Epsilon),
+                        Packing => 0,
+
+                        --  Where the weight begins in the buffer it shares
+                        --  with whatever else the device kept, in elements
+                        --  rather than bytes because this one reads floats.
+                        Base    =>
+                          C.unsigned (Places (Index).Base / 4));
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+
+                     --  A workgroup to a position: its lanes fetch the
+                     --  row together and one of them adds it up in order.
+                     --  See the shader.
+                     Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
                   end;
 
                   Bind_Pipeline

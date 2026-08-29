@@ -2122,6 +2122,280 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Joined_Pair_Says_What_Two_Steps_Say;
 
+   ------------------------------------------
+   -- Fused_Layer_Says_What_The_Parts_Say --
+   ------------------------------------------
+
+   --  A layer's second half named as one sequence against the same nine
+   --  steps done one at a time.
+   --
+   --  Attention, its projection, the residual join, the normalization, the
+   --  two arms of the gated feed-forward, their combination, the projection
+   --  down and the join after it. What the fusing is for is twenty-two
+   --  submissions a token, not a different answer, so the answer has to be
+   --  the one the parts give -- within a tolerance rather than exactly,
+   --  because the device folds a position's squares in a tree and the
+   --  processor here walks them in order.
+   procedure Fused_Layer_Says_What_The_Parts_Say
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      use type N.Wide_Real;
+
+      Heads     : constant := 4;
+      Head_Size : constant := 8;
+      Positions : constant := 5;
+
+      Span : constant N.Element_Count := Heads * Head_Size;
+      Feed : constant N.Element_Count := 16;
+      Room : constant N.Element_Count :=
+        N.Element_Count (Positions) * Span;
+
+      Epsilon : constant N.Real := 1.0e-5;
+      Near    : constant N.Real := 1.0e-3;
+
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      Cache : N.Real_Array (0 .. Room * 2 - 1);
+      Query : N.Real_Array (0 .. Span - 1);
+
+      --  The queries and the residual, one after the other, which is the
+      --  shape the fused call is given.
+      Both : N.Real_Array (0 .. Span * 2 - 1);
+
+      Gain : N.Real_Array (0 .. Span - 1);
+
+      Blend : T.Real_Array_Access;
+      Wrote : T.Real_Array_Access;
+      Arm   : T.Real_Array_Access;
+      Other : T.Real_Array_Access;
+      Mixed : T.Real_Array_Access;
+      Apart : T.Real_Array_Access;
+      Fused : T.Real_Array_Access;
+
+      Joined : N.Real_Array (0 .. Span - 1);
+      Normed : N.Real_Array (0 .. Span - 1);
+
+      Out_Bytes  : Model_Runner.Bytes.Byte_Array_Access;
+      Gate_Bytes : Model_Runner.Bytes.Byte_Array_Access;
+      Up_Bytes   : Model_Runner.Bytes.Byte_Array_Access;
+      Down_Bytes : Model_Runner.Bytes.Byte_Array_Access;
+      Norm_Bytes : Model_Runner.Bytes.Byte_Array_Access;
+
+      Out_View  : T.View;
+      Gate_View : T.View;
+      Up_View   : T.View;
+      Down_View : T.View;
+
+      Status : E.Error_Info;
+
+      --  A matrix of the shape asked for, written as bytes because that is
+      --  how one reaches a backend, with values that have structure.
+      procedure Fill
+        (Into : out Model_Runner.Bytes.Byte_Array_Access;
+         Rows : N.Element_Count;
+         Cols : N.Element_Count;
+         Seed : Natural) is
+      begin
+         Model_Runner.Bytes.Allocate
+           (Model_Runner.Bytes.Byte_Count (Rows * Cols) * 4, Into);
+
+         if Into = null then
+            return;
+         end if;
+
+         for Row in 0 .. Rows - 1 loop
+            for Column in 0 .. Cols - 1 loop
+               declare
+                  Value : constant N.Real :=
+                    N.Real ((Natural (Row) + 2 * Natural (Column) + Seed)
+                            mod 11) / 31.0 - 0.15;
+
+                  At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count (Row * Cols + Column) * 4
+                    + 1;
+               begin
+                  Into.all (At_Byte .. At_Byte + 3) :=
+                    Model_Runner.Bytes.Put_F32 (Value);
+               end;
+            end loop;
+         end loop;
+      end Fill;
+
+      function Viewed
+        (Held : Model_Runner.Bytes.Byte_Array_Access;
+         Rows : N.Element_Count;
+         Cols : N.Element_Count) return T.View is
+        (Format => Model_Runner.GGUF.Type_F32,
+         Rows => Rows, Columns => Cols,
+         Base => Held.all'Address,
+         Span => Model_Runner.Bytes.Byte_Count (Held.all'Length),
+         Offset => 0,
+         Length => Model_Runner.Bytes.Byte_Count (Held.all'Length));
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
+
+      if not Ready then
+         return;
+      end if;
+
+      for Index in Cache'Range loop
+         Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+      end loop;
+      for Index in Query'Range loop
+         Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+      end loop;
+
+      Both (0 .. Span - 1) := Query;
+
+      for Index in 0 .. Span - 1 loop
+         Both (Span + Index) := N.Real (Index mod 9) / 9.0 - 0.4;
+      end loop;
+
+      for Index in Gain'Range loop
+         Gain (Index) := 0.5 + N.Real (Index mod 5) / 8.0;
+      end loop;
+
+      Fill (Out_Bytes, Span, Span, 0);
+      Fill (Gate_Bytes, Feed, Span, 3);
+      Fill (Up_Bytes, Feed, Span, 5);
+      Fill (Down_Bytes, Span, Feed, 7);
+
+      Model_Runner.Bytes.Allocate
+        (Model_Runner.Bytes.Byte_Count (Span) * 4, Norm_Bytes);
+
+      T.Allocate (Span, Blend);
+      T.Allocate (Span, Wrote);
+      T.Allocate (Feed, Arm);
+      T.Allocate (Feed, Other);
+      T.Allocate (Feed, Mixed);
+      T.Allocate (Span, Apart);
+      T.Allocate (Span, Fused);
+
+      Assert (Out_Bytes /= null and then Gate_Bytes /= null
+              and then Up_Bytes /= null and then Down_Bytes /= null
+              and then Norm_Bytes /= null and then Blend /= null
+              and then Wrote /= null and then Arm /= null
+              and then Other /= null and then Mixed /= null
+              and then Apart /= null and then Fused /= null,
+              "no room for the test");
+
+      for Index in Gain'Range loop
+         declare
+            At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+              Model_Runner.Bytes.Byte_Count (Index) * 4 + 1;
+         begin
+            Norm_Bytes.all (At_Byte .. At_Byte + 3) :=
+              Model_Runner.Bytes.Put_F32 (Gain (Index));
+         end;
+      end loop;
+
+      Out_View  := Viewed (Out_Bytes, Span, Span);
+      Gate_View := Viewed (Gate_Bytes, Feed, Span);
+      Up_View   := Viewed (Up_Bytes, Feed, Span);
+      Down_View := Viewed (Down_Bytes, Span, Feed);
+
+      Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Ok);
+
+      if not Ok then
+         Model_Runner.Backend.Device.Close;
+         return;
+      end if;
+
+      Model_Runner.Backend.Device.Put_Cache (0, Cache, Ok);
+      Assert (Ok, "the cache would not be written");
+
+      --  The parts, one at a time, with every result coming back.
+      Model_Runner.Backend.Device.Attend
+        (Query, Heads, Head_Size, Head_Size, 1, 0, Positions - 1,
+         0, Natural (Room), Heads * Head_Size, Heads * Head_Size,
+         0.25, 0.0, Blend.all, Ok);
+      Assert (Ok, "attention on its own was refused");
+
+      Model_Runner.Backend.Device.Dispatch (Out_View, Blend, Wrote, Status);
+      Assert (not E.Is_Error (Status), "the projection was refused");
+
+      for Index in Joined'Range loop
+         Joined (Index) := Wrote.all (Index) + Both (Span + Index);
+      end loop;
+
+      declare
+         Square : N.Wide_Real := 0.0;
+         Scale  : N.Wide_Real;
+      begin
+         for Index in Joined'Range loop
+            Square := Square
+              + N.Wide_Real (Joined (Index)) * N.Wide_Real (Joined (Index));
+         end loop;
+
+         Scale := 1.0 / N.Sqrt
+           (Square / N.Wide_Real (Span) + N.Wide_Real (Epsilon));
+
+         for Index in Joined'Range loop
+            Normed (Index) :=
+              N.Real (N.Wide_Real (Joined (Index)) * Scale) * Gain (Index);
+         end loop;
+      end;
+
+      Wrote.all := Normed;
+
+      Model_Runner.Backend.Device.Dispatch (Gate_View, Wrote, Arm, Status);
+      Assert (not E.Is_Error (Status), "the gating arm was refused");
+
+      Model_Runner.Backend.Device.Dispatch (Up_View, Wrote, Other, Status);
+      Assert (not E.Is_Error (Status), "the other arm was refused");
+
+      for Index in 0 .. Feed - 1 loop
+         declare
+            Gate : constant N.Wide_Real := N.Wide_Real (Arm.all (Index));
+         begin
+            Mixed.all (Index) :=
+              N.Real (Gate / (1.0 + N.Exp (-Gate))) * Other.all (Index);
+         end;
+      end loop;
+
+      Model_Runner.Backend.Device.Dispatch (Down_View, Mixed, Apart, Status);
+      Assert (not E.Is_Error (Status), "the projection down was refused");
+
+      for Index in 0 .. Span - 1 loop
+         Apart.all (Index) := Apart.all (Index) + Joined (Index);
+      end loop;
+
+      --  And the nine as one sequence.
+      Model_Runner.Backend.Device.Attend_And_Feed
+        (Query, Both (Span .. Span * 2 - 1), Heads, Head_Size, Head_Size, 1,
+         0, Positions - 1, 0, Natural (Room),
+         Heads * Head_Size, Heads * Head_Size, 0.25, 0.0,
+         Out_View, Gain, Epsilon, Gate_View, Up_View, Down_View, 0,
+         Fused, Ok);
+
+      if Ok then
+         for Index in 0 .. Span - 1 loop
+            Assert (abs (Apart.all (Index) - Fused.all (Index)) <= Near,
+                    "a layer's second half named as one sequence differs "
+                    & "from the same nine steps done apart at component"
+                    & N.Element_Count'Image (Index));
+         end loop;
+      end if;
+
+      T.Free (Blend);
+      T.Free (Wrote);
+      T.Free (Arm);
+      T.Free (Other);
+      T.Free (Mixed);
+      T.Free (Apart);
+      T.Free (Fused);
+      Model_Runner.Bytes.Free (Out_Bytes);
+      Model_Runner.Bytes.Free (Gate_Bytes);
+      Model_Runner.Bytes.Free (Up_Bytes);
+      Model_Runner.Bytes.Free (Down_Bytes);
+      Model_Runner.Bytes.Free (Norm_Bytes);
+      Model_Runner.Backend.Device.Close;
+   end Fused_Layer_Says_What_The_Parts_Say;
+
    ----------
    -- Name --
    ----------
@@ -2494,6 +2768,10 @@ package body Tests.Backend_Cases is
         (T, Joined_Pair_Says_What_Two_Steps_Say'Access,
          "attention and its projection named together say what the two "
          & "done apart say");
+      Register_Routine
+        (T, Fused_Layer_Says_What_The_Parts_Say'Access,
+         "a layer's second half named as one sequence says what its nine "
+         & "steps done apart say");
    end Register_Tests;
 
 end Tests.Backend_Cases;

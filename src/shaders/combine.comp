@@ -31,6 +31,12 @@ layout(push_constant) uniform Shape {
     //  form that gemma and gpt2 state. Named by number rather than by
     //  architecture because the shader has no business knowing which model
     //  it is running.
+    //
+    //  Two is not a unit at all: it adds the two arms and applies nothing,
+    //  which is the residual join a layer makes twice. It is here rather
+    //  than in a kernel of its own because it is the same two arms in and
+    //  one out, on the same layout, and a second pipeline for an addition
+    //  would be a pipeline for three instructions.
     uint unit;
 
     //  The remaining words of the block the pipeline layout declares. Unused
@@ -65,6 +71,12 @@ void main() {
     }
 
     float gate = g[index];
+
+    if (shape.unit == 2) {
+        y[index] = gate + u[index];
+        return;
+    }
+
     float activated = shape.unit == 0 ? sigmoid_weighted(gate) : gaussian(gate);
 
     y[index] = activated * u[index];

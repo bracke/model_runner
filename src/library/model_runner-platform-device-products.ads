@@ -356,17 +356,22 @@ package Model_Runner.Platform.Device.Products is
    --  @param Kept False when nothing on the host reads this step's answer,
    --    which saves Run the copy back and leaves it where the step after it
    --    will read it.
+   --  @param From_Step Which step's result to read, counting from one, or
+   --    zero for the step immediately before this one. A layer's
+   --    feed-forward reads the normalization twice, and its second arm is
+   --    not the step before it.
    procedure Add_Chained_Product
-     (Steps   : in out Sequence;
-      Base    : System.Address;
-      Span    : Model_Runner.Bytes.Byte_Count;
-      At_Byte : Model_Runner.Bytes.Byte_Count;
-      Packing : Weight_Packing;
-      Rows    : Natural;
-      Columns : Natural;
-      Added   : out Boolean;
-      Key     : System.Address := System.Null_Address;
-      Kept    : Boolean := True);
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Packing   : Weight_Packing;
+      Rows      : Natural;
+      Columns   : Natural;
+      Added     : out Boolean;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True;
+      From_Step : Natural := 0);
 
    --  Name a step that combines the two results before it.
    --
@@ -395,6 +400,70 @@ package Model_Runner.Platform.Device.Products is
       Unit  : Natural;
       Added : out Boolean;
       Kept  : Boolean := True);
+
+   --  Name a residual join for a sequence to perform.
+   --
+   --  The same two arms in and one out that a combination has, adding them
+   --  rather than putting a unit on the first: a layer joins twice and each
+   --  of those is what the host used to do between one submission and the
+   --  next. One arm is a step's result and the other is the residual, which
+   --  travels beside the activation the caller supplies rather than in a
+   --  buffer of its own.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param From_Step Step whose result is the second arm, or zero for the
+   --    step before this one.
+   --  @param From_Vector Where the residual begins in the caller's
+   --    activation, in elements, when Residual_Step is zero.
+   --  @param Residual_Step Step whose result is the residual, or zero to
+   --    take it from the caller's activation.
+   --  @param Added False when the sequence is full or there is nothing to
+   --    join.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Join
+     (Steps         : in out Sequence;
+      Added         : out Boolean;
+      From_Step     : Natural := 0;
+      From_Vector   : Natural := 0;
+      Residual_Step : Natural := 0;
+      Kept          : Boolean := True);
+
+   --  Name a root-mean-square normalization for a sequence to perform.
+   --
+   --  It is here for the submission it saves rather than for itself: a
+   --  layer normalizes twice, each of a few thousand elements against
+   --  products of millions, and the host doing them is the host needing the
+   --  products back. The weight is a tensor of the model and is named the
+   --  way a matrix is, so the device keeps it resident the same way.
+   --
+   --  The sum is walked in order and accumulated in binary64, which is what
+   --  the processor's does: a tree reduction would associate differently
+   --  and a layer's normalization feeds everything after it.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base First byte of the storage the weight lies in.
+   --  @param Span Bytes that storage holds.
+   --  @param At_Byte Where in that storage the weight begins.
+   --  @param Width Components a position holds.
+   --  @param Epsilon The floor under the mean square.
+   --  @param Added False when the sequence is full.
+   --  @param From_Step Step whose result to normalize, or zero for the step
+   --    before this one.
+   --  @param Lifted True where the weight is lifted by one first.
+   --  @param Key Identifies the weight so the device may keep it.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Norm
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Width     : Natural;
+      Epsilon   : Model_Runner.Numerics.Real;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Lifted    : Boolean := False;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True);
 
    --  Name an attention step for a sequence to perform.
    --
@@ -877,6 +946,11 @@ private
       --  were and does not disturb the six.
       Extra      : System.Address := System.Null_Address;
 
+      --  And the normalization, which is here for the submission it saves
+      --  rather than for itself: a layer normalizes twice and the host
+      --  doing it is the host needing the products back.
+      Normer     : System.Address := System.Null_Address;
+
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
@@ -888,6 +962,7 @@ private
       Single_Line : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;
+      Norm_Line   : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
       --  is what the device said when it was opened.
@@ -1007,6 +1082,40 @@ private
       --  Whether this reads what the product before it wrote, rather than
       --  the activation the caller supplied.
       Chained : Boolean := False;
+
+      --  Which step's result this reads, where that is not the one before
+      --  it. Zero means what Chained says: the step before, or the
+      --  caller's activation.
+      --
+      --  A layer fused into one sequence needs this. Both arms of its
+      --  gated feed-forward read the normalization several steps back, and
+      --  its second residual join reads the first one -- neither of which
+      --  is the step before, and neither of which can leave the device
+      --  without costing the submission the fusing is for.
+      Reads     : Natural := 0;
+
+      --  And which step the second arm of a blending step reads, where that
+      --  is not the one before it either. Zero means the step before.
+      Reads_Two : Natural := 0;
+
+      --  Where in the caller's activation a step that reads it begins, in
+      --  elements. A residual join reads the residual, which travels beside
+      --  the queries in one array rather than in a buffer of its own.
+      At_Vector : Natural := 0;
+
+      --  A normalizing step rather than a product: it reads one step's
+      --  result, or the caller's activation, and scales every position of
+      --  it by the root of its own mean square and then by a weight the
+      --  device keeps as it keeps a matrix. The weight is named by the
+      --  Base, Span, At_Byte and Key above.
+      Norms   : Boolean := False;
+
+      --  Whether that weight is lifted by one before it multiplies, which
+      --  is what gemma states and no other architecture here does.
+      Lifted  : Boolean := False;
+
+      --  The floor under the mean square, as the architecture states it.
+      Epsilon : Model_Runner.Numerics.Real := 0.0;
 
       --  Whether the caller wants this step's answer back. A step whose
       --  only reader is the step after it -- an arm of a gate, a blend a

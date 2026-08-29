@@ -5652,6 +5652,11 @@ package body Model_Runner.Llama is
             --  over as one submission. False means the projection still has
             --  to be done, which is what it means everywhere else.
             Projected : Boolean := False;
+            --  And whether the whole of the layer's second half went over
+            --  as one sequence: attention, its projection, the join, the
+            --  normalization, the feed-forward and the join after it. Every
+            --  step below is then already done.
+            Fused     : Boolean := False;
 
             --  Set when a device took the whole gated feed-forward, its
             --  projection down included, so that the common tail does not
@@ -5854,6 +5859,45 @@ package body Model_Runner.Llama is
                   Workers_CPU.Dispatch_Shares
                     (Item.Team, Heads, Share'Unchecked_Access, Shared);
                   Usable := Share.Ok and then E.Is_Ok (Shared);
+               elsif Item.Held = Exact and then Resident
+                 and then Settings.Experts = 0
+                 and then T.Is_Present (Current.Gate)
+                 and then Current.Feed_Norm /= null
+                 and then Current.Out_Bias = null
+                 and then Current.Up_Bias = null
+                 and then Current.Down_Bias = null
+                 and then Current.Feed_Norm_Bias = null
+                 and then Current.Post_Attention_Norm = null
+                 and then Current.Post_Feed_Norm = null
+               then
+                  --  The whole of the layer's second half as one sequence.
+                  --  Everything the host used to do between its two
+                  --  submissions -- the residual join and the
+                  --  normalization -- is a step of it, so the two become
+                  --  one and the fence between them is not paid.
+                  Model_Runner.Backend.Device.Attend_And_Feed
+                    (Item.Query.all, Item.Activation.all,
+                     Natural (Heads), Natural (Head_Size),
+                     Natural (Value_Size), Settings.Group_Size,
+                     Natural (First), Natural (Reserved), Natural (Base),
+                     Natural (Item.Keys.all'Length + V_Base),
+                     Natural (KV_Width), Natural (V_Width), Scale,
+                     Settings.Attention_Cap, Current.Attention_Out,
+                     Current.Feed_Norm.all, Settings.Epsilon,
+                     Current.Gate, Current.Up, Current.Down,
+                     Gate_Unit (Source), Item.Activation, Fused,
+                     Lifted   => Lifted_Norms (Source),
+                     Max_Bias => Settings.Max_Bias);
+
+                  if Fused then
+                     Usable := True;
+                     Projected := True;
+                  else
+                     Attend_There
+                       (Item, Source, Item.Query.all, Heads, Head_Size,
+                        Value_Size, First, Reserved, Base, V_Base, KV_Width,
+                        V_Width, Scale, Item.Attention.all, Usable);
+                  end if;
                elsif Item.Held = Exact and then Resident then
                   --  Attention and the matrix that reads its result, named
                   --  together so they go over as one command buffer and the
@@ -5890,117 +5934,123 @@ package body Model_Runner.Llama is
 
             Charge (Item, Attending, Mark);
 
-            --  Done already where the pair went over together.
-            if not Projected then
-               Product
-                 (Item, Current.Attention_Out, Item.Attention,
-                  Item.Normalized, Status);
-               exit when E.Is_Error (Status);
-            end if;
-
-            Charge (Item, Projecting, Mark);
-
-            if Current.Out_Bias /= null then
-               K.Add (Item.Normalized.all, Current.Out_Bias.all);
-            end if;
-            Join_Residual
-              (Source, Item.Normalized.all, Item.Activation.all,
-               Current.Post_Attention_Norm,
-               Current.Post_Attention_Norm_Bias, Item.Post_Room);
-
-            Charge (Item, Joining, Mark);
-
-            --  Feed-forward block. It reads what the layer normalized on
-            --  the way in where the architecture runs the two in parallel,
-            --  and what the residual holds now where it runs them one after
-            --  the other -- which is the whole of the difference between
-            --  the two arrangements.
-            if Current.Feed_Norm = null then
-               Item.Normalized.all := Item.Post_Room.all;
-            else
-               Normalize
-                 (Source, Item.Activation.all, Current.Feed_Norm.all,
-                  Current.Feed_Norm_Bias, Item.Normalized.all);
-            end if;
-
-            Charge (Item, Normalizing, Mark);
-
-            if Settings.Experts > 0 then
-               Mixture
-                 (Item, Current, Item.Normalized, Item.Mixture, Status);
-               exit when E.Is_Error (Status);
-               Join_Residual
-                 (Source, Item.Mixture.all, Item.Activation.all,
-                  Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
-                  Item.Post_Room);
-            else
-               --  Gated or not, the two arrangements differ only in how the
-               --  buffer handed to the projection down is filled: one fills
-               --  it from two projections and a product, the other from one
-               --  projection. What follows is common, and is written once so
-               --  that it cannot be reached by one arrangement and skipped by
-               --  the other -- which is what happened when the ungated arm
-               --  was added beside a projection down that belonged to the
-               --  gated one, and Falcon then ran with its feed-forward
-               --  computed and discarded.
-               if not T.Is_Present (Current.Gate) then
-                  --  No gate: up, a Gaussian unit, down. The gate being
-                  --  absent is what says so, rather than the architecture,
-                  --  so an architecture added later with the same
-                  --  arrangement needs nothing here.
+            --  Every step of this is a step of the sequence where the
+            --  layer's second half went over as one, so there is nothing
+            --  left here to do.
+            if not Fused then
+               --  Done already where the pair went over together.
+               if not Projected then
                   Product
-                    (Item, Current.Up, Item.Normalized, Item.Gate, Status);
-                  exit when E.Is_Error (Status);
-
-                  --  The bias belongs to the projection, so it is added
-                  --  before the unit rather than after it.
-                  if Current.Up_Bias /= null then
-                     K.Add (Item.Gate.all, Current.Up_Bias.all);
-                  end if;
-
-                  Gate_Activation (Source, Item.Gate.all);
-               else
-                  --  A device takes the whole block: both arms, the unit
-                  --  and the multiply, and the projection that reads the
-                  --  result, without any of the middle coming back. Every
-                  --  other backend does what it did.
-                  if Model_Runner.Backend."=" (Item.Owner.Able.Kind,
-                                               Model_Runner.Backend
-                                                 .Backend_Device)
-                  then
-                     Model_Runner.Backend.Device.Dispatch_Gated
-                       (Current.Gate, Current.Up, Current.Down,
-                        Item.Normalized, 1, Gate_Unit (Source),
-                        Item.Normalized, Status, Item.Stopping);
-                     exit when E.Is_Error (Status);
-                     Whole_Block := True;
-                  else
-                     Product_Group
-                       (Item, [Current.Gate, Current.Up], Item.Normalized,
-                        [Item.Gate, Item.Up], Status);
-                     exit when E.Is_Error (Status);
-
-                     Gate_Activation (Source, Item.Gate.all);
-                     K.Multiply (Item.Gate.all, Item.Up.all);
-                  end if;
-               end if;
-
-               if not Whole_Block then
-                  Product
-                    (Item, Current.Down, Item.Gate, Item.Normalized, Status);
+                    (Item, Current.Attention_Out, Item.Attention,
+                     Item.Normalized, Status);
                   exit when E.Is_Error (Status);
                end if;
 
-               if Current.Down_Bias /= null then
-                  K.Add (Item.Normalized.all, Current.Down_Bias.all);
+               Charge (Item, Projecting, Mark);
+
+               if Current.Out_Bias /= null then
+                  K.Add (Item.Normalized.all, Current.Out_Bias.all);
                end if;
-
-               Charge (Item, Feeding, Mark);
-
                Join_Residual
                  (Source, Item.Normalized.all, Item.Activation.all,
-                  Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
-                  Item.Post_Room);
+                  Current.Post_Attention_Norm,
+                  Current.Post_Attention_Norm_Bias, Item.Post_Room);
+
+               Charge (Item, Joining, Mark);
+
+               --  Feed-forward block. It reads what the layer normalized on
+               --  the way in where the architecture runs the two in parallel,
+               --  and what the residual holds now where it runs them one after
+               --  the other -- which is the whole of the difference between
+               --  the two arrangements.
+               if Current.Feed_Norm = null then
+                  Item.Normalized.all := Item.Post_Room.all;
+               else
+                  Normalize
+                    (Source, Item.Activation.all, Current.Feed_Norm.all,
+                     Current.Feed_Norm_Bias, Item.Normalized.all);
+               end if;
+
+               Charge (Item, Normalizing, Mark);
+
+               if Settings.Experts > 0 then
+                  Mixture
+                    (Item, Current, Item.Normalized, Item.Mixture, Status);
+                  exit when E.Is_Error (Status);
+                  Join_Residual
+                    (Source, Item.Mixture.all, Item.Activation.all,
+                     Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
+                     Item.Post_Room);
+               else
+                  --  Gated or not, the two arrangements differ only in how the
+                  --  buffer handed to the projection down is filled: one fills
+                  --  it from two projections and a product, the other from one
+                  --  projection. What follows is common, and is written once so
+                  --  that it cannot be reached by one arrangement and skipped by
+                  --  the other -- which is what happened when the ungated arm
+                  --  was added beside a projection down that belonged to the
+                  --  gated one, and Falcon then ran with its feed-forward
+                  --  computed and discarded.
+                  if not T.Is_Present (Current.Gate) then
+                     --  No gate: up, a Gaussian unit, down. The gate being
+                     --  absent is what says so, rather than the architecture,
+                     --  so an architecture added later with the same
+                     --  arrangement needs nothing here.
+                     Product
+                       (Item, Current.Up, Item.Normalized, Item.Gate, Status);
+                     exit when E.Is_Error (Status);
+
+                     --  The bias belongs to the projection, so it is added
+                     --  before the unit rather than after it.
+                     if Current.Up_Bias /= null then
+                        K.Add (Item.Gate.all, Current.Up_Bias.all);
+                     end if;
+
+                     Gate_Activation (Source, Item.Gate.all);
+                  else
+                     --  A device takes the whole block: both arms, the unit
+                     --  and the multiply, and the projection that reads the
+                     --  result, without any of the middle coming back. Every
+                     --  other backend does what it did.
+                     if Model_Runner.Backend."=" (Item.Owner.Able.Kind,
+                                                  Model_Runner.Backend
+                                                    .Backend_Device)
+                     then
+                        Model_Runner.Backend.Device.Dispatch_Gated
+                          (Current.Gate, Current.Up, Current.Down,
+                           Item.Normalized, 1, Gate_Unit (Source),
+                           Item.Normalized, Status, Item.Stopping);
+                        exit when E.Is_Error (Status);
+                        Whole_Block := True;
+                     else
+                        Product_Group
+                          (Item, [Current.Gate, Current.Up], Item.Normalized,
+                           [Item.Gate, Item.Up], Status);
+                        exit when E.Is_Error (Status);
+
+                        Gate_Activation (Source, Item.Gate.all);
+                        K.Multiply (Item.Gate.all, Item.Up.all);
+                     end if;
+                  end if;
+
+                  if not Whole_Block then
+                     Product
+                       (Item, Current.Down, Item.Gate, Item.Normalized, Status);
+                     exit when E.Is_Error (Status);
+                  end if;
+
+                  if Current.Down_Bias /= null then
+                     K.Add (Item.Normalized.all, Current.Down_Bias.all);
+                  end if;
+
+                  Charge (Item, Feeding, Mark);
+
+                  Join_Residual
+                    (Source, Item.Normalized.all, Item.Activation.all,
+                     Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
+                     Item.Post_Room);
+               end if;
+
             end if;
 
             Charge (Item, Joining, Mark);

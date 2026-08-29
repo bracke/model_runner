@@ -1221,8 +1221,8 @@ All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself and at the arithmetic it chooses for itself. From the
 six-token prompt in `tests/fixtures/speed-prompt-short.txt`, twelve tokens
-take **0.399 s** -- 0.059 s evaluating the prompt and 0.340 s generating --
-and **1.85 s** of processor time, the median of three runs. Loading the model
+take **0.412 s** -- 0.062 s evaluating the prompt and 0.351 s generating --
+and **1.87 s** of processor time, the median of three runs. Loading the model
 costs a further **0.067 s** of wall that this figure does not include, and it
 used to cost 0.6 s: the weights are the file's own pages now rather than a
 copy of them, so what loading does is open a mapping and what reading them
@@ -1230,7 +1230,7 @@ costs is paid as they are touched.
 
 The arithmetic is half of that. `--arith int8` is the default and rounds the
 vector a product multiplies to a byte an element; the same run at `--arith
-f32`, taken back to back in the same sitting, is **1.137 s** for 8.82 s of
+f32`, taken back to back in the same sitting, is **1.360 s** for 10.11 s of
 processor time. What that costs is measured and bounded in `### Quantized
 activations` below, and it is why every figure in this section is worth
 reading twice: once as a time, and once as a statement about which of the two
@@ -1284,9 +1284,9 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. Taken back to back
-in the same sitting, the same run at fifteen threads takes **0.400 s** of
-wall against **0.399 s** at seven, and 2.22 s of processor time against
-1.85 s.
+in the same sitting, the same run at fifteen threads takes **0.477 s** of
+wall against **0.418 s** at seven, and 2.74 s of processor time against
+1.91 s.
 
 That is level on the wall for twenty per cent more
 processor time -- and the processor time on both sides is larger than it was,
@@ -1520,10 +1520,10 @@ tests speed --model MODEL --backend reference --max-tokens 4
 ```
 
 Four tokens from the short prompt, medians of three, taken back to back at a
-`cpu` spends 0.059 s evaluating the prompt and
-0.113 s generating; `reference` spends 5.579 s and 3.753 s. That is
-**fifty-four times** the work in total, ninety-five times on the prompt
-and thirty-three times on the generation, and the two print the same digest.
+`cpu` spends 0.066 s evaluating the prompt and
+0.115 s generating; `reference` spends 5.911 s and 3.936 s. That is
+**fifty-five times** the work in total, ninety times on the prompt
+and thirty-four times on the generation, and the two print the same digest.
 
 The ratio doubled when the default arithmetic changed, and it is worth being
 clear that only one side moved: `reference` computes what it always did.
@@ -1567,14 +1567,14 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.396 s | **0.296 s** |
-| -- evaluating the prompt | 0.053 s | 0.041 s |
-| -- generating | 0.340 s | **0.256 s** |
-| -- processor time | 1.78 s | **0.07 s** |
-| 110-token prompt, nothing generated | 0.385 s | **0.180 s** |
-| -- processor time | 2.44 s | 0.35 s |
+| 6-token prompt, 12 generated | 0.412 s | **0.320 s** |
+| -- evaluating the prompt | 0.063 s | 0.045 s |
+| -- generating | 0.349 s | **0.273 s** |
+| -- processor time | 1.87 s | **0.10 s** |
+| 110-token prompt, nothing generated | 0.397 s | **0.167 s** |
+| -- processor time | 2.53 s | 0.31 s |
 
-All six cells were taken in one sitting on 2026-08-28, back to back, each
+All six cells were taken in one sitting on 2026-08-29, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
 columns are comparable, which they were not in the version of this table
 before last. The generating row is where the last change landed: it read
@@ -5256,30 +5256,28 @@ operands are not the wall: fourteen per cent between them. What is left is
 the rate this part retires cooperative-matrix multiplies at, and nothing
 tried here has moved it.
 
-### A layer's second half in one submission: built, right, slower
+### A layer's second half in one submission
 
 The section below names the three submissions a layer makes as structural --
 the host normalizes, rotates and joins between the products, so no two of the
 device's sequences are adjacent. One of the three was removed.
 
-What that took: `norm.comp`, the root-mean-square normalization with the sum
-walked in order and accumulated in binary64, which is what the processor does
-so that the two agree bit for bit; a third unit on `combine.comp`, where two
-is not a unit but an addition -- the residual join, in three lines rather
-than a kernel; `Add_Norm` and `Add_Join` on the sequence, with
-back-references so a step may read one it names rather than the one before
+What that took: `norm.comp`, the root-mean-square normalization, whose three
+shapes are most of what this section is about; a third unit on
+`combine.comp`, where two is not a unit but an addition -- the residual join,
+in three lines rather than a kernel; `Add_Norm` and `Add_Join` on the
+sequence, with back-references so a step may read one it names rather than the one before
 it, which a fused layer needs because both arms of its feed-forward read the
 normalization four steps back and its second join reads the first; and
 `Attend_And_Feed`, nine steps in one submission where the engine made two.
 
-**It is right.** Twelve generated tokens on the device answer
-`5abff916f9d83ca6` and sixty-four answer `448c2ed68ec342ee`, which are the
-published digests -- so a normalization computed on the device in binary64
-agrees with the processor's to the last bit, which is what walking the sum in
-order was for.
-
-**And it is forty per cent slower**: 0.367 s against 0.256 for sixty-four
-generated. Two candidates were measured and neither is it. The binary64 sum
+**The first shape was right and forty per cent slower.** With the sum walked
+in order on one invocation and accumulated in binary64, which is what the
+processor does, twelve generated tokens on the device answer
+`5abff916f9d83ca6` and sixty-four answer `448c2ed68ec342ee` -- the published
+digests, so a normalization computed on the device agreed with the
+processor's to the last bit. It cost 0.367 s against 0.256 for sixty-four
+generated. Two candidates were measured and neither was it. The binary64 sum
 is worth eight per cent of the difference -- the same kernel in binary32
 reads 0.365 and answers the same tokens. And the barriers are worth nothing:
 fencing every reader serialized the two arms of the feed-forward, which used
@@ -5288,7 +5286,53 @@ before it visible, so a second reader of the same result needs none -- gave
 back four thousandths of a second.
 
 So a third of a generated token goes somewhere the submission count does not
-explain, and that is written down rather than guessed at. Not kept.
+explain, and that is written down rather than guessed at.
+
+**It was the normalization, and it was the two hundred and fifty-five lanes
+doing nothing.** A bisect settles it: the same sequence with the
+normalization replaced by a join of the same shape -- one dispatch, one
+barrier, the same nine steps -- reads 1.370 s for sixty-four generated
+against 1.820 with it, and against 1.48 unfused. So the fusing is worth what
+the submission count says it is worth, and the kernel in the middle of it was
+giving all of that back.
+
+The kernel walked a position's sum on one invocation. Its second shape had
+the workgroup fetch each block of the row together and one lane add that
+block up out of shared memory, which took three hundred and twenty
+microseconds a layer down to a hundred -- and the hundred is the adds, with
+the other two hundred and fifty-five lanes at a barrier for the whole of
+them. Only folding the sum puts them to work: each lane adds a stride of the
+row and the workgroup halves eight times.
+
+**That means giving up the bit-exact agreement, and the sweep is what says
+whether it may be given up.** A tree associates differently from a walk, so
+this is one of the few places on the device where the answer is the
+conformance sweep's to judge rather than a digest's. The sweep runs 28344
+sequences across thirteen architectures and fifteen formats, and none is
+outside tolerance. The published digests did not move either -- twelve
+generated tokens still answer 5abff916f9d83ca6 and sixty-four still answer
+448c2ed68ec342ee -- which is a fact about this model rather than a
+guarantee, and the sweep is the guarantee.
+
+**Kept: sixty-four generated tokens read 1.447 s against 1.476, better in
+each of nine alternated rounds, and a token is forty-five submissions where
+it was sixty-seven.** Three to four per cent, which is what a fifth of the
+submissions is worth once the kernel that replaced them is not the cost.
+The prompt is level -- a batch amortizes a submission over its positions
+already, and its normalization is real work rather than a fixed cost -- so
+the fused path is where it earns and the batched path is where it does not.
+
+**And a bug it uncovered that predates it.** A sequence acquires every matrix
+it names before it dispatches any of them, and acquiring one can evict
+another to stay inside `--device-memory`. The victim is the matrix wanted
+longest ago, which within a sequence is the one acquired first -- a matrix a
+later step of that same sequence is about to read. The descriptor then points
+at a buffer that no longer exists. Three matrices never reached it; five did,
+and the answer came back as a logit that was not finite. So a sequence pins
+what it has taken: the eviction skips anything wanted since the sequence
+began, and a budget too small to hold all of it takes the memory outside the
+budget and gives it back at the end of the call, which is what the loader
+already did for a single matrix larger than the whole budget.
 
 **Three bugs on the way, none of which a type could have caught.** A pipeline
 created before its request had an entry point and a layout: the driver takes
@@ -5663,33 +5707,33 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **288.0 t/s** | 34.4 t/s |
-| llama.cpp, processor | 364.7 t/s | 40.4 t/s |
-| model_runner, device | 618.0 t/s | **42.3 t/s** |
-| llama.cpp, device | 1680.9 t/s | 56.5 t/s |
+| model_runner, processor | **271.0 t/s** | 33.3 t/s |
+| llama.cpp, processor | 358.0 t/s | 39.6 t/s |
+| model_runner, device | 670.7 t/s | **43.8 t/s** |
+| llama.cpp, device | 1647.8 t/s | 55.9 t/s |
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **274.8 t/s** | 34.4 t/s |
-| llama.cpp, processor | 304.1 t/s | 40.4 t/s |
-| model_runner, device | **784.8 t/s** | 42.3 t/s |
-| llama.cpp, device | 1820.3 t/s | 56.5 t/s |
+| model_runner, processor | **232.3 t/s** | 33.3 t/s |
+| llama.cpp, processor | 278.2 t/s | 39.2 t/s |
+| model_runner, device | **745.7 t/s** | 43.8 t/s |
+| llama.cpp, device | 1756.6 t/s | 55.8 t/s |
 
 **The longer prompt is the harder one and the quieter one, and it took this
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The gap is wider on the device and narrower on the processor: **1.11 times
-there against 1.27 at the shorter length, and 2.3 on the device against
-2.7.** Attention grows with the square of the context and it
+The gap is wider on the device and narrower on the processor: **1.20 times
+there against 1.32 at the shorter length, and 2.4 on the device against
+2.5.** Attention grows with the square of the context and it
 is the part of a layer this program is furthest behind on, so a table taken
 at a hundred and ten tokens reads a little kinder than the work deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±0.8 on 304.1 at 1419 tokens against ±10 on 364.7 at
+three runs it is **±8 on 278.2 at 1419 tokens against ±29 on 358.0 at
 110** -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
 more between sittings than the change being measured moved it: the device row
@@ -5702,11 +5746,11 @@ comparing against somebody else's `pp110` needs it. But **the long one is the
 figure to argue about**.
 
 On the processor at 110 tokens: **1.2 times slower generating and 1.3 times
-slower reading a prompt** -- the generating figure has read 1.2 four times, 1.3 and 1.4 across sittings, the first four of them
+slower reading a prompt** -- the generating figure has read 1.2 five times, 1.3 and 1.4 across sittings, the first four of them
 after `### The wake, not the work`, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, **1.3** and **2.7**,
-where the sittings before this one said 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
+reading of this table said 3.3 and 16. On the device, **1.3** and **2.5**,
+where the sittings before this one said 1.3 and 2.7, then 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
 1.4 and 2.6, then 1.4 and 2.5, then 1.4 and 3.0, then 1.4 and 3.6, then 1.4 and 3.8, then 1.4
 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and
 10.1. Both device rows have moved for a named reason:
@@ -5725,8 +5769,8 @@ which numbers belong to which figure. Reading the table against its own
 prose is what caught it, which is a thing only a person does.
 
 **The device row and llama.cpp's processor row generate at about the same
-rate** -- 42.3 against 40.4 in this sitting, which is the first time the
-device row is clearly ahead, where the fourteen before read 40.1
+rate** -- 43.8 against 39.6 in this sitting, the widest the device row has
+been ahead, where the fifteen before read 42.3 against 40.4, 40.1
 against 40.4, 40.3 against 40.4, 39.8 against 40.3, 40.6 against 39.8, 40.5
 against 39.9, 40.4 against 39.9, 40.2 against 39.9, 40.1 against 40.0, 40.7
 against 40.0, 38.9 against 40.0, 40.9 against 40.4, 41.0 against 40.4, 40.7
@@ -5782,8 +5826,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.382 s
-and 64 in 1.862 s on the processor, 0.178 s and 1.514 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.406 s
+and 64 in 1.921 s on the processor, 0.164 s and 1.461 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -5796,13 +5840,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 752.7 t/s rather
-than 364.7 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 770.1 t/s rather
+than 358.0 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 42.3 t/s
-now, against 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 43.8 t/s
+now, against 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -5868,9 +5912,9 @@ All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.392 s | 33 ms a token |
-| the same model at two bits | 1.544 s | 129 ms a token |
-| the first, drafted by the second | 3.310 s | 24 proposed, 7 accepted |
+| TinyLlama-1.1B at eight bits | 0.408 s | 34 ms a token |
+| the same model at two bits | 1.638 s | 137 ms a token |
+| the first, drafted by the second | 3.726 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking
