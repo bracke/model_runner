@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Three more rearrangements of the matrix shader, all level.** The subgroup
+  width — this part's matrix instruction is documented at wave32 and the
+  shader asks for sixty-four — reads 1.926 s against 1.917. Replacing the two
+  barriers a step with `memoryBarrierShared` alone reads 1.907 against 1.936,
+  inside the noise and **not correct in general** anyway, since a device with
+  32-wide subgroups makes that workgroup two of them.
+
+  And software pipelining, the one with a real argument: the loop decodes a
+  step, waits, multiplies it and waits again, so the unpack and the
+  instruction are end to end. Two buffers, multiplying the step already
+  decoded while decoding the next, one barrier a turn rather than two —
+  **1.960 s against 1.971**, six alternated rounds three each way, better in
+  four of six. Six tenths of a per cent for two kilobytes more of shared
+  memory is not a trade worth making.
+
+  **That closes the shader.** Nine tile shapes, three subgroup counts, the
+  batch against the vector tile, the decode ablated, both operands ablated,
+  the wave width, the barriers and the pipelining — the only one that ever
+  mattered was the tile it already had. The two and a half times is not in
+  the shader's structure.
+
+### Measured
+
 - **The registers were never the wall, and they cost two lines rather than a
   second compilation.** Three entries running ended on "sixteen registers is
   what these kernels have"; `pragma Machine_Attribute (P, "target",

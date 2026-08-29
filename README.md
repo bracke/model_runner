@@ -5256,6 +5256,48 @@ operands are not the wall: fourteen per cent between them. What is left is
 the rate this part retires cooperative-matrix multiplies at, and nothing
 tried here has moved it.
 
+### Three more rearrangements, and the shader is closed
+
+After the tile sweep, the operand ablations and the attention kernel, three
+things were left that could be rearranged without changing what the matrix
+shader computes. None of them moves it.
+
+**The subgroup width.** This part's matrix instruction is documented at
+wave32 and the shader asks for a workgroup of sixty-four, so it was compiled
+with a workgroup of thirty-two as well, the staging dealt round however many
+lanes there are: **1.926 s against 1.917**. Level.
+
+**The barriers.** A workgroup of one subgroup executes in lockstep, so the
+two barriers a step were replaced with `memoryBarrierShared` alone: 1.907 s
+against 1.936, one and a half per cent and inside the noise -- and not
+correct in general, because a device whose subgroups are thirty-two wide
+makes that workgroup two of them and this shader is compiled once for every
+device. Not pursued for a per cent of noise.
+
+**Software pipelining**, which is the one with a real argument behind it. The
+loop decodes a step, waits, multiplies it and waits again, so the unpack and
+the instruction are end to end and neither can start until the other has
+finished. Two buffers instead of one, a turn multiplying the step already
+decoded while it decodes the next, one barrier a turn rather than two:
+
+| | |
+|---|---:|
+| as it is | 1.971 s |
+| pipelined | 1.960 s |
+
+Six alternated rounds of three, three each way, better in four of six. **Six
+tenths of a per cent**, which is nothing; the digest does not move either
+way, so the restructure is right and simply does not buy anything. Two
+kilobytes more of shared memory for six tenths of a per cent is not a trade
+worth making.
+
+Which closes this shader. **Every rearrangement of it has now been
+measured** -- nine tile shapes, three subgroup counts, the batch against the
+vector tile, the decode ablated, both operands ablated, the wave width, the
+barriers and the pipelining -- and the only one that ever mattered was the
+tile it already had. The two and a half times is not in the shader's
+structure.
+
 ### The tile made a number, swept, and put back
 
 `### The tile sweep, and why there was almost nothing to sweep` ended by
