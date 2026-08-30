@@ -65,7 +65,11 @@ Keep a Changelog and the project uses semantic versioning.
   the scalar pass that builds the row's scale table**, a 64-deep binary64
   dependency chain feeding a vector loop of about the same length. Breaking
   that chain associates the sum differently and moves what the model says,
-  so it is the sweep's decision rather than a rewrite. Not taken.
+  so it is the sweep's decision rather than a rewrite. Not taken — and
+  there may be nothing there: the scalar pass walks the whole row before the
+  vector loop reads any of it, so it is the pass that waits for memory.
+  Prefetching the next row from inside the vector loop is level, 1.944 s
+  against 1.948, because the hardware prefetcher already has the stream.
 
 - **The output projection is not worth taking** — 6.8 % of a generated
   token, reading 69 MB in 1.4 ms, which is 50 GB/s and exactly the rate the

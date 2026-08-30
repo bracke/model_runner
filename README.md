@@ -5414,6 +5414,18 @@ differently and moves what the model says. That is a decision the
 conformance sweep judges rather than a rewrite, and it is where this row's
 next per cent is. Not taken here.
 
+**And there may be nothing there either**, which one more measurement
+suggests. The scalar pass walks the whole row before the vector loop reads
+any of it, so it is the pass that waits for memory and the vector loop is
+the one that hits cache -- their near-equal shares are then a wait and an
+arithmetic, not two arithmetics. If that is right, making the scalar pass
+issue fewer instructions buys nothing, and helping it wait less is the only
+thing that would. Prefetching the next row from inside the vector loop --
+one `prefetcht0` a block, a row ahead -- is **level**: 1.944 s against 1.948
+over three alternated rounds. The hardware prefetcher already has this
+stream, which is what a row of two thousand contiguous bytes should look
+like to it.
+
 ### The output projection is not the thing, and a table that was wrong
 
 The output projection is thirty-two thousand rows against one vector, once a
