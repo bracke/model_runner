@@ -78,6 +78,23 @@ Keep a Changelog and the project uses semantic versioning.
   where a packed dot is two a lane. A dot-product kernel cannot beat a
   matrix kernel that is fed at all.
 
+  **Then both kernels were disassembled** — the other runtime runs on the
+  same driver, and `RADV_DEBUG=asm` prints what it generates. Their loop is
+  512 `v_dot2acc_f32_f16` against 90 `ds_load_b64`, and their occupancy is 72
+  registers and 14 subgroups a SIMD — fewer waves and more registers than
+  ours, and faster. Copying that arrangement (128 invocations of 32
+  accumulators, not 256 of 16) reads **1.89 s**, and the disassembly then
+  matches theirs: 508 dots against 512, 96 loads against 90, 42 waits against
+  111, 921 instructions against 1718, same registers, same shared memory,
+  same occupancy — and still 1.8× slower.
+
+  **A difference that survives replacing the kernel is not in the kernel**,
+  and ours is 1.7× off theirs on the matrix path and 1.8× on the dot path —
+  two unrelated kernels, the same distance. What they share is everything
+  around them: 17 steps to a layer, a barrier between most, and dispatches as
+  narrow as eight workgroups. The next measurement is timestamps around the
+  dispatches rather than around the phase.
+
   Not kept. The instruction is recorded, because nothing here has used it
   and the next multiply-add loop should.
 

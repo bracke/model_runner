@@ -6094,12 +6094,48 @@ dot is two a lane, and even at sixteen cycles against one the instruction is
 twice the rate. **A dot-product kernel cannot beat a matrix kernel that is
 fed at all**, and this file's is.
 
-Which leaves the thing that started this unexplained and now sharply so:
-their dot-product kernel reads 1353.7 tokens a second where this one reads
-727, with fewer reads a multiply-add and three times the waves. Whatever
-that is, it is not the instruction, the tile, the thread shape, the
-occupancy or the staging width -- all five are now theirs and it is still
-1.86 times.
+**So the two kernels were disassembled and compared.** The other runtime
+runs on the same driver, and that driver will print the machine code it
+generates: `RADV_DEBUG=asm` on both, and `RADV_DEBUG=shaderstats` for what
+each one costs to run. That is a thing that could have been done at any point
+in the last several sections and was not.
+
+Their hot loop is five hundred and twelve `v_dot2acc_f32_f16` against ninety
+`ds_load_b64` -- sixty-four-bit shared reads, four halves apiece, eleven and
+a half multiply-adds for every read where the kernel above managed eight. And
+their occupancy line says seventy-two registers and fourteen subgroups a
+SIMD, where the kernel above had forty-eight and twenty: **fewer waves and
+more registers, and faster.** So the arrangement to copy was a hundred and
+twenty-eight invocations holding thirty-two accumulators each, not two
+hundred and fifty-six holding sixteen.
+
+Copied, it reads 1.89 s, and the disassembly says why the copying is finished:
+
+| | this program | the other runtime |
+|---|---:|---:|
+| `v_dot2acc_f32_f16` | 508 | 512 |
+| `ds_load_b64` | 96 | 90 |
+| `s_waitcnt` | 42 | 111 |
+| instructions | 921 | 1718 |
+| registers | 72 | 72 |
+| shared memory | 9216 | 9216 |
+| subgroups a SIMD | 14 | 14 |
+
+**Same registers, same shared memory, same occupancy, the same arithmetic in
+the same instruction, fewer instructions around it and fewer waits -- and one
+and eight tenths times slower.** There is nothing left in the kernel to
+copy.
+
+Which is the useful end of a long thread, because it says where to look next
+and it is not here. This program's matrix kernel is 1.7 times off their
+matrix kernel, and this program's dot kernel is 1.8 times off their dot
+kernel: **two unrelated kernels of ours, each about the same distance from
+its counterpart.** A difference that survives replacing the kernel is not in
+the kernel. What both of ours share is everything around them -- seventeen
+steps to a layer, a barrier between most of them, and dispatches as narrow as
+eight workgroups where a key projection is two hundred and fifty-six rows
+wide. The next measurement is timestamps around the dispatches rather than
+around the phase, and that is the one this file does not have.
 
 Not kept: a kernel that is right and slower costs a measurement every time
 somebody reads the file. What is kept is the instruction, which is written
