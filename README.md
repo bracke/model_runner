@@ -6157,10 +6157,40 @@ cent duty cycle; the other runtime records a whole graph and submits it, so
 its recording overlaps its running. **That is where the 1.7 times is**, or
 enough of it to explain why nothing inside the kernel ever moved it.
 
-What it would take is not a kernel: it is recording the next layer while the
-current one runs -- two command buffers and two fences, alternating -- so
-that the host's third of the time disappears behind the device's two thirds.
-That is the next change this file has an argument for.
+**And then the third was measured rather than assumed, which changed what to
+build.** A clock around each of a sequence's three parts, summed over the two
+hundred and forty sequences of a prompt:
+
+| a prompt sequence | |
+|---|---:|
+| recording -- descriptors, commands, and the activation going over | 0.276 s |
+| submitting and waiting -- the device running | 1.119 s |
+| reading the answers back | 0.023 s |
+
+The reading back is nothing, which kills the theory that the host was copying
+its time away. The waiting is 1.119 s against the device's own 1.05 s, so a
+submission and a fence cost about seventy milliseconds over two hundred and
+forty of them -- a fifth of a millisecond each, and not the thing either.
+
+**The recording is 0.276 s, and it is sixteen per cent of the prompt.** What
+it is not is descriptors and commands: the two hundred and forty *generated*
+sequences after it add two thousandths of a second between them, ten
+microseconds each against the prompt's eleven hundred. A cost that appears
+only when the batch is deep is the activation going over -- a hundred and
+twenty-eight positions of two thousand and forty-eight components, a megabyte
+a layer, written into the mapping before every sequence.
+
+Which is not what two command buffers would fix. Recording a generated
+token's layer costs ten microseconds; there is nothing there to hide. What
+the megabyte a layer says is that **the activation should not be going over
+at all**: it is the previous layer's output, which the previous sequence left
+in the device's own result buffer and then copied to the host so that the
+host could copy it back. A sequence that read its input where the last one
+wrote it would delete the upload, the copy out, and sixteen per cent of the
+prompt with them.
+
+That is the next change this file has an argument for, and it is a smaller
+one than the kernel it spent four attempts on.
 
 Which is the useful end of a long thread, because it says where to look next
 and it is not here. This program's matrix kernel is 1.7 times off their

@@ -102,8 +102,20 @@ Keep a Changelog and the project uses semantic versioning.
   so the host's 17 descriptor writes and 17 dispatches a layer are time the
   device sits idle through. Both of this program's kernels run inside that
   envelope, which is what a difference that survives replacing the kernel
-  looks like from the other side. The fix is two command buffers alternating
-  — recording the next layer while the current one runs — not a kernel.
+  looks like from the other side.
+
+  **And the third was then split, which changed what to build.** A clock
+  around each part of a sequence, over a prompt's 240 of them: recording
+  0.276 s, submit-and-wait 1.119 s, reading back 0.023 s. The readback is
+  nothing; submission and fences cost 0.07 s over 240; **recording is 16 % of
+  the prompt** — and it is not descriptors or commands, because the 240
+  *generated* sequences after it add 0.002 s between them, 10 µs each against
+  the prompt's 1.15 ms. A cost that appears only with a deep batch is the
+  activation upload: a megabyte a layer, written into the mapping before
+  every sequence. Two command buffers would hide none of it. What it says is
+  that the activation should not go over at all — it is the previous layer's
+  output, which the previous sequence left in the device's result buffer and
+  then copied to the host so the host could copy it back.
 
   Not kept. The instruction is recorded, because nothing here has used it
   and the next multiply-add loop should.
