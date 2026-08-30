@@ -92,8 +92,18 @@ Keep a Changelog and the project uses semantic versioning.
   and ours is 1.7× off theirs on the matrix path and 1.8× on the dot path —
   two unrelated kernels, the same distance. What they share is everything
   around them: 17 steps to a layer, a barrier between most, and dispatches as
-  narrow as eight workgroups. The next measurement is timestamps around the
-  dispatches rather than around the phase.
+  narrow as eight workgroups.
+
+  **So the device was asked.** A timestamp query pool around every sequence's
+  dispatches, read back after the fence, at this part's 10.019 ns tick: the
+  device runs command buffers for **1.05 s of a 1.65 s prompt phase — a 64 %
+  duty cycle**. The run's half-second of processor time is the other side of
+  it: each sequence is recorded, submitted, waited for and read back in turn,
+  so the host's 17 descriptor writes and 17 dispatches a layer are time the
+  device sits idle through. Both of this program's kernels run inside that
+  envelope, which is what a difference that survives replacing the kernel
+  looks like from the other side. The fix is two command buffers alternating
+  — recording the next layer while the current one runs — not a kernel.
 
   Not kept. The instruction is recorded, because nothing here has used it
   and the next multiply-add loop should.

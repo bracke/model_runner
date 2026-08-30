@@ -6126,6 +6126,42 @@ the same instruction, fewer instructions around it and fewer waits -- and one
 and eight tenths times slower.** There is nothing left in the kernel to
 copy.
 
+**So the device was asked what it had been doing.** A query pool of
+timestamps, one written before the first dispatch of every sequence and one
+after each of them, read back after the fence; `timestampPeriod` on this part
+is 10.019 nanoseconds, which `vulkaninfo` reports and the arithmetic below
+needs.
+
+The stamps between the dispatches turned out to say nothing -- a timestamp
+waits for what came before it to reach the stage, so consecutive ones tile
+the span rather than dividing it, and the sum of the intervals is the span by
+construction. What the first and last say together is the whole point:
+
+| device, 1419-token prompt | |
+|---|---:|
+| the device running command buffers | **1.05 s** |
+| the phase | 1.65 s |
+| the device's share of it | **64 per cent** |
+
+**A third of a device prompt is not the device.** The processor time for that
+run is half a second, which is the other side of the same number: a sequence
+is recorded on the host, submitted, waited for, and read back, and the
+recording and the reading do not overlap the running because each sequence
+waits for its own fence before the next is built. Seventeen descriptor writes
+and seventeen dispatches a layer are host work, and they are host work that
+the device sits idle through.
+
+Which is what a difference that survives replacing the kernel looks like from
+the other side. Both of this program's kernels run inside a sixty-four per
+cent duty cycle; the other runtime records a whole graph and submits it, so
+its recording overlaps its running. **That is where the 1.7 times is**, or
+enough of it to explain why nothing inside the kernel ever moved it.
+
+What it would take is not a kernel: it is recording the next layer while the
+current one runs -- two command buffers and two fences, alternating -- so
+that the host's third of the time disappears behind the device's two thirds.
+That is the next change this file has an argument for.
+
 Which is the useful end of a long thread, because it says where to look next
 and it is not here. This program's matrix kernel is 1.7 times off their
 matrix kernel, and this program's dot kernel is 1.8 times off their dot
