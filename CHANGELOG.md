@@ -117,6 +117,20 @@ Keep a Changelog and the project uses semantic versioning.
   output, which the previous sequence left in the device's result buffer and
   then copied to the host so the host could copy it back.
 
+  **So that was built, and it changes nothing**: a slot at the head of the
+  answer buffer, the last step's result copied into it device-side, the next
+  sequence reading its input from there. 1.665 s against 1.660, three rounds
+  each way, same digest. The upload was not the cost either.
+
+  **Asked in four parts, the clock says where it is**: sizing the steps and
+  finding their weights **0.255 s**, buffers and upload 0.003, descriptors
+  and commands 0.012, submit and wait 1.110, readback 0.022. Fifteen per cent
+  of a device prompt is spent working out where things go — a loop over 17
+  steps that asks the loader for each matrix, 2170 times over 240 sequences,
+  answered from the resident list 1971 times with 199 first-sight misses, at
+  117 µs an ask. Why a walk of a 199-entry list comparing five fields costs
+  that is not yet known.
+
   Not kept. The instruction is recorded, because nothing here has used it
   and the next multiply-add loop should.
 

@@ -6189,8 +6189,38 @@ host could copy it back. A sequence that read its input where the last one
 wrote it would delete the upload, the copy out, and sixteen per cent of the
 prompt with them.
 
-That is the next change this file has an argument for, and it is a smaller
-one than the kernel it spent four attempts on.
+**It was built, it is right, and it changes nothing.** A slot reserved at the
+head of the answer buffer, the last step's result copied into it inside the
+device's own memory, and the next sequence reading its input from there
+instead of being handed a megabyte: 1.665 s against 1.660, three rounds each
+way, at the same digest. The upload was not the cost.
+
+Which the clock then said outright, once it was asked in four parts rather
+than three:
+
+| a prompt sequence, 240 of them | |
+|---|---:|
+| sizing the steps and finding their weights | **0.255 s** |
+| growing the buffers, and the activation where it still goes over | 0.003 s |
+| writing descriptors and recording commands | 0.012 s |
+| submitting and waiting | 1.110 s |
+| reading the answers back | 0.022 s |
+
+**Fifteen per cent of a device prompt is spent working out where things go.**
+Not sending them, not recording them, not waiting for them: the loop that
+walks a sequence's seventeen steps, checks their shapes, and asks the loader
+for each one's matrix. Over two hundred and forty sequences that loop asks
+two thousand one hundred and seventy times and is answered from the resident
+list one thousand nine hundred and seventy-one times -- the other hundred and
+ninety-nine are the first sight of each matrix, so nothing is being uploaded
+twice. A hit is a walk of a list of a hundred and ninety-nine entries
+comparing five fields, and it is costing a hundred and seventeen microseconds.
+
+That is the next thing to look at and this file does not yet know why it is
+slow. What it does know is that it is not the kernel, not the instruction,
+not the tile, not the operands, not the batch, not the submissions, not the
+upload and not the readback -- every one of those measured, most of them
+twice.
 
 Which is the useful end of a long thread, because it says where to look next
 and it is not here. This program's matrix kernel is 1.7 times off their
