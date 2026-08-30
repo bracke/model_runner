@@ -6014,6 +6014,38 @@ is not it, and the batch is not it -- and their scalar kernel still beats this
 one. What is left is unnamed, and this file would rather say that than name
 something it has not measured.
 
+**So the kernel that number belongs to was built.** A register-tiled product
+with no matrix instruction in it: a hundred and twenty-eight rows by a
+hundred and twenty-eight vectors to a workgroup, two hundred and fifty-six
+invocations dividing that sixteen ways by sixteen, each holding an eight by
+eight square of the answer in sixty-four registers and reading eight weights
+and eight activations a column to do sixty-four multiply-adds with -- four
+multiplies for every read, where the kernel it would replace does one. Both
+tiles staged column-major so that a column's sixteen readers are neighbours,
+the stride padded by one so they land on banks of their own, Q8_0 decoded
+into the staging, everything else left to the kernels that read everything
+else.
+
+It is right and it is slower. **2.98 s against 1.66** for the long prompt, at
+the same digest, and the second arrangement of the lane ownership -- every
+sixteenth row rather than eight in a row, so that a step's readers are
+neighbours -- moved it from 3.04 to 2.98.
+
+It is not registers and it is not occupancy, which is what makes it worth
+recording: a hundred and four registers against the matrix kernel's hundred
+and sixty-eight, nothing spilled, and **eight subgroups a SIMD against six**.
+The inner loop is sixteen shared-memory reads, sixteen conversions out of
+half precision and sixty-four multiply-adds, which is two thirds efficiency
+at best and measures a quarter.
+
+What that says is that the distance between a textbook register-tiled product
+and the other runtime's is the whole of the work: the unroll factor, the
+staging depth, double buffering, packed half-precision arithmetic, and a tile
+shape chosen against the part rather than out of a book. This is one
+iteration of a tuning campaign, and the campaign is what 2.98 teraflops is.
+Not kept -- a kernel that is right and slower is a kernel that costs a
+measurement every time somebody reads the file.
+
 Which closes this shader. **Every rearrangement of it has now been
 measured** -- nine tile shapes, three subgroup counts, the batch against the
 vector tile, the decode ablated, both operands ablated, the wave width, the

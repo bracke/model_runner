@@ -51,6 +51,17 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **A register-tiled product built without the matrix instruction, and it is
+  slower: 2.98 s against 1.66.** 128 rows × 128 vectors a workgroup, 256
+  invocations dividing it 16×16, each holding an 8×8 square of the answer in
+  registers — four multiplies per shared-memory read where the kernel it
+  would replace does one. Bit-exact. Not registers or occupancy either: 104
+  VGPRs against the matrix kernel's 168, nothing spilled, and 8 subgroups a
+  SIMD against 6. The inner loop is 16 reads, 16 conversions and 64
+  multiply-adds — two thirds efficiency at best, a quarter measured. The
+  distance to the other runtime's 2.98 teraflops is a tuning campaign, not a
+  kernel. Not kept.
+
 - **The device prompt's 1.7× is not the matrix instruction, and now there is
   a number for that.** llama.cpp uses the same extension on this part
   (`matrix cores: KHR_coopmat`), and telling it not to —
