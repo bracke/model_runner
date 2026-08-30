@@ -51,6 +51,16 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **Four more attempts on the two widest gaps, all measured, none kept.**
+  The scale preamble's binary64 chain: removing it entirely is level, so
+  breaking it into partials would buy nothing — the pass waits for memory,
+  it does not compute. Prefetching the next row: level. The matrix
+  accumulator in half precision: level, so the instruction does not retire
+  faster for writing less. And two subgroups to a workgroup sharing the
+  batch through shared memory — the one arrangement the tile sweep never
+  covered — is 2.5× slower, because staging 128 vectors by hand costs more
+  than the `coopMatLoad` it replaces.
+
 - **The processor's generated token is memory-saturated, and the share cap
   that says so is confirmed.** One share takes 4.558 s for 64 tokens, two
   1.943, three 1.905, and nothing after that moves — but that sweep was

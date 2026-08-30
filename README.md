@@ -5948,6 +5948,18 @@ way, so the restructure is right and simply does not buy anything. Two
 kilobytes more of shared memory for six tenths of a per cent is not a trade
 worth making.
 
+**Two more, after the layer was fused.** The accumulator in half precision
+rather than binary32, on the chance that the instruction retires faster when
+it writes less: **level**, 1.672 s against 1.668, and the tokens change, so
+the trade would have had to be worth something and is not. And the
+arrangement the sweep above did not cover -- not one tile split across more
+subgroups but two subgroups each keeping a whole tile, sharing the batch
+through shared memory instead of reading it twice: **2.5 times slower**,
+3.349 s against 1.339. Staging a hundred and twenty-eight vectors by hand,
+one half-precision element an invocation at a time, costs far more than the
+`coopMatLoad` it was meant to halve. The operands are twelve per cent of
+this kernel and no mechanism for sharing them is cheaper than that.
+
 Which closes this shader. **Every rearrangement of it has now been
 measured** -- nine tile shapes, three subgroup counts, the batch against the
 vector tile, the decode ablated, both operands ablated, the wave width, the
