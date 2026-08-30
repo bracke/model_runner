@@ -5372,6 +5372,48 @@ handed to the weight loader as its Rows by its Columns, which for a step
 whose Rows and Columns say what it reads and writes is a square: the loader
 was asked to upload four million values out of an array of two thousand.
 
+### The output projection is not the thing, and the format is
+
+The output projection is thirty-two thousand rows against one vector, once a
+token, and it looked like the next thing to take: 6.8 per cent of a
+generated token, one submission of its own. It is not. It reads sixty-nine
+megabytes and takes 1.4 milliseconds, which is fifty gigabytes a second --
+exactly the rate the rest of the token runs at. There is nothing special
+about it to take.
+
+**What the measurement found instead is that the rate depends on the format
+by a factor of four, on the same kernel and the same shapes.** Sixty-four
+generated tokens, medians of three, every one of these fully resident with
+no matrix given back:
+
+| | file | generating | rate |
+|---|---:|---:|---:|
+| Q4_K_M | 637 MB | 0.422 s | **96 GB/s** |
+| Q4_0 | 608 MB | 0.448 s | 87 GB/s |
+| Q8_0 | 1116 MB | 1.440 s | 50 GB/s |
+| Q5_K_M | 746 MB | 2.067 s | 23 GB/s |
+
+The part reaches ninety-six gigabytes a second when the format lets it, so
+fifty is not the machine. And the arithmetic cannot be it either: a token
+multiplies the same eleven hundred million weights whatever the format, so
+the accumulate count is identical down every one of these rows -- yet Q4_0
+gets through them in 0.448 s and Q8_0 takes 1.440.
+
+**Two explanations ruled out.** It is not eviction: `--show-stats` says 199
+matrices on the device and none given back for all three of the k-quants and
+for Q8_0 alike. And it is not Q8_0's thirty-four-byte block, which puts half
+its quants two bytes into a word: the loop that assembles them reads the
+next word as well as the current one, and carrying that word forward instead
+-- nine loads a block where there were sixteen -- is **level**, three rounds
+of three. The compiler had already removed the second load.
+
+So the largest single number left on the device is that this program reads
+Q8_0 at half the rate it reads Q4_K, and Q5_K at a quarter, and the cause is
+not yet named. llama.cpp generates Q8_0 at 56.4 tokens a second against this
+program's 46.2, which is 61 gigabytes a second against 50 -- so it does not
+reach ninety-six either, and whatever this is may be part of what it also
+pays.
+
 ### The angles kept the way the activation is kept
 
 The section below built a layer as one submission and found it four per cent

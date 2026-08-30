@@ -51,6 +51,21 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **The output projection is not worth taking, and the format is.** It is
+  6.8 % of a generated token and reads 69 MB in 1.4 ms — 50 GB/s, exactly
+  the rate the rest of the token runs at, so there is nothing special about
+  it. What the measurement found instead: the generating rate depends on the
+  format by a factor of four on the same kernel — Q4_K 96 GB/s, Q4_0 87,
+  Q8_0 50, Q5_K 23 — with all of them fully resident and nothing given back.
+  A token multiplies the same 1.1 billion weights whatever the format, so
+  the arithmetic cannot be it, and 96 GB/s says the machine is not it.
+
+  Ruled out: eviction (199 matrices on the device, none given back, for all
+  four), and Q8_0's 34-byte block putting half its quants two bytes into a
+  word — carrying the word forward, nine loads a block where there were
+  sixteen, is level in three rounds of three, because the compiler had
+  already removed the second load. The cause is not yet named.
+
 - **The rotation's angles are kept the way the activation is kept, and the
   whole layer now pays for a generated token too: 3.5 %.** A matrix reaches
   the device through a loader that keeps it by address; a table of angles
