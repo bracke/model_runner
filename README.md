@@ -6038,13 +6038,42 @@ The inner loop is sixteen shared-memory reads, sixteen conversions out of
 half precision and sixty-four multiply-adds, which is two thirds efficiency
 at best and measures a quarter.
 
-What that says is that the distance between a textbook register-tiled product
-and the other runtime's is the whole of the work: the unroll factor, the
-staging depth, double buffering, packed half-precision arithmetic, and a tile
-shape chosen against the part rather than out of a book. This is one
-iteration of a tuning campaign, and the campaign is what 2.98 teraflops is.
-Not kept -- a kernel that is right and slower is a kernel that costs a
-measurement every time somebody reads the file.
+**Then the source was read instead of guessed at**, which should have come
+first and is the only reason the number moved. The other runtime is on this
+machine; its kernel is a file. What it does that this did not is one
+instruction:
+
+```glsl
+spirv_instruction(extensions = ["SPV_VALVE_mixed_float_dot_product"],
+                  capabilities = [6912], id = 6916)
+float v_dot2_f32_f16 (f16vec2 a, f16vec2 b, float acc);
+```
+
+Two half-precision multiplies and an addition into a binary32 running sum, in
+one instruction, where a scalar loop spends two. The part reports it as a
+capability of its own -- `fp16: dot2` in the line that runtime prints at
+startup, which had been read past several times. Their kernel's fallback for
+a part without it is four `fma` calls in a row, which is exactly what had
+been written here.
+
+With the tiles staged as pairs and the inner loop calling it, **2.98 s becomes
+2.02**. That is the 1.47 times the instruction is worth, arriving where the
+arithmetic said it would. Four halves to a read rather than two is slightly
+worse, 2.12, so the pair is the width.
+
+**And 2.02 is still behind the matrix kernel's 1.66**, which is the answer to
+the question this started from. The instruction was the largest single thing
+in their kernel and it is not the whole of the difference: the rest is the
+warp-level tile between the workgroup and the thread, a per-thread square of
+four by two rather than eight by eight, and a tile of sixty-four by sixty-four
+rather than a hundred and twenty-eight -- a shape chosen against the part.
+This is two iterations of that; the campaign is what the remaining twenty-two
+per cent is.
+
+Not kept: a kernel that is right and slower costs a measurement every time
+somebody reads the file. What is kept is the instruction, which is written
+down here because nothing else in this program has used it and the next
+kernel that wants a multiply-add loop should.
 
 Which closes this shader. **Every rearrangement of it has now been
 measured** -- nine tile shapes, three subgroup counts, the batch against the

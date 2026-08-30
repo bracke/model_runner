@@ -58,9 +58,18 @@ Keep a Changelog and the project uses semantic versioning.
   would replace does one. Bit-exact. Not registers or occupancy either: 104
   VGPRs against the matrix kernel's 168, nothing spilled, and 8 subgroups a
   SIMD against 6. The inner loop is 16 reads, 16 conversions and 64
-  multiply-adds — two thirds efficiency at best, a quarter measured. The
-  distance to the other runtime's 2.98 teraflops is a tuning campaign, not a
-  kernel. Not kept.
+  multiply-adds — two thirds efficiency at best, a quarter measured.
+
+  **Then their source was read rather than guessed at, which should have come
+  first.** What their kernel has that this did not is one instruction:
+  `v_dot2_f32_f16`, a SPIR-V intrinsic doing two half-precision multiplies
+  and an addition into a binary32 sum where a scalar loop spends two — and
+  the part advertises it, `fp16: dot2`, in the line that runtime prints at
+  startup. Staging the tiles as pairs and calling it takes 2.98 s to **2.02**,
+  the 1.47× the arithmetic predicts. Four halves a read is worse (2.12), so
+  the pair is the width. Still behind the matrix kernel's 1.66, so not kept —
+  but the instruction is recorded, because nothing here has used it and the
+  next multiply-add loop should.
 
 - **The device prompt's 1.7× is not the matrix instruction, and now there is
   a number for that.** llama.cpp uses the same extension on this part
