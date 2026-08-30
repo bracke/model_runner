@@ -5372,47 +5372,51 @@ handed to the weight loader as its Rows by its Columns, which for a step
 whose Rows and Columns say what it reads and writes is a square: the loader
 was asked to upload four million values out of an array of two thousand.
 
-### The output projection is not the thing, and the format is
+### The output projection is not the thing, and a table that was wrong
 
 The output projection is thirty-two thousand rows against one vector, once a
 token, and it looked like the next thing to take: 6.8 per cent of a
 generated token, one submission of its own. It is not. It reads sixty-nine
 megabytes and takes 1.4 milliseconds, which is fifty gigabytes a second --
 exactly the rate the rest of the token runs at. There is nothing special
-about it to take.
+about it to take, and that is the whole of what this section originally
+said that survived.
 
-**What the measurement found instead is that the rate depends on the format
-by a factor of four, on the same kernel and the same shapes.** Sixty-four
-generated tokens, medians of three, every one of these fully resident with
-no matrix given back:
+**The rest of it was wrong, and how it was wrong is the part worth keeping.**
+It published a table of four quantizations with a generating rate for each,
+concluded that this program reads Q8_0 at half the rate it reads Q4_K, and
+called that the largest number left on the device. Every rate in it was
+computed by dividing by sixty-four tokens. Three of the four runs did not
+generate sixty-four tokens: at these quantizations the model reaches its
+end-of-sequence token sooner, and `tests speed` reports how many it actually
+produced in the same line as the time. Q4_K generated ten.
 
-| | file | generating | rate |
+Taken again with the counts read rather than assumed:
+
+| | file | generated | a token |
 |---|---:|---:|---:|
-| Q4_K_M | 637 MB | 0.422 s | **96 GB/s** |
-| Q4_0 | 608 MB | 0.448 s | 87 GB/s |
-| Q8_0 | 1116 MB | 1.440 s | 50 GB/s |
-| Q5_K_M | 746 MB | 2.067 s | 23 GB/s |
+| Q8_0 | 1116 MB | 64 | **22.3 ms** |
+| Q5_K_M | 746 MB | 64 | 32.4 ms |
+| Q4_0 | 608 MB | 28 | 16.0 ms |
+| Q4_K_M | 637 MB | 10 | 43.5 ms |
 
-The part reaches ninety-six gigabytes a second when the format lets it, so
-fifty is not the machine. And the arithmetic cannot be it either: a token
-multiplies the same eleven hundred million weights whatever the format, so
-the accumulate count is identical down every one of these rows -- yet Q4_0
-gets through them in 0.448 s and Q8_0 takes 1.440.
+The two that ran to sixty-four are the only pair that compares cleanly, and
+they say the opposite of what was published: Q8_0 is faster than Q5_K_M per
+token while reading half again as many bytes. The two short runs cannot be
+turned into a rate at all without knowing what a run costs before it
+generates anything, and ten tokens is not enough to divide that out.
 
-**Two explanations ruled out.** It is not eviction: `--show-stats` says 199
-matrices on the device and none given back for all three of the k-quants and
-for Q8_0 alike. And it is not Q8_0's thirty-four-byte block, which puts half
-its quants two bytes into a word: the loop that assembles them reads the
-next word as well as the current one, and carrying that word forward instead
--- nine loads a block where there were sixteen -- is **level**, three rounds
-of three. The compiler had already removed the second load.
+**And the comparison cannot be completed with this tool**, which is worth
+saying rather than leaving as a gap: a fair cross-format generating figure
+needs every run to produce the same number of tokens, and nothing here
+ignores an end-of-sequence token. `--stop` and `--stop-token` add reasons to
+stop; there is no flag that removes one.
 
-So the largest single number left on the device is that this program reads
-Q8_0 at half the rate it reads Q4_K, and Q5_K at a quarter, and the cause is
-not yet named. llama.cpp generates Q8_0 at 56.4 tokens a second against this
-program's 46.2, which is 61 gigabytes a second against 50 -- so it does not
-reach ninety-six either, and whatever this is may be part of what it also
-pays.
+What stands after all that is what the table under `### Against llama.cpp`
+already says: Q8_0 generates at 44.8 tokens a second here against llama.cpp's
+56.4, which is fifty gigabytes a second against sixty-one. That gap is real
+and it is 1.26; there is no factor of four anywhere, and this file said there
+was for one commit.
 
 ### The angles kept the way the activation is kept
 
