@@ -3418,6 +3418,57 @@ package body Tests.CLI_Cases is
          return Text_Of ("obj/device-memory.txt");
       end Ran_With;
 
+      --  And what one run produced, which is the other half of the question.
+      --
+      --  A budget too small for the model makes the engine give matrices
+      --  back and fetch them again, in the middle of sequences that name
+      --  several of them at once -- and a sequence that has one evicted
+      --  while it is recording reads a buffer that no longer exists. That
+      --  went wrong once, in the commit that first named five matrices in
+      --  one sequence, and it did not fail: it answered, and answered
+      --  wrongly. So the text is compared and not only the counters.
+      function Text_With (Budget : String) return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         Add (Source, "run");
+         Add (Source, Path);
+         Add (Source, "--backend");
+         Add (Source, "device");
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "hi");
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         Add (Source, "--mmap");
+         Add (Source, "--seed");
+         Add (Source, "1");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+
+         if Budget /= "" then
+            Add (Source, "--device-memory");
+            Add (Source, Budget);
+         end if;
+
+         Ada.Text_IO.Create
+           (Handle, Ada.Text_IO.Out_File, "obj/device-said.txt");
+         Ada.Text_IO.Set_Output (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Ada.Text_IO.Set_Output (Ada.Text_IO.Standard_Output);
+               Ada.Text_IO.Close (Handle);
+               raise;
+         end;
+         Ada.Text_IO.Set_Output (Ada.Text_IO.Standard_Output);
+         Ada.Text_IO.Close (Handle);
+
+         return Text_Of ("obj/device-said.txt");
+      end Text_With;
+
       --  The number a statistics line carries, or minus one when the line
       --  is not there at all -- which is the answer on a machine with no
       --  device, and is why every assertion below is guarded.
@@ -3480,6 +3531,17 @@ package body Tests.CLI_Cases is
                  "a run with no budget named borrowed the host's memory");
          Assert (Number_After (Whole, "matrices given back") = 0,
                  "a run with room for the model gave a matrix back");
+      end;
+
+      --  A budget that evicts must not change a single token. The counters
+      --  below say the eviction happened; this says it was harmless.
+      declare
+         Roomy : constant String := Text_With ("");
+         Close : constant String := Text_With ("4K");
+      begin
+         Assert (Roomy = Close,
+                 "a device budget small enough to evict changed what the "
+                 & "model said, from [" & Roomy & "] to [" & Close & "]");
       end;
 
       declare

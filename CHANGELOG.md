@@ -247,6 +247,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The eviction bug has a test now.** A budget small enough to evict must
+  not change a single token, and until now only the counters were asserted —
+  which is exactly why that bug did not fail when it happened: the run
+  answered, and answered wrongly. The device-memory test compares the text a
+  run produces with and without a budget. Removing the pin it guards makes
+  it fail, which is how it was checked.
+
 - **A sequence could evict a matrix it was about to read.** A sequence
   acquires every matrix it names before dispatching any of them, and
   acquiring one can evict another to stay inside `--device-memory`. The
