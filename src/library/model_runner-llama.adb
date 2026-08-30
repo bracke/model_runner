@@ -5662,7 +5662,108 @@ package body Model_Runner.Llama is
             --  projection down included, so that the common tail does not
             --  project it a second time.
             Whole_Block : Boolean := False;
+            --  The angles this position turns by, where the whole layer
+            --  goes over as one: the table is what the device is handed
+            --  instead of the architecture. Two numbers a pair.
+            Pairs : constant Element_Count :=
+              Element_Count (Settings.Rotary) / 2;
+
+            Angles : N.Wide_Real_Array (0 .. Pairs * 2 - 1) :=
+              [others => 0.0];
+
+            Cosines : N.Wide_Real_Array (0 .. Pairs - 1);
+            Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
          begin
+            --  The whole layer as one submission. A generated token made
+            --  two of them a layer and makes one.
+            if Item.Held = Exact
+              and then Settings.Rotary > 0
+              and then Element_Count (Settings.Rotary) <= Head_Size
+              and then Settings.Experts = 0
+              and then T.Is_Present (Current.Gate)
+              and then Current.Attention_Norm /= null
+              and then Current.Attention_Norm_Bias = null
+              and then Current.Feed_Norm /= null
+              and then Current.Query_Bias = null
+              and then Current.Query_Norm = null
+              and then Current.Key_Bias = null
+              and then Current.Key_Norm = null
+              and then Current.Out_Bias = null
+              and then Current.Up_Bias = null
+              and then Current.Down_Bias = null
+              and then Current.Feed_Norm_Bias = null
+              and then Current.Post_Attention_Norm = null
+              and then Current.Post_Feed_Norm = null
+              and then Source.Settings.Kind not in Falcon | Phi2
+              and then Model_Runner.Backend."="
+                         (Item.Owner.Able.Kind,
+                          Model_Runner.Backend.Backend_Device)
+            then
+               Model_Runner.Backend.Device.Reserve_Cache
+                 (Item.Keys.all'Length + Item.Values.all'Length, Resident);
+
+               if Resident then
+                  K.Rotary_Table
+                    (Element_Count (Settings.Rotary), Item.Committed,
+                     Turn_Base (Settings, Natural (Index)),
+                     Settings.Scaling, Turns (Source),
+                     Cosines => Cosines, Sines => Sines);
+
+                  for Pair in 0 .. Pairs - 1 loop
+                     Angles (Pair * 2) := Cosines (Pair);
+                     Angles (Pair * 2 + 1) := Sines (Pair);
+                  end loop;
+
+                  Model_Runner.Backend.Device.Whole_Layer
+                    (Item.Activation.all,
+                     Current.Attention_Norm.all, Current.Feed_Norm.all,
+                     Settings.Epsilon,
+                     Current.Query, Current.Key, Current.Value,
+                     Angles, Natural (Head_Size), Settings.Rotary,
+                     K."=" (Settings.Pairing, K.Split),
+                     Natural (Slot), Natural (Item.Keys.all'Length + V_Slot),
+                     Natural (Heads), Natural (Value_Size),
+                     Settings.Group_Size,
+                     Natural (Earliest (Settings, Reserved,
+                                        Natural (Index))),
+                     Natural (Reserved), Natural (Base),
+                     Natural (Item.Keys.all'Length + V_Base),
+                     Natural (KV_Width), Natural (V_Width),
+                     Scale, Settings.Attention_Cap,
+                     Current.Attention_Out,
+                     Current.Gate, Current.Up, Current.Down,
+                     Gate_Unit (Source),
+                     Item.Key_Row, Item.Value_Row, Item.Activation, Fused,
+                     Window   =>
+                       (if Settings.Window > 0
+                          and then Earliest (Settings,
+                                             Element_Count (Settings.Window),
+                                             Natural (Index)) > 0
+                        then Settings.Window
+                        else 0),
+                     Lifted   => Lifted_Norms (Source),
+                     Max_Bias => Settings.Max_Bias,
+                     Cancel   => Item.Stopping);
+               end if;
+            end if;
+
+            if Fused then
+               --  The host keeps its own copy of the cache: the snapshot,
+               --  the eviction and the other two precisions all read it.
+               --  The device wrote its own before it attended.
+               for Offset in 0 .. KV_Width - 1 loop
+                  Item.Keys.all (Slot + Offset) :=
+                    Item.Key_Row.all (Offset);
+               end loop;
+               for Offset in 0 .. V_Width - 1 loop
+                  Item.Values.all (V_Slot + Offset) :=
+                    Item.Value_Row.all (Offset);
+               end loop;
+
+               Charge (Item, Attending, Mark);
+               goto Layer_Done;
+            end if;
+
             --  Attention block.
             Normalize
               (Source, Item.Activation.all, Current.Attention_Norm.all,
@@ -6054,6 +6155,8 @@ package body Model_Runner.Llama is
             end if;
 
             Charge (Item, Joining, Mark);
+
+            <<Layer_Done>>
          end;
       end loop;
 

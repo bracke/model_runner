@@ -51,6 +51,21 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **The rotation's angles are kept the way the activation is kept, and the
+  whole layer now pays for a generated token too: 3.5 %.** A matrix reaches
+  the device through a loader that keeps it by address; a table of angles
+  cannot be kept, because it depends on the position, so it went through
+  that loader unkeyed — an allocation, a mapping, a copy and a release,
+  twice a layer. A batch amortizes that over 128 positions and a token pays
+  it whole.
+
+  The activation has the same shape and is not loaded that way at all: one
+  buffer, grown when it has to be, copied into a standing mapping. The
+  angles are held the same way now, and the whole layer — 4 % slower for a
+  token when it was built — is 3.5 % faster, three rounds of three. A token
+  is one submission a layer again, and 46.2 tokens a second against 44.4.
+  The prompt is level, as the case that amortized the cost should be.
+
 - **Attention's key gather staged into shared memory, and reverted: 48 %
   slower.** Each lane walks its own cached position, so the 64 lanes of one
   instruction want addresses a kilobyte apart — 64 transactions for one

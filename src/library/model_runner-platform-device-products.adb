@@ -1900,11 +1900,14 @@ package body Model_Runner.Platform.Device.Products is
       Item.Cache_Bytes := 0;
 
       Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
+      Unmap_Standing (Item, Item.Turn_Memory, Item.Turn_At);
       Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
       Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+      Give_Back_Buffer (Item, Item.Turn_Buffer, Item.Turn_Memory);
       Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
       Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
       Item.Vector_Bytes := 0;
+      Item.Turn_Bytes := 0;
       Item.Result_Bytes := 0;
       Item.Half_Bytes := 0;
 
@@ -3838,6 +3841,9 @@ package body Model_Runner.Platform.Device.Products is
 
       Result_Bytes : Interfaces.Unsigned_64 := 0;
 
+      --  Room the angles need, which the widest rotating step decides.
+      Turn_Room : Interfaces.Unsigned_64 := 0;
+
       --  The clock reading a sequence's matrices are pinned from, so that
       --  acquiring the last of them cannot release the first.
       Pinned : Interfaces.Unsigned_64 := Interfaces.Unsigned_64'Last;
@@ -3932,9 +3938,12 @@ package body Model_Runner.Platform.Device.Products is
                   return;
                end if;
 
-               Places (Index).Weight :=
-                 Interfaces.Unsigned_64 (This.Turns / 2)
-                 * Interfaces.Unsigned_64 (Count) * 16;
+               Places (Index).Weight := 0;
+
+               Turn_Room := Interfaces.Unsigned_64'Max
+                 (Turn_Room,
+                  Interfaces.Unsigned_64 (This.Turns / 2)
+                  * Interfaces.Unsigned_64 (Count) * 16);
             elsif This.Norms then
                --  A normalizing step carries a weight of one element a
                --  component, which the device keeps the way it keeps a
@@ -4064,7 +4073,9 @@ package body Model_Runner.Platform.Device.Products is
             --  Neither a combining step nor an attention step names a
             --  matrix: one reads the two results before it, the other reads
             --  the cache the device holds.
-            if This.Blends or else This.Attends or else This.Places then
+            if This.Blends or else This.Attends or else This.Places
+              or else This.Rotates
+            then
                goto Next_Step;
             end if;
 
@@ -4127,6 +4138,47 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
          Item.Half_Bytes := Half_Bytes;
+      end if;
+
+      --  And the angles, where anything turns: written into a standing
+      --  mapping as the activation is, because they change every call.
+      if Turn_Room > 0 then
+         if Item.Turn_Bytes < Turn_Room then
+            Unmap_Standing (Item, Item.Turn_Memory, Item.Turn_At);
+            Give_Back_Buffer (Item, Item.Turn_Buffer, Item.Turn_Memory);
+            Take (Item, Turn_Room, Item.Turn_Buffer, Item.Turn_Memory, Good);
+            if not Good then
+               Release_All;
+               return;
+            end if;
+            Item.Turn_Bytes := Turn_Room;
+         end if;
+
+         Standing (Item, Item.Turn_Memory, Item.Turn_At, Item.Turn_Bytes,
+                   Good);
+         if not Good then
+            Release_All;
+            return;
+         end if;
+
+         for Index in 1 .. Steps.Held loop
+            if Steps.Items (Index).Rotates then
+               declare
+                  Span : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count
+                      (Interfaces.Unsigned_64 (Steps.Items (Index).Turns / 2)
+                       * Interfaces.Unsigned_64 (Count) * 16);
+
+                  From : Model_Runner.Bytes.Byte_Array (1 .. Span)
+                    with Import, Address => Steps.Items (Index).Base;
+
+                  Into : Model_Runner.Bytes.Byte_Array (1 .. Span)
+                    with Import, Address => Item.Turn_At;
+               begin
+                  Into := From;
+               end;
+            end if;
+         end loop;
       end if;
 
       --  The activation goes over once, however many products read it.
@@ -4248,8 +4300,8 @@ package body Model_Runner.Platform.Device.Products is
             if Steps.Items (Index).Rotates then
                --  The table, what it turns, and its own room out.
                Told (1) :=
-                 (Buffer => Places (Index).Buffer, Offset => 0,
-                  Extent => Places (Index).Base + Places (Index).Weight);
+                 (Buffer => Item.Turn_Buffer, Offset => 0,
+                  Extent => Item.Turn_Bytes);
                Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
                Told (3) :=
                  (Buffer => Item.Result_Buffer,
@@ -4552,10 +4604,9 @@ package body Model_Runner.Platform.Device.Products is
                         First   => C.unsigned (This.Turns),
                         Packing => (if This.Pairs = Split then 1 else 0),
 
-                        --  Where the table begins in the buffer it was put
-                        --  in, in the wide numbers it holds.
-                        Base    =>
-                          C.unsigned (Places (Index).Base / 8));
+                        --  The table begins where the buffer does: it is
+                        --  written for this call and nothing else is in it.
+                        Base    => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);

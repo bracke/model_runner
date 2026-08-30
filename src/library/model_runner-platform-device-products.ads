@@ -1111,6 +1111,18 @@ private
       Vector_Memory : System.Address := System.Null_Address;
       Vector_Bytes  : Interfaces.Unsigned_64 := 0;
 
+      --  And the same for the angles a rotating step turns by. They change
+      --  every call, as the activation does, so they are kept the way the
+      --  activation is kept rather than acquired the way a matrix is: a
+      --  buffer that grows when it has to and a copy into a standing
+      --  mapping. Acquired as a matrix instead, a table cost an allocation
+      --  and a release a layer, which a batch amortizes over its positions
+      --  and a generated token pays whole.
+      Turn_Buffer   : System.Address := System.Null_Address;
+      Turn_Memory   : System.Address := System.Null_Address;
+      Turn_Bytes    : Interfaces.Unsigned_64 := 0;
+      Turn_At       : System.Address := System.Null_Address;
+
       --  Where that memory is mapped, kept from one call to the next, for
       --  the reason written against Result_At below.
       Vector_At     : System.Address := System.Null_Address;
