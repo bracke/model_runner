@@ -1204,6 +1204,22 @@ package body Model_Runner.Platform.Device.Products is
                Item.Normer := Made;
             end if;
          end;
+
+         --  And the rotation, which is the same story: a device that
+         --  refuses it turns on the host, as every device did before.
+         declare
+            Turned : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Rotate;
+         begin
+            Request.Size := Interfaces.C.size_t (Turned'Length * 4);
+            Request.Code := Turned'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Turner := Made;
+            end if;
+         end;
       end;
 
       --  The third kernel's module.
@@ -1476,6 +1492,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Norm_Line := Made;
+            end if;
+         end if;
+
+         if Item.Turner /= Null_Handle then
+            Request.Stage.Module := Item.Turner;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Turn_Line := Made;
             end if;
          end if;
 
@@ -1884,7 +1910,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");
       Give_Back (Item.Norm_Line, "vkDestroyPipeline");
+      Give_Back (Item.Turn_Line, "vkDestroyPipeline");
       Give_Back (Item.Normer, "vkDestroyShaderModule");
+      Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
       Item.Matrices := False;
@@ -3515,6 +3543,53 @@ package body Model_Runner.Platform.Device.Products is
    -- Add_Norm --
    --------------
 
+   ------------------
+   -- Add_Rotation --
+   ------------------
+
+   procedure Add_Rotation
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Width     : Natural;
+      Heads     : Natural;
+      Rotary    : Natural;
+      Pairing   : Rotary_Pairing;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Kept      : Boolean := True)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+   begin
+      if Steps.Held = Sequence_Limit
+        or else Width = 0
+        or else Heads = 0
+        or else Width mod Heads /= 0
+        or else Rotary = 0
+        or else Rotary mod 2 /= 0
+        or else Rotary > Width / Heads
+        or else Base = System.Null_Address
+        or else Source > Steps.Held
+      then
+         Added := False;
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte,
+         Packing => Weight_Packing'First,
+         Rows => Width, Columns => Width, Key => System.Null_Address,
+         Chained => Source /= 0, Reads => Source,
+         Kept => Kept, Rotates => True, Heads => Heads,
+         Turns => Rotary, Pairs => Pairing,
+         Attends => False, Blends => False, Norms => False,
+         others => <>);
+      Added := True;
+   end Add_Rotation;
+
    procedure Add_Norm
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -3761,7 +3836,22 @@ package body Model_Runner.Platform.Device.Products is
             --  A combining step carries no matrix: it reads the two
             --  results before it and writes its own. Everything the shape
             --  checks below say about a matrix is beside the point for it.
-            if This.Norms then
+            if This.Rotates then
+               --  A rotating step carries a table of two wide numbers a
+               --  pair a position, which the device keeps the way it keeps
+               --  a matrix -- so everything below about residency serves it
+               --  and only the shape check differs.
+               if This.Rows = 0
+                 or else This.Base = System.Null_Address
+                 or else This.Reads > Steps.Held
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight :=
+                 Interfaces.Unsigned_64 (This.Turns / 2)
+                 * Interfaces.Unsigned_64 (Count) * 16;
+            elsif This.Norms then
                --  A normalizing step carries a weight of one element a
                --  component, which the device keeps the way it keeps a
                --  matrix -- so everything below about residency serves it
@@ -3902,8 +3992,11 @@ package body Model_Runner.Platform.Device.Products is
             --  driver rather than anywhere this program can see.
             Acquire_Weights
               (Item, Held, This.At_Byte, This.Packing,
-               (if This.Norms then 1 else This.Rows),
-               (if This.Norms then This.Rows else This.Columns),
+               (if This.Norms or else This.Rotates then 1 else This.Rows),
+               (if This.Norms then This.Rows
+                elsif This.Rotates
+                then This.Turns / 2 * Natural (Count) * 4
+                else This.Columns),
                Places (Index).Weight,
                Places (Index).Buffer, Places (Index).Memory,
                Places (Index).Base, Places (Index).Borrowed, Good, This.Key,
@@ -4029,6 +4122,28 @@ package body Model_Runner.Platform.Device.Products is
                --  The queries: where the activation was written, or --
                --  for a chained attention -- what the step before it wrote,
                --  which never left the device.
+               Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
+               Told (4) := Half_Descriptor (Item);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
+            if Steps.Items (Index).Rotates then
+               --  The table, what it turns, and its own room out.
+               Told (1) :=
+                 (Buffer => Places (Index).Buffer, Offset => 0,
+                  Extent => Places (Index).Base + Places (Index).Weight);
                Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
                Told (3) :=
                  (Buffer => Item.Result_Buffer,
@@ -4274,6 +4389,38 @@ package body Model_Runner.Platform.Device.Products is
                      Dispatch
                        (Item.Buffer, C.unsigned (This.Heads),
                         Attend_Groups (Item, Count), 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Rotates then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Turn_Line);
+
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Heads),
+                        Count   => C.unsigned (Count),
+                        First   => C.unsigned (This.Turns),
+                        Packing => (if This.Pairs = Split then 1 else 0),
+
+                        --  Where the table begins in the buffer it was put
+                        --  in, in the wide numbers it holds.
+                        Base    =>
+                          C.unsigned (Places (Index).Base / 8));
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+
+                     --  A workgroup to a position, as the normalization
+                     --  does: the pairs of one position are what its lanes
+                     --  divide between them.
+                     Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
                   end;
 
                   Bind_Pipeline

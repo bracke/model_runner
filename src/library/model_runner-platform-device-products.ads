@@ -428,6 +428,49 @@ package Model_Runner.Platform.Device.Products is
       Residual_Step : Natural := 0;
       Kept          : Boolean := True);
 
+   --  How a model pairs the components a rotation turns.
+   type Rotary_Pairing is (Interleaved, Split);
+
+   --  Name a rotary position encoding for a sequence to perform.
+   --
+   --  The turning only. Every architecture turns by a different angle -- the
+   --  stretch a file states, its ramp, a divisor table, an attenuation --
+   --  and none of that is on the device: the caller tabulates a cosine and
+   --  a sine for each pair of each position, which is thirty-two numbers a
+   --  position against the couple of thousand multiply-adds done with them,
+   --  and hands the table over with the step. What varies between models
+   --  stays written once, on the host.
+   --
+   --  The table is two numbers a pair a position, wide ones, a cosine and
+   --  the sine after it, positions in the order the batch holds them.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base First byte of the storage the table lies in.
+   --  @param Span Bytes that storage holds.
+   --  @param At_Byte Where in that storage the table begins.
+   --  @param Width Components a position holds.
+   --  @param Heads How many heads that is.
+   --  @param Rotary How many components of a head turn.
+   --  @param Pairing Which two components make a pair.
+   --  @param Added False when the sequence is full, when the shape does not
+   --    hold together, or when there is nothing to turn.
+   --  @param From_Step Which step's result to turn, or zero for the step
+   --    before this one -- and for a rotation first in a sequence, the
+   --    caller's own activation.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Rotation
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Width     : Natural;
+      Heads     : Natural;
+      Rotary    : Natural;
+      Pairing   : Rotary_Pairing;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Kept      : Boolean := True);
+
    --  Name a root-mean-square normalization for a sequence to perform.
    --
    --  It is here for the submission it saves rather than for itself: a
@@ -950,6 +993,7 @@ private
       --  rather than for itself: a layer normalizes twice and the host
       --  doing it is the host needing the products back.
       Normer     : System.Address := System.Null_Address;
+      Turner     : System.Address := System.Null_Address;
 
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
@@ -963,6 +1007,7 @@ private
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;
       Norm_Line   : System.Address := System.Null_Address;
+      Turn_Line   : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
       --  is what the device said when it was opened.
@@ -1116,6 +1161,16 @@ private
 
       --  The floor under the mean square, as the architecture states it.
       Epsilon : Model_Runner.Numerics.Real := 0.0;
+
+      --  A rotating step rather than a product: it turns each pair of a
+      --  head by an angle the caller tabulated, and the table is named by
+      --  the Base, Span and At_Byte above. It says how many heads the width
+      --  holds in the Heads an attention step uses, because it means the
+      --  same thing; Turns is how many components of a head turn, and Pairs
+      --  which two of them make a pair.
+      Rotates : Boolean := False;
+      Turns   : Natural := 0;
+      Pairs   : Rotary_Pairing := Interleaved;
 
       --  Whether the caller wants this step's answer back. A step whose
       --  only reader is the step after it -- an arm of a gate, a blend a

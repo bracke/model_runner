@@ -5409,6 +5409,26 @@ package body Checks is
 
          Digest : constant Interfaces.Unsigned_64 :=
            Shader_Generation.Source_Digest
+             (Root & "/src/shaders/rotate.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/rotate.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Rotate_Digest then
+            Fail ("src/shaders/rotate.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
+      --  And the fifth, asked the same way.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
              (Root & "/src/shaders/attention.comp", Found);
       begin
          Result.Performed := Result.Performed + 1;

@@ -973,6 +973,36 @@ package body Tests.CLI_Cases is
                              & " normalization and the join after it by"
                              & N.Real'Image (Worst));
 
+                     --  A rotation turns each pair of a head by an angle
+                     --  the caller tabulated. Asked here for its refusals
+                     --  rather than its arithmetic, which the backend test
+                     --  compares against the processor's.
+                     Products.Open_Sequence (Layer);
+                     Products.Add_Product
+                       (Layer, Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                        0, Products.Values_F32, Rows, Cols,
+                        Added);
+                     Products.Add_Rotation
+                       (Layer, Held_Gain.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held_Gain.all'Length),
+                        0, Rows, 1, 4, Products.Interleaved, Added);
+                     Assert (Added, "a sequence refused a rotation");
+
+                     Products.Open_Sequence (Layer);
+                     Products.Add_Product
+                       (Layer, Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                        0, Products.Values_F32, Rows, Cols,
+                        Added);
+                     Products.Add_Rotation
+                       (Layer, Held_Gain.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held_Gain.all'Length),
+                        0, Rows, 1, 5, Products.Interleaved, Added);
+                     Assert (not Added,
+                             "a sequence turned an odd number of "
+                             & "components");
+
                      --  A normalization first in a sequence reads what the
                      --  caller handed in, as a product first in one does.
                      Products.Open_Sequence (Layer);

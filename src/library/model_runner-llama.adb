@@ -6148,6 +6148,17 @@ package body Model_Runner.Llama is
       Gate   : T.Real_Array_Access := null;
       Up     : T.Real_Array_Access := null;
 
+      --  The angles this batch turns by, where a device does the turning: a
+      --  cosine and the sine after it for each pair of each position, in
+      --  the wide format the rotation keeps them in. Allocated only for the
+      --  path that uses it.
+      type Wide_Access is access N.Wide_Real_Array;
+
+      procedure Forget is
+        new Ada.Unchecked_Deallocation (N.Wide_Real_Array, Wide_Access);
+
+      Angles : Wide_Access := null;
+
       procedure Release is
       begin
          T.Free (Acts);
@@ -6159,6 +6170,7 @@ package body Model_Runner.Llama is
          T.Free (Attend);
          T.Free (Gate);
          T.Free (Up);
+         Forget (Angles);
       end Release;
 
       --  Slice of a batch buffer belonging to one token of the batch.
@@ -6407,8 +6419,10 @@ package body Model_Runner.Llama is
             Resident : Boolean := False;
 
             --  Whether a device took the normalization and the three
-            --  matrices that read it as one sequence.
+            --  matrices that read it as one sequence, and whether it turned
+            --  the queries and the keys while it had them.
             Projected : Boolean := False;
+            Rotated   : Boolean := False;
 
             --  And whether the whole of the layer's second half went over
             --  as one sequence, as it does when a single position is
@@ -6580,13 +6594,70 @@ package body Model_Runner.Llama is
             then
                Charge (Item, Normalizing, Mark);
 
-               Model_Runner.Backend.Device.Normalize_And_Project
-                 ([Current.Query, Current.Key, Current.Value],
-                  Acts, Current.Attention_Norm.all, Settings.Epsilon,
-                  [Query, Keys, Values], Projected,
-                  Spread => Count,
-                  Lifted => Lifted_Norms (Source),
-                  Cancel => Item.Stopping);
+               --  The angles this batch turns by, tabulated here and turned
+               --  by on the device. Everything an architecture varies about
+               --  a rotation is in these two numbers a pair, so the kernel
+               --  that applies them knows nothing about any architecture --
+               --  see Kernels.Rotary_Table.
+               declare
+                  Pairs : constant Element_Count :=
+                    Element_Count (Settings.Rotary) / 2;
+
+                  Turnable : constant Boolean :=
+                    Settings.Rotary > 0
+                    and then Element_Count (Settings.Rotary) <= Head_Size
+                    and then Element_Count (Settings.Rotary) mod 2 = 0;
+               begin
+                  if Turnable then
+                     if Angles = null
+                       or else Angles.all'Length < Count * Pairs * 2
+                     then
+                        Forget (Angles);
+                        Angles :=
+                          new N.Wide_Real_Array (0 .. Count * Pairs * 2 - 1);
+                     end if;
+
+                     for Which in 0 .. Count - 1 loop
+                        declare
+                           Cosines : N.Wide_Real_Array (0 .. Pairs - 1);
+                           Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
+                        begin
+                           K.Rotary_Table
+                             (Element_Count (Settings.Rotary),
+                              Item.Committed + Natural (Which),
+                              Turn_Base (Settings, Natural (Index)),
+                              Settings.Scaling, Turns (Source),
+                              Cosines => Cosines, Sines => Sines);
+
+                           for Pair in 0 .. Pairs - 1 loop
+                              Angles.all (Which * Pairs * 2 + Pair * 2) :=
+                                Cosines (Pair);
+                              Angles.all
+                                (Which * Pairs * 2 + Pair * 2 + 1) :=
+                                Sines (Pair);
+                           end loop;
+                        end;
+                     end loop;
+                  end if;
+
+                  Model_Runner.Backend.Device.Normalize_And_Project
+                    ([Current.Query, Current.Key, Current.Value],
+                     Acts, Current.Attention_Norm.all, Settings.Epsilon,
+                     [Query, Keys, Values], Projected,
+                     Spread => Count,
+                     Lifted => Lifted_Norms (Source),
+                     Turns  =>
+                       (if Turnable
+                        then Angles.all (0 .. Count * Pairs * 2 - 1)
+                        else Model_Runner.Backend.Device.No_Turns),
+                     Turned    => (if Turnable then 2 else 0),
+                     Head_Size => Natural (Head_Size),
+                     Rotary    => Settings.Rotary,
+                     Split     => K."=" (Settings.Pairing, K.Split),
+                     Cancel    => Item.Stopping);
+
+                  Rotated := Projected and then Turnable;
+               end;
             end if;
 
             if not Projected then
@@ -6679,14 +6750,19 @@ package body Model_Runner.Llama is
                   --  the same angles, so the table is computed once for
                   --  both. Two calls computed it twice, and the table is
                   --  a power, a cosine and a sine a pair.
-                  K.Apply_Rotary_Pair
-                    (Query.all (Q_At .. Q_At + Wide - 1), Heads,
-                     Keys.all (KV_At .. KV_At + KV_Width - 1), KV_Heads,
-                     Head_Size, Element_Count (Settings.Rotary),
-                     Item.Committed + Natural (Which),
-                     Turn_Base (Settings, Natural (Index)),
-                     Settings.Scaling, Turns (Source),
-                     Settings.Pairing);
+                  --
+                  --  Done already where the device turned them as it
+                  --  projected: the table it was given is this one.
+                  if not Rotated then
+                     K.Apply_Rotary_Pair
+                       (Query.all (Q_At .. Q_At + Wide - 1), Heads,
+                        Keys.all (KV_At .. KV_At + KV_Width - 1), KV_Heads,
+                        Head_Size, Element_Count (Settings.Rotary),
+                        Item.Committed + Natural (Which),
+                        Turn_Base (Settings, Natural (Index)),
+                        Settings.Scaling, Turns (Source),
+                        Settings.Pairing);
+                  end if;
 
                   if Item.Held = Eighth then
                      Pack_Row

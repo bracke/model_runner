@@ -433,6 +433,10 @@ package Model_Runner.Backend.Device is
       Status  : out Model_Runner.Errors.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null);
 
+   --  An empty table, for a caller that rotates nothing.
+   No_Turns : constant Model_Runner.Numerics.Wide_Real_Array (1 .. 0) :=
+     [others => 0.0];
+
    --  A normalization and the products that read it, in one submission.
    --
    --  The other half of what `Attend_And_Feed` does. A layer normalizes its
@@ -457,6 +461,17 @@ package Model_Runner.Backend.Device is
    --  @param Ok False when the device did not run it, which leaves the
    --    caller to normalize and multiply as it did before.
    --  @param Cancel Token a caller may set to ask for a stop.
+   --  @param Turns The cosines and sines the first Turned results are
+   --    rotated by, two a pair a position, positions in the order the batch
+   --    holds them. Empty where nothing is rotated.
+   --  @param Turned How many of the results the rotation reaches, counting
+   --    from the first: two for a layer, whose queries and keys turn and
+   --    whose values do not.
+   --  @param Head_Size How wide a head is, which says how many heads each
+   --    rotated result holds.
+   --  @param Rotary How many components of a head turn.
+   --  @param Split True where a head's pairs are a component and the one
+   --    half a rotary further on, false where they are neighbours.
    procedure Normalize_And_Project
      (Weights     : Model_Runner.Tensors.View_Group;
       Vector      : Model_Runner.Tensors.Real_Array_Access;
@@ -466,6 +481,11 @@ package Model_Runner.Backend.Device is
       Ok          : out Boolean;
       Spread      : Model_Runner.Numerics.Element_Count := 1;
       Lifted      : Boolean := False;
+      Turns       : Model_Runner.Numerics.Wide_Real_Array := No_Turns;
+      Turned      : Natural := 0;
+      Head_Size   : Natural := 0;
+      Rotary      : Natural := 0;
+      Split       : Boolean := False;
       Cancel      : Model_Runner.Cancellation.Token_Reference := null);
 
    --  A gated feed-forward block, whole, in one submission.

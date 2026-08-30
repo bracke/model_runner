@@ -27,6 +27,7 @@ package Model_Runner.Kernels is
    subtype Element_Count is Model_Runner.Numerics.Element_Count;
    subtype Real_Array is Model_Runner.Numerics.Real_Array;
    subtype Half_Array is Model_Runner.Numerics.Half_Array;
+   subtype Wide_Real_Array is Model_Runner.Numerics.Wide_Real_Array;
 
    --  Add Addend into Target element-wise.
    --
@@ -448,6 +449,42 @@ package Model_Runner.Kernels is
    --  Per-dimension divisors for the rotation's frequencies, when a model
    --  carries them. A model that does not is every element one.
    No_Factors : constant Real_Array (1 .. 0) := [others => 0.0];
+
+   --  The cosines and the sines a position turns by, tabulated.
+   --
+   --  What Apply_Rotary_Pair computes before it touches a vector, exposed
+   --  because a caller that means to rotate somewhere else needs the table
+   --  and not the loop: everything an architecture varies -- the stretch,
+   --  its ramp across a band of dimensions, the per-dimension divisors, the
+   --  attenuation -- is in these two numbers a pair, and nothing after them
+   --  is architecture at all. A device kernel handed this table rotates
+   --  every model this program reads without knowing what any of them is.
+   --
+   --  Kept in the wide format for the same reason the rotation keeps it:
+   --  rounding the table would round twice where the rotation rounds once,
+   --  and move every rotated vector off the bits every other path produces.
+   --
+   --  @param Rotary How many components of a head turn.
+   --  @param Position The position being turned to.
+   --  @param Base The frequency base the model states.
+   --  @param Scaling How the model stretches the rotation.
+   --  @param Factors The per-dimension divisors, or none.
+   --  @param Backwards True to turn back rather than forward.
+   --  @param First_Pair Which pair the two arrays begin at, so that a
+   --    caller holding a run of the table on the stack may fill it a run at
+   --    a time. Zero for the whole of it.
+   --  @param Cosines Receives one cosine a pair, as many as it holds.
+   --  @param Sines Receives one sine a pair, the same count.
+   procedure Rotary_Table
+     (Rotary     : Element_Count;
+      Position   : Natural;
+      Base       : Wide_Real;
+      Scaling    : Rotary_Scaling := No_Scaling;
+      Factors    : Real_Array := No_Factors;
+      Backwards  : Boolean := False;
+      First_Pair : Element_Count := 0;
+      Cosines    : out Wide_Real_Array;
+      Sines      : out Wide_Real_Array);
 
    --  Two vectors rotated at one position, by one table of angles.
    --

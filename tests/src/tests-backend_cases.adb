@@ -5,6 +5,7 @@ with AUnit.Assertions;
 
 with Interfaces;
 
+with Model_Runner.Kernels;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -2396,6 +2397,95 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Fused_Layer_Says_What_The_Parts_Say;
 
+   -----------------------------------------
+   -- Turning_Is_What_The_Table_Says_It_Is --
+   -----------------------------------------
+
+   --  The table a rotation turns by, against the rotation itself.
+   --
+   --  Everything an architecture varies about a rotation is in these two
+   --  numbers a pair, so a caller that means to turn somewhere else -- a
+   --  device kernel, here -- needs the table and not the loop. That only
+   --  holds if the two agree, and the way to ask is to turn a vector by the
+   --  table here and compare it against what Apply_Rotary says.
+   procedure Turning_Is_What_The_Table_Says_It_Is
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      use type N.Wide_Real;
+
+      Heads     : constant N.Element_Count := 3;
+      Head_Size : constant N.Element_Count := 8;
+      Rotary    : constant N.Element_Count := 6;
+      Pairs     : constant N.Element_Count := Rotary / 2;
+
+      Base : constant N.Wide_Real := 10000.0;
+   begin
+      for Position in 0 .. 4 loop
+         for Split in Boolean'Range loop
+            declare
+               Turned : N.Real_Array (0 .. Heads * Head_Size - 1);
+               Mine   : N.Real_Array (0 .. Heads * Head_Size - 1);
+
+               Cosines : N.Wide_Real_Array (0 .. Pairs - 1);
+               Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
+            begin
+               for Index in Turned'Range loop
+                  Turned (Index) := N.Real (Index mod 7) / 7.0 - 0.3;
+               end loop;
+
+               Mine := Turned;
+
+               Model_Runner.Kernels.Apply_Rotary
+                 (Turned, Heads, Head_Size, Rotary, Position, Base,
+                  Pairing =>
+                    (if Split then Model_Runner.Kernels.Split
+                     else Model_Runner.Kernels.Interleaved));
+
+               Model_Runner.Kernels.Rotary_Table
+                 (Rotary, Position, Base,
+                  Cosines => Cosines, Sines => Sines);
+
+               --  The same arithmetic the rotation does, from the table.
+               for Head in 0 .. Heads - 1 loop
+                  for Pair in 0 .. Pairs - 1 loop
+                     declare
+                        Origin : constant N.Element_Count :=
+                          Head * Head_Size;
+
+                        Even : constant N.Element_Count :=
+                          (if Split then Origin + Pair
+                           else Origin + 2 * Pair);
+                        Odd  : constant N.Element_Count :=
+                          (if Split then Even + Pairs else Even + 1);
+
+                        First  : constant N.Wide_Real :=
+                          N.Wide_Real (Mine (Even));
+                        Second : constant N.Wide_Real :=
+                          N.Wide_Real (Mine (Odd));
+                     begin
+                        Mine (Even) :=
+                          N.Real (First * Cosines (Pair)
+                                  - Second * Sines (Pair));
+                        Mine (Odd) :=
+                          N.Real (First * Sines (Pair)
+                                  + Second * Cosines (Pair));
+                     end;
+                  end loop;
+               end loop;
+
+               for Index in Turned'Range loop
+                  Assert (Turned (Index) = Mine (Index),
+                          "the table and the rotation disagree at component"
+                          & N.Element_Count'Image (Index)
+                          & " of position" & Natural'Image (Position));
+               end loop;
+            end;
+         end loop;
+      end loop;
+   end Turning_Is_What_The_Table_Says_It_Is;
+
    ----------------------------------------------
    -- Normalized_Group_Says_What_The_Parts_Say --
    ----------------------------------------------
@@ -2938,6 +3028,10 @@ package body Tests.Backend_Cases is
         (T, Normalized_Group_Says_What_The_Parts_Say'Access,
          "a normalization named with the matrices that read it says what "
          & "the four done apart say");
+      Register_Routine
+        (T, Turning_Is_What_The_Table_Says_It_Is'Access,
+         "the table a rotation turns by says exactly what the rotation "
+         & "does, at every position and both pairings");
    end Register_Tests;
 
 end Tests.Backend_Cases;

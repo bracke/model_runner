@@ -51,6 +51,32 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **The rotation runs on the device, and knows nothing about any
+  architecture: 2 % of a 1419-token device prompt, at the same digests.**
+  What varies between models is the angle, and an angle is a cosine and a
+  sine. The host tabulates 32 of each for this model and then does 2300
+  multiply-adds with them, so the table — which is all of the architecture:
+  the stretch, its ramp, the divisor table, the attenuation — stays on the
+  host, and the shader is twenty lines that apply it. `Kernels.Rotary_Table`
+  is the one implementation, called by the processor's own rotation too, so
+  the two cannot drift.
+
+  In binary64, because that is what the processor does; there is a
+  thousandth as much rotation as matrix product, so a part that runs
+  binary64 at a thirty-second rate still finishes a layer in microseconds.
+  Rotating went from 0.128 s to 0.040 s of the prompt, and what is left of
+  it is the cache write.
+
+  **What it is for is the submission after it.** A layer is two submissions
+  because the host rotates and writes the cache between them. The rotation
+  is now a step; when the cache write is one too, a layer is one submission,
+  and a generated token is 45 of them at 83 µs — 15 % of it.
+
+- **The generated shader words are written plainly rather than as
+  hexadecimal literals** — 455 kB against 1025, which put the file back
+  under the megabyte this repository allows a committed file. The tenth
+  shader crossed it. The bound that keeps models out did not move.
+
 - **A layer's first half fuses as well: 5 % of a 1419-token device prompt,
   and 70 % of the processor time it had left.** The host normalized the
   layer's input and then sent the queries, the keys and the values as three

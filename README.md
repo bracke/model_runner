@@ -5371,6 +5371,64 @@ handed to the weight loader as its Rows by its Columns, which for a step
 whose Rows and Columns say what it reads and writes is a square: the loader
 was asked to upload four million values out of an array of two thousand.
 
+### The rotation, turned on the device without knowing whose it is
+
+The section below said the rotation was the last thing the host did during a
+device prompt and that it was left there on purpose: every architecture turns
+by a different angle -- the stretch a file states, its ramp across a band of
+dimensions, a per-dimension divisor table, an attenuation -- and putting all
+of that in a shader is a second implementation of the most variable part of
+this program.
+
+**It does not have to go.** What varies is the angle, and an angle is a
+cosine and a sine. The host tabulates thirty-two of each for this model and
+then does two thousand three hundred multiply-adds with them; the table is a
+seventieth of the work and all of the architecture. So the table stays on the
+host, `Kernels.Rotary_Table` is what computes it -- the same code the
+processor's own rotation now calls, so the two cannot drift -- and the shader
+is twenty lines that know nothing about any model:
+
+```glsl
+y[even] = float (first * c - second * s);
+y[odd]  = float (first * s + second * c);
+```
+
+In binary64, because that is what the processor does: it widens each
+component, multiplies by a wide cosine and a wide sine, and rounds once. A
+part that runs binary64 at a thirty-second of its binary32 rate still
+finishes a layer's rotation in microseconds, because there is a thousandth
+as much of it as there is of a matrix product. **The digests do not move**,
+which is the whole point of passing the table rather than the angle.
+
+| device, 1419-token prompt | before | after |
+| --- | ---: | ---: |
+| rotating | 0.128 s | **0.040 s** |
+| projecting | 0.344 s | 0.422 s |
+| the whole prompt | 1.800 s | **1.764 s** |
+
+**Two per cent, better in each of three alternated rounds**, which is less
+than the seven the rotation cost because the table is most of what is left
+and the turning was cheaper than the transcendentals that feed it. What
+remains under `rotating` is the cache write, which is a copy into a standing
+mapping.
+
+**What it is really for is the submission after it.** A layer is two of them
+-- the normalization with the projections, then attention with the whole
+feed-forward -- and it is two because the host has to rotate and write the
+cache in between. The rotation is now a step; the cache write is not, and
+when it is, the two become one. A generated token is forty-five submissions
+at eighty-three microseconds, **fifteen per cent of it**, and halving that is
+the largest single thing left on the device. Not built here: it wants the
+whole layer as one entry point of seventeen steps, and a step that writes
+into a buffer the sequence does not own.
+
+**And the generated shader words crossed the megabyte** this repository
+allows a committed file, on the tenth shader. They were written as
+hexadecimal literals, five to a line; written plainly they are 455 kilobytes
+against 1025, because a compiled shader is not a number anybody recognizes
+and the four characters a literal's wrapper costs were a fifth of the file.
+The bound that keeps models out of here did not move.
+
 ### The other half of a layer, and what is left on the host
 
 `### The same fusing, for a batch` fused a layer's second half for a prompt
@@ -5980,8 +6038,8 @@ On the processor at 110 tokens: **1.2 times slower generating and 1.3 times
 slower reading a prompt** -- the generating figure has read 1.2 five times, 1.3 and 1.4 across sittings, the first four of them
 after `### The wake, not the work`, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, **1.3** and **2.1**,
-where the sittings before this one said 1.3 and 2.3, then 1.2 and 2.4, then 1.3 and 2.5, then 1.3 and 2.7, then 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
+reading of this table said 3.3 and 16. On the device, **1.2** and **2.1**,
+where the sittings before this one said 1.3 and 2.1, then 1.3 and 2.3, then 1.2 and 2.4, then 1.3 and 2.5, then 1.3 and 2.7, then 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
 1.4 and 2.6, then 1.4 and 2.5, then 1.4 and 3.0, then 1.4 and 3.6, then 1.4 and 3.8, then 1.4
 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and
 10.1. Both device rows have moved for a named reason:
@@ -6000,7 +6058,7 @@ which numbers belong to which figure. Reading the table against its own
 prose is what caught it, which is a thing only a person does.
 
 **The device row and llama.cpp's processor row generate at about the same
-rate** -- 44.5 against 39.5 in this sitting, where the eighteen before read 44.4 against 39.3, 45.8 against 39.4, 43.8 against 39.6, 42.3 against 40.4, 40.1
+rate** -- 48.5 against 40.1 in this sitting, where the nineteen before read 44.5 against 39.5, 44.4 against 39.3, 45.8 against 39.4, 43.8 against 39.6, 42.3 against 40.4, 40.1
 against 40.4, 40.3 against 40.4, 39.8 against 40.3, 40.6 against 39.8, 40.5
 against 39.9, 40.4 against 39.9, 40.2 against 39.9, 40.1 against 40.0, 40.7
 against 40.0, 38.9 against 40.0, 40.9 against 40.4, 41.0 against 40.4, 40.7
@@ -6075,8 +6133,8 @@ than 351.7 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 44.5 t/s
-now, against 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 48.5 t/s
+now, against 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the

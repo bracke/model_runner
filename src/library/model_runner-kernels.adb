@@ -1478,33 +1478,23 @@ package body Model_Runner.Kernels is
    -- Apply_Rotary --
    -------------------
 
-   procedure Apply_Rotary_Pair
-     (Vector          : in out Real_Array;
-      Heads           : Element_Count;
-      Second          : in out Real_Array;
-      Second_Heads    : Element_Count;
-      Head_Size       : Element_Count;
-      Rotary          : Element_Count;
-      Position        : Natural;
-      Base            : Wide_Real;
-      Scaling         : Rotary_Scaling := No_Scaling;
-      Factors         : Real_Array := No_Factors;
-      Pairing         : Rotary_Pairing := Interleaved;
-      Backwards       : Boolean := False)
+   ------------------
+   -- Rotary_Table --
+   ------------------
+
+   procedure Rotary_Table
+     (Rotary     : Element_Count;
+      Position   : Natural;
+      Base       : Wide_Real;
+      Scaling    : Rotary_Scaling := No_Scaling;
+      Factors    : Real_Array := No_Factors;
+      Backwards  : Boolean := False;
+      First_Pair : Element_Count := 0;
+      Cosines    : out Wide_Real_Array;
+      Sines      : out Wide_Real_Array)
    is
-      --  A pair's frequency divisor, when the model carries one. A table of
-      --  the wrong length is not used at all: applying the part that fits
-      --  would rotate some dimensions by a model's numbers and the rest by
-      --  nobody's.
       Divided : constant Boolean := Factors'Length = Rotary / 2;
 
-      --  The band of dimensions Yarn ramps across, in pairs.
-      --
-      --  A dimension makes Original / (2 pi b ** (2 i / D)) turns over the
-      --  context the model was trained on. Solving that for the dimension
-      --  that makes a given number of turns is what names the two edges of
-      --  the band, and everything between them is mixed rather than either
-      --  extrapolated or interpolated.
       function Edge (Turns : Wide_Real) return Wide_Real is
         (Wide_Real (Rotary)
          * N.Log (Wide_Real (Scaling.Original)
@@ -1520,14 +1510,89 @@ package body Model_Runner.Kernels is
       Low  : Wide_Real := 0.0;
       High : Wide_Real := 0.0;
 
-      --  What Yarn multiplies the rotated vector by. Interpolating the
-      --  angles brings the dot products they produce closer together, and
-      --  this is the correction the method states for that; a file may scale
-      --  it further, which is what Attenuation is.
       Magnitude : Wide_Real := 1.0;
 
+      Pairs : constant Element_Count := Rotary / 2;
+   begin
+      Cosines := [others => 1.0];
+      Sines := [others => 0.0];
+
+      if Rotary = 0 or else Rotary mod 2 /= 0 or else Base <= 0.0
+        or else Cosines'Length /= Sines'Length
+        or else First_Pair + Element_Count (Cosines'Length) > Pairs
+      then
+         return;
+      end if;
+
+      if Ramped then
+         Low := Wide_Real'Max (0.0, Wide_Real'Floor (Edge (Scaling.Beta_Fast)));
+         High := Wide_Real'Min
+           (Wide_Real (Rotary / 2 - 1),
+            Wide_Real'Ceiling (Edge (Scaling.Beta_Slow)));
+         Magnitude :=
+           Scaling.Attenuation
+           * (1.0 + 0.1 * N.Log (1.0 / Scaling.Frequency));
+      else
+         Magnitude := 1.0;
+      end if;
+
+      for Index in 0 .. Element_Count (Cosines'Length) - 1 loop
+         declare
+            Pair : constant Element_Count := First_Pair + Index;
+
+            Exponent : constant Wide_Real :=
+              -2.0 * Wide_Real (Pair) / Wide_Real (Rotary);
+
+            Extended : constant Wide_Real :=
+              (if Divided
+               then Wide_Real (Position) * N.Power (Base, Exponent)
+                    / Wide_Real (Factors (Factors'First + Pair))
+               else Wide_Real (Position) * N.Power (Base, Exponent));
+            Between  : constant Wide_Real := Scaling.Frequency * Extended;
+
+            Mix : constant Wide_Real :=
+              (if not Ramped
+               then 0.0
+               else Wide_Real'Max
+                      (0.0,
+                       Wide_Real'Min
+                         (1.0,
+                          1.0
+                          - (Wide_Real (Pair) - Low)
+                            / Wide_Real'Max (0.001, High - Low))));
+
+            Theta : constant Wide_Real :=
+              Between * (1.0 - Mix) + Extended * Mix;
+         begin
+            Cosines (Cosines'First + Index) :=
+              (if Backwards then N.Cos (Theta) else N.Cos (Theta) * Magnitude);
+            Sines (Sines'First + Index) :=
+              (if Backwards then -N.Sin (Theta)
+               else N.Sin (Theta) * Magnitude);
+         end;
+      end loop;
+   end Rotary_Table;
+
+   procedure Apply_Rotary_Pair
+     (Vector          : in out Real_Array;
+      Heads           : Element_Count;
+      Second          : in out Real_Array;
+      Second_Heads    : Element_Count;
+      Head_Size       : Element_Count;
+      Rotary          : Element_Count;
+      Position        : Natural;
+      Base            : Wide_Real;
+      Scaling         : Rotary_Scaling := No_Scaling;
+      Factors         : Real_Array := No_Factors;
+      Pairing         : Rotary_Pairing := Interleaved;
+      Backwards       : Boolean := False)
+   is
       --  How many pairs there are, how many of them are tabulated at once,
-      --  and where the run being tabulated begins.
+      --  and where the run being tabulated begins. What goes into the table
+      --  -- the stretch, its ramp, the divisors, the attenuation -- is
+      --  Rotary_Table's, so that the one caller who wants the table without
+      --  the loop gets the same numbers as this one rather than a second
+      --  implementation of them.
       Pairs   : constant Element_Count := Rotary / 2;
       Run     : constant Element_Count := 128;
       At_Pair : Element_Count := 0;
@@ -1549,18 +1614,6 @@ package body Model_Runner.Kernels is
         and then Second'Length /= Second_Heads * Head_Size
       then
          return;
-      end if;
-
-      if Ramped then
-         Low := Wide_Real'Max (0.0, Wide_Real'Floor (Edge (Scaling.Beta_Fast)));
-         High := Wide_Real'Min
-           (Wide_Real (Rotary / 2 - 1),
-            Wide_Real'Ceiling (Edge (Scaling.Beta_Slow)));
-         Magnitude :=
-           Scaling.Attenuation
-           * (1.0 + 0.1 * N.Log (1.0 / Scaling.Frequency));
-      else
-         Magnitude := 1.0;
       end if;
 
       --  The angles first, then every head against them.
@@ -1590,58 +1643,9 @@ package body Model_Runner.Kernels is
             Cosines : N.Wide_Real_Array (0 .. Here - 1);
             Sines   : N.Wide_Real_Array (0 .. Here - 1);
          begin
-            for Index in 0 .. Here - 1 loop
-               declare
-                  Pair : constant Element_Count := At_Pair + Index;
-
-                  Exponent : constant Wide_Real :=
-                    -2.0 * Wide_Real (Pair) / Wide_Real (Rotary);
-
-                  --  The angle as trained, and the angle the model's factor
-                  --  stretches it to. Unscaled and linear are the same
-                  --  arithmetic with a frequency of one and of the factor.
-                  Extended : constant Wide_Real :=
-                    (if Divided
-                     then Wide_Real (Position) * N.Power (Base, Exponent)
-                          / Wide_Real (Factors (Factors'First + Pair))
-                     else Wide_Real (Position) * N.Power (Base, Exponent));
-                  Between  : constant Wide_Real :=
-                    Scaling.Frequency * Extended;
-
-                  --  Where this pair sits in the ramped band: one at the
-                  --  fast edge, where the angle is left as trained, and zero
-                  --  at the slow edge, where it is fully stretched.
-                  Mix : constant Wide_Real :=
-                    (if not Ramped
-                     then 0.0
-                     else Wide_Real'Max
-                            (0.0,
-                             Wide_Real'Min
-                               (1.0,
-                                1.0
-                                - (Wide_Real (Pair) - Low)
-                                  / Wide_Real'Max (0.001, High - Low))));
-
-                  Theta    : constant Wide_Real :=
-                    Between * (1.0 - Mix) + Extended * Mix;
-                  --  Turning back is the angle negated and the magnitude
-                  --  left alone. A stretch that attenuates applies its
-                  --  factor when a vector is rotated; a vector being moved
-                  --  has been rotated once already and carries it, so
-                  --  applying it again -- or dividing it out -- would leave
-                  --  a vector no position would have produced. Both were
-                  --  tried and both were caught by asking the kernel whether
-                  --  turning back by N equals rotating N earlier, which is
-                  --  the identity a shifted context rests on.
-               begin
-                  Cosines (Index) :=
-                    (if Backwards then N.Cos (Theta)
-                     else N.Cos (Theta) * Magnitude);
-                  Sines (Index) :=
-                    (if Backwards then -N.Sin (Theta)
-                     else N.Sin (Theta) * Magnitude);
-               end;
-            end loop;
+            Rotary_Table
+              (Rotary, Position, Base, Scaling, Factors, Backwards,
+               First_Pair => At_Pair, Cosines => Cosines, Sines => Sines);
 
             for Head in 0 .. Heads - 1 loop
                declare

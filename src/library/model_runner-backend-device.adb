@@ -1048,6 +1048,11 @@ package body Model_Runner.Backend.Device is
       Ok          : out Boolean;
       Spread      : Model_Runner.Numerics.Element_Count := 1;
       Lifted      : Boolean := False;
+      Turns       : Model_Runner.Numerics.Wide_Real_Array := No_Turns;
+      Turned      : Natural := 0;
+      Head_Size   : Natural := 0;
+      Rotary      : Natural := 0;
+      Split       : Boolean := False;
       Cancel      : Model_Runner.Cancellation.Token_Reference := null)
    is
 
@@ -1061,6 +1066,17 @@ package body Model_Runner.Backend.Device is
       Cancelled : Boolean := False;
 
       Width : Model_Runner.Numerics.Element_Count := 0;
+
+      --  Whether the rotation goes over too. It needs a table, a head width
+      --  that divides the results it reaches, and something to turn.
+      Rotating : constant Boolean :=
+        Turned > 0
+        and then Turned <= Weights'Length
+        and then Head_Size > 0
+        and then Rotary > 0
+        and then Rotary <= Head_Size
+        and then Turns'Length
+                   = Slots * Model_Runner.Numerics.Element_Count (Rotary);
    begin
       Ok := False;
 
@@ -1124,10 +1140,15 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
 
+            --  A result the rotation reaches is not what the host reads:
+            --  the turning below writes its own answer and that is the one
+            --  kept, so the product's own room is stepped over.
             Products.Add_Chained_Product
               (Steps, This.Base, This.Span, This.Offset, Packing,
                Natural (This.Rows), Natural (This.Columns), Added,
                Key => At_Offset (This.Base, This.Offset),
+               Kept => not (Rotating
+                            and then Index - Weights'First < Turned),
                From_Step => 1);
 
             if not Added then
@@ -1137,6 +1158,46 @@ package body Model_Runner.Backend.Device is
             Wanted := Wanted + This.Rows * Slots;
          end;
       end loop;
+
+      --  And the turning, one step for each result it reaches, each reading
+      --  the product that made it.
+      if Rotating then
+         declare
+            At_Turn : constant System.Address := Turns (Turns'First)'Address;
+
+            Span : constant Model_Runner.Bytes.Byte_Count :=
+              Model_Runner.Bytes.Byte_Count (Turns'Length) * 8;
+         begin
+            for Offset in 0 .. Turned - 1 loop
+               declare
+                  This : T.View renames Weights (Weights'First + Offset);
+               begin
+                  if This.Rows
+                       mod Model_Runner.Numerics.Element_Count (Head_Size)
+                     /= 0
+                  then
+                     return;
+                  end if;
+
+                  Products.Add_Rotation
+                    (Steps, At_Turn, Span, 0,
+                     Natural (This.Rows),
+                     Natural (This.Rows)
+                     / Head_Size,
+                     Rotary,
+                     (if Split then Products.Split else Products.Interleaved),
+                     Added,
+                     From_Step => 1 + Offset + 1);
+
+                  if not Added then
+                     return;
+                  end if;
+
+                  Wanted := Wanted + This.Rows * Slots;
+               end;
+            end loop;
+         end;
+      end if;
 
       if Landing = null or else Landing.all'Length < Wanted then
          T.Free (Landing);
@@ -1161,7 +1222,15 @@ package body Model_Runner.Backend.Device is
          --  Past the normalization's room, which nothing here reads.
          At_Value : Model_Runner.Numerics.Element_Count :=
            Landing.all'First + Slots * Width;
+
+         --  Where the turned answers begin, which is after every product's
+         --  room whether the host reads that room or not.
+         At_Turned : Model_Runner.Numerics.Element_Count := At_Value;
       begin
+         for Index in Weights'Range loop
+            At_Turned := At_Turned + Weights (Index).Rows * Slots;
+         end loop;
+
          for Index in Weights'Range loop
             declare
                Mine : T.Real_Array_Access renames
@@ -1169,10 +1238,21 @@ package body Model_Runner.Backend.Device is
 
                Take : constant Model_Runner.Numerics.Element_Count :=
                  Weights (Index).Rows * Slots;
+
+               Turned_Here : constant Boolean :=
+                 Rotating and then Index - Weights'First < Turned;
+
+               From : constant Model_Runner.Numerics.Element_Count :=
+                 (if Turned_Here then At_Turned else At_Value);
             begin
                Mine.all (Mine.all'First .. Mine.all'First + Take - 1) :=
-                 Landing.all (At_Value .. At_Value + Take - 1);
+                 Landing.all (From .. From + Take - 1);
+
                At_Value := At_Value + Take;
+
+               if Turned_Here then
+                  At_Turned := At_Turned + Take;
+               end if;
             end;
          end loop;
       end;

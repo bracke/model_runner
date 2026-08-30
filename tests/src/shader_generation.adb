@@ -21,18 +21,6 @@ package body Shader_Generation is
       return Room;
    end Hex;
 
-   function Hex (Value : Interfaces.Unsigned_32) return String is
-      Digits_Of : constant String := "0123456789ABCDEF";
-      Room      : String (1 .. 8) := [others => '0'];
-      Left      : Interfaces.Unsigned_32 := Value;
-   begin
-      for Index in reverse Room'Range loop
-         Room (Index) := Digits_Of (Natural (Left and 16#F#) + 1);
-         Left := Interfaces.Shift_Right (Left, 4);
-      end loop;
-      return Room;
-   end Hex;
-
    --  Read a whole file as bytes, or report that it could not be.
    procedure Read_All
      (Path  : String;
@@ -239,7 +227,19 @@ package body Shader_Generation is
                     or Interfaces.Shift_Left
                          (Interfaces.Unsigned_32 (Room (At_Byte + 3)), 24);
 
-                  Text : constant String := "16#" & Hex (Value) & "#";
+                  --  Written plainly rather than as hexadecimal literals.
+                  --  Nobody reads this file, a compiled shader is not a
+                  --  number anybody recognizes, and the four characters a
+                  --  literal's wrapper costs are a fifth of the file: it
+                  --  crossed the megabyte the repository allows for a
+                  --  committed file when the tenth shader was added, and
+                  --  this is what put it back under rather than raising the
+                  --  bound that keeps models out of here.
+                  Plain : constant String :=
+                    Interfaces.Unsigned_32'Image (Value);
+
+                  Text : constant String :=
+                    Plain (Plain'First + 1 .. Plain'Last);
                begin
                   if Column = 0 and then Index > 1 then
                      Ada.Text_IO.Put_Line (Handle, "");
@@ -254,7 +254,7 @@ package body Shader_Generation is
                   --  and the gate refuses a build that leaves style warnings
                   --  behind.
                   Column := Column + 1;
-                  if Column = 5 then
+                  if Column = 6 then
                      Column := 0;
                   end if;
 

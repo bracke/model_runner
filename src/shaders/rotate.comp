@@ -1,0 +1,104 @@
+#version 450
+
+//  The rotary position encoding, on the device.
+//
+//  A pair of components of a head is turned by an angle that depends on the
+//  position and on the pair, and every architecture this program reads turns
+//  by a different angle: the stretch a file states, its ramp across a band
+//  of dimensions, a per-dimension divisor table, an attenuation. None of
+//  that is here.
+//
+//  What is here is the turning. The host tabulates a cosine and a sine for
+//  each pair -- which is thirty-two numbers for this model against the two
+//  thousand three hundred multiply-adds it then does with them -- and hands
+//  the table over with the vector. So every architecture rotates the same
+//  way on the device, and what varies between them stays where it is
+//  written once.
+//
+//  In binary64, because that is what the processor does: it widens each
+//  component, multiplies by a wide cosine and a wide sine, and rounds once.
+//  Rounding the table to binary32 would round twice and move every rotated
+//  vector off the bits every other path produces. The arithmetic is a
+//  thousandth of what a layer does and it is spread over every lane, so a
+//  part that runs binary64 at a thirty-second of its binary32 rate still
+//  finishes it in microseconds.
+
+#extension GL_ARB_gpu_shader_fp64 : enable
+
+const uint LANES = 256u;
+
+layout(local_size_x = LANES) in;
+
+//  The table, two numbers a pair a position: a cosine and the sine after it.
+layout(std430, binding = 0) readonly  buffer Table  { double turn[]; };
+layout(std430, binding = 1) readonly  buffer Source { float  x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float  y[]; };
+
+layout(push_constant) uniform Shape {
+    //  Components a position holds, which is the heads times a head's width.
+    uint width;
+
+    //  How many heads that is.
+    uint heads;
+
+    //  Positions in this batch.
+    uint count;
+
+    //  How many components of a head turn. The rest are copied through.
+    uint rotary;
+
+    //  Which two components make a pair: zero for the neighbours, one for
+    //  a component and the one half a rotary further on.
+    uint pairing;
+
+    //  Where the table begins in the buffer it was uploaded to, in the
+    //  numbers it holds.
+    uint base;
+} shape;
+
+void main() {
+    uint slot = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (slot >= shape.count || shape.heads == 0u) {
+        return;
+    }
+
+    uint head_size = shape.width / shape.heads;
+    uint pairs     = shape.rotary / 2u;
+    uint at        = slot * shape.width;
+
+    for (uint i = lane; i < shape.heads * pairs; i += LANES) {
+        uint head = i / pairs;
+        uint pair = i - head * pairs;
+
+        uint origin = at + head * head_size;
+        uint even   = shape.pairing == 0u ? origin + 2u * pair : origin + pair;
+        uint odd    = shape.pairing == 0u ? even + 1u : even + pairs;
+
+        uint entry = shape.base + (slot * pairs + pair) * 2u;
+
+        double c = turn[entry];
+        double s = turn[entry + 1u];
+
+        double first  = double (x[even]);
+        double second = double (x[odd]);
+
+        y[even] = float (first * c - second * s);
+        y[odd]  = float (first * s + second * c);
+    }
+
+    //  And what the rotation does not reach. A model whose heads are wider
+    //  than what it turns leaves the rest as it stands, and this writes its
+    //  own answer whole rather than being given the vector to edit.
+    if (head_size > shape.rotary) {
+        uint rest = head_size - shape.rotary;
+
+        for (uint i = lane; i < shape.heads * rest; i += LANES) {
+            uint head = i / rest;
+            uint c    = shape.rotary + (i - head * rest);
+
+            y[at + head * head_size + c] = x[at + head * head_size + c];
+        }
+    }
+}
