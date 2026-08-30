@@ -1260,6 +1260,363 @@ package body Model_Runner.Backend.Device is
       Ok := True;
    end Normalize_And_Project;
 
+   -----------------
+   -- Whole_Layer --
+   -----------------
+
+   procedure Whole_Layer
+     (Residual       : T.Real_Array;
+      Attention_Norm : T.Real_Array;
+      Feed_Norm      : T.Real_Array;
+      Epsilon        : Model_Runner.Numerics.Real;
+      Query          : T.View;
+      Key            : T.View;
+      Value          : T.View;
+      Turns          : Model_Runner.Numerics.Wide_Real_Array;
+      Head_Size      : Natural;
+      Rotary         : Natural;
+      Split          : Boolean;
+      At_Key         : Natural;
+      At_Value       : Natural;
+      Heads          : Natural;
+      Value_Size     : Natural;
+      Group_Size     : Natural;
+      First          : Natural;
+      Last           : Natural;
+      K_Base         : Natural;
+      V_Base         : Natural;
+      KV_Width       : Natural;
+      V_Width        : Natural;
+      Scale          : Model_Runner.Numerics.Real;
+      Cap            : Model_Runner.Numerics.Real;
+      Weight         : T.View;
+      Gate           : T.View;
+      Up             : T.View;
+      Down           : T.View;
+      Unit           : Natural;
+      Keys           : T.Real_Array_Access;
+      Values         : T.Real_Array_Access;
+      Into           : T.Real_Array_Access;
+      Ok             : out Boolean;
+      Positions      : Natural := 1;
+      Window         : Natural := 0;
+      Causal         : Boolean := True;
+      Lifted         : Boolean := False;
+      Max_Bias       : Model_Runner.Numerics.Real := 0.0;
+      Cancel         : Model_Runner.Cancellation.Token_Reference := null)
+   is
+
+      Slots : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
+
+      Width : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Attention_Norm'Length);
+
+      Steps  : Products.Sequence;
+      Added  : Boolean;
+      Ran    : Boolean;
+      Cancelled : Boolean := False;
+
+      --  Where each step's answer lands in the target, which is every
+      --  step's room in order whether the host reads it or not.
+      At_Values : Model_Runner.Numerics.Element_Count := 0;
+      At_Keys   : Model_Runner.Numerics.Element_Count := 0;
+      At_Out    : Model_Runner.Numerics.Element_Count := 0;
+      Wanted    : Model_Runner.Numerics.Element_Count := 0;
+
+      Packing : Products.Weight_Packing;
+      Gate_P  : Products.Weight_Packing;
+      Up_P    : Products.Weight_Packing;
+      Down_P  : Products.Weight_Packing;
+      Q_P     : Products.Weight_Packing;
+      K_P     : Products.Weight_Packing;
+      V_P     : Products.Weight_Packing;
+      Known   : Boolean;
+
+      --  Every step's rows, in order, so the offsets above are a sum rather
+      --  than a tally kept by hand.
+      procedure Step_Room (Rows : Model_Runner.Numerics.Element_Count) is
+      begin
+         Wanted := Wanted + Rows * Slots;
+      end Step_Room;
+   begin
+      Ok := False;
+
+      if not Ready_Now
+        or else Width = 0
+        or else Head_Size = 0
+        or else Rotary = 0
+        or else Rotary > Head_Size
+        or else Rotary mod 2 /= 0
+        or else Heads = 0
+        or else Keys = null or else Values = null or else Into = null
+        or else Feed_Norm'Length /= Attention_Norm'Length
+        or else Residual'Length < Slots * Width
+        or else Query.Columns /= Width
+        or else Key.Columns /= Width
+        or else Value.Columns /= Width
+        or else Turns'Length
+                  /= Slots * Model_Runner.Numerics.Element_Count (Rotary)
+        or else Keys.all'Length < Slots * Key.Rows
+        or else Values.all'Length < Slots * Value.Rows
+        or else Into.all'Length < Slots * Width
+      then
+         return;
+      end if;
+
+      Packing_Of (Query, Q_P, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Key, K_P, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Value, V_P, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Weight, Packing, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Gate, Gate_P, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Up, Up_P, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Down, Down_P, Known);
+      if not Known then
+         return;
+      end if;
+
+      Products.Open_Sequence (Steps);
+
+      --  One: the normalization on the way in, of what the caller handed us.
+      declare
+         At_Norm : constant System.Address :=
+           Attention_Norm (Attention_Norm'First)'Address;
+      begin
+         Products.Add_Norm
+           (Steps, At_Norm,
+            Model_Runner.Bytes.Byte_Count (Attention_Norm'Length) * 4, 0,
+            Natural (Width), Epsilon, Added,
+            Lifted => Lifted, Key => At_Norm, Kept => False);
+      end;
+      if not Added then
+         return;
+      end if;
+      Step_Room (Width);
+
+      --  Two, three and four: the queries, the keys and the values, each
+      --  reading the normalization rather than the step before it.
+      Products.Add_Chained_Product
+        (Steps, Query.Base, Query.Span, Query.Offset, Q_P,
+         Natural (Query.Rows), Natural (Query.Columns), Added,
+         Key => At_Offset (Query.Base, Query.Offset), Kept => False,
+         From_Step => 1);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Query.Rows);
+
+      Products.Add_Chained_Product
+        (Steps, Key.Base, Key.Span, Key.Offset, K_P,
+         Natural (Key.Rows), Natural (Key.Columns), Added,
+         Key => At_Offset (Key.Base, Key.Offset), Kept => False,
+         From_Step => 1);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Key.Rows);
+
+      Products.Add_Chained_Product
+        (Steps, Value.Base, Value.Span, Value.Offset, V_P,
+         Natural (Value.Rows), Natural (Value.Columns), Added,
+         Key => At_Offset (Value.Base, Value.Offset), Kept => True,
+         From_Step => 1);
+      if not Added then
+         return;
+      end if;
+      At_Values := Wanted;
+      Step_Room (Value.Rows);
+
+      --  Five and six: the turning, of the queries and of the keys.
+      declare
+         At_Turn : constant System.Address := Turns (Turns'First)'Address;
+
+         Span : constant Model_Runner.Bytes.Byte_Count :=
+           Model_Runner.Bytes.Byte_Count (Turns'Length) * 8;
+
+         Pairing : constant Products.Rotary_Pairing :=
+           (if Split then Products.Split else Products.Interleaved);
+      begin
+         Products.Add_Rotation
+           (Steps, At_Turn, Span, 0, Natural (Query.Rows),
+            Natural (Query.Rows) / Head_Size, Rotary, Pairing, Added,
+            From_Step => 2, Kept => False);
+         if not Added then
+            return;
+         end if;
+         Step_Room (Query.Rows);
+
+         Products.Add_Rotation
+           (Steps, At_Turn, Span, 0, Natural (Key.Rows),
+            Natural (Key.Rows) / Head_Size, Rotary, Pairing, Added,
+            From_Step => 3, Kept => True);
+         if not Added then
+            return;
+         end if;
+         At_Keys := Wanted;
+         Step_Room (Key.Rows);
+      end;
+
+      --  Seven and eight: into the cache, before anything attends to it.
+      Products.Add_Place
+        (Steps, Natural (Key.Rows), KV_Width, At_Key, Added,
+         From_Step => 6);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Key.Rows);
+
+      Products.Add_Place
+        (Steps, Natural (Value.Rows), V_Width, At_Value, Added,
+         From_Step => 4);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Value.Rows);
+
+      --  Nine: attention, against the queries five steps back.
+      Products.Add_Attention
+        (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
+         K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
+         Window => Window, Causal => Causal, Max_Bias => Max_Bias,
+         Chained => True, From_Step => 5, Kept => False);
+      if not Added then
+         return;
+      end if;
+      Step_Room
+        (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
+
+      --  Ten through seventeen: the second half, as Attend_And_Feed builds
+      --  it, with the residual coming from the front of the activation
+      --  rather than the back of it -- there is nothing else in it now.
+      Products.Add_Chained_Product
+        (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
+         Natural (Weight.Rows), Natural (Weight.Columns), Added,
+         Key => At_Offset (Weight.Base, Weight.Offset), Kept => False);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Weight.Rows);
+
+      Products.Add_Join (Steps, Added, From_Step => 10, Kept => False);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Width);
+
+      declare
+         At_Feed : constant System.Address :=
+           Feed_Norm (Feed_Norm'First)'Address;
+      begin
+         Products.Add_Norm
+           (Steps, At_Feed,
+            Model_Runner.Bytes.Byte_Count (Feed_Norm'Length) * 4, 0,
+            Natural (Width), Epsilon, Added,
+            From_Step => 11, Lifted => Lifted, Key => At_Feed,
+            Kept => False);
+      end;
+      if not Added then
+         return;
+      end if;
+      Step_Room (Width);
+
+      Products.Add_Chained_Product
+        (Steps, Gate.Base, Gate.Span, Gate.Offset, Gate_P,
+         Natural (Gate.Rows), Natural (Gate.Columns), Added,
+         Key => At_Offset (Gate.Base, Gate.Offset), Kept => False,
+         From_Step => 12);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Gate.Rows);
+
+      Products.Add_Chained_Product
+        (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
+         Natural (Up.Rows), Natural (Up.Columns), Added,
+         Key => At_Offset (Up.Base, Up.Offset), Kept => False,
+         From_Step => 12);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Up.Rows);
+
+      Products.Add_Combination (Steps, Unit, Added, Kept => False);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Gate.Rows);
+
+      Products.Add_Chained_Product
+        (Steps, Down.Base, Down.Span, Down.Offset, Down_P,
+         Natural (Down.Rows), Natural (Down.Columns), Added,
+         Key => At_Offset (Down.Base, Down.Offset), Kept => False);
+      if not Added then
+         return;
+      end if;
+      Step_Room (Down.Rows);
+
+      Products.Add_Join
+        (Steps, Added, From_Step => 16, Residual_Step => 11);
+      if not Added then
+         return;
+      end if;
+      At_Out := Wanted;
+      Step_Room (Width);
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps,
+         Residual (Residual'First .. Residual'First + Slots * Width - 1),
+         Positive (Slots),
+         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ran, Cancelled, Cancel);
+
+      if Cancelled or else not Ran then
+         return;
+      end if;
+
+      Values.all (Values.all'First
+                  .. Values.all'First + Slots * Value.Rows - 1) :=
+        Landing.all (Landing.all'First + At_Values
+                     .. Landing.all'First + At_Values
+                        + Slots * Value.Rows - 1);
+
+      Keys.all (Keys.all'First .. Keys.all'First + Slots * Key.Rows - 1) :=
+        Landing.all (Landing.all'First + At_Keys
+                     .. Landing.all'First + At_Keys
+                        + Slots * Key.Rows - 1);
+
+      Into.all (Into.all'First .. Into.all'First + Slots * Width - 1) :=
+        Landing.all (Landing.all'First + At_Out
+                     .. Landing.all'First + At_Out + Slots * Width - 1);
+
+      Ok := True;
+   end Whole_Layer;
+
    --------------------
    -- Dispatch_Gated --
    --------------------

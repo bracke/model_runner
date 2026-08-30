@@ -1003,6 +1003,24 @@ package body Tests.CLI_Cases is
                              "a sequence turned an odd number of "
                              & "components");
 
+                     --  A cache write needs something to write and a
+                     --  stride at least as wide as what it writes.
+                     Products.Open_Sequence (Layer);
+                     Products.Add_Place (Layer, Rows, Rows, 0, Added);
+                     Assert (not Added,
+                             "a sequence wrote nothing into the cache");
+
+                     Products.Open_Sequence (Layer);
+                     Products.Add_Product
+                       (Layer, Held.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Held.all'Length),
+                        0, Products.Values_F32, Rows, Cols,
+                        Added);
+                     Products.Add_Place (Layer, Rows, Rows - 1, 0, Added);
+                     Assert (not Added,
+                             "a sequence wrote a row into a stride narrower "
+                             & "than the row");
+
                      --  A normalization first in a sequence reads what the
                      --  caller handed in, as a product first in one does.
                      Products.Open_Sequence (Layer);

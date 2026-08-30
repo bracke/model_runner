@@ -1220,6 +1220,21 @@ package body Model_Runner.Platform.Device.Products is
                Item.Turner := Made;
             end if;
          end;
+
+         --  And the cache write, the same again.
+         declare
+            Placed : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Place;
+         begin
+            Request.Size := Interfaces.C.size_t (Placed'Length * 4);
+            Request.Code := Placed'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Placer := Made;
+            end if;
+         end;
       end;
 
       --  The third kernel's module.
@@ -1502,6 +1517,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Turn_Line := Made;
+            end if;
+         end if;
+
+         if Item.Placer /= Null_Handle then
+            Request.Stage.Module := Item.Placer;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Place_Line := Made;
             end if;
          end if;
 
@@ -1911,8 +1936,10 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Attender, "vkDestroyShaderModule");
       Give_Back (Item.Norm_Line, "vkDestroyPipeline");
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
+      Give_Back (Item.Place_Line, "vkDestroyPipeline");
       Give_Back (Item.Normer, "vkDestroyShaderModule");
       Give_Back (Item.Turner, "vkDestroyShaderModule");
+      Give_Back (Item.Placer, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
       Item.Matrices := False;
@@ -3543,6 +3570,45 @@ package body Model_Runner.Platform.Device.Products is
    -- Add_Norm --
    --------------
 
+   ---------------
+   -- Add_Place --
+   ---------------
+
+   procedure Add_Place
+     (Steps     : in out Sequence;
+      Width     : Natural;
+      Stride    : Natural;
+      At_First  : Natural;
+      Added     : out Boolean;
+      From_Step : Natural := 0)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+   begin
+      if Steps.Held = Sequence_Limit
+        or else Width = 0
+        or else Stride < Width
+        or else Source = 0
+        or else Source > Steps.Held
+      then
+         Added := False;
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => System.Null_Address, Span => 0, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => Width, Columns => Width, Key => System.Null_Address,
+         Chained => True, Reads => Source,
+         Kept => False, Places => True, Stride => Stride,
+         At_First => At_First,
+         Attends => False, Blends => False, Norms => False,
+         Rotates => False,
+         others => <>);
+      Added := True;
+   end Add_Place;
+
    ------------------
    -- Add_Rotation --
    ------------------
@@ -3653,15 +3719,19 @@ package body Model_Runner.Platform.Device.Products is
       Chained    : Boolean := False;
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
-      Kept       : Boolean := True) is
+      Kept       : Boolean := True;
+      From_Step  : Natural := 0) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
       --  better refused where the caller can still do it another way.
       if Steps.Held = Sequence_Limit
+        or else From_Step > Steps.Held
         or else (Chained
                  and then (Steps.Held = 0
-                           or else Steps.Items (Steps.Held).Rows
+                           or else Steps.Items
+                                     ((if From_Step = 0 then Steps.Held
+                                       else From_Step)).Rows
                                      /= Heads * Head_Size))
         or else Heads = 0
         or else Head_Size = 0
@@ -3685,6 +3755,7 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Heads * Value_Size,
          Columns => Heads * Head_Size,
          Key => System.Null_Address, Chained => Chained, Blends => False,
+         Reads => From_Step,
          Kept => Kept,
          Unit => 0, Attends => True,
          Heads => Heads, Head_Size => Head_Size, Value_Size => Value_Size,
@@ -3836,7 +3907,20 @@ package body Model_Runner.Platform.Device.Products is
             --  A combining step carries no matrix: it reads the two
             --  results before it and writes its own. Everything the shape
             --  checks below say about a matrix is beside the point for it.
-            if This.Rotates then
+            if This.Places then
+               --  A placing step carries no weight and reads no matrix: it
+               --  writes what a step before it made into the cache, so what
+               --  it needs is a cache to write into.
+               if This.Rows = 0
+                 or else Item.Cache_Buffer = Null_Handle
+                 or else This.Reads = 0
+                 or else This.Reads > Steps.Held
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight := 0;
+            elsif This.Rotates then
                --  A rotating step carries a table of two wide numbers a
                --  pair a position, which the device keeps the way it keeps
                --  a matrix -- so everything below about residency serves it
@@ -3980,7 +4064,7 @@ package body Model_Runner.Platform.Device.Products is
             --  Neither a combining step nor an attention step names a
             --  matrix: one reads the two results before it, the other reads
             --  the cache the device holds.
-            if This.Blends or else This.Attends then
+            if This.Blends or else This.Attends or else This.Places then
                goto Next_Step;
             end if;
 
@@ -4139,6 +4223,28 @@ package body Model_Runner.Platform.Device.Products is
                goto Next_Set;
             end if;
 
+            if Steps.Items (Index).Places then
+               --  What it writes, and the cache it writes into -- which is
+               --  bound where every other step binds its own room out.
+               Told (1) :=
+                 (Buffer => Item.Cache_Buffer, Offset => 0,
+                  Extent => Item.Cache_Bytes);
+               Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (3) :=
+                 (Buffer => Item.Cache_Buffer, Offset => 0,
+                  Extent => Item.Cache_Bytes);
+               Told (4) := Half_Descriptor (Item);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
             if Steps.Items (Index).Rotates then
                --  The table, what it turns, and its own room out.
                Told (1) :=
@@ -4258,6 +4364,12 @@ package body Model_Runner.Platform.Device.Products is
          --  Steps whose results a barrier has already published.
          Fenced : Natural := 0;
 
+         --  The last step that wrote the cache, which an attending step
+         --  reads without naming: its queries come from a step it names and
+         --  its keys come from the cache, so the rule below cannot see the
+         --  dependency and is told about it here.
+         Cached : Natural := 0;
+
          Bind_Pipeline : constant Bind_Pipeline_Call :=
            To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
          Bind_Sets : constant Bind_Sets_Call :=
@@ -4341,13 +4453,20 @@ package body Model_Runner.Platform.Device.Products is
                         elsif This.Chained and then This.Reads = 0
                         then Index - 1
                         else 0));
+                  Wanted : constant Natural :=
+                    (if This.Attends then Natural'Max (Source, Cached)
+                     else Source);
                begin
-                  if Source > Fenced then
+                  if Wanted > Fenced then
                      Barrier
                        (Item.Buffer, Pipeline_Stage_Compute,
                         Pipeline_Stage_Compute, 0, 1, Wall'Address,
                         0, Null_Handle, 0, Null_Handle);
                      Fenced := Index - 1;
+                  end if;
+
+                  if This.Places then
+                     Cached := Index;
                   end if;
                end;
 
@@ -4389,6 +4508,30 @@ package body Model_Runner.Platform.Device.Products is
                      Dispatch
                        (Item.Buffer, C.unsigned (This.Heads),
                         Attend_Groups (Item, Count), 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Places then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Place_Line);
+
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Stride),
+                        Count   => C.unsigned (Count),
+                        First   => C.unsigned (This.At_First),
+                        Packing => 0,
+                        Base    => 0);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
                   end;
 
                   Bind_Pipeline

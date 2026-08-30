@@ -51,6 +51,28 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **A layer goes over in one submission: 3.5 % of a 1419-token device
+  prompt, at the same digests.** The turning was already a step; the cache
+  write is fifteen more lines, and with both of them steps there is nothing
+  left for the host to do in the middle. `Whole_Layer` names all seventeen.
+  The prompt reads 1030.5 tokens a second and its gap to llama.cpp is 1.70,
+  from 1.81.
+
+  **It does not pay for a generated token, which is what it was built for.**
+  A token was 45 submissions and this makes it 23 — 15 % by this file's own
+  price — and measures **4 % slower**, three rounds of three. Seventeen
+  steps each want a descriptor set and a dispatch, and the rotation's table
+  is uploaded fresh every call; a batch of 128 amortizes that and a token
+  cannot. So the whole layer is for batches and the two halves stay for a
+  token.
+
+- **The published figures were a sitting behind for one commit.** The script
+  that rewrites them raised on the first anchor it could not find and wrote
+  nothing, so the rotation commit stamped new fingerprints over the previous
+  sitting's tables, under prose a second script had updated. Both are
+  corrected here, and the script now applies what matches, reports what does
+  not, and always writes.
+
 - **The rotation runs on the device, and knows nothing about any
   architecture: 2 % of a 1419-token device prompt, at the same digests.**
   What varies between models is the angle, and an angle is a cosine and a

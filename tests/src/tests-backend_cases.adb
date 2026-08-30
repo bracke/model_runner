@@ -2648,6 +2648,235 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Normalized_Group_Says_What_The_Parts_Say;
 
+   -------------------------------------------
+   -- Whole_Layer_Says_What_Two_Halves_Say --
+   -------------------------------------------
+
+   --  A layer named as one sequence against the same layer named as two.
+   --
+   --  The two halves are what the engine did before -- the normalization
+   --  with the projections, then attention with the feed-forward, and the
+   --  host rotating and writing the cache in between. Naming them together
+   --  saves a submission and the host's part of it, and must say the same
+   --  thing.
+   procedure Whole_Layer_Says_What_Two_Halves_Say
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+
+      Heads     : constant N.Element_Count := 4;
+      Head_Size : constant N.Element_Count := 8;
+      Rotary    : constant N.Element_Count := 8;
+      Pairs     : constant N.Element_Count := Rotary / 2;
+      Positions : constant N.Element_Count := 3;
+      Context   : constant N.Element_Count := 8;
+
+      Width : constant N.Element_Count := Heads * Head_Size;
+      Feed  : constant N.Element_Count := 16;
+
+      Epsilon : constant N.Real := 1.0e-5;
+      Near    : constant N.Real := 1.0e-3;
+
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      Acts : N.Real_Array (0 .. Positions * Width - 1);
+      Gain : N.Real_Array (0 .. Width - 1);
+      Feed_Gain : N.Real_Array (0 .. Width - 1);
+
+      Angles : N.Wide_Real_Array (0 .. Positions * Pairs * 2 - 1);
+
+      Held : array (1 .. 6) of Model_Runner.Bytes.Byte_Array_Access :=
+        [others => null];
+      Rows : constant array (1 .. 6) of N.Element_Count :=
+        [Width, Width, Width, Width, Feed, Feed];
+      Cols : constant array (1 .. 6) of N.Element_Count :=
+        [Width, Width, Width, Width, Width, Width];
+
+      Views : array (1 .. 7) of T.View;
+
+      Query_Row : T.Real_Array_Access;
+      Key_Row   : T.Real_Array_Access;
+      Value_Row : T.Real_Array_Access;
+      Apart     : T.Real_Array_Access;
+      Whole     : T.Real_Array_Access;
+
+      Cache : constant N.Real_Array (0 .. Context * Width * 2 - 1) :=
+        [others => 0.0];
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
+
+      if not Ready then
+         return;
+      end if;
+
+      for Index in Acts'Range loop
+         Acts (Index) := N.Real (Index mod 11) / 11.0 - 0.4;
+      end loop;
+      for Index in Gain'Range loop
+         Gain (Index) := 0.5 + N.Real (Index mod 5) / 8.0;
+         Feed_Gain (Index) := 0.6 + N.Real (Index mod 3) / 7.0;
+      end loop;
+
+      for Slot in 0 .. Positions - 1 loop
+         declare
+            Cosines : N.Wide_Real_Array (0 .. Pairs - 1);
+            Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
+         begin
+            Model_Runner.Kernels.Rotary_Table
+              (Rotary, Natural (Slot), 10000.0,
+               Cosines => Cosines, Sines => Sines);
+
+            for Pair in 0 .. Pairs - 1 loop
+               Angles (Slot * Pairs * 2 + Pair * 2) := Cosines (Pair);
+               Angles (Slot * Pairs * 2 + Pair * 2 + 1) := Sines (Pair);
+            end loop;
+         end;
+      end loop;
+
+      T.Allocate (Positions * Width, Query_Row);
+      T.Allocate (Positions * Width, Key_Row);
+      T.Allocate (Positions * Width, Value_Row);
+      T.Allocate (Positions * Width, Apart);
+      T.Allocate (Positions * Width, Whole);
+
+      for Which in 1 .. 6 loop
+         Model_Runner.Bytes.Allocate
+           (Model_Runner.Bytes.Byte_Count (Rows (Which) * Cols (Which)) * 4,
+            Held (Which));
+
+         for Row in 0 .. Rows (Which) - 1 loop
+            for Column in 0 .. Cols (Which) - 1 loop
+               declare
+                  Value : constant N.Real :=
+                    N.Real ((Natural (Row) + 2 * Natural (Column) + Which)
+                            mod 11) / 41.0 - 0.12;
+
+                  At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count
+                      (Row * Cols (Which) + Column) * 4 + 1;
+               begin
+                  Held (Which).all (At_Byte .. At_Byte + 3) :=
+                    Model_Runner.Bytes.Put_F32 (Value);
+               end;
+            end loop;
+         end loop;
+
+         Views (Which) :=
+           (Format => Model_Runner.GGUF.Type_F32,
+            Rows => Rows (Which), Columns => Cols (Which),
+            Base => Held (Which).all'Address,
+            Span => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length),
+            Offset => 0,
+            Length =>
+              Model_Runner.Bytes.Byte_Count (Held (Which).all'Length));
+      end loop;
+
+      --  The projection down reads the feed width and writes the layer's.
+      Views (7) := (Views (5) with delta Rows => Width, Columns => Feed);
+
+      Assert (Query_Row /= null and then Whole /= null
+              and then Held (1) /= null, "no room for the test");
+
+      Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Ok);
+
+      if not Ok then
+         Model_Runner.Backend.Device.Close;
+         return;
+      end if;
+
+      Model_Runner.Backend.Device.Put_Cache (0, Cache, Ok);
+      Assert (Ok, "the cache would not be written");
+
+      --  The two halves, as the engine named them before.
+      Model_Runner.Backend.Device.Normalize_And_Project
+        ([Views (1), Views (2), Views (3)],
+         new N.Real_Array'(Acts), Gain, Epsilon,
+         [Query_Row, Key_Row, Value_Row], Ok,
+         Spread    => Positions,
+         Turns     => Angles,
+         Turned    => 2,
+         Head_Size => Natural (Head_Size),
+         Rotary    => Natural (Rotary));
+
+      if not Ok then
+         Model_Runner.Backend.Device.Close;
+         return;
+      end if;
+
+      --  The cache write the host used to do between the halves.
+      for Slot in 0 .. Positions - 1 loop
+         Model_Runner.Backend.Device.Put_Cache
+           (Slot * Width,
+            Key_Row.all (Slot * Width .. Slot * Width + Width - 1), Ok);
+         Assert (Ok, "a key would not reach the cache");
+
+         Model_Runner.Backend.Device.Put_Cache
+           (Context * Width + Slot * Width,
+            Value_Row.all (Slot * Width .. Slot * Width + Width - 1), Ok);
+         Assert (Ok, "a value would not reach the cache");
+      end loop;
+
+      declare
+         Both : N.Real_Array (0 .. Positions * Width * 2 - 1);
+      begin
+         Both (0 .. Positions * Width - 1) := Query_Row.all;
+         Both (Positions * Width .. Positions * Width * 2 - 1) := Acts;
+
+         Model_Runner.Backend.Device.Attend_And_Feed
+           (Both (0 .. Positions * Width - 1),
+            Both (Positions * Width .. Positions * Width * 2 - 1),
+            Natural (Heads), Natural (Head_Size), Natural (Head_Size), 1,
+            0, Natural (Positions) - 1, 0, Natural (Context * Width),
+            Natural (Width), Natural (Width), 0.25, 0.0,
+            Views (4), Feed_Gain, Epsilon,
+            Views (5), Views (6), Views (7), 0, Apart, Ok,
+            Positions => Natural (Positions));
+      end;
+
+      if not Ok then
+         Model_Runner.Backend.Device.Close;
+         return;
+      end if;
+
+      --  And the whole of it as one, from the same empty cache.
+      Model_Runner.Backend.Device.Put_Cache (0, Cache, Ok);
+      Assert (Ok, "the cache would not be cleared");
+
+      Model_Runner.Backend.Device.Whole_Layer
+        (Acts, Gain, Feed_Gain, Epsilon,
+         Views (1), Views (2), Views (3), Angles,
+         Natural (Head_Size), Natural (Rotary), False,
+         0, Natural (Context * Width),
+         Natural (Heads), Natural (Head_Size), 1,
+         0, Natural (Positions) - 1, 0, Natural (Context * Width),
+         Natural (Width), Natural (Width), 0.25, 0.0,
+         Views (4), Views (5), Views (6), Views (7), 0,
+         Key_Row, Value_Row, Whole, Ok,
+         Positions => Natural (Positions));
+
+      if Ok then
+         for Index in 0 .. Positions * Width - 1 loop
+            Assert (abs (Apart.all (Index) - Whole.all (Index)) <= Near,
+                    "a layer named as one sequence differs from the same "
+                    & "layer named as two at component"
+                    & N.Element_Count'Image (Index));
+         end loop;
+      end if;
+
+      T.Free (Query_Row);
+      T.Free (Key_Row);
+      T.Free (Value_Row);
+      T.Free (Apart);
+      T.Free (Whole);
+      for Which in 1 .. 6 loop
+         Model_Runner.Bytes.Free (Held (Which));
+      end loop;
+      Model_Runner.Backend.Device.Close;
+   end Whole_Layer_Says_What_Two_Halves_Say;
+
    ----------
    -- Name --
    ----------
@@ -3028,6 +3257,10 @@ package body Tests.Backend_Cases is
         (T, Normalized_Group_Says_What_The_Parts_Say'Access,
          "a normalization named with the matrices that read it says what "
          & "the four done apart say");
+      Register_Routine
+        (T, Whole_Layer_Says_What_Two_Halves_Say'Access,
+         "a layer named as one sequence says what the same layer named as "
+         & "two halves says");
       Register_Routine
         (T, Turning_Is_What_The_Table_Says_It_Is'Access,
          "the table a rotation turns by says exactly what the rotation "

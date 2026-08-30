@@ -471,6 +471,33 @@ package Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Kept      : Boolean := True);
 
+   --  Name a write into the device's cache for a sequence to perform.
+   --
+   --  The keys and the values a layer produced belong in the cache before
+   --  anything attends to them, and the host used to put them there --
+   --  which is what makes a layer two submissions rather than one, since
+   --  nothing between them can be recorded until the host has been round.
+   --
+   --  The host still reads them back for its own arrays. What this saves is
+   --  the round trip, not the copy.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Width Elements a position holds.
+   --  @param Stride How far apart one position is from the next in the
+   --    cache, which is every head's worth and not just this layer's.
+   --  @param At_First Where the first position goes, in elements.
+   --  @param Added False when the sequence is full, when the shape does not
+   --    hold together, or when the engine holds no cache.
+   --  @param From_Step Which step's result to write, or zero for the step
+   --    before this one.
+   procedure Add_Place
+     (Steps     : in out Sequence;
+      Width     : Natural;
+      Stride    : Natural;
+      At_First  : Natural;
+      Added     : out Boolean;
+      From_Step : Natural := 0);
+
    --  Name a root-mean-square normalization for a sequence to perform.
    --
    --  It is here for the submission it saves rather than for itself: a
@@ -559,6 +586,9 @@ package Model_Runner.Platform.Device.Products is
    --  @param Kept False when nothing on the host reads this step's answer,
    --    which saves Run the copy back and leaves it where the step after it
    --    will read it.
+   --  @param From_Step Which step the queries come from, or zero for the
+   --    step before this one. A layer named whole rotates them several
+   --    steps before it attends with them.
    procedure Add_Attention
      (Steps      : in out Sequence;
       Heads      : Natural;
@@ -578,7 +608,8 @@ package Model_Runner.Platform.Device.Products is
       Chained    : Boolean := False;
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
-      Kept       : Boolean := True);
+      Kept       : Boolean := True;
+      From_Step  : Natural := 0);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -994,6 +1025,7 @@ private
       --  doing it is the host needing the products back.
       Normer     : System.Address := System.Null_Address;
       Turner     : System.Address := System.Null_Address;
+      Placer     : System.Address := System.Null_Address;
 
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
@@ -1008,6 +1040,7 @@ private
       Tile_Line   : System.Address := System.Null_Address;
       Norm_Line   : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;
+      Place_Line  : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
       --  is what the device said when it was opened.
@@ -1171,6 +1204,13 @@ private
       Rotates : Boolean := False;
       Turns   : Natural := 0;
       Pairs   : Rotary_Pairing := Interleaved;
+
+      --  A placing step rather than a product: it writes what it reads into
+      --  the cache the engine holds, a position at a time, at At_First and
+      --  every Stride after it.
+      Places   : Boolean := False;
+      Stride   : Natural := 0;
+      At_First : Natural := 0;
 
       --  Whether the caller wants this step's answer back. A step whose
       --  only reader is the step after it -- an arm of a gate, a blend a

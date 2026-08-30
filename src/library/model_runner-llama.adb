@@ -6424,6 +6424,11 @@ package body Model_Runner.Llama is
             Projected : Boolean := False;
             Rotated   : Boolean := False;
 
+            --  And whether the whole layer went over as one sequence, which
+            --  is the two halves and everything the host did between them.
+            Whole_Layer_Done : Boolean := False;
+            Cached           : Boolean := False;
+
             --  And whether the whole of the layer's second half went over
             --  as one sequence, as it does when a single position is
             --  generated: attention, its projection, the join, the
@@ -6640,23 +6645,104 @@ package body Model_Runner.Llama is
                      end loop;
                   end if;
 
-                  Model_Runner.Backend.Device.Normalize_And_Project
-                    ([Current.Query, Current.Key, Current.Value],
-                     Acts, Current.Attention_Norm.all, Settings.Epsilon,
-                     [Query, Keys, Values], Projected,
-                     Spread => Count,
-                     Lifted => Lifted_Norms (Source),
-                     Turns  =>
-                       (if Turnable
-                        then Angles.all (0 .. Count * Pairs * 2 - 1)
-                        else Model_Runner.Backend.Device.No_Turns),
-                     Turned    => (if Turnable then 2 else 0),
-                     Head_Size => Natural (Head_Size),
-                     Rotary    => Settings.Rotary,
-                     Split     => K."=" (Settings.Pairing, K.Split),
-                     Cancel    => Item.Stopping);
+                  --  Does the device hold the cache? Asked here rather
+                  --  than read off Resident, which is set by the loop that
+                  --  writes the positions and so says nothing yet: the
+                  --  whole layer writes them itself and has to know before
+                  --  it starts. Asking for room already taken returns at
+                  --  once.
+                  if Item.Held = Exact
+                    and then Model_Runner.Backend."="
+                               (Item.Owner.Able.Kind,
+                                Model_Runner.Backend.Backend_Device)
+                  then
+                     Model_Runner.Backend.Device.Reserve_Cache
+                       (Item.Keys.all'Length + Item.Values.all'Length,
+                        Resident);
+                  end if;
 
-                  Rotated := Projected and then Turnable;
+                  --  The whole layer as one submission, where the device
+                  --  holds the cache: with the turning a step and the cache
+                  --  write a step, there is nothing left for the host to do
+                  --  between the two halves.
+                  if Turnable
+                    and then Resident
+                    and then Item.Held = Exact
+                    and then Settings.Experts = 0
+                    and then T.Is_Present (Current.Gate)
+                    and then Current.Out_Bias = null
+                    and then Current.Up_Bias = null
+                    and then Current.Down_Bias = null
+                    and then Current.Feed_Norm_Bias = null
+                    and then Current.Post_Attention_Norm = null
+                    and then Current.Post_Feed_Norm = null
+                    and then Current.Key_Bias = null
+                    and then Current.Key_Norm = null
+                  then
+                     Model_Runner.Backend.Device.Whole_Layer
+                       (Acts.all (0 .. Count * Width - 1),
+                        Current.Attention_Norm.all,
+                        Current.Feed_Norm.all, Settings.Epsilon,
+                        Current.Query, Current.Key, Current.Value,
+                        Angles.all (0 .. Count * Pairs * 2 - 1),
+                        Natural (Head_Size), Settings.Rotary,
+                        K."=" (Settings.Pairing, K.Split),
+                        Natural (Base + Reserved * KV_Width),
+                        Natural (Item.Keys.all'Length + V_Base
+                                 + Reserved * V_Width),
+                        Natural (Heads), Natural (Value_Size),
+                        Settings.Group_Size,
+                        Natural (Earliest (Settings, Reserved,
+                                           Natural (Index))),
+                        Natural (if Settings.Causal
+                                 then Reserved else Reserved + Count - 1),
+                        Natural (Base),
+                        Natural (Item.Keys.all'Length + V_Base),
+                        Natural (KV_Width), Natural (V_Width),
+                        Scale, Settings.Attention_Cap,
+                        Current.Attention_Out,
+                        Current.Gate, Current.Up, Current.Down,
+                        Gate_Unit (Source),
+                        Keys, Values, Acts, Whole_Layer_Done,
+                        Positions => Natural (Count),
+                        Window    =>
+                          (if Settings.Window > 0
+                             and then Earliest
+                                        (Settings,
+                                         Element_Count (Settings.Window),
+                                         Natural (Index)) > 0
+                           then Settings.Window
+                           else 0),
+                        Causal    => Settings.Causal,
+                        Lifted    => Lifted_Norms (Source),
+                        Max_Bias  => Settings.Max_Bias,
+                        Cancel    => Item.Stopping);
+                  end if;
+
+                  if Whole_Layer_Done then
+                     Projected := True;
+                     Rotated := True;
+                     Fused := True;
+                     Cached := True;
+                  else
+                     Model_Runner.Backend.Device.Normalize_And_Project
+                       ([Current.Query, Current.Key, Current.Value],
+                        Acts, Current.Attention_Norm.all, Settings.Epsilon,
+                        [Query, Keys, Values], Projected,
+                        Spread => Count,
+                        Lifted => Lifted_Norms (Source),
+                        Turns  =>
+                          (if Turnable
+                           then Angles.all (0 .. Count * Pairs * 2 - 1)
+                           else Model_Runner.Backend.Device.No_Turns),
+                        Turned    => (if Turnable then 2 else 0),
+                        Head_Size => Natural (Head_Size),
+                        Rotary    => Settings.Rotary,
+                        Split     => K."=" (Settings.Pairing, K.Split),
+                        Cancel    => Item.Stopping);
+
+                     Rotated := Projected and then Turnable;
+                  end if;
                end;
             end if;
 
@@ -6789,10 +6875,17 @@ package body Model_Runner.Llama is
                      --  generates and another when a draft's proposals are
                      --  checked says two different things, and the suite
                      --  says so.
-                     Put_Position
-                       (Item, Place, Keys.all (KV_At .. KV_At + KV_Width - 1),
-                        V_Place, Values.all (V_At .. V_At + V_Width - 1),
-                        Resident);
+                     --
+                     --  Written already where the layer went over whole:
+                     --  the sequence put them there before it attended.
+                     if not Cached then
+                        Put_Position
+                          (Item, Place,
+                           Keys.all (KV_At .. KV_At + KV_Width - 1),
+                           V_Place,
+                           Values.all (V_At .. V_At + V_Width - 1),
+                           Resident);
+                     end if;
                   else
                      for Offset in 0 .. KV_Width - 1 loop
                         Item.Half_Keys.all (Place + Offset) :=
@@ -6817,7 +6910,10 @@ package body Model_Runner.Llama is
             --  own blend, so nothing makes them wait for each other -- and a
             --  call costs 83 microseconds before it computes anything, which
             --  a position at a time pays 2420 times over a 110-token prompt.
-            if Item.Held = Exact and then Resident then
+            --
+            --  Done already where the whole layer went over as one: this is
+            --  a step of it.
+            if Item.Held = Exact and then Resident and then not Fused then
                declare
                   --  What Earliest would return for the batch's first
                   --  position, and the width it would slide for the rest.
@@ -6916,7 +7012,9 @@ package body Model_Runner.Llama is
             --  rendezvous for a prompt. It also needs no score buffer beyond
             --  the row a head already has, where sharing the positions out
             --  would have needed a row per share per head.
-            if not (Item.Held = Exact and then Resident) then
+            if not Fused
+              and then not (Item.Held = Exact and then Resident)
+            then
                declare
                   type Batch_Share is limited new Workers_CPU.Task_Item with
                      record

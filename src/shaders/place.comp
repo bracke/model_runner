@@ -1,0 +1,62 @@
+#version 450
+
+//  A step's result, written into the cache the device holds.
+//
+//  The keys and the values a layer produced belong in the cache before
+//  anything attends to them, and until now the host put them there: it read
+//  them back, copied them into its own arrays, and copied them again into
+//  the mapping the device reads. The copy is cheap -- a standing mapping and
+//  no call to the driver -- and the round trip is not, because it is what
+//  makes a layer two submissions instead of one.
+//
+//  Written here, the keys never leave the device between the projection that
+//  made them and the attention that reads them. The host still gets its own
+//  copy, because a session that later runs on the processor needs one; what
+//  it no longer does is stand between two halves of a layer.
+//
+//  A workgroup a position, its lanes over the row.
+
+const uint LANES = 256u;
+
+layout(local_size_x = LANES) in;
+
+//  Bound but unread: a step's descriptor set carries four and this kernel
+//  wants two. Binding it to the cache costs nothing and leaves the set the
+//  shape every other step has.
+layout(std430, binding = 0) readonly  buffer Kept   { float unused_kept[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Cache  { float kv[]; };
+
+layout(push_constant) uniform Shape {
+    //  Elements a position holds.
+    uint width;
+
+    //  How far apart one position is from the next in the cache, which is
+    //  every head's worth of keys or of values and not just this layer's.
+    uint stride;
+
+    //  Positions in this batch.
+    uint count;
+
+    //  Where the first of them goes, in elements.
+    uint at_first;
+
+    uint unused_packing;
+    uint unused_base;
+} shape;
+
+void main() {
+    uint slot = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (slot >= shape.count) {
+        return;
+    }
+
+    uint from = slot * shape.width;
+    uint into = shape.at_first + slot * shape.stride;
+
+    for (uint c = lane; c < shape.width; c += LANES) {
+        kv[into + c] = x[from + c];
+    }
+}

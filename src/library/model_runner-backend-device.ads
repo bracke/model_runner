@@ -488,6 +488,110 @@ package Model_Runner.Backend.Device is
       Split       : Boolean := False;
       Cancel      : Model_Runner.Cancellation.Token_Reference := null);
 
+   --  A whole layer, in one submission.
+   --
+   --  `Attend_And_Feed` takes its second half and `Normalize_And_Project`
+   --  its first, and between them the host rotated and wrote the cache --
+   --  which is what made a layer two submissions rather than one. With the
+   --  rotation a step and the cache write a step, there is nothing left in
+   --  between, and a generated token goes from forty-five submissions to
+   --  twenty-three.
+   --
+   --  Seventeen steps: the normalization, the queries, the keys and the
+   --  values, the turning of the first two, the two cache writes,
+   --  attention, its projection, the residual join, the second
+   --  normalization, both arms of the feed-forward, their combination, the
+   --  projection down and the join after it.
+   --
+   --  The host still gets the keys and the values back, because a session
+   --  that later runs on the processor needs its own copy of them. What it
+   --  no longer does is stand between two halves of a layer.
+   --
+   --  @param Residual The layer's input, Positions of it, which the first
+   --    join adds to; the second adds to what the first wrote.
+   --  @param Attention_Norm The normalization on the way in.
+   --  @param Feed_Norm The normalization before the feed-forward.
+   --  @param Epsilon The floor under both mean squares.
+   --  @param Lifted True where those weights are lifted by one first.
+   --  @param Query The query projection.
+   --  @param Key The key projection.
+   --  @param Value The value projection.
+   --  @param Turns The cosines and sines the queries and keys turn by, two
+   --    a pair a position.
+   --  @param Head_Size How wide a head is.
+   --  @param Rotary How many components of a head turn.
+   --  @param Split True where a head's pairs are a component and the one
+   --    half a rotary further on.
+   --  @param At_Key Where this batch's keys go in the cache, in elements.
+   --  @param At_Value Where its values go, in the same buffer.
+   --  @param Heads How many heads.
+   --  @param Value_Size How wide a value head is.
+   --  @param Group_Size How many heads share one group of keys and values.
+   --  @param First First cached position the first position may look at.
+   --  @param Last The last it may look at.
+   --  @param K_Base Where the keys begin.
+   --  @param V_Base Where the values begin.
+   --  @param KV_Width How far apart one position's keys are.
+   --  @param V_Width How far apart its values are.
+   --  @param Scale What a score is multiplied by.
+   --  @param Cap The bound on a score, or zero for none.
+   --  @param Weight The matrix the blend is projected through.
+   --  @param Gate The gating arm of the feed-forward.
+   --  @param Up The other arm.
+   --  @param Down The projection back down to the layer's width.
+   --  @param Unit Which unit the combination applies.
+   --  @param Keys Receives the rotated keys, Positions of them.
+   --  @param Values Receives the values, Positions of them.
+   --  @param Into Receives the layer's output, Positions of them.
+   --  @param Positions How many positions the layer is given.
+   --  @param Window This layer's sliding window, or zero for none.
+   --  @param Causal True where a position may see only what precedes it.
+   --  @param Max_Bias How steeply a head's attention falls off with
+   --    distance, or zero.
+   --  @param Ok False when the device did not run it, which leaves the
+   --    caller to do the whole of it as it did before.
+   --  @param Cancel Token a caller may set to ask for a stop.
+   procedure Whole_Layer
+     (Residual       : Model_Runner.Tensors.Real_Array;
+      Attention_Norm : Model_Runner.Tensors.Real_Array;
+      Feed_Norm      : Model_Runner.Tensors.Real_Array;
+      Epsilon        : Model_Runner.Numerics.Real;
+      Query          : Model_Runner.Tensors.View;
+      Key            : Model_Runner.Tensors.View;
+      Value          : Model_Runner.Tensors.View;
+      Turns          : Model_Runner.Numerics.Wide_Real_Array;
+      Head_Size      : Natural;
+      Rotary         : Natural;
+      Split          : Boolean;
+      At_Key         : Natural;
+      At_Value       : Natural;
+      Heads          : Natural;
+      Value_Size     : Natural;
+      Group_Size     : Natural;
+      First          : Natural;
+      Last           : Natural;
+      K_Base         : Natural;
+      V_Base         : Natural;
+      KV_Width       : Natural;
+      V_Width        : Natural;
+      Scale          : Model_Runner.Numerics.Real;
+      Cap            : Model_Runner.Numerics.Real;
+      Weight         : Model_Runner.Tensors.View;
+      Gate           : Model_Runner.Tensors.View;
+      Up             : Model_Runner.Tensors.View;
+      Down           : Model_Runner.Tensors.View;
+      Unit           : Natural;
+      Keys           : Model_Runner.Tensors.Real_Array_Access;
+      Values         : Model_Runner.Tensors.Real_Array_Access;
+      Into           : Model_Runner.Tensors.Real_Array_Access;
+      Ok             : out Boolean;
+      Positions      : Natural := 1;
+      Window         : Natural := 0;
+      Causal         : Boolean := True;
+      Lifted         : Boolean := False;
+      Max_Bias       : Model_Runner.Numerics.Real := 0.0;
+      Cancel         : Model_Runner.Cancellation.Token_Reference := null);
+
    --  A gated feed-forward block, whole, in one submission.
    --
    --  The gate and up projections read the same normalized input; a unit is
