@@ -60,6 +60,15 @@ package Model_Runner.Platform.Device.Products is
    --  dispatch asks for and that one decides how many each does.
    Query_Block : constant := 8;
 
+   --  And how many the matrix kernel answers, which is what its tile is
+   --  wide. Below this a block is mostly rows the batch does not have.
+   Matrix_Queries : constant := 32;
+
+   --  The widest head that kernel takes, which is what the shared memory
+   --  its queries are staged into is sized for. A model with wider heads
+   --  attends through the scalar kernel.
+   Matrix_Head : constant := 64;
+
    --  How a matrix's bytes are packed. The device decodes every one of these
    --  itself, which is every format this program reads: nothing has to be
    --  repacked to reach a device any more, and repacking is what it always
@@ -994,6 +1003,10 @@ private
       --  that a block is mostly padding and the kernel above is better.
       Query_Tile : System.Address := System.Null_Address;
 
+      --  And attention through the matrix instruction, where the device
+      --  offers it. Null on a device that does not.
+      Attend_Matrix : System.Address := System.Null_Address;
+
       --  The fourth and fifth kernels, which go together and are made only
       --  where the device offers the matrix instruction: a tile of the
       --  answer at a time, and the copy of the batch in half precision that
@@ -1038,6 +1051,7 @@ private
       Single_Line : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;
+      Matrix_Attend : System.Address := System.Null_Address;
       Norm_Line   : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;
       Place_Line  : System.Address := System.Null_Address;
@@ -1146,6 +1160,12 @@ private
       Cache_Buffer : System.Address := System.Null_Address;
       Cache_Memory : System.Address := System.Null_Address;
       Cache_Bytes  : Interfaces.Unsigned_64 := 0;
+
+      --  How many binary32 elements of that the cache proper holds. The
+      --  rest is the half-precision copy of it, which the matrix kernel
+      --  attends out of and nothing else reads, and which begins at twice
+      --  this counted in halves.
+      Cache_Elements : Interfaces.Unsigned_64 := 0;
 
       --  The cache mapped once and left mapped. A position is written every
       --  layer of every token -- hundreds of writes a run, at a millisecond

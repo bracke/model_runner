@@ -1,0 +1,417 @@
+#version 450
+
+//  Attention through the device's matrix instruction.
+//
+//  This computes what attention.comp computes and computes it the same way
+//  -- the scores against every cached key, the bound, the running softmax,
+//  the values weighted by what comes out -- and differs in one thing: the
+//  two products are matrix products rather than loops of multiply-adds.
+//
+//  Which is where the time was. attention.comp's loop was taken apart a
+//  piece at a time on a 1419-token prompt: its key loads cost four
+//  thousandths of a second and its value loads four, its reductions five
+//  and its exponentials eleven. Its two products cost a hundred and
+//  thirteen. Nothing was wrong with it -- it is a good scalar kernel, and
+//  measured against llama.cpp's scalar kernel it is the faster of the two
+//  -- but it does one multiply-add a lane where the part offers four
+//  thousand and ninety-six an instruction.
+//
+//  The same source of theirs says how much that is worth: with the
+//  cooperative matrix turned off their attention reads 1610 gigaflops and
+//  with it 2945, and a 1419-token prompt goes 1240 tokens a second to
+//  1744. Attention was fifty-two per cent of what this program was behind
+//  by.
+//
+//  The instruction takes half precision, and the cache is kept in it: the
+//  step that writes a position writes it twice, binary32 where it always
+//  went and half precision after it, and this reads the second. That is
+//  not a detail. Written the other way -- staging the binary32 cache into
+//  shared memory a tile at a time and converting it there -- this kernel
+//  measured 1.535 s against the scalar kernel's 1.268, and a variant that
+//  walked the keys twice to be rid of the rescale measured 1.785. The
+//  difference between those two is one more staging and one more product,
+//  a quarter of a second, which is what said the staging was the cost and
+//  not the arithmetic. Keys and values in halves are loaded straight into
+//  the instruction with the cache's own stride, and nothing is staged at
+//  all.
+//
+//  And the running softmax rescales everything accumulated so far whenever
+//  a tile raises the largest score, which cannot be done to a cooperative
+//  matrix -- an accumulator's elements belong to lanes in an order the
+//  hardware chooses and no lane knows which row it holds. So the
+//  accumulator is not one: each tile's weighted values are a product of
+//  their own, stored to shared memory and added into ordinary registers,
+//  where a rescale is a multiply like any other.
+//
+//  Sixty-four is the widest head this compilation takes: the queries are
+//  the one thing still staged, because they arrive in binary32 and are
+//  read by every tile, and shared memory is what bounds how many of these
+//  a part will run at once. A model with wider heads attends through
+//  attention.comp as it did before.
+
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_cooperative_matrix : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_clustered : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+
+//  One subgroup, and the host has established that a subgroup here is
+//  sixty-four invocations, as it has for the matrix product.
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
+layout(std430, binding = 1) readonly  buffer Query { float q[]; };
+layout(std430, binding = 2) writeonly buffer Blend { float y[]; };
+
+layout(push_constant) uniform Shape {
+    uint heads;
+    uint head_size;
+    uint value_size;
+
+    //  How many heads share one group of keys and values. One for a model
+    //  that gives every head its own; more where several heads read the same.
+    uint group_size;
+
+    //  The first and last cached positions the batch's first position may
+    //  look at. A model with a sliding window states a first that is not
+    //  zero. Position p of the batch looks to last + p where the model
+    //  attends one way, and to last itself where it attends both.
+    uint first;
+    uint last;
+
+    //  Where the keys begin in the shared buffer, where the values begin,
+    //  and how far apart one position's keys and values are.
+    uint k_base;
+    uint v_base;
+    uint kv_width;
+    uint v_width;
+
+    //  The scale on a score before the bound, and the bound itself, which is
+    //  zero where the architecture states none.
+    float scale;
+    float cap;
+
+    //  How many positions this call attends for. One while generating.
+    uint positions;
+
+    //  How wide this layer's sliding window is, or zero where it does not
+    //  slide one. It cannot be read off first and last, because first is
+    //  the batch's first position's and every later position has its own.
+    uint window;
+
+    //  Whether a position may see only what precedes it. Non-zero for every
+    //  model that generates. Zero for one that reads a whole text at once,
+    //  where every position of the batch sees every position of it -- the
+    //  ones after it as well as the ones before -- so none of them derives
+    //  its last from where it sits.
+    uint causal;
+
+    //  How steeply a head's attention falls off with distance, for a model
+    //  that learned no positions at all and is told where a token is by the
+    //  scores instead. Zero for every model that rotates or learns a row for
+    //  the position. The per-head slope follows from this and the head
+    //  count, and is worked out here rather than pushed, because a workgroup
+    //  is one head of one position and a push constant is the same for all
+    //  of them.
+    float max_bias;
+
+} shape;
+
+//  Query positions a workgroup answers, cached positions a tile holds, and
+//  the widest head this compilation stages. All three are multiples of the
+//  instruction's sixteen.
+const uint BR = 32u;
+const uint BC = 32u;
+const uint DM = 64u;
+
+//  The keys and the values, as the instruction reads them, in the same
+//  buffer as the cache proper and after it. Aliasing the binding is how a
+//  shader reaches one buffer as two kinds.
+layout(std430, binding = 0) readonly buffer Halves { float16_t kvh[]; };
+
+//  The queries, once, in half precision. The only thing staged: they come
+//  in binary32 and every tile reads them.
+shared float16_t qs[BR * DM];
+
+//  The scores of a tile, and at the very end the answer on its way out of
+//  the cooperative matrices. The answer is the wider of the two, which is
+//  what this is sized for.
+shared float ss[BR * DM];
+
+//  The weights, in what the instruction reads.
+shared float16_t ps[BR * BC];
+
+void main() {
+    uint head  = gl_WorkGroupID.x;
+    uint block = gl_WorkGroupID.y;
+    uint lane  = gl_LocalInvocationID.x;
+
+    if (head >= shape.heads || block * BR >= shape.positions) {
+        return;
+    }
+
+    uint group = head / shape.group_size;
+    uint dk    = shape.head_size;
+    uint dv    = shape.value_size;
+    uint col   = lane & 31u;
+
+    //  Where this head's keys and values begin in the half-precision copy.
+    uint k_at = shape.k_base + group * dk;
+    uint v_at = shape.v_base + group * dv;
+
+    //  This head's rung of the slope ladder, worked out as attention.comp
+    //  works it out.
+    float slope = 0.0;
+    if (shape.max_bias > 0.0) {
+        uint rungs = 1u;
+        while (rungs * 2u <= shape.heads) {
+            rungs *= 2u;
+        }
+
+        float m0 = exp2(-(shape.max_bias / float(rungs)));
+        float m1 = exp2(-(shape.max_bias / 2.0 / float(rungs)));
+
+        slope = head < rungs
+                ? pow(m0, float(head + 1u))
+                : pow(m1, float(2u * (head - rungs) + 1u));
+    }
+
+    //  The union of the block's windows, which is what the tiles walk. The
+    //  first row's is the earliest and the last row's is the latest, so
+    //  neither bound needs the rows compared.
+    uint slot_low  = min (block * BR, shape.positions - 1u);
+    uint slot_high = min (block * BR + BR - 1u, shape.positions - 1u);
+
+    uint last_max = shape.last + (shape.causal != 0u ? slot_high : 0u);
+    uint last_low = shape.last + (shape.causal != 0u ? slot_low  : 0u);
+
+    uint first_min = shape.first;
+    if (shape.window > 0u) {
+        first_min = last_low + 1u > shape.window
+                    ? last_low + 1u - shape.window : 0u;
+    }
+
+    //  The queries, in half precision. A row past the end of the batch is
+    //  clamped onto the last real one, as attention.comp clamps it, and
+    //  dropped at the write. A component to an invocation, walking the
+    //  rows: a flat loop over row times component would divide by a push
+    //  constant to get the row back, and an integer division by a value
+    //  the compiler cannot see is a long sequence.
+    if (lane < dk) {
+        for (uint m = 0u; m < BR; m++) {
+            uint slot = min (block * BR + m, shape.positions - 1u);
+
+            qs[m * DM + lane] =
+                float16_t (q[slot * shape.heads * dk + head * dk + lane]);
+        }
+    }
+
+    //  A row's largest score so far, the sum of its weights, and what the
+    //  last tile rescaled them by. They belong to the thirty-two
+    //  invocations that share the row, all of which reach them through the
+    //  same cluster-wide reduction and so hold the same value.
+    float top[16];
+    float total[16];
+    float carry[16];
+
+    [[unroll]] for (uint i = 0u; i < 16u; i++) {
+        top[i]   = -1.0 / 0.0;
+        total[i] = 0.0;
+        carry[i] = 1.0;
+    }
+
+    //  What this invocation carries out: one column of each of sixteen
+    //  rows, in each chunk of thirty-two columns.
+    float held[DM / 32u][16];
+
+    [[unroll]] for (uint ch = 0u; ch < DM / 32u; ch++) {
+        [[unroll]] for (uint i = 0u; i < 16u; i++) {
+            held[ch][i] = 0.0;
+        }
+    }
+
+    for (uint base = first_min; base <= last_max; base += BC) {
+        barrier();
+
+        //  The scores of the tile, as a matrix product read out of the
+        //  cache where it lies. Element (m, n) is query m against key n,
+        //  which is the queries by the transpose of the keys -- and the
+        //  transpose is free, because a key keeps its components together
+        //  and reading that column major is what the operand wants.
+        {
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+                sacc[BR / 16u][BC / 16u];
+
+            [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                    sacc[m][n] =
+                        coopmat<float, gl_ScopeSubgroup, 16, 16,
+                                gl_MatrixUseAccumulator>(0.0);
+                }
+            }
+
+            for (uint d0 = 0u; d0 < dk; d0 += 16u) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+                    qm[BR / 16u];
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
+                    km[BC / 16u];
+
+                [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                    coopMatLoad (qm[m], qs, m * 16u * DM + d0, DM,
+                                 gl_CooperativeMatrixLayoutRowMajor);
+                }
+
+                [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                    coopMatLoad (km[n], kvh,
+                                 k_at + (base + n * 16u) * shape.kv_width + d0,
+                                 shape.kv_width,
+                                 gl_CooperativeMatrixLayoutColumnMajor);
+                }
+
+                [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                    [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                        sacc[m][n] = coopMatMulAdd (qm[m], km[n], sacc[m][n]);
+                    }
+                }
+            }
+
+            [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                    coopMatStore (sacc[m][n], ss, m * 16u * BC + n * 16u, BC,
+                                  gl_CooperativeMatrixLayoutRowMajor);
+                }
+            }
+        }
+
+        barrier();
+
+        //  The softmax. Every invocation takes one column of each of its
+        //  sixteen rows, and the thirty-two that share a row agree on its
+        //  largest score and the sum of its weights through a reduction
+        //  over their half of the subgroup.
+        [[unroll]] for (uint i = 0u; i < 16u; i++) {
+            uint  r     = (lane >> 5u) + 2u * i;
+            uint  step  = base + col;
+            float score = -1.0 / 0.0;
+
+            uint slot = min (block * BR + r, shape.positions - 1u);
+            uint la   = shape.last + (shape.causal != 0u ? slot : 0u);
+            uint fi   = shape.first;
+
+            if (shape.window > 0u) {
+                fi = la + 1u > shape.window ? la + 1u - shape.window : 0u;
+            }
+
+            if (step >= fi && step <= la) {
+                score = ss[r * BC + col] * shape.scale;
+
+                if (slope > 0.0) {
+                    uint asking = shape.causal != 0u
+                                  ? la
+                                  : shape.last - (shape.positions - 1u) + slot;
+
+                    score -= slope * float (abs (int (step) - int (asking)));
+                }
+
+                if (shape.cap > 0.0) {
+                    score = shape.cap * tanh (score / shape.cap);
+                }
+            }
+
+            float raised = max (top[i], subgroupClusteredMax (score, 32u));
+            bool  empty  = isinf (raised) && raised < 0.0;
+
+            carry[i] = empty ? 1.0 : exp (top[i] - raised);
+
+            float w = empty ? 0.0 : exp (score - raised);
+
+            ps[r * BC + col] = float16_t (w);
+
+            total[i] = total[i] * carry[i] + subgroupClusteredAdd (w, 32u);
+            top[i]   = raised;
+        }
+
+        barrier();
+
+        //  What this tile weighs, a chunk of thirty-two components at a
+        //  time: a product of its own, read straight out of the cache,
+        //  stored where the scores were and added into what the invocation
+        //  already carries after that has been rescaled.
+        [[unroll]] for (uint ch = 0u; ch < DM / 32u; ch++) {
+            if (ch * 32u < dv) {
+                coopmat<float, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseAccumulator> pacc[BR / 16u][2];
+
+                [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                    [[unroll]] for (uint t = 0u; t < 2u; t++) {
+                        pacc[m][t] =
+                            coopmat<float, gl_ScopeSubgroup, 16, 16,
+                                    gl_MatrixUseAccumulator>(0.0);
+                    }
+                }
+
+                [[unroll]] for (uint n0 = 0u; n0 < BC; n0 += 16u) {
+                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                            gl_MatrixUseA> pm[BR / 16u];
+                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                            gl_MatrixUseB> vm[2];
+
+                    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                        coopMatLoad (pm[m], ps, m * 16u * BC + n0, BC,
+                                     gl_CooperativeMatrixLayoutRowMajor);
+                    }
+
+                    [[unroll]] for (uint t = 0u; t < 2u; t++) {
+                        coopMatLoad (vm[t], kvh,
+                                     v_at + (base + n0) * shape.v_width
+                                     + ch * 32u + t * 16u,
+                                     shape.v_width,
+                                     gl_CooperativeMatrixLayoutRowMajor);
+                    }
+
+                    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                        [[unroll]] for (uint t = 0u; t < 2u; t++) {
+                            pacc[m][t] =
+                                coopMatMulAdd (pm[m], vm[t], pacc[m][t]);
+                        }
+                    }
+                }
+
+                barrier();
+
+                [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                    [[unroll]] for (uint t = 0u; t < 2u; t++) {
+                        coopMatStore (pacc[m][t], ss,
+                                      m * 16u * 32u + t * 16u, 32u,
+                                      gl_CooperativeMatrixLayoutRowMajor);
+                    }
+                }
+
+                barrier();
+
+                [[unroll]] for (uint i = 0u; i < 16u; i++) {
+                    uint r = (lane >> 5u) + 2u * i;
+
+                    held[ch][i] = held[ch][i] * carry[i] + ss[r * 32u + col];
+                }
+            }
+        }
+    }
+
+    //  And out, a row's components together, dropping the rows the block
+    //  invented and the components a narrower head does not have.
+    [[unroll]] for (uint ch = 0u; ch < DM / 32u; ch++) {
+        [[unroll]] for (uint i = 0u; i < 16u; i++) {
+            uint r    = (lane >> 5u) + 2u * i;
+            uint c    = ch * 32u + col;
+            uint slot = block * BR + r;
+
+            if (slot < shape.positions && c < dv) {
+                y[slot * shape.heads * dv + head * dv + c] =
+                    held[ch][i] / total[i];
+            }
+        }
+    }
+}

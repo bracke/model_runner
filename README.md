@@ -501,14 +501,18 @@ cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv \
                                            # vulkan1.1 -DSUBGROUPS -DWIDE`
                                            # and with `--target-env
                                            # vulkan1.1 -DSUBGROUPS
-                                           # -DQUERY_TILE`. A
+                                           # -DQUERY_TILE`.
+                                           # `attention_matrix.comp` needs
+                                           # `--target-env vulkan1.3` as
+                                           # the matrix product does. A
                                            # constant is named for the
                                            # compiled file, so they arrive
                                            # as Matrix_Product and
                                            # Matrix_Extra, Row_Product and
                                            # Row_Single, Attention,
-                                           # Attention_Subgroups and
-                                           # Attention_Tiled.
+                                           # Attention_Subgroups,
+                                           # Attention_Tiled and
+                                           # Attention_Matrix.
 cd tests && ./bin/tests fuzz --seed 1 --cases 2000
 cd tests && ./bin/tests fixtures           # write tests/fixtures/tiny-model.gguf
 cd tests && ./bin/tests package .. .       # write model_runner-<version>.tar
@@ -1570,12 +1574,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.434 s | **0.274 s** |
-| -- evaluating the prompt | 0.067 s | 0.035 s |
-| -- generating | 0.368 s | **0.240 s** |
-| -- processor time | 1.94 s | **0.09 s** |
-| 110-token prompt, nothing generated | 0.428 s | **0.138 s** |
-| -- processor time | 2.62 s | **0.03 s** |
+| 6-token prompt, 12 generated | 0.405 s | **0.267 s** |
+| -- evaluating the prompt | 0.061 s | 0.035 s |
+| -- generating | 0.343 s | **0.231 s** |
+| -- processor time | 1.83 s | **0.08 s** |
+| 110-token prompt, nothing generated | 0.441 s | **0.131 s** |
+| -- processor time | 2.71 s | **0.02 s** |
 
 All six cells were taken in one sitting on 2026-08-30, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -1630,7 +1634,9 @@ had fallen back off the device, and that was a guess about a number nobody
 could see -- so the engine was taught to report it. `--show-stats` says
 **bytes of context on the device**, and it said the context was there:
 92274688 bytes of it, under a smaller `--device-memory` as well as the
-default. With the processor fallback compiled out entirely, so that it could
+default. That reading is half again as large now -- the cache is kept
+twice, binary32 and half precision, for the reason `### Attention through
+the matrix instruction` below gives. With the processor fallback compiled out entirely, so that it could
 not run at all, the run still took 1.692 s. Attention was on the device
 throughout.
 
@@ -5199,6 +5205,14 @@ against the shared memory that is already what binds it**, which is why none
 of them is obviously the answer and why this is written down rather than
 tried on.
 
+**It was tried on later, and the answer was none of the three.** Two of them
+were built -- the tile of thirty-two queries, and the blend kept in
+accumulators by walking the keys twice so that no maximum ever moves -- and
+both were slower still. What wins is to stop staging at all, which means
+keeping the cache in half precision so that the instruction can read it
+where it lies. `### Attention through the matrix instruction` below is that,
+and it is thirteen per cent faster where this was thirteen per cent slower.
+
 ### Device attention, priced, and the rate it runs at
 
 `--budget` puts attending at **24.6 per cent of a device prompt**, second
@@ -6514,33 +6528,33 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **257.0 t/s** | 33.6 t/s |
-| llama.cpp, processor | 351.7 t/s | 39.2 t/s |
-| model_runner, device | 797.1 t/s | **48.0 t/s** |
-| llama.cpp, device | 1499.2 t/s | 55.9 t/s |
+| model_runner, processor | **249.4 t/s** | 34.4 t/s |
+| llama.cpp, processor | 352.4 t/s | 39.4 t/s |
+| model_runner, device | 839.7 t/s | **47.3 t/s** |
+| llama.cpp, device | 1584.5 t/s | 55.8 t/s |
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **225.8 t/s** | 33.6 t/s |
-| llama.cpp, processor | 271.1 t/s | 39.3 t/s |
-| model_runner, device | **1105.1 t/s** | 48.0 t/s |
-| llama.cpp, device | 1802.2 t/s | 55.9 t/s |
+| model_runner, processor | **238.2 t/s** | 34.4 t/s |
+| llama.cpp, processor | 271.3 t/s | 38.8 t/s |
+| model_runner, device | **1158.4 t/s** | 47.3 t/s |
+| llama.cpp, device | 1759.1 t/s | 55.7 t/s |
 
 **The longer prompt is the harder one and the quieter one, and it took this
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The gap is wider on the device and narrower on the processor: **1.20 times
-there against 1.37 at the shorter length, and 1.63 on the device against
-1.88.** Attention grows with the square of the context and it
+The gap is wider on the device and narrower on the processor: **1.14 times
+there against 1.41 at the shorter length, and 1.52 on the device against
+1.89.** Attention grows with the square of the context and it
 is the part of a layer this program is furthest behind on, so a table taken
 at a hundred and ten tokens reads a little kinder than the work deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±1 on 271.1 at 1419 tokens against ±23 on 351.7 at
+three runs it is **±0.4 on 271.3 at 1419 tokens against ±32 on 352.4 at
 110** -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
 more between sittings than the change being measured moved it: the device row
@@ -6632,8 +6646,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.428 s
-and 64 in 1.905 s on the processor, 0.138 s and 1.333 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.441 s
+and 64 in 1.859 s on the processor, 0.131 s and 1.353 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -6646,13 +6660,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 707.5 t/s rather
-than 351.7 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 734.2 t/s rather
+than 352.4 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 48.0 t/s
-now, against 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 47.3 t/s
+now, against 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -8568,6 +8582,84 @@ table under `### The device backend` measures it: twelve tokens after a
 six-token prompt moved 0.249 s to 0.240, and sixty-four tokens after that
 same six-token prompt read 1.340 s against 1.348, which is level. Attention
 grows with the context, and so does what widening it is worth.
+
+### Attention through the matrix instruction
+
+A prompt's attention is now two matrix products with a softmax between
+them, on the same `VK_KHR_cooperative_matrix` instruction the matrix
+product uses. `### Attention through the matrix instruction, built and not
+kept` above is the same kernel, built earlier and rejected for being
+thirteen per cent slower; what it was missing is the last paragraph of
+this one. **The 1419-token prompt reads 1.236 s against 1.323**, better
+in each of three alternated rounds with every matrix run faster than every
+scalar one, and the gap to llama.cpp on that prompt falls from 1.63 times
+to **1.52**.
+
+The section above measured attention's loop apart and found nothing in it
+worth attacking: its key loads cost four thousandths of a second, its value
+loads four, its reductions five, its exponentials eleven. What it did not
+say is what llama.cpp's own profiler says when asked. `GGML_VK_PERF_LOGGER`
+prints per-operation timings, and against ours, in microseconds per
+position per layer:
+
+| | ours, before | llama.cpp |
+| --- | ---: | ---: |
+| attention | 6.12 | 2.85 |
+| the five matrix products | 22.5 | 21.6 |
+| everything else | 3.3 | 3.1 |
+
+**Our matrix product was already level with theirs** -- 2048 by 512 by 2048
+runs at 4154 gigaflops for them and 4050 for us -- which is why three
+attempts at its tile shape all failed. Attention was fifty-two per cent of
+what remained, and their own build says why: with `GGML_VK_DISABLE_COOPMAT=1`
+their attention reads 1610 gigaflops and with it 2945, and a 1419-token
+prompt goes 1240 tokens a second to 1744. It is the instruction, and
+nothing else in the kernel.
+
+**The cache is kept twice now, and that is the whole difficulty.** The
+instruction reads half precision; this cache was binary32. Two kernels were
+written that converted it into shared memory a tile at a time, and both
+were slower than the scalar kernel they replaced -- 1.535 s for the
+straightforward one, and 1.785 for a variant that walks the keys twice so
+that nothing is ever rescaled and the answer can stay in the accumulators
+from the first tile to the last. **The difference between those two is one
+more staging and one more product, a quarter of a second**, which is what
+said the staging was the cost. llama.cpp never pays it because their cache
+is half precision in memory.
+
+So `place.comp` writes each position twice, binary32 where it always went
+and half precision after it in the same buffer, and attention loads its
+keys and values straight into the instruction with the cache's own stride.
+Nothing is staged but the queries, which arrive in binary32 and are read by
+every tile. The cache costs half again as much room, and the sweep is what
+says the rounding is small enough: 28344 sequences, none outside tolerance.
+Every published digest held.
+
+Two things about the kernel are worth writing down.
+
+**The running softmax cannot rescale a cooperative matrix.** An
+accumulator's elements belong to lanes in an order the hardware chooses, so
+no lane knows which row it holds, and when a tile raises a row's largest
+score everything accumulated so far has to be multiplied by the difference.
+llama.cpp's answer is to keep the weighted values in ordinary registers and
+move each tile's product through shared memory to get them there, and that
+is what this does: the two products are the instruction's, and the carrying
+is not.
+
+**The reduction is clustered, not a walk.** Sixty-four invocations hold
+thirty-two rows of scores, thirty-two columns each, so the thirty-two that
+share a row agree on its largest score and the sum of its weights through
+one reduction over their half of the subgroup. Written the obvious way --
+one invocation to a row, walking its thirty-two columns -- the same kernel
+read 1.606 s.
+
+It is a fourth attending kernel rather than a fourth compilation of
+`attention.comp`, because only the softmax between the products reads the
+same. A device without the instruction, a head wider than sixty-four or one
+that is not a multiple of sixteen, and every generated token -- a workgroup
+answers thirty-two query positions and a token is one -- go to the scalar
+kernels exactly as before.
+
 
 ### Kernels
 

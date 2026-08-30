@@ -299,9 +299,30 @@ package body Model_Runner.Platform.Device.Products is
    --  Which of the two attention kernels this device got. The subgroup one
    --  where it offered the operations, the shared-memory one everywhere
    --  else.
+   --  Whether the matrix kernel takes this shape. It stages a head's
+   --  queries into shared memory sized for Matrix_Head and reads the cache
+   --  sixteen components at a time, so a head wider than that or not a
+   --  multiple of sixteen is not one it can answer.
+   function Attends_By_Matrix
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean
+   is (Item.Matrix_Attend /= Null_Handle
+       and then Positions >= Matrix_Queries
+       and then Head_Size <= Matrix_Head
+       and then Value_Size <= Matrix_Head
+       and then Head_Size mod 16 = 0
+       and then Value_Size mod 16 = 0);
+
    function Attend_Kernel
-     (Item : Engine; Positions : Natural) return Address
-   is (if Item.Tile_Line /= Null_Handle
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Address
+   is (if Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
+       then Item.Matrix_Attend
+       elsif Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
        then Item.Tile_Line
        elsif Item.Group_Line /= Null_Handle
@@ -313,8 +334,13 @@ package body Model_Runner.Platform.Device.Products is
    --  answers a block at a time. The two have to be decided together, which
    --  is why neither is written out at a call site.
    function Attend_Groups
-     (Item : Engine; Positions : Natural) return C.unsigned
-   is (if Item.Tile_Line /= Null_Handle
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return C.unsigned
+   is (if Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
+       then C.unsigned ((Positions + Matrix_Queries - 1) / Matrix_Queries)
+       elsif Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
        then C.unsigned ((Positions + Query_Block - 1) / Query_Block)
        else C.unsigned (Positions));
@@ -510,6 +536,8 @@ package body Model_Runner.Platform.Device.Products is
       --  pushed the wrong one would attend to the wrong half of a text and
       --  return numbers of exactly the right shape.
       Causal     : C.unsigned := 1;
+
+
 
       --  How steeply a head's attention falls off with distance, for the one
       --  architecture that is told where a token is by the scores rather
@@ -1309,6 +1337,32 @@ package body Model_Runner.Platform.Device.Products is
       --  is written for.
       Item.Matrices := Has_Matrix_Instruction (On);
 
+      --  And attention through the same instruction, which belongs here
+      --  rather than beside the other attending modules: it is wanted only
+      --  where the instruction is, and whether it is has just been decided.
+      --  Allowed to fail on its own -- a device that takes the matrix
+      --  product and refuses this one attends as it did before.
+      if Item.Matrices then
+         declare
+            Create  : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Attends : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Attention_Matrix;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create /= null then
+               Request.Size := Interfaces.C.size_t (Attends'Length * 4);
+               Request.Code := Attends'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Attend_Matrix := Made;
+               end if;
+            end if;
+         end;
+      end if;
+
       if Item.Matrices then
          declare
             Create : constant Create_Call :=
@@ -1582,6 +1636,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Tile_Line := Made;
+            end if;
+         end if;
+
+         if Item.Attend_Matrix /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Matrix;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Matrix_Attend := Made;
             end if;
          end if;
 
@@ -1934,6 +1998,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
+      Give_Back (Item.Matrix_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Attend_Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");
@@ -2987,8 +3053,18 @@ package body Model_Runner.Platform.Device.Products is
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
+      --  Four bytes an element for the cache and two more for the
+      --  half-precision copy the matrix kernel attends out of.
+      --
+      --  The copy is what makes that kernel worth having. Staging the
+      --  binary32 cache into shared memory a tile at a time and converting
+      --  it there was measured twice and cost more than the instruction
+      --  saved: a second walk over the keys, which is one more staging and
+      --  one more product, took a 1419-token prompt from 1.535 s to 1.785.
+      --  Kept in halves, the keys and values are what the instruction
+      --  reads and are loaded straight out of memory.
       Wanted : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Elements) * 4;
+        Interfaces.Unsigned_64 (Elements) * 6;
    begin
       Ok := False;
 
@@ -3020,6 +3096,7 @@ package body Model_Runner.Platform.Device.Products is
       Take (Item, Wanted, Item.Cache_Buffer, Item.Cache_Memory, Ok);
       if not Ok then
          Item.Cache_Bytes := 0;
+         Item.Cache_Elements := 0;
          return;
       end if;
 
@@ -3042,7 +3119,22 @@ package body Model_Runner.Platform.Device.Products is
          Item.Cache_At := Where;
       end;
 
+      --  Zeroed, because the matrix kernel reads a whole tile of cached
+      --  positions whether or not every position in it has been written:
+      --  the scores of the ones past the end are masked to nothing, but a
+      --  weight of zero against a value that was never written is zero
+      --  times whatever was in that memory, and a not-a-number there
+      --  survives the zero.
+      declare
+         Room : Model_Runner.Bytes.Byte_Array
+           (1 .. Model_Runner.Bytes.Byte_Count (Wanted))
+           with Import, Address => Item.Cache_At;
+      begin
+         Room := [others => 0];
+      end;
+
       Item.Cache_Bytes := Wanted;
+      Item.Cache_Elements := Interfaces.Unsigned_64 (Elements);
    end Reserve;
 
    ---------------
@@ -3086,6 +3178,34 @@ package body Model_Runner.Platform.Device.Products is
       begin
          Room := Values;
       end;
+
+      --  And the half-precision copy beside it, so that a cache the host
+      --  seeded reads the same to the matrix kernel as one the device
+      --  wrote itself. Only where there is one: a caller may put values
+      --  into a cache this engine took for itself rather than reserved,
+      --  and writing halves at an offset of nothing would put them over
+      --  the cache proper.
+      if Item.Cache_Elements > 0
+        and then Item.Cache_Elements * 4
+                 + Interfaces.Unsigned_64 (At_Value) * 2
+                 + Interfaces.Unsigned_64 (Values'Length) * 2
+                 <= Item.Cache_Bytes
+      then
+      declare
+         Halves : Model_Runner.Numerics.Half_Array (Values'Range)
+           with Import,
+                Address =>
+                  System.Storage_Elements.To_Address
+                    (System.Storage_Elements.To_Integer (Item.Cache_At)
+                     + System.Storage_Elements.Integer_Address
+                         (Item.Cache_Elements * 4
+                          + Interfaces.Unsigned_64 (At_Value) * 2));
+      begin
+         for Index in Halves'Range loop
+            Halves (Index) := Model_Runner.Numerics.To_Half (Values (Index));
+         end loop;
+      end;
+      end if;
 
       Ok := True;
    end Put_Cache;
@@ -3251,8 +3371,22 @@ package body Model_Runner.Platform.Device.Products is
             Group_Size => C.unsigned (Group_Size),
             First      => C.unsigned (First),
             Last       => C.unsigned (Last),
-            K_Base     => C.unsigned (K_Base),
-            V_Base     => C.unsigned (V_Base),
+            --  Where the keys and the values begin. The matrix kernel
+            --  reads them out of the half-precision copy, which lies after
+            --  the cache proper and is indexed the same way, so where that
+            --  kernel is the one bound these say so and nothing else in
+            --  the block has to change. A push constant is what the shader
+            --  that is running reads, and only one of them runs.
+            K_Base     =>
+              C.unsigned
+                (K_Base
+                 + (if Attends_By_Matrix (Item, Slots, Head_Size, Value_Size)
+                    then Natural (Item.Cache_Elements * 2) else 0)),
+            V_Base     =>
+              C.unsigned
+                (V_Base
+                 + (if Attends_By_Matrix (Item, Slots, Head_Size, Value_Size)
+                    then Natural (Item.Cache_Elements * 2) else 0)),
             KV_Width   => C.unsigned (KV_Width),
             V_Width    => C.unsigned (V_Width),
             Scale      => C.C_float (Scale),
@@ -3276,7 +3410,8 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Bind_Pipeline
-           (Item.Buffer, Bind_Point_Compute, Attend_Kernel (Item, Slots));
+           (Item.Buffer, Bind_Point_Compute,
+            Attend_Kernel (Item, Slots, Head_Size, Value_Size));
          Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                     Sets'Address, 0, Null_Handle);
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
@@ -3287,7 +3422,7 @@ package body Model_Runner.Platform.Device.Products is
          --  need each other, so they go in one submission rather than one
          --  each.
          Dispatch (Item.Buffer, C.unsigned (Heads),
-                   Attend_Groups (Item, Slots), 1);
+                   Attend_Groups (Item, Slots, Head_Size, Value_Size), 1);
 
          if Stop (Item.Buffer) /= 0 then
             return;
@@ -4530,7 +4665,8 @@ package body Model_Runner.Platform.Device.Products is
                   --  the combining step does.
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
-                     Attend_Kernel (Item, Count));
+                     Attend_Kernel (Item, Count, This.Head_Size,
+                                    This.Value_Size));
 
                   declare
                      Shape : aliased Attention_Constants :=
@@ -4540,8 +4676,22 @@ package body Model_Runner.Platform.Device.Products is
                         Group_Size => C.unsigned (This.Group_Size),
                         First      => C.unsigned (This.First),
                         Last       => C.unsigned (This.Last),
-                        K_Base     => C.unsigned (This.K_Base),
-                        V_Base     => C.unsigned (This.V_Base),
+                        K_Base     =>
+                          C.unsigned
+                            (This.K_Base
+                             + (if Attends_By_Matrix
+                                     (Item, Count, This.Head_Size,
+                                      This.Value_Size)
+                                then Natural (Item.Cache_Elements * 2)
+                                else 0)),
+                        V_Base     =>
+                          C.unsigned
+                            (This.V_Base
+                             + (if Attends_By_Matrix
+                                     (Item, Count, This.Head_Size,
+                                      This.Value_Size)
+                                then Natural (Item.Cache_Elements * 2)
+                                else 0)),
                         KV_Width   => C.unsigned (This.KV_Width),
                         V_Width    => C.unsigned (This.V_Width),
                         Scale      => C.C_float (This.Scale),
@@ -4559,7 +4709,8 @@ package body Model_Runner.Platform.Device.Products is
                            Attention_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer, C.unsigned (This.Heads),
-                        Attend_Groups (Item, Count), 1);
+                        Attend_Groups (Item, Count, This.Head_Size,
+                                       This.Value_Size), 1);
                   end;
 
                   Bind_Pipeline
@@ -4579,7 +4730,12 @@ package body Model_Runner.Platform.Device.Products is
                         Count   => C.unsigned (Count),
                         First   => C.unsigned (This.At_First),
                         Packing => 0,
-                        Base    => 0);
+
+                        --  Where the half-precision copy of the cache
+                        --  begins, in halves, which is the one thing this
+                        --  kernel needs that the others put nothing in.
+                        Base    =>
+                          C.unsigned (Item.Cache_Elements * 2));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);

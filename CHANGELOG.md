@@ -7,6 +7,58 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A prompt attends through the device's matrix instruction, and the cache
+  is kept in half precision so that it can: the 1419-token prompt reads
+  1.236 s against 1.323**, better in each of three alternated rounds with
+  every matrix run faster than every scalar one. The gap to llama.cpp on
+  that prompt falls from 1.63 times to **1.52**, and the device reads it at
+  1158 tokens a second against 1105.
+
+  `attention_matrix.comp` does the scores as the queries against the
+  transpose of the keys and the blend as the weights against the values,
+  both through `coopMatMulAdd` at sixteen by sixteen by sixteen, with the
+  softmax between them. **The same kernel was built before and rejected for
+  being thirteen per cent slower**, and what was missing was not its shape:
+  the instruction reads half precision and the cache was binary32, so every
+  tile had to be staged into shared memory and converted there. Two kernels
+  paid that — 1.535 s for the straightforward one, 1.785 for a variant that
+  walks the keys twice so nothing is ever rescaled — and the difference
+  between them is one more staging and one more product, a quarter of a
+  second, which is what named the staging as the cost.
+
+  So `place.comp` writes each position twice, binary32 where it always went
+  and half precision after it in the same buffer, and attention loads its
+  operands straight into the instruction with the cache's own stride.
+  Nothing is staged but the queries. **The cache costs half again as much
+  room** and `--show-stats` says so.
+
+  **The sweep is what allows the rounding**: 28344 sequences, none outside
+  tolerance, and every published digest held — `1a26d24d33b8957b`,
+  `cbf29ce484222325`, `448c2ed68ec342ee`, `5abff916f9d83ca6`. A device
+  without the instruction, a head wider than sixty-four or not a multiple of
+  sixteen, and every generated token go to the scalar kernels unchanged.
+
+  Two details cost measurable time. The running softmax cannot rescale a
+  cooperative matrix — an accumulator's elements belong to lanes in an order
+  the hardware chooses — so each tile's blend is a product of its own, moved
+  through shared memory into ordinary registers where a rescale is a
+  multiply. And the row reductions are clustered over half a subgroup rather
+  than walked: one invocation to a row, walking its thirty-two columns, read
+  1.606 s.
+
+- **Read llama.cpp's profiler rather than deriving from ours.**
+  `GGML_VK_PERF_LOGGER` prints their per-operation timings, and per position
+  per layer they say attention 2.85 µs against our 6.12, the five matrix
+  products 21.6 against our 22.5, everything else 3.1 against 3.3. **Our
+  matrix product was already level with theirs** — 4154 gigaflops against
+  4050 on the same shape — which is why three attempts at its tile shape all
+  failed, and attention was fifty-two per cent of what remained. Their build
+  says why on its own: `GGML_VK_DISABLE_COOPMAT=1` takes their attention
+  from 2945 gigaflops to 1610 and a 1419-token prompt from 1744 tokens a
+  second to 1240. This corrects an earlier note here that read that flag at
+  512 tokens, where attention is a small share, and concluded the
+  instruction was not where their speed came from.
+
 - **A generated token's attention runs two hundred and fifty-six invocations
   to a workgroup where it ran sixty-four: 64 tokens after a 1419-token
   prompt read 1.603 s against 1.715**, better in each of three alternated

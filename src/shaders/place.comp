@@ -18,6 +18,9 @@
 
 const uint LANES = 256u;
 
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
 layout(local_size_x = LANES) in;
 
 //  Bound but unread: a step's descriptor set carries four and this kernel
@@ -26,6 +29,13 @@ layout(local_size_x = LANES) in;
 layout(std430, binding = 0) readonly  buffer Kept   { float unused_kept[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
 layout(std430, binding = 2) writeonly buffer Cache  { float kv[]; };
+
+//  The same buffer again, as halves. The cache is kept twice: once as it
+//  has always been kept, and once in half precision after it, which is
+//  what the matrix attention kernel reads. Aliasing the binding is how a
+//  shader reaches one buffer as two kinds; the descriptor set is unchanged
+//  and so is every other kernel bound against it.
+layout(std430, binding = 2) writeonly buffer Halves { float16_t kvh[]; };
 
 layout(push_constant) uniform Shape {
     //  Elements a position holds.
@@ -42,7 +52,9 @@ layout(push_constant) uniform Shape {
     uint at_first;
 
     uint unused_packing;
-    uint unused_base;
+
+    //  Where the half-precision copy begins, in halves.
+    uint half_base;
 } shape;
 
 void main() {
@@ -57,6 +69,9 @@ void main() {
     uint into = shape.at_first + slot * shape.stride;
 
     for (uint c = lane; c < shape.width; c += LANES) {
-        kv[into + c] = x[from + c];
+        float value = x[from + c];
+
+        kv[into + c] = value;
+        kvh[shape.half_base + into + c] = float16_t (value);
     }
 }

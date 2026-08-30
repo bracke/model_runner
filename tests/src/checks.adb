@@ -5704,6 +5704,29 @@ package body Checks is
          end if;
       end;
 
+      --  And attention through the same instruction, which is a shader of
+      --  its own rather than another compilation of attention.comp: the
+      --  scores and the weighted values are matrix products there and
+      --  loops here, and only the softmax between them reads the same.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/attention_matrix.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/attention_matrix.comp is missing, and the "
+                  & "words compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Attention_Matrix_Digest then
+            Fail ("src/shaders/attention_matrix.comp has changed since it "
+                  & "was compiled; compile it with --target-env vulkan1.3 "
+                  & "and run 'tests shader' again with every shader named");
+         end if;
+      end;
+
       --  And the fifth, which goes with it.
       declare
          Found : Boolean;
