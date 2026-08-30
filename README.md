@@ -5982,6 +5982,38 @@ operand this kernel touches at twelve per cent of it. A mechanism that costs
 some of twelve to win eleven of eighty-eight is not obviously worth
 building, and it is certainly not the 1.7 times.
 
+**And where the 1.7 times is not.** llama.cpp reports what it uses on this
+part -- `matrix cores: KHR_coopmat` -- so it is the same extension, the same
+shapes and the same device. It can also be told not to use it, which prices
+the instruction from the other side: `GGML_VK_DISABLE_COOPMAT=1` reads 1353.7
+tokens a second against 1949.3 with it. So the matrix instruction is worth
+1.44 times to them.
+
+**Their kernel without the matrix instruction is twenty-eight per cent faster
+than this one with it** -- 1353.7 against 1059. That is the finding, and it
+moves the question off the instruction entirely: this program's coopmat
+kernel does 2.33 teraflops where their scalar one does 2.98 and their coopmat
+one 3.98.
+
+Three attempts at closing it, all worse, all bit-exact so it is the shape and
+not the arithmetic:
+
+| 1419-token device prompt | |
+|---|---:|
+| as it is, one subgroup, the batch read by `coopMatLoad` | **1.66 s** |
+| two subgroups sharing a staged batch, staged an element at a time | 3.35 s |
+| the same, staged sixteen bytes at a time | 2.62 s |
+| four subgroups sharing it | 3.15 s |
+
+Vectorizing the staging recovers most of what staging costs and still loses,
+and sharing it across more subgroups loses further. The reading being staged
+away is not a cost: `coopMatLoad` from the buffer issues wide loads straight
+into the matrix registers, and any trip through shared memory is a trip it
+did not need. So the operands are not it, the instruction is not it, the tile
+is not it, and the batch is not it -- and their scalar kernel still beats this
+one. What is left is unnamed, and this file would rather say that than name
+something it has not measured.
+
 Which closes this shader. **Every rearrangement of it has now been
 measured** -- nine tile shapes, three subgroup counts, the batch against the
 vector tile, the decode ablated, both operands ablated, the wave width, the

@@ -51,6 +51,19 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **The device prompt's 1.7× is not the matrix instruction, and now there is
+  a number for that.** llama.cpp uses the same extension on this part
+  (`matrix cores: KHR_coopmat`), and telling it not to —
+  `GGML_VK_DISABLE_COOPMAT=1` — reads 1353.7 t/s against 1949.3. So the
+  instruction is worth 1.44× to them, and **their kernel without it is 28 %
+  faster than ours with it** (1353.7 against 1059).
+
+  Three attempts at the structure, all bit-exact, all worse: two subgroups
+  sharing a staged batch 3.35 s, the same staged 16 bytes at a time 2.62 s,
+  four subgroups 3.15 s, against 1.66 s for the kernel as it stands.
+  `coopMatLoad` from the buffer issues wide loads straight into the matrix
+  registers, so any trip through shared memory is one it did not need.
+
 - **The integer matrix instruction priced before a rewrite was built for
   it: 11 %, not the 2× the hardware sheet implies.** This device offers ten
   cooperative-matrix shapes including signed 8-bit in, 32-bit out — and
