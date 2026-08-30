@@ -85,7 +85,41 @@
 //  them, which is what a device cannot afford and the processor does not
 //  mind.
 
+//  How many invocations a workgroup has, which is how many cached
+//  positions it takes at a time.
+//
+//  Sixty-four is one subgroup, which makes every barrier below free. What
+//  it costs is that a workgroup is one wave: generating, where a workgroup
+//  is a head of a single position, thirty-two heads are thirty-two waves
+//  and this part has twenty-four of them to fill. A layer's attention then
+//  reads eighty-seven gigaflops where its matrix products read four
+//  thousand.
+//
+//  Two hundred and fifty-six is four subgroups, four times the waves, and
+//  barriers that are no longer free. Which of those matters more depends on
+//  how many workgroups there already are, and the two compilations that
+//  attend are on opposite sides of it.
+//
+//  Generating, a workgroup is a head of one position and there are
+//  thirty-two of them: sixty-four generated tokens read 1.603 s against
+//  1.715, better in each of three rounds and with every wide run faster
+//  than every narrow one. Reading a prompt, a workgroup is a head of a
+//  block of eight positions and there are five hundred and twelve, which
+//  fills the part already -- and there the same change costs six per cent,
+//  1.740 s against 1.635. So the second compilation is wide and the third
+//  is not.
+//
+//  The first is not either. It reduces by walking the tile rather than
+//  through subgroup operations, and a walk over two hundred and fifty-six
+//  entries where sixty-four would do is four times the serial reads this
+//  kernel exists to avoid.
+#ifdef WIDE
+#define LANES 256u
+layout(local_size_x = 256) in;
+#else
+#define LANES 64u
 layout(local_size_x = 64) in;
+#endif
 
 layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
 layout(std430, binding = 1) readonly  buffer Query { float q[]; };
@@ -157,7 +191,7 @@ const uint QUERIES = 1u;
 #endif
 
 //  One tile of scores per query of the block, one entry per invocation.
-shared float tile[QUERIES * 64u];
+shared float tile[QUERIES * LANES];
 
 #ifdef SUBGROUPS
 //  One partial per subgroup. Sixty-four of them, because a device may make
@@ -223,7 +257,7 @@ float whole_max (float mine) {
     barrier ();
 
     float whole = tile[0];
-    for (uint i = 1u; i < 64u; i++) {
+    for (uint i = 1u; i < LANES; i++) {
         whole = max (whole, tile[i]);
     }
     return whole;
@@ -235,7 +269,7 @@ float whole_sum (float mine) {
     barrier ();
 
     float whole = 0.0;
-    for (uint i = 0u; i < 64u; i++) {
+    for (uint i = 0u; i < LANES; i++) {
         whole += tile[i];
     }
     return whole;
@@ -316,6 +350,14 @@ void main() {
     //  What this invocation carries out: every sixty-fourth component of
     //  each query's value, so the private store is four floats a query and
     //  not a head's width.
+    //  Which component of the value this invocation carries, and which
+    //  sixty-four of a tile's positions it weighs into it. With one
+    //  subgroup there is one part and this is what it always was; with
+    //  four, four invocations share a component and each takes a quarter
+    //  of the positions, to be added up once at the end.
+    uint comp = lane & 63u;
+    uint part = lane >> 6u;
+
     float held[QUERIES][room / 64];
     float top[QUERIES];
     float sum[QUERIES];
@@ -328,7 +370,7 @@ void main() {
         sum[i] = 0.0;
     }
 
-    for (uint base = first_min; base <= last_max; base += 64) {
+    for (uint base = first_min; base <= last_max; base += LANES) {
         uint step = base + lane;
 
         //  The key at this lane's cached position, read once and multiplied
@@ -437,14 +479,17 @@ void main() {
 
         barrier();
         for (uint i = 0u; i < QUERIES; i++) {
-            tile[i * 64u + lane] = mine[i];
+            tile[i * LANES + lane] = mine[i];
         }
         barrier();
 
-        uint span = min(64u, last_max - base + 1);
+        uint span = min(LANES, last_max - base + 1);
+
+        uint lo = min (part * 64u, span);
+        uint hi = min (lo + 64u, span);
 
         for (uint k = 0; k < room / 64; k++) {
-            uint c = lane + k * 64;
+            uint c = comp + k * 64;
             if (c >= shape.value_size) {
                 break;
             }
@@ -468,9 +513,9 @@ void main() {
             //  Eight cached positions a turn, for the same reason the
             //  dot product takes eight components a turn: a query's eight
             //  weights lie together in the tile and are read as one.
-            uint run = span & ~7u;
+            uint run = lo + ((hi - lo) & ~7u);
 
-            for (uint j = 0; j < run; j += 8u) {
+            for (uint j = lo; j < run; j += 8u) {
                 float v[8];
 
                 for (uint e = 0u; e < 8u; e++) {
@@ -480,17 +525,17 @@ void main() {
 
                 for (uint i = 0u; i < QUERIES; i++) {
                     for (uint e = 0u; e < 8u; e++) {
-                        got[i] += tile[i * 64u + j + e] * v[e];
+                        got[i] += tile[i * LANES + j + e] * v[e];
                     }
                 }
             }
 
-            for (uint j = run; j < span; j++) {
+            for (uint j = run; j < hi; j++) {
                 float v = kv[shape.v_base + (base + j) * shape.v_width
                              + group * shape.value_size + c];
 
                 for (uint i = 0u; i < QUERIES; i++) {
-                    got[i] += tile[i * 64u + j] * v;
+                    got[i] += tile[i * LANES + j] * v;
                 }
             }
 
@@ -512,12 +557,28 @@ void main() {
         uint out_at = slot_of[i] * shape.heads * shape.value_size
                       + head * shape.value_size;
 
+        //  The parts added up. One invocation of the four that share a
+        //  component writes it, and the tile is free to gather them in --
+        //  the scores it held are spent. The loop over k does not leave
+        //  early: it has barriers in it and every invocation has to reach
+        //  them, so the component it does not carry is written by nobody
+        //  rather than escaped from.
         for (uint k = 0; k < room / 64; k++) {
-            uint c = lane + k * 64;
-            if (c >= shape.value_size) {
-                break;
+            barrier ();
+            tile[lane] = held[i][k];
+            barrier ();
+
+            uint c = comp + k * 64;
+
+            if (part == 0u && c < shape.value_size) {
+                float total = 0.0;
+
+                for (uint pp = 0u; pp < LANES / 64u; pp++) {
+                    total += tile[pp * 64u + comp];
+                }
+
+                y[out_at + c] = total / sum[i];
             }
-            y[out_at + c] = held[i][k] / sum[i];
         }
     }
 }

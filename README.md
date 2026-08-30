@@ -498,8 +498,10 @@ cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv \
                                            # the row product with
                                            # `-DSINGLE`, and attention twice
                                            # more with `--target-env
-                                           # vulkan1.1 -DSUBGROUPS` and the
-                                           # same plus `-DQUERY_TILE`. A
+                                           # vulkan1.1 -DSUBGROUPS -DWIDE`
+                                           # and with `--target-env
+                                           # vulkan1.1 -DSUBGROUPS
+                                           # -DQUERY_TILE`. A
                                            # constant is named for the
                                            # compiled file, so they arrive
                                            # as Matrix_Product and
@@ -1568,18 +1570,24 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.426 s | **0.283 s** |
-| -- evaluating the prompt | 0.062 s | 0.034 s |
-| -- generating | 0.351 s | **0.249 s** |
-| -- processor time | 1.91 s | **0.09 s** |
-| 110-token prompt, nothing generated | 0.400 s | **0.134 s** |
-| -- processor time | 2.56 s | **0.03 s** |
+| 6-token prompt, 12 generated | 0.434 s | **0.274 s** |
+| -- evaluating the prompt | 0.067 s | 0.035 s |
+| -- generating | 0.368 s | **0.240 s** |
+| -- processor time | 1.94 s | **0.09 s** |
+| 110-token prompt, nothing generated | 0.428 s | **0.138 s** |
+| -- processor time | 2.62 s | **0.03 s** |
 
 All six cells were taken in one sitting on 2026-08-30, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
 columns are comparable, which they were not in the version of this table
 before last. The generating row is where the last change landed: it read
 0.378 s until `### The batch that was not there` below.
+
+They were taken again the same day, after `### The width of an attending
+workgroup` below widened the kernel a generated token attends with. Twelve
+tokens after a six-token prompt is the shortest cache in this file and the
+least that change can show: the device's generating cell moved 0.249 s to
+0.240. What it is worth is further down, where the cache is long.
 
 **The device wins both runs now, and spends a fortieth of the processor's
 time doing it.** Six changes took its 110-token prompt from 1.951 s to
@@ -6506,33 +6514,33 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **254.0 t/s** | 33.1 t/s |
-| llama.cpp, processor | 356.6 t/s | 39.7 t/s |
-| model_runner, device | 827.1 t/s | **46.2 t/s** |
-| llama.cpp, device | 1633.3 t/s | 56.4 t/s |
+| model_runner, processor | **257.0 t/s** | 33.6 t/s |
+| llama.cpp, processor | 351.7 t/s | 39.2 t/s |
+| model_runner, device | 797.1 t/s | **48.0 t/s** |
+| llama.cpp, device | 1499.2 t/s | 55.9 t/s |
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **232.0 t/s** | 33.1 t/s |
-| llama.cpp, processor | 273.9 t/s | 39.2 t/s |
-| model_runner, device | **1059.7 t/s** | 46.2 t/s |
-| llama.cpp, device | 1809.0 t/s | 55.8 t/s |
+| model_runner, processor | **225.8 t/s** | 33.6 t/s |
+| llama.cpp, processor | 271.1 t/s | 39.3 t/s |
+| model_runner, device | **1105.1 t/s** | 48.0 t/s |
+| llama.cpp, device | 1802.2 t/s | 55.9 t/s |
 
 **The longer prompt is the harder one and the quieter one, and it took this
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The gap is wider on the device and narrower on the processor: **1.18 times
-there against 1.40 at the shorter length, and 1.7 on the device against
-2.0.** Attention grows with the square of the context and it
+The gap is wider on the device and narrower on the processor: **1.20 times
+there against 1.37 at the shorter length, and 1.63 on the device against
+1.88.** Attention grows with the square of the context and it
 is the part of a layer this program is furthest behind on, so a table taken
 at a hundred and ten tokens reads a little kinder than the work deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±5 on 273.9 at 1419 tokens against ±29 on 356.6 at
+three runs it is **±1 on 271.1 at 1419 tokens against ±23 on 351.7 at
 110** -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
 more between sittings than the change being measured moved it: the device row
@@ -6624,8 +6632,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.433 s
-and 64 in 1.933 s on the processor, 0.133 s and 1.384 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.428 s
+and 64 in 1.905 s on the processor, 0.138 s and 1.333 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -6638,13 +6646,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 736.4 t/s rather
-than 356.6 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 707.5 t/s rather
+than 351.7 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 46.2 t/s
-now, against 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 48.0 t/s
+now, against 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -8462,6 +8470,104 @@ initializer is one of the shortest things one can write in Ada -- and the
 instruction count barely noticed, because a `rep stos` moves sixty-four bytes
 per instruction. It cost a fifth of the prompt and `perf report` named it on
 the first run.
+
+### Where the device's prompt goes, one piece at a time
+
+Four sections above measured the parts of a layer against each other. This
+measures them by taking each one out and seeing what the prompt costs
+without it, which answers a different question: not what a piece takes but
+what removing it would be worth. All four are the 1419-token prompt on the
+device, median of three, against a baseline of 1.282 s.
+
+| what was taken out | prompt | what it was worth |
+| --- | ---: | ---: |
+| nothing | 1.282 s | -- |
+| the weight staging, decoding a constant instead | 1.082 s | **0.200 s** |
+| that and the activation loads as well | 0.983 s | 0.099 s |
+| thirty-one of every thirty-two matrix instructions | 0.916 s | **0.366 s** |
+
+The last row is the one to read twice. Every load and every decode still
+happens; only the arithmetic is gone. **The matrix instruction is
+twenty-nine per cent of a device prompt**, so a kernel that did the
+multiplies for nothing would read 0.92 s where llama.cpp reads 0.74. The
+gap is not in the multiply, and three attempts at it in one sitting say the
+same thing from three directions -- all measured, none kept:
+
+The packed half-precision dot product, which is what llama.cpp uses and
+what this file spent a day looking for, is **thirty-nine per cent slower**
+than the matrix instruction here: 1.806 s against 1.295, three alternated
+rounds each. The kernel is real -- the disassembly holds 2048
+`v_dot2acc_f32_f16` in one unbroken run, at 144 registers against the
+matrix kernel's 256 and six subgroups a SIMD against four -- and it is
+better on every static measure and slower on the only one that counts. It
+is also not where llama.cpp's speed comes from: with `GGML_VK_DISABLE_COOPMAT=1`
+it reads 1418 tokens a second and without it 1408, so both of its paths
+arrive at the same place and neither of them is the difference.
+
+A taller tile -- a hundred and twenty-eight rows over four subgroups, with
+the activations staged in shared memory so the four share one copy -- reads
+**2.665 s**. The arithmetic that suggested it was wrong: a workgroup of
+thirty-two rows re-reads its half-megabyte tile of activations sixty-four
+times for a two-thousand-column matrix, which is thirty-three megabytes
+against four and a half of weights, but those re-reads are second-level
+cache hits and not memory at all. Staging them traded cache bandwidth,
+which was free, for shared-memory bandwidth, which was not, and turned
+every barrier into a real four-wave sync.
+
+A wider tile -- five hundred and twelve vectors over four subgroups sharing
+one decoded copy of the weights, with the step deepened from thirty-two
+columns to a hundred and twenty-eight so that every invocation has a share
+of the decode -- reads **1.624 s**, with the same registers, the same
+occupancy, a quarter of the barriers and a quarter of the passes over the
+weights. Five hundred and twelve vectors is a two-megabyte tile of
+activations, which is this part's whole second-level cache, so what the
+weights stopped paying the activations began paying. The batch width on its
+own is neutral -- 1.319, 1.261 and 1.336 s at 128, 512 and 256 -- because
+a workgroup re-reads the weights whatever the batch is.
+
+So thirty-two rows by a hundred and twenty-eight vectors is where this
+part's cache hierarchy puts the optimum, and the matrix product is not
+where the remaining gap is. What is left is the row above it: attention,
+nineteen per cent of a prompt and fifteen of a generated token.
+
+### The width of an attending workgroup
+
+`attention.comp`'s second compilation now runs two hundred and fifty-six
+invocations to a workgroup where it ran sixty-four. **Sixty-four generated
+tokens after a 1419-token prompt read 1.603 s against 1.715**, better in
+each of three alternated rounds, with every wide run faster than every
+narrow one.
+
+Sixty-four is one subgroup, which is what made every barrier in that kernel
+free. What it cost is that a workgroup is then one wave. Generating, a
+workgroup is one head of one position, so a thirty-two-head model is
+thirty-two waves and this part has twenty-four SIMDs to fill: a layer's
+attention reads eighty-seven gigaflops where the same layer's matrix
+products read four thousand. That is not bandwidth and not arithmetic; it
+is a kernel with nothing behind it to hide a load. Four subgroups is four
+times the waves, and the barriers stop being free.
+
+Which of those wins depends on how many workgroups there already are, and
+the two attending compilations are on opposite sides of it. Reading a
+prompt, a workgroup is a head of a block of eight positions and there are
+five hundred and twelve of them, which fills the part on its own -- and
+there the same change **costs six per cent**, 1.740 s against 1.635. So the
+tiled compilation stays narrow and only the single-position one is widened.
+The first compilation, the one for a device with no subgroup operations,
+stays narrow too: it reduces by walking the score tile, and four times the
+lanes would be four times the serial reads that kernel exists to avoid.
+
+The value a lane carries is now summed in four parts and added up once at
+the end rather than accumulated in one running sum, so the order of a
+floating-point addition changed. **Both digests are unchanged** --
+`1a26d24d33b8957b` and `7ec6b755e53e16b4` -- and the sweep reads 28344
+sequences with none outside tolerance.
+
+It is worth least where the cache is shortest, which is exactly where the
+table under `### The device backend` measures it: twelve tokens after a
+six-token prompt moved 0.249 s to 0.240, and sixty-four tokens after that
+same six-token prompt read 1.340 s against 1.348, which is level. Attention
+grows with the context, and so does what widening it is worth.
 
 ### Kernels
 

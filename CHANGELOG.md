@@ -7,6 +7,61 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A generated token's attention runs two hundred and fifty-six invocations
+  to a workgroup where it ran sixty-four: 64 tokens after a 1419-token
+  prompt read 1.603 s against 1.715**, better in each of three alternated
+  rounds with every wide run faster than every narrow one. Sixty-four lanes
+  is one subgroup, which made every barrier in that kernel free, and made a
+  workgroup one wave. Generating, a workgroup is one head of one position,
+  so a thirty-two-head model is thirty-two waves on a part with twenty-four
+  SIMDs: attention reads 87 Gflop/s where the same layer's matrix products
+  read 4000. Nothing there is bandwidth or arithmetic — it is a kernel with
+  nothing behind it to hide a load.
+
+  **Only the compilation a generated token enters is widened.** Reading a
+  prompt, a workgroup is a head of a block of eight positions and there are
+  five hundred and twelve of them, which fills the part already — and there
+  the same change costs six per cent, 1.740 s against 1.635. The tiled
+  compilation stays narrow, and so does the one for a device without
+  subgroup operations, which reduces by walking the score tile and would
+  walk four times as far.
+
+  The value a lane carries is now four partial sums added at the end rather
+  than one running sum, so a floating-point addition changed order. Both
+  digests held — `1a26d24d33b8957b` and `7ec6b755e53e16b4` — and the sweep
+  reads 28344 sequences with none outside tolerance. It is worth least
+  where the cache is shortest: twelve tokens after a six-token prompt moved
+  0.249 s to 0.240, and sixty-four after that same prompt read 1.340 s
+  against 1.348, which is level.
+
+- **Where a device prompt goes, and three attempts at the matrix product
+  that were measured and not kept.** Removing one piece at a time from the
+  1419-token prompt, against 1.282 s: the weight staging is worth 0.200 s,
+  the activation loads 0.099, and thirty-one of every thirty-two matrix
+  instructions 0.366. **So the matrix instruction is twenty-nine per cent
+  of a device prompt** — a kernel whose multiplies were free would read
+  0.92 s where llama.cpp reads 0.74, and the gap is not in the multiply.
+
+  The packed half-precision dot product `v_dot2_f32_f16`, reached through a
+  SPIR-V intrinsic exactly as llama.cpp reaches it, is **thirty-nine per
+  cent slower** than the cooperative matrix here: 1.806 s against 1.295.
+  The disassembly holds 2048 `v_dot2acc_f32_f16` in one unbroken run at 144
+  registers against 256 — better on every static measure, slower on the
+  only one that counts. llama.cpp does not owe its speed to it either:
+  `GGML_VK_DISABLE_COOPMAT=1` reads 1418 t/s against 1408 with it.
+
+  A taller tile, 128 rows over four subgroups with the activations staged
+  in shared memory, reads 2.665 s: the 33 MB of activation re-reads that
+  argued for it are second-level cache hits, not memory, so it traded free
+  bandwidth for contended bandwidth. A wider tile, 512 vectors over four
+  subgroups sharing one decoded copy of the weights with the step deepened
+  to 128 columns so every invocation decodes, reads 1.624 s at the same
+  registers and the same occupancy: 512 vectors is a two-megabyte
+  activation tile, which is the whole L2. Batch width alone is neutral —
+  1.319, 1.261 and 1.336 s at 128, 512 and 256. **Thirty-two rows by a
+  hundred and twenty-eight vectors is where this part's cache hierarchy
+  puts the optimum.**
+
 - **A layer's second half in one submission, kept: 64 generated tokens read
   1.447 s against 1.476, and a token is 45 submissions where it was 67.**
   The entry below names the three submissions a layer makes as structural,

@@ -5473,7 +5473,7 @@ package body Checks is
          then
             Fail ("the second compilation of src/shaders/attention.comp is "
                   & "older than the source; compile it twice, the second "
-                  & "with --target-env vulkan1.1 -DSUBGROUPS to "
+                  & "with --target-env vulkan1.1 -DSUBGROUPS -DWIDE to "
                   & "attention_subgroups.spv, and run 'tests shader' again "
                   & "with every shader named");
          end if;
