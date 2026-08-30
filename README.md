@@ -5371,6 +5371,47 @@ handed to the weight loader as its Rows by its Columns, which for a step
 whose Rows and Columns say what it reads and writes is a square: the loader
 was asked to upload four million values out of an array of two thousand.
 
+### The key gather, and why staging it costs more than it saves
+
+Attention's dot product has each lane walk its own cached position, so the
+sixty-four lanes of one instruction want addresses a whole position apart --
+a kilobyte on this model, sixty-four transactions serving one instruction.
+An ablation prices it: with the key reads removed attention was 0.626 s
+against 0.772, a fifth of it, which is about six per cent of a device
+prompt.
+
+The fix a book would give is to stage the tile the other way round: a
+position at a time with the lanes over its components, so each read is one
+line and the tile crosses the bus once. Sixty-four positions of a
+sixty-four-wide head is sixteen kilobytes of shared memory, padded by a word
+a row so that a lane reading its own position lands on a bank of its own
+rather than on the one every other lane is on.
+
+| 1419-token device prompt | |
+|---|---:|
+| as it is | 1.692 s |
+| the keys staged | **2.499 s** |
+
+**Forty-eight per cent slower**, three rounds of three, and the digest does
+not move -- so the staging is right and it is not the arithmetic. It is the
+occupancy: shared memory is what bounds how many subgroups a part will run
+at once, and seventeen kilobytes of it takes this kernel from fourteen
+subgroups a SIMD to four. A kernel that is waiting on memory and has a
+quarter of the waves to hide it behind loses far more than coalescing wins.
+
+**And the half measure is worse than nothing.** Staging thirty-two
+components instead of sixty-four brings the occupancy back to eight, but a
+head of sixty-four then exceeds the room and the staging never runs -- and
+the shader is still four per cent slower than the one without the branch in
+it. That is the third time this file has measured a pipeline paying for code
+it never executes.
+
+What would fix the gather without paying for it is a cache laid out
+component-major, so that consecutive lanes read consecutive addresses with
+no staging at all. That is the host's cache, its writes, the placing kernel,
+attention and the processor's own blend, for a ceiling of six per cent.
+Priced and not taken.
+
 ### A layer, in one submission
 
 Everything above is the two halves of a layer and the host between them. The

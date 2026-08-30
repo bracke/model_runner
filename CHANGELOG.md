@@ -51,6 +51,21 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **Attention's key gather staged into shared memory, and reverted: 48 %
+  slower.** Each lane walks its own cached position, so the 64 lanes of one
+  instruction want addresses a kilobyte apart — 64 transactions for one
+  instruction, and an ablation prices it at a fifth of attention, about 6 %
+  of a device prompt. Staging the tile a position at a time makes every read
+  one line and is bit-exact; it also takes 17 kB of shared memory, which
+  takes the kernel from fourteen subgroups a SIMD to four. A memory-bound
+  kernel with a quarter of the waves to hide behind loses far more than
+  coalescing wins.
+
+  Staging half a head brings occupancy back to eight but then never fires
+  for a 64-wide head — and is still 4 % slower than the shader without the
+  branch. The third time this file has measured a pipeline paying for code
+  it never executes.
+
 - **A layer goes over in one submission: 3.5 % of a 1419-token device
   prompt, at the same digests.** The turning was already a step; the cache
   write is fifteen more lines, and with both of them steps there is nothing
