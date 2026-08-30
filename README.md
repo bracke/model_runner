@@ -5372,6 +5372,48 @@ handed to the weight loader as its Rows by its Columns, which for a step
 whose Rows and Columns say what it reads and writes is a square: the loader
 was asked to upload four million values out of an array of two thousand.
 
+### What a generated token on the processor is waiting for
+
+The processor's generating row is 1.20 times behind llama.cpp and had not
+been looked at this year. It is memory, and the shape of that is worth
+writing down because it settles three questions at once.
+
+**It saturates at four threads and the engine already knows.** One share
+takes 4.558 s for sixty-four tokens, two take 1.943, three take 1.905, and
+nothing after that moves: eight threads read 1.963 and twelve 1.970. That is
+not the sweep discovering anything -- `Vector_Team` in the pool caps the
+single-vector byte path at four shares on purpose, with a comment saying
+four saturate the memory -- so the sweep was measuring the cap. Sweeping the
+cap itself says the same thing: three 2.025 s, four 1.965, five 1.953, six
+1.940, eight 2.013, and four against six alternated four times is 1.955
+against 1.949, which is three tenths of a per cent and noise. **The cap is
+still right.**
+
+Sixty-four tokens read 69.8 gigabytes of weights in 1.907 s, which is 36.6
+gigabytes a second. llama.cpp generates the same model at 39.7 tokens a
+second, which is 43. So the gap is neither parallelism nor arithmetic: it is
+eighteen per cent of streaming, against a wall both are near.
+
+**And inside the kernel, the half of it nobody looks at costs as much as the
+half everybody does.** Annotating the profile splits `Rows_Singly` almost
+evenly in two:
+
+| | share of the kernel |
+|---|---:|
+| the vector loop -- `vpdpbusd`, `vcvtdq2ps`, `vfmadd231ps` | 33.5 % |
+| the scalar pass that builds the row's scale table | 31.3 % |
+
+The second is a loop over the row's sixty-four blocks that reads each
+block's own scale as a half, multiplies it by the activation's, and
+accumulates a correction in binary64 -- one serial dependency chain a row,
+sixty-four deep, feeding a vector loop of about the same length. It is not
+free and it is not the arithmetic anybody would have named.
+
+Fixing it means breaking that chain into partials, which associates the sum
+differently and moves what the model says. That is a decision the
+conformance sweep judges rather than a rewrite, and it is where this row's
+next per cent is. Not taken here.
+
 ### The output projection is not the thing, and a table that was wrong
 
 The output projection is thirty-two thousand rows against one vector, once a

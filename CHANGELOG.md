@@ -51,6 +51,22 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **The processor's generated token is memory-saturated, and the share cap
+  that says so is confirmed.** One share takes 4.558 s for 64 tokens, two
+  1.943, three 1.905, and nothing after that moves — but that sweep was
+  measuring `Vector_Team`, which caps the single-vector byte path at four
+  shares on purpose. Sweeping the cap itself: three 2.025 s, four 1.965,
+  five 1.953, six 1.940, eight 2.013, and four against six alternated four
+  times is 1.955 against 1.949 — three tenths of a per cent. The cap stands.
+
+  64 tokens read 69.8 GB in 1.907 s, which is 36.6 GB/s against llama.cpp's
+  43: the gap is streaming, not parallelism. And annotating the profile
+  splits the kernel almost evenly — 33.5 % in the vector loop, **31.3 % in
+  the scalar pass that builds the row's scale table**, a 64-deep binary64
+  dependency chain feeding a vector loop of about the same length. Breaking
+  that chain associates the sum differently and moves what the model says,
+  so it is the sweep's decision rather than a rewrite. Not taken.
+
 - **The output projection is not worth taking** — 6.8 % of a generated
   token, reading 69 MB in 1.4 ms, which is 50 GB/s and exactly the rate the
   rest of the token runs at.
