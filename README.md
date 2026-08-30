@@ -6070,6 +6070,37 @@ rather than a hundred and twenty-eight -- a shape chosen against the part.
 This is two iterations of that; the campaign is what the remaining twenty-two
 per cent is.
 
+**And their shape too, read off the same source.** A sixty-four by sixty-four
+tile rather than a hundred and twenty-eight, two hundred and fifty-six
+invocations holding four by four of the answer rather than eight by eight,
+which is sixteen accumulators a thread rather than sixty-four. It is the
+worse ratio -- sixteen multiply-adds for eight reads against sixty-four for
+sixteen -- and the better occupancy, and on this part the occupancy wins:
+**1.95 s against 2.02**.
+
+| 1419-token device prompt | |
+|---|---:|
+| the matrix kernel this program uses | **1.64 s** |
+| scalar multiply-adds, 128 tile, eight by eight | 2.98 s |
+| the packed dot product | 2.02 s |
+| their tile and their thread shape as well | 1.95 s |
+
+**Forty-eight registers and twenty subgroups a SIMD**, against the matrix
+kernel's hundred and sixty-eight and six. So the kernel is not short of waves
+and not short of registers and is still eighteen per cent behind, which is
+the arithmetic nobody had written down: a cooperative-matrix multiply-add is
+four thousand and ninety-six multiply-adds in one instruction where a packed
+dot is two a lane, and even at sixteen cycles against one the instruction is
+twice the rate. **A dot-product kernel cannot beat a matrix kernel that is
+fed at all**, and this file's is.
+
+Which leaves the thing that started this unexplained and now sharply so:
+their dot-product kernel reads 1353.7 tokens a second where this one reads
+727, with fewer reads a multiply-add and three times the waves. Whatever
+that is, it is not the instruction, the tile, the thread shape, the
+occupancy or the staging width -- all five are now theirs and it is still
+1.86 times.
+
 Not kept: a kernel that is right and slower costs a measurement every time
 somebody reads the file. What is kept is the instruction, which is written
 down here because nothing else in this program has used it and the next

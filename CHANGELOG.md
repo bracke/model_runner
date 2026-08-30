@@ -67,9 +67,19 @@ Keep a Changelog and the project uses semantic versioning.
   the part advertises it, `fp16: dot2`, in the line that runtime prints at
   startup. Staging the tiles as pairs and calling it takes 2.98 s to **2.02**,
   the 1.47× the arithmetic predicts. Four halves a read is worse (2.12), so
-  the pair is the width. Still behind the matrix kernel's 1.66, so not kept —
-  but the instruction is recorded, because nothing here has used it and the
-  next multiply-add loop should.
+  the pair is the width.
+
+  **Their tile and thread shape too**: 64×64 rather than 128×128, 256
+  invocations holding 4×4 rather than 8×8 — the worse ratio and the better
+  occupancy, and the occupancy wins: **1.95 s**. At 48 registers and 20
+  subgroups a SIMD against the matrix kernel's 168 and 6, it is short of
+  neither waves nor registers and still 18 % behind — because a
+  cooperative-matrix multiply-add is 4096 multiply-adds in one instruction
+  where a packed dot is two a lane. A dot-product kernel cannot beat a
+  matrix kernel that is fed at all.
+
+  Not kept. The instruction is recorded, because nothing here has used it
+  and the next multiply-add loop should.
 
 - **The device prompt's 1.7× is not the matrix instruction, and now there is
   a number for that.** llama.cpp uses the same extension on this part
