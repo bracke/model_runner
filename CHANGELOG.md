@@ -51,6 +51,22 @@ Keep a Changelog and the project uses semantic versioning.
   is. The kernel therefore runs at about a third of what the part's byte dot
   product could do, and the two thirds are the format rather than the loop.
 
+- **The integer matrix instruction priced before a rewrite was built for
+  it: 11 %, not the 2× the hardware sheet implies.** This device offers ten
+  cooperative-matrix shapes including signed 8-bit in, 32-bit out — and
+  Q8_0 weights are already signed bytes, so an integer kernel would skip the
+  decode entirely. Timed with the staging equalized so only the instruction
+  differs, int8 reads 3.733 s against half precision's 4.199. Since Q8_0
+  scales every 32 elements, using it needs per-block scale tiles and
+  byte-quantized activations, and the ablations put every operand this
+  kernel touches at 12 % of it. Not built.
+
+- **A deeper prompt batch is level.** `Llama.Max_Batch` capped it at 128, so
+  the weights are read eleven times over a 1419-token prompt where llama.cpp
+  reads them once. Raising the cap: 256 is level, 512 is worse, digests
+  unchanged. So the prompt is not weight-traffic-bound either, which is an
+  independent confirmation that the matrix phase is compute-bound.
+
 - **Four more attempts on the two widest gaps, all measured, none kept.**
   The scale preamble's binary64 chain: removing it entirely is level, so
   breaking it into partials would buy nothing — the pass waits for memory,

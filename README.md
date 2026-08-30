@@ -5960,6 +5960,28 @@ one half-precision element an invocation at a time, costs far more than the
 `coopMatLoad` it was meant to halve. The operands are twelve per cent of
 this kernel and no mechanism for sharing them is cheaper than that.
 
+**And the instruction itself, priced before anything was built for it.**
+This device offers ten cooperative-matrix shapes, not one: sixteen cubed in
+half precision to half or to binary32, and six integer forms including
+signed eight-bit in to thirty-two-bit out. Q8_0 weights are already signed
+bytes, so an integer kernel would skip the decode entirely, and RDNA3's
+integer matrix instruction is documented at twice the half-precision rate.
+That is the largest thing this file has had reason to hope for.
+
+It is worth eleven per cent. Timed with the staging equalized -- both arms
+copying their operands into shared memory, so the only difference is which
+instruction retires -- eight-bit integer reads 3.733 s against half
+precision's 4.199. Not two times; eleven per cent.
+
+Which decides it, because eleven per cent is less than what using it would
+cost. Q8_0 keeps a scale for every thirty-two elements, so an integer
+accumulator has to be converted and scaled once a block against a rank-one
+tile of weight and activation scales, and the activations have to be
+quantized to bytes and carried over as well. The ablations above put every
+operand this kernel touches at twelve per cent of it. A mechanism that costs
+some of twelve to win eleven of eighty-eight is not obviously worth
+building, and it is certainly not the 1.7 times.
+
 Which closes this shader. **Every rearrangement of it has now been
 measured** -- nine tile shapes, three subgroup counts, the batch against the
 vector tile, the decode ablated, both operands ablated, the wave width, the
