@@ -1227,8 +1227,8 @@ All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself and at the arithmetic it chooses for itself. From the
 six-token prompt in `tests/fixtures/speed-prompt-short.txt`, twelve tokens
-take **0.414 s** -- 0.061 s evaluating the prompt and 0.353 s generating --
-and **1.86 s** of processor time, the median of three runs. Loading the model
+take **0.428 s** -- 0.065 s evaluating the prompt and 0.355 s generating --
+and **1.92 s** of processor time, the median of three runs. Loading the model
 costs a further **0.067 s** of wall that this figure does not include, and it
 used to cost 0.6 s: the weights are the file's own pages now rather than a
 copy of them, so what loading does is open a mapping and what reading them
@@ -1236,7 +1236,7 @@ costs is paid as they are touched.
 
 The arithmetic is half of that. `--arith int8` is the default and rounds the
 vector a product multiplies to a byte an element; the same run at `--arith
-f32`, taken back to back in the same sitting, is **1.439 s** for 10.52 s of
+f32`, taken back to back in the same sitting, is **1.318 s** for 9.91 s of
 processor time. What that costs is measured and bounded in `### Quantized
 activations` below, and it is why every figure in this section is worth
 reading twice: once as a time, and once as a statement about which of the two
@@ -1526,10 +1526,10 @@ tests speed --model MODEL --backend reference --max-tokens 4
 ```
 
 Four tokens from the short prompt, medians of three, taken back to back at a
-`cpu` spends 0.068 s evaluating the prompt and
-0.119 s generating; `reference` spends 5.948 s and 3.982 s. That is
-**fifty-three times** the work in total, eighty-seven times on the prompt
-and thirty-three times on the generation, and the two print the same
+`cpu` spends 0.062 s evaluating the prompt and
+0.117 s generating; `reference` spends 5.911 s and 3.935 s. That is
+**fifty-five times** the work in total, ninety-five times on the prompt
+and thirty-four times on the generation, and the two print the same
 digest.
 
 The ratio doubled when the default arithmetic changed, and it is worth being
@@ -1574,12 +1574,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.425 s | **0.274 s** |
-| -- evaluating the prompt | 0.067 s | 0.033 s |
-| -- generating | 0.356 s | **0.242 s** |
-| -- processor time | 1.91 s | **0.09 s** |
-| 110-token prompt, nothing generated | 0.443 s | **0.129 s** |
-| -- processor time | 2.68 s | **0.03 s** |
+| 6-token prompt, 12 generated | 0.428 s | **0.277 s** |
+| -- evaluating the prompt | 0.065 s | 0.037 s |
+| -- generating | 0.355 s | **0.246 s** |
+| -- processor time | 1.92 s | **0.09 s** |
+| 110-token prompt, nothing generated | 0.435 s | **0.123 s** |
+| -- processor time | 2.59 s | **0.02 s** |
 
 All six cells were taken in one sitting on 2026-08-30, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -2943,8 +2943,9 @@ prompt cannot go below` measures the whole surround at 0.502 s for a
 1419-token prompt, and that prompt makes about 1710 product calls: 0.29 ms
 apiece is 0.50 s. The two measurements meet. **What a bigger batch would do
 about it is nothing**, and that was checked rather than assumed --
-`--batch-size` at 64, 128, 256, 512 and 1024 reads 3.138, 2.490, 2.459, 2.426
-and 2.547 seconds, so the default is within three per cent of the best. The
+`--batch-size` at 64, 128, 256, 512 and 1024 reads 1.828, 1.137, 1.156, 1.159
+and 1.154 seconds, so the default is the best of them and half the batch is
+much worse. The
 floor is host loops over *positions*, which a batch does not divide.
 
 ### One core, and seven idle
@@ -6528,33 +6529,33 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **248.3 t/s** | 33.3 t/s |
-| llama.cpp, processor | 374.4 t/s | 39.7 t/s |
-| model_runner, device | 852.7 t/s | **48.4 t/s** |
-| llama.cpp, device | 1659.0 t/s | 55.8 t/s |
+| model_runner, processor | **252.9 t/s** | 33.0 t/s |
+| llama.cpp, processor | 353.3 t/s | 39.1 t/s |
+| model_runner, device | 894.3 t/s | **48.2 t/s** |
+| llama.cpp, device | 1553.4 t/s | 55.8 t/s |
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **226.2 t/s** | 33.3 t/s |
-| llama.cpp, processor | 272.5 t/s | 39.0 t/s |
-| model_runner, device | **1194.4 t/s** | 48.4 t/s |
-| llama.cpp, device | 1817.9 t/s | 55.8 t/s |
+| model_runner, processor | **226.6 t/s** | 33.0 t/s |
+| llama.cpp, processor | 272.6 t/s | 39.0 t/s |
+| model_runner, device | **1243.6 t/s** | 48.2 t/s |
+| llama.cpp, device | 1760.5 t/s | 56.0 t/s |
 
 **The longer prompt is the harder one and the quieter one, and it took this
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
 The gap is wider on the device and narrower on the processor: **1.20 times
-there against 1.51 at the shorter length, and 1.52 on the device against
-1.95.** Attention grows with the square of the context and it
+there against 1.40 at the shorter length, and 1.42 on the device against
+1.74.** Attention grows with the square of the context and it
 is the part of a layer this program is furthest behind on, so a table taken
 at a hundred and ten tokens reads a little kinder than the work deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±6 on 272.5 at 1419 tokens against ±7 on 374.4 at
+three runs it is **±6 on 272.6 at 1419 tokens against ±37 on 353.3 at
 110** -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
 more between sittings than the change being measured moved it: the device row
@@ -6646,8 +6647,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.443 s
-and 64 in 1.922 s on the processor, 0.129 s and 1.321 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.435 s
+and 64 in 1.938 s on the processor, 0.123 s and 1.327 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -6660,13 +6661,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 705.4 t/s rather
-than 374.4 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 690.2 t/s rather
+than 353.3 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 48.4 t/s
-now, against 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 48.2 t/s
+now, against 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -6732,9 +6733,9 @@ All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.417 s | 35 ms a token |
-| the same model at two bits | 1.796 s | 150 ms a token |
-| the first, drafted by the second | 3.886 s | 24 proposed, 7 accepted |
+| TinyLlama-1.1B at eight bits | 0.428 s | 36 ms a token |
+| the same model at two bits | 1.833 s | 153 ms a token |
+| the first, drafted by the second | 3.921 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking
@@ -8701,6 +8702,47 @@ split the columns across workgroups, each accumulating a partial answer,
 and add them up in a pass of their own. That is the one shape not yet
 tried, and it is the only one that does not put two subgroups behind the
 same barrier.
+
+
+### The seventh of a prompt that was not in a dispatch
+
+Per-step GPU timestamps, summed: the seventeen steps of a layer account for
+1025 ms of a 1190 ms prompt. **Eighty-six per cent of a device prompt was
+inside a dispatch, where llama.cpp's own logger accounts for
+ninety-six** -- 784 ms of an 813 ms prompt. A seventh of ours was somewhere
+no kernel could reach, and three sections above spent themselves on the
+other six sevenths.
+
+Timing `Run` from the caller's side splits it. Of a prompt with the
+one-time weight upload netted out: **1093 ms waiting on the device, 40 ms
+inside `Run` and not waiting** -- recording, the activation over, the
+answers back -- **and 190 ms outside `Run` altogether**, which is host work
+between one layer and the next, three quarters of a millisecond a layer.
+
+Most of it was the rotation table. `Rotary_Table` is called once a position
+a layer, and for each it works out a cosine and a sine a pair in binary64 --
+a hundred and twenty-eight positions by thirty-two pairs, twenty-two times a
+batch. **It does not depend on the layer.** Everything it reads is fixed for
+the whole of one call except the rotation base, and an architecture states
+one base unless it states a local one for windowed layers, which this
+family does not. So it is tabulated once a base now rather than once a
+layer, and a batch does the work once instead of twenty-two times.
+
+**The 1419-token prompt reads 1.131 s against 1.209**, better in each of
+three alternated rounds and clear of them: the slowest cached run is faster
+than the fastest uncached one. That is six and a half per cent, and the
+device now reads the prompt at **1244 tokens a second** against llama.cpp's
+1760 -- a gap of 1.42 where it was 1.52.
+
+It is worth about a hundred milliseconds on the processor too, which is one
+and a half per cent there rather than six: the same work saved against a
+prompt five times longer. Both backends compute the table in the same place
+and neither needed it.
+
+What is left outside a dispatch is a little over a hundred milliseconds a
+prompt. The rest of that is the keys and values copied back into the host's
+own cache, the sequence built a layer at a time, and the residual
+bookkeeping -- none of it yet measured apart.
 
 
 ### Kernels

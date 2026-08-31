@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The rotation table is tabulated once a batch rather than once a layer:
+  the 1419-token device prompt reads 1.131 s against 1.209**, better in each
+  of three alternated rounds with the slowest cached run faster than the
+  fastest uncached one. Six and a half per cent, and about a hundred
+  milliseconds on the processor as well. The device reads that prompt at
+  **1244 tokens a second** and the gap to llama.cpp falls from 1.52 times to
+  **1.42**.
+
+  `Rotary_Table` is called once a position a layer and works out a cosine
+  and a sine a pair in binary64 — 128 positions by 32 pairs, 22 times a
+  batch — and **it does not depend on the layer**. Everything it reads is
+  fixed for one call except the rotation base, and a base is stated once
+  unless an architecture states a local one for windowed layers. So it is
+  cached on the base, and reallocation clears the cache.
+
+- **Found by accounting the prompt against llama.cpp's own accounting.**
+  Per-step GPU timestamps sum to 1025 ms of a 1190 ms prompt — 86 per cent
+  inside a dispatch, where their logger accounts for 96. Timing `Run` from
+  the caller's side split the rest: 1093 ms waiting on the device, 40 ms
+  inside `Run` and not waiting, and **190 ms outside `Run` altogether**,
+  three quarters of a millisecond of host work per layer. Three sections of
+  work before this one had gone after the other six sevenths.
+
 - **A prompt attends sixteen query rows to a workgroup rather than
   thirty-two: 1.212 s against 1.237** on the 1419-token prompt, better in
   each of three alternated rounds. Sixteen is the instruction's own tile and

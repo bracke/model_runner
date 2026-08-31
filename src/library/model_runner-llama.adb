@@ -6262,6 +6262,16 @@ package body Model_Runner.Llama is
 
       Angles : Wide_Access := null;
 
+      --  The base the table in Angles was tabulated for, and a value no
+      --  base takes so that the first layer of a batch always tabulates.
+      --
+      --  Everything the table depends on but the base is fixed for the
+      --  whole of one call: the rotary width, the positions -- which start
+      --  at Item.Committed and run to Count -- the scaling and the turns.
+      --  So a batch tabulates once a base and not once a layer, and an
+      --  architecture that states no local base states one base.
+      Angles_Base : N.Wide_Real := -1.0;
+
       procedure Release is
       begin
          T.Free (Acts);
@@ -6723,7 +6733,15 @@ package body Model_Runner.Llama is
                         Forget (Angles);
                         Angles :=
                           new N.Wide_Real_Array (0 .. Count * Pairs * 2 - 1);
+
+                        --  Room that holds nothing yet.
+                        Angles_Base := -1.0;
                      end if;
+
+                     if Angles_Base
+                        /= Turn_Base (Settings, Natural (Index))
+                     then
+                        Angles_Base := Turn_Base (Settings, Natural (Index));
 
                      for Which in 0 .. Count - 1 loop
                         declare
@@ -6746,6 +6764,7 @@ package body Model_Runner.Llama is
                            end loop;
                         end;
                      end loop;
+                     end if;
                   end if;
 
                   --  Does the device hold the cache? Asked here rather
