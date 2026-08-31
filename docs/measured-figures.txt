@@ -2846,6 +2846,56 @@
 #   The worker-count and share-count comparisons were not re-taken, for the
 #   reason given twice above.
 #
+# 2026-08-31, the per-step table retaken after the three changes that
+# invalidated it, and two mechanisms for the down projection eliminated.
+#
+#   Per-step GPU timestamps again, 264 layer-batches of a 1419-token
+#   prompt, span 1.038 s. Per position per layer, against llama.cpp's own
+#   logger at a 512-position ubatch:
+#
+#                          ours   theirs   gap
+#     down projection      6.27     4.95   +1.32
+#     gate and up         10.76     9.58   +1.18
+#     key and value        2.08     0.97   +1.11
+#     attention            3.95     2.85   +1.10
+#     the two norms        1.02     0.63   +0.39
+#     query and output     4.25     4.04   +0.21
+#     the three joins      1.94     2.07   -0.13
+#     rotate and cache     0.45     0.46   -0.01
+#     total               30.72    25.55
+#
+#   As rates: gate and up 4.20 and 4.38 teraflops, query and output 3.92
+#   and 3.97, down 3.68, key and value 1.01. Theirs: 4.82 on gate and up,
+#   4.15 on query and output, 4.66 on down, 2.16 on key and value.
+#
+#   So down is the largest single gap and the shape of it is peculiar:
+#   on identical flop counts llama.cpp is FASTER on the deep matrix than on
+#   the square ones, and this program is slower. Depth helps them and hurts
+#   us.
+#
+#   Two mechanisms tested and both eliminated:
+#
+#     The activation reads. Replaced with a constant, down falls 22 per
+#     cent and gate 20 -- proportionally the same, so the deep matrix does
+#     not pay more for reading its activations. With them free, down still
+#     reads 4.69 teraflops against gate's 5.27.
+#
+#     The iteration count. Down walks 176 steps of thirty-two columns where
+#     gate walks 64, so the step was deepened to sixty-four -- the decode
+#     run twice over, every format reading the same. Everything got worse:
+#     span 1.120 s against 1.038, gate up ten per cent, down up seven.
+#     Fewer, deeper steps are not what this kernel wants.
+#
+#   What is left is the workgroup count -- down makes sixty-four of them
+#   against a feed-forward arm's hundred and seventy-six, on a part with
+#   ninety-six wave slots -- and that is the hypothesis this file has
+#   already recorded four measurements against, in other steps. It cannot
+#   be tested for down without also multiplying its weight decode by two or
+#   four, which is a fifth to three fifths of the step, so the test would
+#   not answer the question. Written down rather than guessed at.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 303e81b left it.
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
