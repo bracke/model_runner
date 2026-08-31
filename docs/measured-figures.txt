@@ -2442,6 +2442,43 @@
 #   448c2ed68ec342ee, 5abff916f9d83ca6, 33f48397f89839f6, 3248ac1bb7011de0.
 #   The sweep reads 28344 sequences, none outside tolerance.
 #
+# 2026-08-31, the split, measured in the cheap form first and not built in
+# the expensive one.
+#
+#   The workgroup count of the matrix product follows the rows, and the
+#   narrow products make too few: eight for a two-hundred-and-fifty-six-row
+#   projection over a batch of a hundred and twenty-eight, on a part with
+#   twenty-four SIMDs, running at 1040 gigaflops where a feed-forward arm's
+#   hundred and seventy-six run at 4390. The fix proposed was to split the
+#   columns across workgroups and add the partial answers up in a pass of
+#   their own.
+#
+#   Before building that, the same occupancy was bought a cheaper way: a
+#   third compilation of matrix_product.comp with NARROW, taking
+#   thirty-two vectors to a workgroup instead of a hundred and
+#   twenty-eight. That is four times the workgroups for the same rows --
+#   eight becomes thirty-two -- at the price of decoding the weights four
+#   times over, which for a half-megabyte matrix is nothing.
+#
+#   Alternated, three rounds, medians of three, 1419-token prompt:
+#     narrow tile for the keys and values   1.192, 1.191, 1.206 s
+#     wide tile for everything              1.193, 1.193, 1.215 s
+#   Level. Quadrupling the workgroups moved nothing measurable.
+#
+#   The pipeline was live: bound for every product instead of only the
+#   narrow ones, the same prompt reads 1.709 s, which is the four-fold
+#   decode on the wide matrices and proof the selection works.
+#
+#   So the workgroup count is not what binds those products, and the
+#   column split is not worth building. What it would add over the tile
+#   measured here is the decode it does not repeat -- three extra passes
+#   over half a megabyte a layer, 360 MB across the prompt, about six
+#   thousandths of a second of eleven hundred and ninety. Against that: a
+#   scratch region of rows by vectors by splits, a combining pass, and the
+#   engine plumbing for both. Not built, and this is why.
+#
+#   Nothing kept, nothing restamped: the tree is as commit a25f993 left it.
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
