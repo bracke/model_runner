@@ -2896,6 +2896,52 @@
 #
 #   Nothing kept, nothing restamped: the tree is as commit 303e81b left it.
 #
+# 2026-08-31, llama.cpp's mul_mm read for the deep matrix, and the one
+# thing it does that this does not, measured three ways and not kept.
+#
+#   Their k loop is: load A into shared memory, load B into shared memory,
+#   barrier, compute, barrier. Two barriers a block, as here, and a block
+#   of sixteen columns against this program's thirty-two -- so for a
+#   five-thousand-six-hundred-column matrix they take three hundred and
+#   fifty-two turns where this takes a hundred and seventy-six, and they
+#   are the faster of the two. That kills the iteration-count explanation
+#   from the entry above twice over.
+#
+#   The structural difference is B. They stage both operands and read both
+#   out of shared memory at a stride of their own choosing; this reads the
+#   activation where it lies, column major at the matrix's own column
+#   count -- four kilobytes between one vector and the next for a
+#   two-thousand-column matrix and eleven for a five-thousand-six-hundred
+#   one. That is a real asymmetry and it shows: with the activation reads
+#   replaced by a constant the down projection falls twenty-two per cent
+#   and a feed-forward arm twenty, on identical element counts.
+#
+#   So the activation was staged here too, with the tile and the single
+#   subgroup left exactly as they are -- which is what the taller-tile
+#   attempt earlier in this file confounded. Three ways of writing the
+#   staging loop, 1419-token device prompt against 1.042 s as it stands:
+#
+#     a vector to an invocation, each walking its own thirty-two
+#     components -- sixty-four runs a column count apart      1.982 s
+#     thirty-two invocations to a half, one component each,
+#     one cache line a half                                   1.809 s
+#     four invocations to a vector, eight components a read   1.688 s
+#
+#   Coalescing it properly is worth three tenths of a second and it is
+#   still sixty-two per cent slower than not staging at all. Reading the
+#   operand where it lies beats copying it first on this part, whatever the
+#   stride, and that is why the two kernels are different shapes rather
+#   than one of them being behind on a detail.
+#
+#   The down projection is therefore still unexplained. Eliminated so far:
+#   the activation reads (proportional to a shallow matrix's), the
+#   iteration count (deeper steps are worse, and their kernel takes twice
+#   as many), and staging (three ways, all much worse). What is left is the
+#   workgroup count, which cannot be tested here without multiplying the
+#   weight decode.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 2b4b6ca left it.
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
