@@ -9182,6 +9182,69 @@ the layout the instruction reads for free, and the four-kilobyte stride that
 looks wrong on paper is invisible beside a transpose that is not.
 
 
+### Attention split four ways, as llama.cpp splits it
+
+Attention is what is left: seventeen per cent of a device prompt and 2.1
+times behind -- 0.16 s against 0.078. An earlier sitting priced every
+overhead inside the kernel and found none, so whatever is left is
+structural, and the other runtime's structure was read out of its source
+rather than guessed at.
+
+`get_fa_tuning_params_coopmat1` gives this device sixteen query rows by
+sixty-four cached positions -- **the same tile this kernel already uses** --
+and then `row_split = 4`: four subgroups to a workgroup, two hundred and
+fifty-six invocations, where this uses one subgroup of sixty-four. Their
+split falls in three different places, and reading `flash_attn_cm1.comp` is
+what shows the third one is the clever part:
+
+| phase | what a subgroup takes |
+| --- | --- |
+| scoring | sixteen of the tile's sixty-four cached positions |
+| the softmax | four of the block's sixteen query rows |
+| weighing | sixteen of the head's sixty-four components |
+
+Splitting the weighing by *component* rather than by row or by key is what
+makes the whole thing cheap: a subgroup weighs every cached position of a
+tile against its own slice of the head, so the slice it accumulates is its
+own from the first tile to the last and **nothing has to be reduced across
+the four**. Only the softmax's rescale crosses, through sixteen floats of
+shared memory.
+
+That was built. It computes the same tokens, and it is **fourteen per cent
+slower** -- 1.108, 1.099 and 1.092 seconds against 0.968, 0.951 and 0.964,
+behind in each of three alternated rounds.
+
+**And it is slower having won every number that was supposed to make it
+faster.** The shader report, before against after:
+
+| | one subgroup | four |
+| --- | ---: | ---: |
+| registers | 128 | **64** |
+| subgroups a SIMD | 8 | **16** |
+| code | 17588 bytes | **6032** |
+
+Half the registers, twice the occupancy, a third of the code, four times
+fewer sequential matrix instructions in a subgroup -- and fourteen per cent
+worse. What it buys instead is four real barriers a tile where a workgroup
+of one subgroup needs none, and on this part that trade is a loss.
+
+**Occupancy was not the constraint**, which is worth saying plainly because
+it is the thing every one of these attempts assumed. This is the third
+independent measurement to reach it: a hundred-and-twenty-eight-row product
+tile over four subgroups cost thirteen per cent, staging both its operands
+cost sixteen, and now attention over four subgroups costs fourteen. Three
+kernels, three shapes, one answer -- a workgroup here wants to be one
+subgroup, and what it saves by being one is more than what more waves in
+flight can win back.
+
+One caution about the instrument, since this run exposed it. `--budget` puts
+attention at 0.241 s before the change and 0.236 s after, which is no change
+at all, while the run it is part of is a seventh slower. Its spans are
+host-side and the device's work runs on past them, so the phase shares say
+where work is issued and not where the machine spends its time. The
+end-to-end figure is the one to read.
+
+
 ### Kernels
 
 Row dot product, nanoseconds per element, release build, every format the

@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Attention split four ways as llama.cpp splits it: correct, and fourteen
+  per cent slower having won every number that was meant to make it
+  faster.** `get_fa_tuning_params_coopmat1` gives this device the same
+  sixteen-by-sixty-four tile this kernel already uses, and then `row_split =
+  4` — four subgroups where this uses one. Their split falls in three
+  places: sixteen cached positions each for scoring, four query rows each
+  for the softmax, and sixteen head components each for weighing. The third
+  is the clever one — splitting by component means a subgroup's slice is its
+  own from the first tile to the last, so nothing is reduced across the
+  four and only the softmax's rescale crosses.
+
+  Built, same tokens, 1.108/1.099/1.092 s against 0.968/0.951/0.964 —
+  behind in each of three alternated rounds. And the shader report went the
+  right way on everything: registers 128 → **64**, subgroups a SIMD 8 →
+  **16**, code 17588 → **6032** bytes, four times fewer sequential matrix
+  instructions in a subgroup. What it buys instead is four real barriers a
+  tile where one subgroup needs none.
+
+  **Occupancy was not the constraint** — the third independent measurement
+  to say so, after the 128-row product tile (+13 %) and staging both its
+  operands (+16 %). Three kernels, three shapes, one answer: a workgroup
+  here wants to be one subgroup.
+
+  A caution the run exposed: `--budget` puts attention at 0.241 s before and
+  0.236 s after — no change — while the run is a seventh slower. Its spans
+  are host-side and the device runs past them, so the phase shares say where
+  work is issued, not where time goes. Nothing kept, nothing restamped.
+
 - **The half-precision batch turned depth-major, so a tile's operand would
   be contiguous — thirty-two per cent slower, and the reason is worth
   keeping.** The instruction's second operand is sixteen depths by sixteen

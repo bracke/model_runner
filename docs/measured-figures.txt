@@ -3456,6 +3456,78 @@
 #   load:  under 1.5 throughout
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-08-31, attention split four ways as llama.cpp splits it: right,
+# faster on every static measure, and fourteen per cent slower.
+#
+#   Attention is what is left of the device prompt -- seventeen per cent of
+#   it and 2.1 times behind, 0.16 s against llama.cpp's 0.078 by their own
+#   per-node timings. An earlier entry priced every overhead inside this
+#   kernel and found none, so what is left is structural.
+#
+#   Read out of ggml-vulkan.cpp rather than derived.
+#   get_fa_tuning_params_coopmat1 gives this device block_rows 16 and
+#   block_cols 16 * 4 -- the same sixteen-by-sixty-four tile this kernel
+#   already had -- and row_split 4: four subgroups, two hundred and fifty-six
+#   invocations, where this had one subgroup of sixty-four.
+#
+#   flash_attn_cm1.comp shows the split falling in three different places,
+#   and the third is the one that makes it work:
+#
+#     scoring      sixteen of the tile's sixty-four cached positions
+#     the softmax  four of the block's sixteen query rows
+#     weighing     sixteen of the head's sixty-four components
+#
+#   Splitting the weighing by component means a subgroup weighs every
+#   cached position of a tile against its own slice of the head, so the
+#   slice it accumulates is its own from the first tile to the last and
+#   nothing is reduced across the four. Only the rescale crosses, through
+#   sixteen floats of shared memory -- carried, beside summed for the
+#   division at the end, because the softmax owns rows and the weighing owns
+#   components and neither can hand the other a register.
+#
+#   Built the same way here. It answers 1a26d24d33b8957b, which is the
+#   published digest, and it is fourteen per cent slower. Alternated,
+#   medians of three, the 1419-token device prompt:
+#
+#     one subgroup      0.968, 0.951, 0.964 s
+#     four subgroups    1.108, 1.099, 1.092 s
+#
+#   Behind in each of three rounds, and behind having won every static
+#   measure the change was supposed to win:
+#
+#                          one subgroup   four
+#     registers                     128     64
+#     subgroups a SIMD                8     16
+#     code                        17588   6032 bytes
+#     matrix instructions a
+#       subgroup a tile              32      8
+#
+#   Half the registers, twice the occupancy, a third of the code, a quarter
+#   of the sequential arithmetic. What it buys instead is four real barriers
+#   a tile where a workgroup of one subgroup needs none, and on this part
+#   that trade loses.
+#
+#   Occupancy was not the constraint, and this is the third independent
+#   measurement to say so: a 128-row product tile over four subgroups cost
+#   thirteen per cent, staging both that kernel's operands cost sixteen, and
+#   attention over four subgroups costs fourteen. Three kernels, three
+#   shapes, one answer -- a workgroup on this part wants to be one subgroup,
+#   and what it saves by being one is more than more waves in flight win
+#   back.
+#
+#   One caution about the instrument, which this run exposed. --budget puts
+#   ATTENDING at 0.241 s before the change and 0.236 s after -- no change at
+#   all -- while the run it is part of is a seventh slower. Its spans are
+#   host-side and the device's work runs on past them, so the phase shares
+#   say where work is issued and not where the machine spends its time. The
+#   end-to-end figure is the one to read, and the shares are for proportions
+#   between phases rather than for judging a change.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 46e4dae left it.
+#
+#   load:  under 1.4 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
