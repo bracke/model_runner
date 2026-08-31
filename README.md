@@ -9404,6 +9404,58 @@ caller is a kernel that will do this; it takes the count from the caller
 now, and zero means there is nothing to write.
 
 
+### A generated token is one kernel
+
+Everything above is about a prompt. A generated token was priced the same
+way -- each kernel voided in turn, sixty-four tokens, two rounds each -- and
+it is a different program:
+
+| kernel voided | generating | it costs |
+| --- | ---: | ---: |
+| nothing | 1.270 s | -- |
+| **`row_product`** | **0.181 s** | **1.089 s, 86 %** |
+| `attention` | 1.273 s | nothing |
+| `combine` | 1.271 s | nothing |
+| `norm` | 1.249 s | nothing |
+| `rotate` | 1.273 s | nothing |
+| `place` | 1.282 s | nothing |
+
+**A generated token is the row product and nothing else.** Attention,
+the normalizations, the joins, the rotation and the cache write together
+measure zero at a batch of one -- every one of them is a few thousand
+operations against a pass over every weight in the model.
+
+Per token: 19.8 milliseconds, of which **17.0 is the row product and 2.8 is
+no kernel at all**. llama.cpp's whole token on this device is 17.9. So this
+program's one kernel is about as fast as their entire token, and what puts
+it behind is the 2.8 milliseconds around it.
+
+**The row product is at the bus, not at its instructions.** It moves 1.17
+gigabytes a token in 17.0 milliseconds, which is 69 gigabytes a second of a
+part whose peak is about a hundred. And the instruction count was tested
+directly: a `Q8_0` block is thirty-four bytes and a row begins on a word, so
+half the blocks of every matrix straddle, and the straddling path read both
+words of every pair -- sixteen reads for what nine words cover. Carrying the
+second word forward reads each once, a quarter off every weight read the
+kernel makes. It is bit-exact and it is **level**: 1.276, 1.282 and 1.280
+seconds against 1.278, 1.282 and 1.288. A kernel waiting on memory does not
+care how few instructions ask for it.
+
+The 2.8 milliseconds is not what it looks like either. It is about
+twenty-two submissions -- one a layer -- and the obvious suspect was the
+host writing descriptors, four to a step and nine steps to a layer. Writing
+every one of them **twice** costs nothing: 1.264 seconds against 1.270. So
+the descriptors are free and what is left is the submissions themselves.
+
+**And `--budget` is no help here at all**, which is the sharpest illustration
+this file has of what that instrument measures. It puts attending at
+**seventy-five per cent** of a generated token and projecting at nineteen,
+where removal puts attention at zero and the row product at eighty-six. The
+single-position path waits for a layer's fence inside its attending span, so
+the whole layer's time lands there. The instrument is not wrong -- it is
+answering where the host waits, and this is where the host waits.
+
+
 ### Kernels
 
 Row dot product, nanoseconds per element, release build, every format the

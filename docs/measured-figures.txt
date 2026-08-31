@@ -3742,6 +3742,71 @@
 #   load:  under 1.4 throughout
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-08-31, a generated token priced by removal: it is one kernel, and the
+# two things that are not it are not what they looked like.
+#
+#   Every entry above is about a prompt. A generated token was priced the
+#   same way -- each kernel voided in turn by an early return, sixty-four
+#   tokens, two rounds each:
+#
+#     nothing voided     1.261, 1.279 s
+#     row_product        0.181, 0.181 s      costs 1.089 s   86 %
+#     attention          1.270, 1.276 s      nothing
+#     combine            1.273, 1.269 s      nothing
+#     norm               1.248, 1.249 s      nothing
+#     rotate             1.270, 1.275 s      nothing
+#     place              1.281, 1.282 s      nothing
+#
+#   A generated token is the row product and nothing else. Attention, the
+#   normalizations, the joins, the rotation and the cache write all measure
+#   zero at a batch of one: each is a few thousand operations against a pass
+#   over every weight in the model.
+#
+#   Per token: 19.8 ms, of which 17.0 is the row product and 2.8 is no
+#   kernel at all. llama.cpp's whole token on this device is 17.9 ms, so
+#   this program's one kernel is about as fast as their entire token, and
+#   the 2.8 ms around it is what puts it behind.
+#
+#   Two things were then tested rather than assumed, and neither is what it
+#   looked like.
+#
+#   The kernel is at the bus and not at its instructions. It moves 1.17
+#   gigabytes a token in 17.0 ms, which is 69 GB/s of a part whose peak is
+#   about a hundred. A Q8_0 block is thirty-four bytes and a row begins on a
+#   word, so half the blocks of every matrix straddle, and the straddling
+#   path read both words of every pair -- sixteen reads for what nine words
+#   cover, because the second word of one element is the first word of the
+#   next. Carrying it forward reads each word once, which is a quarter off
+#   every weight read this kernel makes. Bit-exact -- 448c2ed68ec342ee
+#   throughout -- and level:
+#
+#     both words read    1.278, 1.282, 1.288 s
+#     one carried        1.276, 1.282, 1.280 s
+#
+#   Ahead in two of three by three thousandths, which is nothing. A kernel
+#   waiting on memory does not care how few instructions ask for it. Not
+#   kept.
+#
+#   And the 2.8 ms is not the descriptors. The host writes four of them a
+#   step and nine steps a layer, a hundred and ninety-eight a token, which
+#   was the obvious suspect. Writing every one of them twice costs nothing:
+#   1.264 s against 1.270. So what is left in the 2.8 ms is the twenty-two
+#   submissions a token makes -- one a layer -- and the gap around each.
+#
+#   One more reading of the instrument, and the sharpest this file has.
+#   --budget on a generated token says ATTENDING 75.3 per cent and
+#   PROJECTING 18.7, where removal says attention nothing and the row
+#   product eighty-six. The single-position path waits for a layer's fence
+#   inside its attending span, so the whole layer's time lands there. The
+#   instrument is not wrong; it answers where the host waits, and that is
+#   where the host waits. It is not an account of where the machine spends,
+#   and the entry above this one already says not to read it as one.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 69cfd1a left it.
+#
+#   load:  under 1.4 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

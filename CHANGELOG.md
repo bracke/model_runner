@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A generated token is one kernel: `row_product` is 86 per cent of it and
+  everything else measures zero.** Priced by voiding each kernel in turn
+  over sixty-four tokens: 1.270 s as it is, **0.181 s with the row product
+  voided**, and 1.249–1.282 s with attention, the joins, the
+  normalizations, the rotation or the cache write voided — every one of them
+  free at a batch of one.
+
+  Per token: 19.8 ms, of which 17.0 is the row product and **2.8 is no
+  kernel at all**. llama.cpp's whole token here is 17.9, so this program's
+  one kernel is about as fast as their entire token and the 2.8 ms around it
+  is what puts it behind.
+
+  **The kernel is at the bus, not at its instructions** — 1.17 GB a token in
+  17.0 ms is 69 GB/s of about a hundred. Tested directly: a `Q8_0` block is
+  34 bytes so half of every matrix's blocks straddle a word, and the
+  straddling path read both words of every pair where carrying the second
+  forward reads each once — a quarter off every weight read. Bit-exact, and
+  **level**: 1.276/1.282/1.280 s against 1.278/1.282/1.288.
+
+  **The 2.8 ms is not the descriptors either**: writing every one of them
+  twice costs nothing, 1.264 s against 1.270. What is left is the twenty-two
+  submissions a token makes.
+
+  And `--budget` puts attending at **75 per cent** of a generated token
+  where removal puts it at zero — the sharpest illustration yet that the
+  instrument answers where the host waits, not where the time goes. Nothing
+  kept, nothing restamped.
+
 - **The half-precision conversion fused into the kernel that produces the
   activation: it works, and it is level.** `norm.comp` makes two of the four
   activations a layer converts, so it writes the half copy beside its own
