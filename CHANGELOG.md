@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A wider tile, now that a batch can fill one — measured, refused, and the
+  wall named.** With a batch of 512 the tile could finally be wider than
+  128, which would cut the weight reads per answer, and those are a fifth of
+  a prompt. Two rounds each, medians of three, digests held: 128 reads
+  0.954 and 0.964 s on the long prompt, 256 reads 1.223 and 1.176, and 512
+  reads 14.678 and 14.420.
+
+  The part says why. A tile's accumulators are its registers — `TILE_R/16`
+  by `TILE_V/16` of them, four apiece. At twice the width the shader reports
+  **256 registers with 67 spilled**, twelve kilobytes of shared memory taken
+  to spill into, and occupancy down from six subgroups a SIMD to four. At
+  four times, the accumulators alone want the whole file.
+
+  **All four walls of this tile are now measured** and they are not the same
+  wall: wider is the register file (+23 %, +1400 %), taller is the barrier
+  (+13 %), staging the operands is the round trip (+16 %), deeper was
+  measured earlier, and the only direction that ever paid is the padded
+  stride (−1 %, kept). Thirty-two by a hundred and twenty-eight on one
+  subgroup is a corner, not a choice.
+
+  The loads are already as wide as they go: the executed Q8_0 loop holds
+  thirty-four `buffer_load_b128` and three `buffer_load_b32`, and the three
+  are block scales. Nothing shipped; nothing moved; no figure re-measured.
+
 - **A prompt reads the weights three times where it read them twelve: the
   1419-token device prompt goes to 1466 tokens a second and the gap to
   llama.cpp to 1.20**, from 1.27. `Max_Batch` was 128, so a batch — which is

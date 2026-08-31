@@ -9079,6 +9079,71 @@ move with it and those were listed, so the check fired anyway; it fired by
 luck. `model_runner-llama.ads` is in the five groups now.
 
 
+### The tile is in a corner, and here is what holds each wall
+
+A batch is five hundred and twelve now, so the tile could finally be as wide
+as the section above made the batch. A workgroup reads `TILE_R` rows of
+weights by the whole depth to produce `TILE_R` by `TILE_V` answers, so the
+weight reads per answer fall as the tile widens -- and those reads are a
+fifth of a prompt. The sweep that once called tile width neutral was run
+when a batch was a hundred and twenty-eight and a wide tile could never be
+full.
+
+It is worse, and the part number says why. Two rounds each, medians of
+three, with the same digests throughout:
+
+| tile width | 1419-token prompt | 110-token prompt |
+| --- | ---: | ---: |
+| **128** | **0.954, 0.964 s** | **0.114, 0.113 s** |
+| 256 | 1.223, 1.176 s | 0.208, 0.209 s |
+| 512 | 14.678, 14.420 s | 4.713, 4.756 s |
+
+**A tile's accumulators are its registers**, and there are `TILE_R/16` by
+`TILE_V/16` of them, four registers apiece. Sixteen accumulators fit; at
+twice the width the shader reports **256 registers with 67 spilled** and
+twelve kilobytes of shared memory taken to spill them into, and its
+occupancy falls from six subgroups a SIMD to four. At four times the width
+the accumulators alone want the whole register file, and the fifteen-fold
+figure is what a kernel does when every one of them is a memory access.
+
+So the four walls of this tile are all now measured, and two of them are
+different walls:
+
+| direction | what it costs | what holds it |
+| --- | ---: | --- |
+| wider -- 256, 512 vectors | +23 %, +1400 % | the register file |
+| taller -- 128 rows, four subgroups | +13 % | the barrier |
+| operands staged in shared memory | +16 % | the round trip |
+| deeper -- 64, 128 columns a step | slower | measured earlier |
+| the shared tile's stride, padded | **-1 %** | kept |
+
+Thirty-two rows by a hundred and twenty-eight vectors on one subgroup is a
+corner, not a choice: the register file stops it widening and the cost of a
+second subgroup stops it growing any other way, because more output per
+workgroup needs either more registers each or more subgroups sharing them
+and this part refuses both.
+
+**And the loads are already as wide as they go.** The natural next thought
+-- that four one-word reads of a weight block should be one four-word read
+-- is already true: the executed Q8_0 loop holds thirty-four
+`buffer_load_b128` and three `buffer_load_b32`, and the three are the block
+scales.
+
+Where the prompt stands after all of it, on the current kernel, two rounds
+each:
+
+| | 1419-token device prompt |
+| --- | ---: |
+| as it is | 0.960 s |
+| the decode and the weight reads that feed it, gone | 0.734 s |
+| thirty-one of every thirty-two matrix instructions, gone | 0.803 s |
+
+Twenty-four per cent is the weights arriving and being turned into
+half-precision values, sixteen is the multiply itself, and the shape around
+both of them is at a local optimum in every direction anyone has thought to
+push it.
+
+
 ### Kernels
 
 Row dot product, nanoseconds per element, release build, every format the

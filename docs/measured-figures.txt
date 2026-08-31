@@ -3325,6 +3325,88 @@
 #   load:  0.79 to 2.52 across the sitting, each part started under 1.10
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-08-31, a wider tile now that a batch can fill one: measured, refused,
+# and the wall behind each of the four directions named.
+#
+#   The entry above makes a batch five hundred and twelve, so the tile can
+#   finally be wider than a hundred and twenty-eight. The argument for it is
+#   arithmetic: a workgroup reads TILE_R rows of weights by the whole depth
+#   to produce TILE_R by TILE_V answers, so the weight reads per answer fall
+#   as the tile widens, and the weight reads are a fifth of a prompt. The
+#   sweep that once called tile width neutral was taken when a batch was a
+#   hundred and twenty-eight and a wider tile could never be full.
+#
+#   Two rounds each, medians of three, digests 1a26d24d33b8957b and
+#   cbf29ce484222325 throughout:
+#
+#     TILE_V   1419-token prompt      110-token prompt
+#       128    0.954, 0.964 s         0.114, 0.113 s
+#       256    1.223, 1.176 s         0.208, 0.209 s
+#       512    14.678, 14.420 s       4.713, 4.756 s
+#
+#   And the part says why, which is the point of taking the shader
+#   statistics as well as the time:
+#
+#     TILE_V 128   168 registers, 0 spilled, 6 subgroups a SIMD
+#     TILE_V 256   256 registers, 67 spilled, twelve kilobytes of shared
+#                  memory taken to spill into, 4 subgroups a SIMD
+#
+#   A tile's accumulators are its registers -- TILE_R/16 by TILE_V/16 of
+#   them, four apiece -- so sixteen fit and thirty-two do not. At five
+#   hundred and twelve the accumulators alone want the whole register file,
+#   and fifteen times is what a kernel reads when every one of them is a
+#   memory access.
+#
+#   So the four directions out of this tile have all been measured now, and
+#   they are held by different things:
+#
+#     wider, 256 and 512 vectors        +23 %, +1400 %   the register file
+#     taller, 128 rows on four
+#       subgroups                       +13 %            the barrier
+#     both operands staged in shared
+#       memory                          +16 %            the round trip
+#     deeper, 64 and 128 columns        slower           measured earlier
+#     the shared tile's stride padded   -1 %             kept
+#
+#   Thirty-two rows by a hundred and twenty-eight vectors on one subgroup is
+#   a corner rather than a choice: more answers per workgroup needs either
+#   more registers apiece or more subgroups sharing them, and this part
+#   refuses both.
+#
+#   The loads are already as wide as they go, which was the other thing to
+#   check before concluding. The executed Q8_0 loop holds thirty-four
+#   buffer_load_b128 and three buffer_load_b32, and the three are the block
+#   scales -- so the compiler is already merging four_words into one
+#   four-word read, and there is no narrow load left to widen.
+#
+#   Where the prompt stands on the current kernel, two rounds each:
+#
+#     as it is                                       0.960, 0.960 s
+#     the decode and the weight reads feeding it,
+#       gone                                         0.740, 0.728 s
+#     thirty-one of every thirty-two matrix
+#       instructions, gone                           0.813, 0.793 s
+#
+#   Twenty-four per cent is the weights arriving and becoming
+#   half-precision values, sixteen is the multiply, and the shape around
+#   both is at a local optimum in every direction anyone has pushed it.
+#
+#   And where the prompt's time goes, by the engine's own accounting on the
+#   same build -- the instrument costs about eighteen per cent, so read the
+#   shares and not the seconds:
+#
+#     PROJECTING    75.6 %
+#     ATTENDING     17.0 %
+#     READING_OUT    2.7 %
+#     NORMALIZING    2.6 %
+#     ROTATING       2.0 %
+#
+#   Nothing kept and nothing restamped: the tree is as commit abe381d left
+#   it, and no group's sources changed.
+#
+#   load:  0.82 to 1.6 across the sitting
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
