@@ -115,7 +115,24 @@ const uint KCH    = 32u;
 const uint AR = TILE_R / 16u;
 const uint AV = TILE_V / 16u;
 
-shared float16_t wt[TILE_R * KCH];
+//  The step a row takes in the shared tile, which is wider than the step
+//  it holds. A sixteen-by-sixteen load out of shared memory reads sixteen
+//  rows at once, and a stride that is a power of two lands them in the
+//  same banks; llama.cpp pads its own tile on these devices for the same
+//  reason. What the padding costs is memory nothing reads.
+//
+//  Four, eight and sixteen measure the same -- 1.039, 1.040 and 1.041 s
+//  on the long device prompt -- and no padding at all is 1.048, so what
+//  this buys is a stride that is not a power of two rather than a
+//  particular bank pattern. Two is worse than none, 1.097 s, which the
+//  bank arithmetic does not predict and which is the one reading here
+//  that is not understood: a stride of sixty-eight bytes is the only one
+//  of these a sixteen-byte load cannot be built out of, so alignment
+//  rather than banking is the likely reason.
+const uint WT_PAD    = 4u;
+const uint WT_STRIDE = KCH + WT_PAD;
+
+shared float16_t wt[TILE_R * WT_STRIDE];
 
 //  The two formats this decodes, numbered as Weight_Packing'Pos numbers
 //  them, which is the same numbering row_product.comp is given.
@@ -308,7 +325,7 @@ void main() {
         {
             uint half_of = gl_LocalInvocationID.x & 1u;
             uint r       = gl_LocalInvocationID.x >> 1u;
-            uint into    = r * KCH + half_of * 16u;
+            uint into    = r * WT_STRIDE + half_of * 16u;
             uint row     = shape.base + (row0 + r) * rb;
 
 #ifdef MORE_FORMATS
@@ -906,7 +923,7 @@ void main() {
                 b[AV];
 
             for (uint i = 0u; i < AR; ++i) {
-                coopMatLoad(a[i], wt, i * 16u * KCH + kk, KCH,
+                coopMatLoad(a[i], wt, i * 16u * WT_STRIDE + kk, WT_STRIDE,
                             gl_CooperativeMatrixLayoutRowMajor);
             }
 

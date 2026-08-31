@@ -7,6 +7,44 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **llama.cpp's matrix tile, built here and thirty-one per cent slower; the
+  one per cent of it that was worth keeping, kept.** The matrix product is
+  seventy-nine per cent of the device's prompt and 1.42 times behind — 3.4
+  teraflops against 4.9, and **eighty-four per cent of the whole remaining
+  gap**. Their tile was read out of `ggml-vulkan.cpp` rather than guessed
+  at: `{256, 128, 128, 32}` for an AMD device with cooperative matrices on
+  the open driver, four subgroups, both operands staged in shared memory.
+
+  Built, correct, and slower. The two halves were then separated, alternated
+  round by round, medians of three, on the 1419-token device prompt:
+
+  | | prompt |
+  | --- | ---: |
+  | thirty-two rows, one subgroup, batch read in place | **1.026 s** |
+  | the same, batch staged in shared memory | 1.195 s |
+  | 128 rows, four subgroups, in place | 1.170 s |
+  | 128 rows, four subgroups, staged | 1.355 s |
+
+  **Both halves lose alone and the costs compose.** Staging the batch costs
+  sixteen per cent with one subgroup, where the barrier is free and cannot
+  be blamed. The taller tile costs thirteen on its own. Reading the staged
+  batch four values at a time, as llama.cpp does, changes nothing. What the
+  tall tile saves is real — the batch is re-read four times as often at
+  thirty-two rows — and this part would rather serve those re-reads out of
+  its second-level cache than pay a shared-memory round trip for them.
+
+  **Kept: the shared weight tile's stride, padded.** Sixteen rows are read
+  at once and a power-of-two stride puts all sixteen in the same banks;
+  llama.cpp pads its own tile on these devices for the same reason. 1.036 s
+  against 1.048, ahead in each of seven alternated pairs. Four, eight and
+  sixteen measure the same, so what it buys is a stride that is not a power
+  of two; two is worse than none, 1.097 s, which no bank arithmetic predicts
+  and which is recorded as not understood.
+
+  The device reads the 1419-token prompt at **1382.9 tokens a second** and
+  the gap to llama.cpp is **1.27**, from 1.31. 293 tests pass, the sweep
+  reads 28344 sequences with none outside tolerance, and every digest held.
+
 - **A generated token carries its activation from layer to layer too, and
   the host's copy of its cache is read back once a token rather than once a
   layer: sixty-four generated tokens on the device read 1.269, 1.273 and
