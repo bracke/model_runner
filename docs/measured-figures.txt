@@ -3528,6 +3528,63 @@
 #   load:  under 1.4 throughout
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-08-31, what attention actually costs, measured by removal rather
+# than by the instrument that has been reporting it.
+#
+#   The entry above records a caution: --budget puts attention at 0.241 s
+#   before the four-subgroup split and 0.236 after, no change, while the run
+#   is a seventh slower. Its spans are host-side. Every attention figure in
+#   this file came from it, so the kernel was priced again the way the
+#   matrix product was -- by taking pieces out and reading the whole run.
+#
+#   Two rounds each, medians of three, the 1419-token device prompt:
+#
+#     nothing removed                          0.957, 0.973 s
+#     the scores' matrix instructions          0.959, 0.953 s
+#     the weighing's matrix instructions       0.964, 0.970 s
+#     the keys, a constant matrix instead      0.953, 0.958 s
+#     the values                               0.943, 0.950 s
+#     both                                     0.953, 0.954 s
+#     the queries staged and nothing after     0.847, 0.840 s
+#     the whole kernel                         0.854, 0.859, 0.853 s
+#
+#   Attention is 0.111 s -- a ninth of a prompt, where the instrument said a
+#   sixth. Against llama.cpp's 0.078 s of FLASH_ATTN_EXT nodes that is 1.4
+#   times behind rather than 2.1, and everything else in the prompt is 0.854
+#   against their 0.726, which is 1.18.
+#
+#   So the account this file has been giving of where the device prompt's
+#   gap lies was skewed: attention is a fifth of what is left rather than a
+#   third, and the matrix product is more of it than the ratios said.
+#
+#   And nothing inside the kernel is individually attributable. Removing
+#   either product's matrix instructions changes nothing. Removing the keys,
+#   the values, or both changes nothing. Staging the queries is free. Only
+#   removing the whole tile loop shows. That is what a loop reads like when
+#   its loads, its arithmetic and its shared-memory traffic overlap and none
+#   of them is the wall on its own -- the same plateau the four-subgroup
+#   split found from the other direction.
+#
+#   The transferable part is about the instrument, not the kernel. Both
+#   numbers are real measurements of different things: --budget times the
+#   host's spans and says where work is issued, and removal says what the
+#   machine spends. A ratio quoted against another runtime's per-node
+#   timings wants the second. The phase shares stay useful for proportions
+#   between phases of one build and are not to be used to judge a change --
+#   which is exactly how they were used to rank attention as the next thing
+#   to do.
+#
+#   Two probes would not run and are recorded as not run rather than
+#   quietly dropped: the softmax with its exponentials replaced by a linear
+#   weight, and the tile loop with everything after the scores skipped. Both
+#   produce values the run rejects before it publishes anything, which is
+#   the speed tool refusing to report a run that did not complete.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 6625de1 left it.
+#
+#   load:  under 1.4 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

@@ -8947,6 +8947,12 @@ where the difference is and says it plainly:
 **Eighty-four per cent of the whole gap is in the one row.** Our kernel runs
 that work at 3.4 teraflops and theirs at 4.9.
 
+Read the attention row with the correction under `### What attention
+actually costs` below, which was measured later and by removal rather than
+by this instrument: attention is a ninth of a prompt and 1.4 times behind,
+not a sixth and 2.1. The row above overstates it, and the reason is the
+instrument rather than the arithmetic.
+
 So the other runtime's tile was read out of its source rather than guessed
 at. For an AMD device with `VK_KHR_cooperative_matrix` on the open driver,
 `ggml-vulkan.cpp` picks `{256, 128, 128, 32}`: a hundred and twenty-eight
@@ -9243,6 +9249,51 @@ at all, while the run it is part of is a seventh slower. Its spans are
 host-side and the device's work runs on past them, so the phase shares say
 where work is issued and not where the machine spends its time. The
 end-to-end figure is the one to read.
+
+
+### What attention actually costs
+
+That caution turned out to be worth following up, because every figure this
+section had for attention came from the instrument it warns about. So the
+kernel was priced the way the matrix product was priced -- by taking pieces
+out and reading the whole run:
+
+| what was taken out | 1419-token device prompt |
+| --- | ---: |
+| nothing | 0.965 s |
+| the scores' matrix instructions | 0.956 s |
+| the weighing's | 0.967 s |
+| the keys, loaded as a constant instead | 0.956 s |
+| the values | 0.947 s |
+| both | 0.954 s |
+| the queries' staging and everything after it | 0.844 s |
+| **the whole kernel** | **0.855 s** |
+
+**Attention is 0.111 s, a ninth of a prompt** -- where the instrument said a
+sixth. Against llama.cpp's 0.078 s of flash-attention nodes that is **1.4
+times behind, not 2.1**, and everything else in the prompt is 0.854 against
+their 0.726, which is 1.18. The gap is flatter than this section has been
+saying, and the part of it that is attention is a fifth of what is left
+rather than a third.
+
+**And nothing inside the kernel is individually attributable.** Removing the
+matrix instructions of either product changes nothing. Removing the keys,
+the values, or both changes nothing. Staging the queries is free. Only
+removing the whole tile loop shows, which is what a loop looks like when its
+loads, its arithmetic and its shared-memory traffic all overlap and none of
+them is the wall on its own.
+
+That is the same conclusion the four-subgroup split reached from the other
+direction, and together they say this kernel is on a plateau: it is not
+short of occupancy, not short of arithmetic, and not waiting on any one of
+its own operands.
+
+The lesson about the instrument is the transferable part. `--budget` puts
+attention at seventeen per cent of a prompt and removal puts it at eleven,
+because the instrument times host-side spans and the device runs on past
+them. Both numbers in this file are real measurements of different things,
+and every ratio quoted against another runtime's per-node timings wants the
+second one.
 
 
 ### Kernels

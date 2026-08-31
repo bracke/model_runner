@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Attention priced by removal instead of by the instrument: a ninth of a
+  prompt and 1.4 times behind, where the instrument said a sixth and 2.1.**
+  The caution recorded with the four-subgroup split — that `--budget` times
+  host-side spans while the device runs on past them — turned out to matter,
+  because every attention figure in the file came from it.
+
+  Priced by taking pieces out and reading the whole run: the whole kernel is
+  **0.111 s of a 0.965 s prompt**. Against llama.cpp's 0.078 s of
+  flash-attention nodes that is 1.4 times, and everything else in the prompt
+  is 0.854 against their 0.726, which is 1.18. The gap is flatter than this
+  file has been saying and attention is a fifth of what is left, not a
+  third.
+
+  **And nothing inside the kernel is individually attributable**: removing
+  either product's matrix instructions, the keys, the values, or both
+  changes nothing; staging the queries is free; only removing the whole tile
+  loop shows. That is what a loop looks like when its loads, its arithmetic
+  and its shared-memory traffic overlap and none is the wall alone — the
+  same plateau the four-subgroup split found from the other side.
+
+  Nothing kept, nothing restamped. The profile table under `### The tile
+  llama.cpp uses` now carries the correction.
+
 - **Attention split four ways as llama.cpp splits it: correct, and fourteen
   per cent slower having won every number that was meant to make it
   faster.** `get_fa_tuning_params_coopmat1` gives this device the same
