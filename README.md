@@ -9469,6 +9469,57 @@ reported the failure instead of hiding it. The helper prints its errors now;
 a measurement harness that cannot fail loudly is a harness that will publish
 somebody's last build.
 
+
+### Where a device prompt goes now
+
+With the conversion gone the budget was taken again, each kernel voided in
+turn, two rounds each against an 0.897-second prompt:
+
+| kernel | costs | share |
+| --- | ---: | ---: |
+| `matrix_product` | 0.635 s | **71 %** |
+| `attention_matrix` | 0.106 s | 12 % |
+| `combine` | 0.071 s | 8 % |
+| `norm` | 0.051 s | 6 % |
+| `rotate` | 0.017 s | 2 % |
+| `half_batch` | **-0.003 s** | -- |
+| `place` | -0.004 s | -- |
+
+The five that cost anything add to 0.880 s of 0.897, and the conversion
+kernel measures **below nothing**, which is what a kernel reads when it is
+compiled, bound, and never dispatched.
+
+### The normalization's second read, which is free
+
+That leaves the normalization at six per cent, and it walks its row twice --
+once to sum the squares, once to scale by the root of their mean. A
+workgroup is two hundred and fifty-six lanes and a row is two thousand and
+forty-eight values, so **sixteen values a lane**: the whole row fits in
+registers, and the second walk need not happen. Kept in an array indexed by
+a literal in an unrolled loop, so that it is registers and not scratch --
+the shader report confirms scratch stays at zero -- with the tail of a row
+too wide to hold read twice as before.
+
+It is bit-exact and it is **level, if anything behind**: 0.899, 0.906 and
+0.885 seconds against 0.883, 0.895 and 0.902, ahead in one round of three.
+
+The report says why, and it is the second half of the same sentence:
+
+| | registers | subgroups a SIMD |
+| --- | ---: | ---: |
+| the row read twice | 24 | **32** |
+| the row kept | 48 | 20 |
+
+**A third of the occupancy for a read that was never going to memory.** A
+row is eight kilobytes and the kernel that wrote it ran a moment before, so
+the second read is a cache hit; what it costs is an instruction, and what
+holding it costs is twenty-four registers and twelve waves. Not kept.
+
+That is the fourth measurement in this file to find that occupancy is what
+this part is short of, after a taller product tile, staged operands and a
+four-way attention -- and the first where the change removed work rather
+than adding it.
+
 One correctness trap on the way, worth recording because it was silent on
 the run that matters and loud on the one that does not. A run whose products
 all take the row shader has no half-precision buffer at all -- the engine

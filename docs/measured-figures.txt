@@ -4050,6 +4050,68 @@
 #   load:  0.65 to 2.90 across the sitting
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-08-31, where a device prompt goes with the conversion gone, and the
+# normalization's second read of its row, which is free.
+#
+#   The budget again, each kernel voided in turn, two rounds each against a
+#   0.897 s prompt:
+#
+#     matrix_product     0.264, 0.259 s     costs 0.635 s   70.8 %
+#     attention_matrix   0.789, 0.793 s           0.106 s   11.8 %
+#     combine            0.830, 0.821 s           0.071 s    7.9 %
+#     norm               0.834, 0.857 s           0.051 s    5.7 %
+#     rotate             0.879, 0.880 s           0.017 s    1.9 %
+#     half_batch         0.899, 0.900 s          -0.003 s
+#     place              0.903, 0.898 s          -0.004 s
+#
+#   The five that cost anything add to 0.880 s of 0.897, and the conversion
+#   kernel measures below nothing -- which is what a kernel reads when it is
+#   compiled, bound, and never dispatched. That is the entry above,
+#   confirmed from the other side.
+#
+#   Which leaves the normalization at six per cent, walking its row twice:
+#   once to sum the squares and once to scale by the root of their mean. A
+#   workgroup is two hundred and fifty-six lanes and a row is two thousand
+#   and forty-eight values, so sixteen a lane holds the whole row and the
+#   second walk need not happen. Held in an array indexed by a literal
+#   inside an unrolled loop, which is what keeps it in registers rather than
+#   scratch -- the shader report confirms scratch at zero -- and a row too
+#   wide to hold keeps what fits and reads the rest twice as before.
+#
+#   Bit-exact: 1a26d24d33b8957b and 5abff916f9d83ca6 both ways, which is
+#   what summing the same values in the same order gives.
+#
+#   Alternated, medians of three, the 1419-token device prompt:
+#     the row read twice   0.883, 0.895, 0.902 s
+#     the row kept         0.899, 0.906, 0.885 s
+#   Level, and ahead in one round of three. The 110-token prompt reads 0.107
+#   against 0.109 the same way round.
+#
+#   The shader report says why, and it is the second half of the same
+#   sentence:
+#
+#                          registers   subgroups a SIMD
+#     the row read twice          24                 32
+#     the row kept                48                 20
+#
+#   A third of the occupancy for a read that was never going to memory. A
+#   row is eight kilobytes and the kernel that wrote it ran a moment before,
+#   so the second read is a cache hit: what it costs is an instruction, and
+#   what holding it costs is twenty-four registers and twelve waves.
+#
+#   Not kept. This is the fourth measurement in this file to find that
+#   occupancy is what this part is short of -- after a hundred-and-
+#   twenty-eight-row product tile, its operands staged, and attention split
+#   four ways -- and the first of the four where the change removed work
+#   rather than adding it. The lesson is not that bigger tiles or more
+#   subgroups are wrong; it is that on this part a register is worth more
+#   than an instruction, and a cached read costs an instruction.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 4ac4807 left it.
+#
+#   load:  under 1.3 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

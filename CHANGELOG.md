@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The normalization's second read of its row is free, and holding the row
+  instead costs a third of the occupancy.** It walks the row once to sum the
+  squares and again to scale; a workgroup is 256 lanes and a row is 2048
+  values, so sixteen a lane holds the whole of it in registers — confirmed
+  in registers and not scratch by the shader report. Bit-exact and **level,
+  if anything behind**: 0.899, 0.906 and 0.885 s against 0.883, 0.895 and
+  0.902, ahead in one round of three.
+
+  The report says why: registers 24 → 48, subgroups a SIMD **32 → 20**. A
+  row is eight kilobytes and the kernel that wrote it ran a moment before,
+  so the second read is a cache hit — an instruction, not memory — and
+  holding it costs twelve waves. The fourth measurement in this file to find
+  occupancy is what this part is short of, and the first where the change
+  removed work rather than adding it. Not kept.
+
+  With the conversion gone the budget was taken again, two rounds each
+  against an 0.897 s prompt: `matrix_product` 0.635 s (71 %),
+  `attention_matrix` 0.106 (12 %), `combine` 0.071 (8 %), `norm` 0.051
+  (6 %), `rotate` 0.017 (2 %), and **`half_batch` −0.003** — what a kernel
+  reads when it is compiled, bound and never dispatched.
+
 - **The fourth activation follows the other three, and the conversion kernel
   stops running altogether.** The attention blend is read by the projection
   after it and by nothing else, so it too is written only in half precision
