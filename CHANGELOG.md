@@ -7,6 +7,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A layer's answer stays on the device for the next layer to read: the
+  1419-token device prompt reads 1.105 s against 1.134**, better in each of
+  three alternated rounds with clean separation. The device reads that
+  prompt at **1296 tokens a second** and the gap to llama.cpp falls from
+  1.40 times to **1.36**. Digest `1a26d24d33b8957b` unmoved, sweep clean at
+  28344 sequences.
+
+  A megabyte a layer was coming out of the mapped result buffer and the same
+  megabyte going back over. **Nothing is copied to stop it**: the result
+  buffer keeps room at its front that nothing else is placed in, and a layer
+  that carries out has its last step placed *there*, so the device writes
+  the answer straight into the room the next layer reads from. The first
+  version did copy — a transfer command and a barrier either side — and was
+  worth half as much, 1.2 per cent against 2.6.
+
+  **A layer may only carry out if the next one will be taken whole too.** A
+  layer that falls back reads the host's copy, which is what carrying does
+  not write, so the condition deciding whether the device takes a layer is
+  now a function and is asked of the next layer first.
+
+  What it does not remove is the fence per layer. The host wants nothing
+  from a carried layer but its keys and values, for its own mirror of the
+  cache; if that mirror went, submissions could chain and the 68 ms a prompt
+  spends between submit and wake would go too. That changes what a session
+  guarantees, and is not made here.
+
 - **The rotation table is tabulated once a batch rather than once a layer:
   the 1419-token device prompt reads 1.131 s against 1.209**, better in each
   of three alternated rounds with the slowest cached run faster than the

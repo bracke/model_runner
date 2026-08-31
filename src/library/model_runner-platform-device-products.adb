@@ -3916,7 +3916,9 @@ package body Model_Runner.Platform.Device.Products is
       Target    : out Model_Runner.Numerics.Real_Array;
       Ok        : out Boolean;
       Cancelled : out Boolean;
-      Cancel    : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null;
+      Carry_In  : Boolean := False;
+      Carry_Out : Boolean := False)
    is
       use type System.Storage_Elements.Integer_Address;
 
@@ -3974,7 +3976,14 @@ package body Model_Runner.Platform.Device.Products is
       Vector_Bytes : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Vector_Room) * 4;
 
-      Result_Bytes : Interfaces.Unsigned_64 := 0;
+      --  Room the result buffer keeps at its front for the activation a
+      --  sequence carries in or leaves behind. Nothing else is placed
+      --  there, so a sequence may read what the one before it wrote while
+      --  writing its own answers past it.
+      Carry_Room : constant Interfaces.Unsigned_64 :=
+        (Vector_Bytes + Alignment - 1) / Alignment * Alignment;
+
+      Result_Bytes : Interfaces.Unsigned_64 := Carry_Room;
 
       --  Room the angles need, which the widest rotating step decides.
       Turn_Room : Interfaces.Unsigned_64 := 0;
@@ -4186,6 +4195,16 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      --  Carried out, the last step writes straight into the room the next
+      --  sequence reads its activation from, and there is nothing to copy.
+      --  Safe because the only step that reads that room is the first join,
+      --  which is published by a barrier long before the last step runs.
+      if Carry_Out and then Steps.Held > 0
+        and then Places (Steps.Held).Bytes <= Carry_Room
+      then
+         Places (Steps.Held).At_Byte := 0;
+      end if;
+
       Item.Clock := Item.Clock + 1;
 
       Pinned := Item.Clock;
@@ -4316,15 +4335,22 @@ package body Model_Runner.Platform.Device.Products is
          end loop;
       end if;
 
-      --  The activation goes over once, however many products read it.
+      --  The activation goes over once, however many products read it --
+      --  and not at all where the sequence before this one left it on the
+      --  device.
       declare
          Wanted : Model_Runner.Numerics.Real_Array
            renames Vectors (Vectors'First
                             .. Vectors'First + Vector_Room - 1);
       begin
-         Standing (Item, Item.Vector_Memory, Item.Vector_At,
-                   Item.Vector_Bytes, Good);
-         if Good then
+         if Carry_In then
+            Good := True;
+         else
+            Standing (Item, Item.Vector_Memory, Item.Vector_At,
+                      Item.Vector_Bytes, Good);
+         end if;
+
+         if Good and then not Carry_In then
             declare
                Room : Model_Runner.Numerics.Real_Array (Wanted'Range)
                  with Import, Address => Item.Vector_At;
@@ -4366,6 +4392,13 @@ package body Model_Runner.Platform.Device.Products is
               Interfaces.Unsigned_64 (This.At_Vector) * 4;
          begin
             if From = 0 then
+               --  The activation: what the host sent, or what the sequence
+               --  before this one left at the front of the result buffer.
+               if Carry_In then
+                  return (Buffer => Item.Result_Buffer, Offset => Skip,
+                          Extent => Vector_Bytes - Skip);
+               end if;
+
                return (Buffer => Item.Vector_Buffer, Offset => Skip,
                        Extent => Vector_Bytes - Skip);
             else

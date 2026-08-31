@@ -1303,7 +1303,9 @@ package body Model_Runner.Backend.Device is
       Causal         : Boolean := True;
       Lifted         : Boolean := False;
       Max_Bias       : Model_Runner.Numerics.Real := 0.0;
-      Cancel         : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel         : Model_Runner.Cancellation.Token_Reference := null;
+      Carry_In       : Boolean := False;
+      Carry_Out      : Boolean := False)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -1573,7 +1575,8 @@ package body Model_Runner.Backend.Device is
       Step_Room (Down.Rows);
 
       Products.Add_Join
-        (Steps, Added, From_Step => 16, Residual_Step => 11);
+        (Steps, Added, From_Step => 16, Residual_Step => 11,
+         Kept => not Carry_Out);
       if not Added then
          return;
       end if;
@@ -1593,7 +1596,7 @@ package body Model_Runner.Backend.Device is
          Residual (Residual'First .. Residual'First + Slots * Width - 1),
          Positive (Slots),
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
-         Ran, Cancelled, Cancel);
+         Ran, Cancelled, Cancel, Carry_In, Carry_Out);
 
       if Cancelled or else not Ran then
          return;
@@ -1610,9 +1613,13 @@ package body Model_Runner.Backend.Device is
                      .. Landing.all'First + At_Keys
                         + Slots * Key.Rows - 1);
 
-      Into.all (Into.all'First .. Into.all'First + Slots * Width - 1) :=
-        Landing.all (Landing.all'First + At_Out
-                     .. Landing.all'First + At_Out + Slots * Width - 1);
+      --  The answer, where the host is the one that reads it next. Carried
+      --  out it stays on the device and Landing holds nothing for it.
+      if not Carry_Out then
+         Into.all (Into.all'First .. Into.all'First + Slots * Width - 1) :=
+           Landing.all (Landing.all'First + At_Out
+                        .. Landing.all'First + At_Out + Slots * Width - 1);
+      end if;
 
       Ok := True;
    end Whole_Layer;

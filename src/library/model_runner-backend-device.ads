@@ -551,6 +551,22 @@ package Model_Runner.Backend.Device is
    --  @param Ok False when the device did not run it, which leaves the
    --    caller to do the whole of it as it did before.
    --  @param Cancel Token a caller may set to ask for a stop.
+   --  @param Carry_In True where this layer's activation is the answer the
+   --    layer before it left on the device. Residual is then neither read
+   --    nor sent over.
+   --  @param Carry_Out True where this layer's answer is to be left on the
+   --    device for the next layer to read. Into is then not written.
+   --
+   --  A layer's answer is the next layer's activation, and between them it
+   --  was a megabyte out of the mapped result buffer and the same megabyte
+   --  back over. Carried, the last step writes straight into the room the
+   --  next layer reads from and neither happens. The first layer of a
+   --  batch reads what the host sent and the last writes what the host
+   --  reads; the ones between need neither.
+   --
+   --  A caller must not carry out of a layer unless the next one will be
+   --  taken whole as well: a layer that falls back reads the host's copy,
+   --  and the host's copy is the thing carrying does not write.
    procedure Whole_Layer
      (Residual       : Model_Runner.Tensors.Real_Array;
       Attention_Norm : Model_Runner.Tensors.Real_Array;
@@ -590,7 +606,9 @@ package Model_Runner.Backend.Device is
       Causal         : Boolean := True;
       Lifted         : Boolean := False;
       Max_Bias       : Model_Runner.Numerics.Real := 0.0;
-      Cancel         : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel         : Model_Runner.Cancellation.Token_Reference := null;
+      Carry_In       : Boolean := False;
+      Carry_Out      : Boolean := False);
 
    --  A gated feed-forward block, whole, in one submission.
    --

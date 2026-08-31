@@ -6272,6 +6272,28 @@ package body Model_Runner.Llama is
       --  architecture that states no local base states one base.
       Angles_Base : N.Wide_Real := -1.0;
 
+      --  Whether the layer before this one left its answer on the device.
+      --  False at the start of every batch: the first layer reads the
+      --  embedding, which the host has.
+      Carrying : constant Boolean := True;
+      Carried : Boolean := False;
+
+      --  Whether a layer is one the device takes whole. Asked of the next
+      --  layer as well as of this one, because a layer that hands its
+      --  answer on must know that the layer it hands to will be there to
+      --  take it: one that falls back reads the host's copy, and the host's
+      --  copy is what carrying does not write.
+      function Whole_Layer_Fits (L : Layer) return Boolean
+      is (T.Is_Present (L.Gate)
+          and then L.Out_Bias = null
+          and then L.Up_Bias = null
+          and then L.Down_Bias = null
+          and then L.Feed_Norm_Bias = null
+          and then L.Post_Attention_Norm = null
+          and then L.Post_Feed_Norm = null
+          and then L.Key_Bias = null
+          and then L.Key_Norm = null);
+
       procedure Release is
       begin
          T.Free (Acts);
@@ -6791,15 +6813,7 @@ package body Model_Runner.Llama is
                     and then Resident
                     and then Item.Held = Exact
                     and then Settings.Experts = 0
-                    and then T.Is_Present (Current.Gate)
-                    and then Current.Out_Bias = null
-                    and then Current.Up_Bias = null
-                    and then Current.Down_Bias = null
-                    and then Current.Feed_Norm_Bias = null
-                    and then Current.Post_Attention_Norm = null
-                    and then Current.Post_Feed_Norm = null
-                    and then Current.Key_Bias = null
-                    and then Current.Key_Norm = null
+                    and then Whole_Layer_Fits (Current)
                   then
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
@@ -6838,8 +6852,28 @@ package body Model_Runner.Llama is
                         Causal    => Settings.Causal,
                         Lifted    => Lifted_Norms (Source),
                         Max_Bias  => Settings.Max_Bias,
-                        Cancel    => Item.Stopping);
+                        Cancel    => Item.Stopping,
+
+                        --  The first layer reads what the host sent and
+                        --  the last writes what the host reads; the ones
+                        --  between hand the activation on where it lies.
+                        --  Carried only where the whole layer went to the
+                        --  device on the layer before as well, which
+                        --  Carried says.
+                        Carry_In  => Carried,
+                        Carry_Out =>
+                          Carrying
+                          and then Index < Source.Layers.all'Last
+                          and then Whole_Layer_Fits
+                                     (Source.Layers.all (Index + 1)));
                   end if;
+
+                  Carried :=
+                    Carrying
+                    and then Whole_Layer_Done
+                    and then Index < Source.Layers.all'Last
+                    and then Whole_Layer_Fits
+                               (Source.Layers.all (Index + 1));
 
                   if Whole_Layer_Done then
                      Projected := True;

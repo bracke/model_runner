@@ -644,6 +644,19 @@ package Model_Runner.Platform.Device.Products is
    --  @param Ok True when the device computed all of them.
    --  @param Cancelled True when a caller asked to stop partway.
    --  @param Cancel Token a caller may set to ask for a stop.
+   --  @param Carry_In True where the activation this sequence reads is
+   --    the one the sequence before it left on the device, rather than
+   --    Vectors. Vectors is then not sent over at all.
+   --  @param Carry_Out True where the last step's answer is to be left on
+   --    the device for the next sequence to read, rather than copied back
+   --    into Target.
+   --
+   --  A layer's answer is the next layer's activation, and between them it
+   --  went to the host and came back: a megabyte a layer out of the mapped
+   --  result buffer and the same megabyte over again. Carried, neither
+   --  happens -- the answer stays where the device wrote it, in room the
+   --  result buffer keeps at its front for exactly this, and the next
+   --  sequence reads it there.
    procedure Run
      (Item      : in out Engine;
       Steps     : Sequence;
@@ -652,7 +665,9 @@ package Model_Runner.Platform.Device.Products is
       Target    : out Model_Runner.Numerics.Real_Array;
       Ok        : out Boolean;
       Cancelled : out Boolean;
-      Cancel    : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null;
+      Carry_In  : Boolean := False;
+      Carry_Out : Boolean := False);
 
    --  One position attending to everything a cache holds.
    --
