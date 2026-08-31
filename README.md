@@ -9520,6 +9520,74 @@ this part is short of, after a taller product tile, staged operands and a
 four-way attention -- and the first where the change removed work rather
 than adding it.
 
+
+### The workers are not spinning for nothing
+
+A profile of the processor generating puts 73.5 per cent in the eight-bit
+row kernel and **12.1 per cent in the worker loop** -- and annotating that
+loop shows ninety-five per cent of its samples in four instructions: a load
+of a shared counter, a compare, a `pause`, a decrement. Seven cores waiting,
+a hundred and fifty-four times a token. It reads like pure overhead. It is
+not, and three measurements say so.
+
+**The spin earns its keep.** Its budget was swept, medians of three, sixty-
+four generated tokens on the processor:
+
+| spin budget | generating |
+| --- | ---: |
+| **20 000** | **1.90 s** |
+| 4 000 | 1.93 s |
+| 400 | 2.04 s |
+| 0 | 2.07 s |
+
+Taking it out costs nine per cent. What the workers are avoiding is the
+kernel putting them to sleep and waking them again, and at a hundred and
+fifty-four jobs a token that wake is worth more than the core it burns.
+
+**The false sharing is not real either.** `Ticket` and `Left` are adjacent
+fields of one record, so every worker's decrement of `Left` as it finishes
+takes the line away from the six still reading `Ticket` for the next job --
+which is exactly the shape the annotation suggests. Given each its own cache
+line, generating reads 1.911 seconds against 1.907 and the long prompt 6.085
+against 5.972. Level, and slightly worse. Not kept.
+
+**What the workers are waiting for is the bus.** The worker count swept over
+the same run:
+
+| workers | generating |
+| --- | ---: |
+| **3** | **1.875 s** |
+| 4 | 1.911 s |
+| 5 | 1.916 s |
+| 6 | 1.913 s |
+| 7 | 1.927 s |
+| 8 | 1.918 s |
+
+Flat from three to eight, and three is the fastest of them. Generating reads
+every weight once and does one multiply with each, and **three cores of this
+part saturate whatever carries them**; the other four have nothing to do,
+and the spin is what makes having them cheap rather than what makes them
+expensive.
+
+The prompt is a different program on the same cores, and it scales: 25.142
+seconds at one worker, 9.207 at two, 7.677 at three, 6.841, 6.350 and 5.944
+at seven. A batch shares one reading of the weights between five hundred and
+twelve tokens, so it is arithmetic where generating is traffic.
+
+**So the processor's two gaps are two different problems.** Generating is
+1.16 times behind at 39.7 gigabytes a second against llama.cpp's 46, on a
+wall both of them are near. The prompt is 1.11 times behind with real
+scaling still in it, and that is where the row kernel is worth attacking.
+
+And the normalization's six per cent of a device prompt is neither of the
+two things it looked like. Its second read of the row was refused last
+section for occupancy. Its fold -- two hundred and fifty-six lanes halved
+through eight workgroup barriers, which the shader's own comment flags as
+the thing a subgroup reduction would replace -- costs nothing either:
+removing the halvings entirely reads 0.892 and 0.903 seconds against 0.892
+and 0.885. What is left is the streaming and the dispatch, and neither is a
+lever.
+
 One correctness trap on the way, worth recording because it was silent on
 the run that matters and loud on the one that does not. A run whose products
 all take the row shader has no half-precision buffer at all -- the engine

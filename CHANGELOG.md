@@ -7,6 +7,38 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The workers are not spinning for nothing, and generating saturates this
+  part at three cores of seven.** A profile of the processor generating puts
+  73.5 per cent in the eight-bit row kernel and 12.1 in the worker loop,
+  ninety-five per cent of which is four instructions — a shared counter, a
+  compare, a `pause`, a decrement. Three measurements say it is not
+  overhead.
+
+  The spin budget swept: 20 000 reads 1.90 s, 4 000 reads 1.93, 400 reads
+  2.04, and 0 reads 2.07. **Taking it out costs nine per cent** — the wake
+  it avoids is worth more than the core it burns, a hundred and fifty-four
+  times a token.
+
+  `Ticket` and `Left` share a cache line, so a worker's decrement takes it
+  from the six reading it. Given each its own line: 1.911 s against 1.907
+  generating, 6.085 against 5.972 on the prompt. **Level and slightly
+  worse.** Not kept.
+
+  The worker count swept: **3 workers is fastest** (1.875 s) and 4 through 8
+  are flat (1.911–1.927). Generating reads every weight once and multiplies
+  once, and three cores saturate whatever carries them. The prompt on the
+  same cores scales — 25.142 s at one worker to 5.944 at seven — because a
+  batch shares one reading of the weights.
+
+  **So the processor's two gaps are two problems**: generating is 1.16 times
+  behind at 39.7 GB/s against 46, near a wall both runtimes are at; the
+  prompt is 1.11 behind with scaling still in it.
+
+  And `norm`'s six per cent of a device prompt is neither of its two
+  suspects: the second read was refused last commit for occupancy, and
+  removing the fold's eight barriers entirely reads 0.892 and 0.903 s
+  against 0.892 and 0.885. Nothing kept, nothing restamped.
+
 - **The normalization's second read of its row is free, and holding the row
   instead costs a third of the occupancy.** It walks the row once to sum the
   squares and again to scale; a workgroup is 256 lanes and a row is 2048

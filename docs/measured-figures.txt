@@ -4112,6 +4112,83 @@
 #   load:  under 1.3 throughout
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-08-31, the processor's worker loop, its two gaps, and the
+# normalization's fold: three things that looked like levers and are not.
+#
+#   A profile of sixty-four tokens generated on the processor:
+#
+#     model_runner__quantization__integers__deep__rows   73.5 %
+#     model_runner__backend__cpu__worker                 12.1 %
+#     model_runner__backend__cpu__mat_vec                 2.7 %
+#     model_runner__tensors__mat_mul_range_packed         1.8 %
+#
+#   Annotating the worker puts ninety-five per cent of its samples in four
+#   instructions -- a load of a shared counter, a compare, a pause, a
+#   decrement -- which is the Spin_Budget loop. Seven cores waiting, a
+#   hundred and fifty-four times a token. It reads like pure overhead.
+#
+#   It is not. The budget swept, medians of three:
+#     20_000   1.883, 1.923 s
+#      4_000   1.927, 1.925 s
+#        400   2.032, 2.057 s
+#          0   2.061, 2.088 s
+#   Taking the spin out costs nine per cent: the wake it avoids is worth
+#   more than the core it burns.
+#
+#   Nor is the false sharing real, which was the other reading of the
+#   annotation. Ticket and Left are adjacent fields of one record, so a
+#   worker's decrement of Left as it finishes its share takes the line away
+#   from the six still reading Ticket for the next job. Given each its own
+#   sixty-four-byte line, aligned:
+#     one line   1.907, 1.902, 1.916 s generating; 5.972 s on the prompt
+#     apart      1.919, 1.880, 1.911 s generating; 6.085 s on the prompt
+#   Level, and slightly worse on the prompt. Not kept.
+#
+#   What the workers are waiting for is the bus. The worker count swept over
+#   sixty-four generated tokens:
+#     3   1.875 s      6   1.913 s
+#     4   1.911 s      7   1.927 s
+#     5   1.916 s      8   1.918 s
+#   Flat from three to eight and three the fastest. Generating reads every
+#   weight once and does one multiply with each, and three cores of this
+#   part saturate whatever carries them; the other four have nothing to do.
+#   The spin is what makes having them cheap rather than what makes them
+#   expensive.
+#
+#   The prompt is a different program on the same cores and it scales:
+#     1   25.142 s     4   6.841 s
+#     2    9.207 s     5   6.350 s
+#     3    7.677 s     7   5.944 s
+#   A batch shares one reading of the weights between five hundred and
+#   twelve tokens, so it is arithmetic where generating is traffic. Four and
+#   a quarter times on seven cores, sublinear because it is partly traffic
+#   too.
+#
+#   So the processor's two gaps are two different problems, and this file
+#   has been quoting them as one. Generating is 1.16 times behind at 39.7
+#   gigabytes a second against llama.cpp's 46, on a wall both are near. The
+#   prompt is 1.11 behind with real scaling left in it, and that is where
+#   the row kernel is worth attacking.
+#
+#   And the normalization's six per cent of a device prompt is neither of
+#   the two things it looked like. Its second read of the row was refused in
+#   the entry above for occupancy. Its fold -- two hundred and fifty-six
+#   lanes halved through eight workgroup barriers, which the shader's own
+#   comment flags as what a subgroup reduction would replace -- costs
+#   nothing: with the halvings removed entirely and a finite constant in
+#   their place, the prompt reads 0.892 and 0.903 s against 0.892 and 0.885.
+#   What is left in that kernel is the streaming and the dispatch.
+#
+#   One probe would not run and is recorded as not run: the fold removed
+#   without a constant in its place makes a gain that is not finite, and the
+#   run refuses to publish rather than reporting nonsense -- which is the
+#   check working.
+#
+#   Nothing kept, nothing restamped: the tree is as commit dee23ec left it.
+#
+#   load:  under 1.4 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
