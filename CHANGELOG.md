@@ -7,6 +7,39 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A layer converts four activations where it converted seven: the
+  1419-token device prompt reads 1500 tokens a second and the gap to
+  llama.cpp is 1.17**, from 1.20. Ahead in each of three alternated rounds —
+  0.933, 0.921 and 0.937 s against 0.944, 0.969 and 0.969 — worth 3.7 per
+  cent at the same tokens.
+
+  Found by pricing every kernel the way attention was priced, voiding each
+  of the eight in turn. The eight add to 0.966 s against a 0.964 s prompt,
+  so this is the whole of where a device prompt goes:
+
+  | kernel | what it costs |
+  | --- | ---: |
+  | `matrix_product` | **0.642 s, 67 %** |
+  | `attention_matrix` | 0.116 s, 12 % |
+  | `combine` | 0.078 s, 8 % |
+  | `half_batch` | **0.076 s, 8 %** |
+  | `norm` | 0.037 s, 4 % |
+  | `rotate`, `place`, `row_product` | 0.017 s together |
+
+  `half_batch` is the surprise: the smallest kernel in the program, a
+  binary32 activation copied into half precision with no arithmetic at all,
+  costing as much as attention's keys, values and both matrix products
+  together — because it ran once per product where a layer's seven products
+  share four activations. The engine already computes which earlier step
+  each step reads, for the barrier; a tiled product now skips the conversion
+  when the product before it converted the same answer at the same width.
+
+  A note on how nearly this was measured wrong: the first A/B toggled the
+  arms with a `sed` whose pattern matched one arm and not the other, so
+  every round after the first built the same program. What caught it was the
+  twelve-token run coming back identical to the thousandth in both arms,
+  which two different binaries do not do.
+
 - **Attention priced by removal instead of by the instrument: a ninth of a
   prompt and 1.4 times behind, where the instrument said a sixth and 2.1.**
   The caution recorded with the four-subgroup split — that `--budget` times

@@ -2808,6 +2808,14 @@ package body Model_Runner.Platform.Device.Products is
    --  Recorded into a command buffer the caller has already begun, and
    --  leaving the row product's pipeline bound behind it, because a
    --  sequence's next step may be a kernel that expects to find it there.
+   --
+   --  Fresh says whether the copy has to be made. A layer asks for seven
+   --  products and hands only four activations to them -- the query, the
+   --  key and the value read one normalization, the two feed-forward arms
+   --  read another -- so three of the seven copies are of something the one
+   --  before them already converted. The caller says so; this cannot tell,
+   --  because what it is handed is a shape and a weight rather than which
+   --  step's answer it is reading.
    procedure Tile_Product
      (Item    : in out Engine;
       Rows    : Natural;
@@ -2816,6 +2824,7 @@ package body Model_Runner.Platform.Device.Products is
       Room    : Natural;
       Packing : Weight_Packing;
       Base    : Interfaces.Unsigned_64;
+      Fresh   : Boolean;
       Good    : out Boolean)
    is
       Bind_Pipeline : constant Bind_Pipeline_Call :=
@@ -2841,6 +2850,7 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      if Fresh then
       Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Halve_Line);
 
       declare
@@ -2862,6 +2872,7 @@ package body Model_Runner.Platform.Device.Products is
       Barrier
         (Item.Buffer, Pipeline_Stage_Compute, Pipeline_Stage_Compute,
          0, 1, Wall'Address, 0, Null_Handle, 0, Null_Handle);
+      end if;
 
       --  Whichever of the two tiles decodes this format.
       Bind_Pipeline
@@ -3190,7 +3201,7 @@ package body Model_Runner.Platform.Device.Products is
          if Tiled then
             Tile_Product
               (Item, Rows, Columns, Count, Vectors_Room, Packing,
-               Weight_Base, Good);
+               Weight_Base, Fresh => True, Good => Good);
 
             if not Good then
                Release_Borrowed;
@@ -4910,6 +4921,13 @@ package body Model_Runner.Platform.Device.Products is
          Wall : aliased Memory_Barrier;
 
          Began : aliased Command_Begin_Info;
+
+         --  Which step's answer the half-precision copy of the batch now
+         --  holds, and how long that answer's vectors are. Minus one is
+         --  none. A layer asks for seven products from four activations,
+         --  so three of the seven find the copy already made and skip it.
+         Half_From : Integer := -1;
+         Half_Wide : Natural := 0;
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -4947,7 +4965,21 @@ package body Model_Runner.Platform.Device.Products is
 
                Bound : aliased Address := Item.Sets (Index);
                First : Natural := 0;
+
+               --  Which step this one reads, filled in below beside the
+               --  barrier that decides the same thing.
+               Reading : Natural := 0;
+
+               --  What the half-precision copy held when this step began.
+               --  It is invalidated first and re-established only by a
+               --  tiled product, so a step of any other kind -- which may
+               --  have written what the copy holds -- leaves it invalid.
+               Was_From : constant Integer := Half_From;
+               Was_Wide : constant Natural := Half_Wide;
             begin
+               Half_From := -1;
+               Half_Wide := 0;
+
                --  A chained product reads what the one before it wrote, so
                --  the device is told to finish writing before it starts
                --  reading. Products of the same activation share nothing and
@@ -4979,6 +5011,7 @@ package body Model_Runner.Platform.Device.Products is
                     (if This.Attends then Natural'Max (Source, Cached)
                      else Source);
                begin
+                  Reading := Source;
                   if Wanted > Fenced then
                      Barrier
                        (Item.Buffer, Pipeline_Stage_Compute,
@@ -5187,16 +5220,27 @@ package body Model_Runner.Platform.Device.Products is
                then
                   declare
                      Done : Boolean;
+
+                     --  The copy still describes this activation if the
+                     --  product before this one converted the same answer
+                     --  at the same width, and nothing has run in between.
+                     Again : constant Boolean :=
+                       Was_From = Reading
+                       and then Was_Wide = This.Columns;
                   begin
                      Tile_Product
                        (Item, This.Rows, This.Columns, Count,
                         Whole_Tiles (Count), This.Packing,
-                        Places (Index).Base, Done);
+                        Places (Index).Base, Fresh => not Again,
+                        Good => Done);
 
                      if not Done then
                         Release_All;
                         return;
                      end if;
+
+                     Half_From := Reading;
+                     Half_Wide := This.Columns;
                   end;
 
                   goto Next_Dispatch;
