@@ -2479,6 +2479,62 @@
 #
 #   Nothing kept, nothing restamped: the tree is as commit a25f993 left it.
 #
+# 2026-08-31, the prompt's time accounted against llama.cpp's own
+# accounting, and their narrow-shape configuration matched.
+#
+#   Per-step GPU timestamps again, a top-of-pipe at the command buffer's
+#   start and a bottom-of-pipe after each of the seventeen steps and at the
+#   end, read every eighth submission so that the read does not stall each
+#   one. Thirty-three batched samples spread over the prompt.
+#
+#   Per layer-batch of a hundred and twenty-eight positions, milliseconds:
+#     down projection      0.785      gate                 0.695
+#     up                   0.665      attention            0.505
+#     query projection     0.271      output projection    0.266
+#     key                  0.132      value                0.131
+#     gate combine         0.133      the two norms        0.126
+#     the other two joins  0.117      rotate               0.042
+#     the two cache writes 0.014
+#     total                3.882
+#
+#   Which is 30.3 microseconds a position a layer, against llama.cpp's
+#   25.55 from their own logger. Attention is 3.95 now where it was 6.12
+#   before the half-precision cache and the sixteen-row tile.
+#
+#   And the accounting, which is the point of taking these:
+#     span inside Submit_And_Wait     93.7 per cent of the wall there
+#     the seventeen steps summed      1025 ms across the prompt
+#     the prompt itself               1190 ms
+#   So eighty-six per cent of a device prompt is inside a dispatch.
+#   llama.cpp's logger reads 784 ms of GPU against an 813 ms prompt --
+#   ninety-six. About a hundred and sixty-five milliseconds of ours, a
+#   seventh of the prompt, is somewhere no kernel change can reach, where
+#   theirs has thirty.
+#
+#   Their configuration for the narrow shape, read out of
+#   ggml_vk_guess_matmul_pipeline and ggml_vk_guess_split_k rather than
+#   guessed: the tile is chosen by shape -- m or n at most 32 takes a
+#   32x32 tile, at most 64 a 64x64, otherwise 128x128 with a hundred and
+#   twenty-eight invocations -- and split_k is taken only where k is at
+#   least 2048 and the tiles are at most two thirds of the core count. Run
+#   over this model's shapes that gives split_k of one everywhere except
+#   the keys and values, where it gives three.
+#
+#   Matched here as far as the shape allows -- a compilation with two
+#   subgroups to a workgroup, sixteen rows each, the step deepened to
+#   sixty-four columns so that all hundred and twenty-eight invocations
+#   decode, bound only where the rows are under five hundred and twelve:
+#     paired for the keys and values   1.195, 1.181, 1.203 s
+#     one wave everywhere              1.199, 1.191, 1.232 s
+#   Faster in each of three rounds and by three parts in a thousand. Not
+#   kept: a third pipeline and a fourth compilation for that is not a
+#   trade, and it settles that the narrow products are not where the
+#   remaining gap is. The earlier reading of the same idea applied to every
+#   product measured 1.360 s, and a narrower vector tile measured level;
+#   this is the third and last of that family.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 2811c4d left it.
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
