@@ -61,8 +61,15 @@ package Model_Runner.Platform.Device.Products is
    Query_Block : constant := 8;
 
    --  And how many the matrix kernel answers, which is what its tile is
-   --  wide. Below this a block is mostly rows the batch does not have.
-   Matrix_Queries : constant := 32;
+   --  tall. Below this a block is mostly rows the batch does not have.
+   --
+   --  Sixteen rather than thirty-two, measured: thirty-two holds twice the
+   --  answer in registers and needs two hundred and fifty-six of them,
+   --  which is four subgroups a SIMD, where sixteen needs ninety-six and
+   --  gets ten. The prompt reads 1.212 s against 1.237, better in each of
+   --  three rounds. Sixteen is also the floor -- it is what the
+   --  instruction's own tile is.
+   Matrix_Queries : constant := 16;
 
    --  The widest head that kernel takes, which is what the shared memory
    --  its queries are staged into is sized for. A model with wider heads

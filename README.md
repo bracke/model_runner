@@ -1574,12 +1574,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.405 s | **0.267 s** |
-| -- evaluating the prompt | 0.061 s | 0.035 s |
-| -- generating | 0.343 s | **0.231 s** |
-| -- processor time | 1.83 s | **0.08 s** |
-| 110-token prompt, nothing generated | 0.441 s | **0.131 s** |
-| -- processor time | 2.71 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.425 s | **0.274 s** |
+| -- evaluating the prompt | 0.067 s | 0.033 s |
+| -- generating | 0.356 s | **0.242 s** |
+| -- processor time | 1.91 s | **0.09 s** |
+| 110-token prompt, nothing generated | 0.443 s | **0.129 s** |
+| -- processor time | 2.68 s | **0.03 s** |
 
 All six cells were taken in one sitting on 2026-08-30, back to back, each
 waiting for the machine to fall below 1.20 before it started -- so the two
@@ -6528,33 +6528,33 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **249.4 t/s** | 34.4 t/s |
-| llama.cpp, processor | 352.4 t/s | 39.4 t/s |
-| model_runner, device | 839.7 t/s | **47.3 t/s** |
-| llama.cpp, device | 1584.5 t/s | 55.8 t/s |
+| model_runner, processor | **248.3 t/s** | 33.3 t/s |
+| llama.cpp, processor | 374.4 t/s | 39.7 t/s |
+| model_runner, device | 852.7 t/s | **48.4 t/s** |
+| llama.cpp, device | 1659.0 t/s | 55.8 t/s |
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **238.2 t/s** | 34.4 t/s |
-| llama.cpp, processor | 271.3 t/s | 38.8 t/s |
-| model_runner, device | **1158.4 t/s** | 47.3 t/s |
-| llama.cpp, device | 1759.1 t/s | 55.7 t/s |
+| model_runner, processor | **226.2 t/s** | 33.3 t/s |
+| llama.cpp, processor | 272.5 t/s | 39.0 t/s |
+| model_runner, device | **1194.4 t/s** | 48.4 t/s |
+| llama.cpp, device | 1817.9 t/s | 55.8 t/s |
 
 **The longer prompt is the harder one and the quieter one, and it took this
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The gap is wider on the device and narrower on the processor: **1.14 times
-there against 1.41 at the shorter length, and 1.52 on the device against
-1.89.** Attention grows with the square of the context and it
+The gap is wider on the device and narrower on the processor: **1.20 times
+there against 1.51 at the shorter length, and 1.52 on the device against
+1.95.** Attention grows with the square of the context and it
 is the part of a layer this program is furthest behind on, so a table taken
 at a hundred and ten tokens reads a little kinder than the work deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±0.4 on 271.3 at 1419 tokens against ±32 on 352.4 at
+three runs it is **±6 on 272.5 at 1419 tokens against ±7 on 374.4 at
 110** -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
 more between sittings than the change being measured moved it: the device row
@@ -6646,8 +6646,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.441 s
-and 64 in 1.859 s on the processor, 0.131 s and 1.353 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.443 s
+and 64 in 1.922 s on the processor, 0.129 s and 1.321 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -6660,13 +6660,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 734.2 t/s rather
-than 352.4 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 705.4 t/s rather
+than 374.4 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 47.3 t/s
-now, against 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 48.4 t/s
+now, against 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -8659,6 +8659,48 @@ same. A device without the instruction, a head wider than sixty-four or one
 that is not a multiple of sixteen, and every generated token -- a workgroup
 answers thirty-two query positions and a token is one -- go to the scalar
 kernels exactly as before.
+
+
+### Sixteen rows, and two shapes that are not the answer
+
+The attending tile is sixteen query rows a workgroup rather than
+thirty-two. **The 1419-token prompt reads 1.212 s against 1.237**, better
+in each of three alternated rounds, and the device now reads it at 1194
+tokens a second.
+
+Sixteen is the floor -- it is the instruction's own tile -- and the reason
+it wins is the register file. Thirty-two rows hold twice the answer, and
+that is **two hundred and fifty-six registers against ninety-six, four
+subgroups a SIMD against ten**. The arithmetic per workgroup is the same
+either way; what changes is how many of them the part will hold at once.
+
+The other two things this was measured against are worth writing down,
+because both were argued from a diagnosis that is right and both lost.
+
+**The workgroup count follows the rows, and the narrow products suffer for
+it.** A workgroup of the matrix product answers thirty-two rows by a
+hundred and twenty-eight vectors, so over a batch of that width the
+feed-forward arms make a hundred and seventy-six workgroups, the
+projections sixty-four, and the keys and values **eight** -- eight waves on
+a part with twenty-four SIMDs. The rates follow exactly: 4390, 4050 and
+3814, and 1040 gigaflops. That is a quarter of what this program is still
+behind by, and the cause is not in doubt.
+
+Two ways at it were tried. Sending the narrow products to the row product
+instead, which dispatches thirty-two workgroups for a
+two-hundred-and-fifty-six-row projection, reads **1.246 s against 1.223**:
+the matrix kernel wins even eight workgroups deep. Splitting a workgroup's
+rows between two subgroups -- twice the waves for the same workgroups, half
+the accumulators each -- reads **1.360 s**, and that is the third time a
+workgroup of more than one subgroup has lost in this kernel, after the
+taller tile and the wider one. Its barriers are free at one subgroup and
+are not free at two, and nothing measured so far buys back what they cost.
+
+What is left is to raise the workgroup count without sharing a barrier:
+split the columns across workgroups, each accumulating a partial answer,
+and add them up in a pass of their own. That is the one shape not yet
+tried, and it is the only one that does not put two subgroups behind the
+same barrier.
 
 
 ### Kernels

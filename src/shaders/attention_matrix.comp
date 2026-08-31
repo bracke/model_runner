@@ -122,7 +122,7 @@ layout(push_constant) uniform Shape {
 //  Query positions a workgroup answers, cached positions a tile holds, and
 //  the widest head this compilation stages. All three are multiples of the
 //  instruction's sixteen.
-const uint BR = 32u;
+const uint BR = 16u;
 const uint BC = 32u;
 const uint DM = 64u;
 
@@ -212,11 +212,11 @@ void main() {
     //  last tile rescaled them by. They belong to the thirty-two
     //  invocations that share the row, all of which reach them through the
     //  same cluster-wide reduction and so hold the same value.
-    float top[16];
-    float total[16];
-    float carry[16];
+    float top[BR / 2u];
+    float total[BR / 2u];
+    float carry[BR / 2u];
 
-    [[unroll]] for (uint i = 0u; i < 16u; i++) {
+    [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
         top[i]   = -1.0 / 0.0;
         total[i] = 0.0;
         carry[i] = 1.0;
@@ -224,10 +224,10 @@ void main() {
 
     //  What this invocation carries out: one column of each of sixteen
     //  rows, in each chunk of thirty-two columns.
-    float held[DM / 32u][16];
+    float held[DM / 32u][BR / 2u];
 
     [[unroll]] for (uint ch = 0u; ch < DM / 32u; ch++) {
-        [[unroll]] for (uint i = 0u; i < 16u; i++) {
+        [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
             held[ch][i] = 0.0;
         }
     }
@@ -291,7 +291,7 @@ void main() {
         //  sixteen rows, and the thirty-two that share a row agree on its
         //  largest score and the sum of its weights through a reduction
         //  over their half of the subgroup.
-        [[unroll]] for (uint i = 0u; i < 16u; i++) {
+        [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
             uint  r     = (lane >> 5u) + 2u * i;
             uint  step  = base + col;
             float score = -1.0 / 0.0;
@@ -391,7 +391,7 @@ void main() {
 
                 barrier();
 
-                [[unroll]] for (uint i = 0u; i < 16u; i++) {
+                [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
                     uint r = (lane >> 5u) + 2u * i;
 
                     held[ch][i] = held[ch][i] * carry[i] + ss[r * 32u + col];
@@ -403,7 +403,7 @@ void main() {
     //  And out, a row's components together, dropping the rows the block
     //  invented and the components a narrower head does not have.
     [[unroll]] for (uint ch = 0u; ch < DM / 32u; ch++) {
-        [[unroll]] for (uint i = 0u; i < 16u; i++) {
+        [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
             uint r    = (lane >> 5u) + 2u * i;
             uint c    = ch * 32u + col;
             uint slot = block * BR + r;

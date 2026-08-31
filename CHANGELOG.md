@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A prompt attends sixteen query rows to a workgroup rather than
+  thirty-two: 1.212 s against 1.237** on the 1419-token prompt, better in
+  each of three alternated rounds. Sixteen is the instruction's own tile and
+  so the floor, and it wins on the register file — thirty-two rows hold
+  twice the answer and need **256 registers against 96, four subgroups a
+  SIMD against ten**. The device reads that prompt at 1194 tokens a second
+  now, from 1105 two changes ago. Digest `1a26d24d33b8957b` unmoved, sweep
+  clean.
+
+- **Two shapes measured against it and not kept, both aimed at a real
+  defect.** A workgroup of the matrix product answers 32 rows by 128
+  vectors, so the workgroup count follows the rows: 176 for a feed-forward
+  arm, 64 for a projection, **8 for the keys and values** — eight waves on a
+  part with 24 SIMDs, and the rates say so exactly (4390, 4050, 3814, and
+  1040 gigaflops). Sending the narrow products to the row product, which
+  dispatches 32 workgroups instead of 8, reads **1.246 s against 1.223** —
+  the matrix kernel wins even under-occupied. Splitting a workgroup's rows
+  between two subgroups reads **1.360 s**, the third multi-subgroup shape to
+  lose in this kernel after the taller tile and the wider one. Raising the
+  workgroup count without putting two subgroups behind one barrier — a split
+  of the columns with a pass to add the partials up — is the shape left
+  untried.
+
 - **A prompt attends through the device's matrix instruction, and the cache
   is kept in half precision so that it can: the 1419-token prompt reads
   1.236 s against 1.323**, better in each of three alternated rounds with
