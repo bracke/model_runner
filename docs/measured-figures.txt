@@ -2728,6 +2728,40 @@
 #   and the 68 ms a prompt spends between submit and wake would go with it.
 #   That is a change to what a session guarantees.
 #
+# 2026-08-31, the host's copy of the cache filled once a batch instead of
+# once a layer -- built, correct, and level.
+#
+#   The keys and the values a layer writes came back through the result
+#   buffer, step by step, because the host keeps its own copy of the cache
+#   for a session that later runs on the processor. They are already in the
+#   cache the device holds, so Get_Cache was added beside Put_Cache, the two
+#   steps stopped being kept, and the copy was made once at the end of a
+#   batch out of the device's own cache instead.
+#
+#   Alternated, three rounds, medians of three, 1419-token device prompt:
+#     filled once a batch   1.110, 1.103, 1.105 s
+#     filled once a layer   1.104, 1.106, 1.107 s
+#   Level. Digest 1a26d24d33b8957b throughout.
+#
+#   It was never going to pay on its own: it moves a copy rather than
+#   removing one, and the copy was not what a layer waited for. What it was
+#   for is the wait -- with the answer carried on the device and the keys
+#   and values read out afterwards, a layer needs nothing from the device
+#   at all, and the sixty-eight milliseconds a prompt spends between submit
+#   and wake could go.
+#
+#   That needs the engine doubled, and this is where it stops. Submissions
+#   on one queue can be made to execute in order, so the result buffer is
+#   safe; what is not safe is that the host writes descriptor sets and
+#   records a command buffer between layers, and neither may be touched
+#   while a submission using them is still executing. So chaining needs two
+#   command buffers, two fences and two sets of descriptor sets -- the
+#   engine has one of each. Reverted rather than kept: it is complexity
+#   with nothing measurable behind it until that is done, and it is written
+#   here so that it is not re-derived.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 3857d10 left it.
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
