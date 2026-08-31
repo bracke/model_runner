@@ -7,6 +7,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The half-precision conversion fused into the kernel that produces the
+  activation: it works, and it is level.** `norm.comp` makes two of the four
+  activations a layer converts, so it writes the half copy beside its own
+  answer, zeroes the positions the rounding invented, and tells the engine
+  so; the engine then skips the conversion for any product reading that
+  normalization. 0.926, 0.939 and 0.916 s against 0.928, 0.931 and 0.943, at
+  the same tokens.
+
+  The diagnostic is the part worth keeping: voiding `half_batch` was worth
+  0.047 s before and is worth **0.011 s** after — so the fusing removed
+  thirty-six milliseconds of the conversion's work and the run did not get
+  thirty-six milliseconds faster. That work reappeared in the
+  normalization. What a conversion costs is the writing, and the writing
+  costs the same wherever it is done; what fusing saves on top — one read,
+  one dispatch, one barrier — is swallowed by making a store-bound kernel
+  write two arrays instead of one. The other two producers were not built,
+  because they can recover at most the 0.011 s that is left and would pay
+  the same extra store for it.
+
+  A correctness trap on the way, silent on the run that matters and loud on
+  the one that does not: a run whose products all take the row shader has no
+  half-precision buffer, and the binding that would carry it is then the
+  batch's own. The normalization wrote through it and a generated token came
+  back with a different digest while the prompt's stayed right. Nothing
+  kept, nothing restamped.
+
 - **A layer converts four activations where it converted seven: the
   1419-token device prompt reads 1500 tokens a second and the gap to
   llama.cpp is 1.17**, from 1.20. Ahead in each of three alternated rounds —

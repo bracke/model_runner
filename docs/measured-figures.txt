@@ -3682,6 +3682,66 @@
 #   load:  0.72 to 2.49 across the sitting
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-08-31, the half-precision conversion fused into the kernel that
+# produces the activation: built, right, and level -- with the arithmetic of
+# why.
+#
+#   The entry above leaves half_batch costing 0.047 s, made once an
+#   activation rather than once a product. The way to be rid of the rest is
+#   to stop it being a kernel: the step that produces an activation writes
+#   the half-precision copy beside the binary32 one, which is what place.comp
+#   already does for the cache. Two bytes written instead of four read and
+#   two written, and no dispatch and no barrier.
+#
+#   norm.comp makes two of the four activations a layer converts -- the
+#   query, key and value read one normalization and both feed-forward arms
+#   read another -- so it went first. It writes the copy beside its own
+#   answer, zeroes the positions the rounding invented, and the engine skips
+#   the conversion for any product reading it.
+#
+#   Alternated, medians of three, the 1419-token device prompt:
+#     the conversion a kernel of its own   0.928, 0.931, 0.943 s
+#     left behind by the normalization     0.926, 0.939, 0.916 s
+#   Level. Ahead in two of three and behind in one, and the same tokens.
+#
+#   The diagnostic is what makes this worth writing down rather than just
+#   reverting. Voiding half_batch, two rounds each:
+#
+#     before the normalization wrote the copy   0.047 s
+#     after                                     0.011 s
+#
+#   So the fusing removed thirty-six milliseconds of the conversion's work
+#   and the run did not get thirty-six milliseconds faster. The work
+#   reappeared in the normalization.
+#
+#   What a conversion costs is the writing, and the writing costs the same
+#   wherever it is done. What fusing saves on top of that -- one read of the
+#   activation, one dispatch, one barrier -- is small enough to be swallowed
+#   by making a kernel that was already store-bound write two arrays instead
+#   of one. The normalization's stores are strided a lane across a
+#   two-thousand-wide row and it now does that twice.
+#
+#   The other two producers -- the combining step for the gated arm and the
+#   attention kernel for the blend -- were not built. They can recover at
+#   most the 0.011 s that is left and would pay the same kind of extra store
+#   to do it.
+#
+#   One correctness trap, recorded because it was silent on the run that
+#   matters and loud on the one that does not. A run whose products all take
+#   the row shader has no half-precision buffer at all -- the engine sizes
+#   it only when some step uses the tile -- and the binding that would carry
+#   it is then the batch's own. The normalization wrote its copy through
+#   that binding, and a generated token came back 695d2a94ba6aec9d where it
+#   should have been 5abff916f9d83ca6, while the 1419-token prompt's digest
+#   stayed right the whole time. A kernel that trusts a binding rather than
+#   the caller will do this; the count came from the caller after that, with
+#   zero meaning there is nothing to write.
+#
+#   Nothing kept, nothing restamped: the tree is as commit bc8aab5 left it.
+#
+#   load:  under 1.4 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

@@ -9353,11 +9353,55 @@ against 0.949 and looked like a small loss. What caught it was that the
 twelve-token run came back identical to the thousandth of a second in both
 arms, which two different binaries do not do.
 
-What is left here is the other four sevenths, and they need the conversion
-to stop being a kernel at all: the step that produces an activation could
-write the half-precision copy beside the binary32 one, which is what
-`place.comp` already does for the cache. Then there is no second pass over
-the activation and no dispatch to wait for.
+What is left here is the other four sevenths, and the obvious way to take
+them is the next section -- which does not work.
+
+
+### The conversion moved and did not get cheaper
+
+With the copy made once an activation rather than once a product,
+`half_batch` still costs 0.047 s. The way to be rid of the rest of it is to
+stop it being a kernel: the step that produces an activation writes the
+half-precision copy beside the binary32 one, which is what `place.comp`
+already does for the cache. Then there is no second pass over the activation
+and no dispatch to wait for -- two bytes written instead of four read and
+two written.
+
+`norm.comp` produces two of the four activations a layer converts, so it
+went first. It writes the half copy beside its own answer, zeroes the
+positions the rounding invented, and tells the engine it has done so; the
+engine skips the conversion for any product reading that normalization.
+
+**It works and it is level**: 0.926, 0.939 and 0.916 seconds against 0.928,
+0.931 and 0.943, at the same tokens. And the diagnostic says why, which is
+the part worth keeping:
+
+| | voiding `half_batch` is worth |
+| --- | ---: |
+| before the normalization wrote the copy | 0.047 s |
+| after | 0.011 s |
+
+**The fusing removed thirty-six milliseconds of the conversion's work and
+the run did not get thirty-six milliseconds faster**, so that work reappeared
+in the normalization. Which is the whole lesson: what a conversion costs is
+the writing, and the writing costs the same wherever it is done. What fusing
+saves on top -- one read of the activation, one dispatch, one barrier -- is
+small enough to be swallowed by making a kernel that was already
+store-bound write two arrays instead of one.
+
+The other two producers were not built, and the arithmetic is why: they can
+recover at most the 0.011 s that is left, and they would pay the same kind
+of extra store to do it.
+
+One correctness trap on the way, worth recording because it was silent on
+the run that matters and loud on the one that does not. A run whose products
+all take the row shader has no half-precision buffer at all -- the engine
+sizes it only when some step uses the tile -- and the binding that would
+carry it is then the batch's own. The normalization wrote its copy through
+that binding and a generated token came back with a different digest while
+the prompt's stayed right. A kernel that trusts a binding rather than the
+caller is a kernel that will do this; it takes the count from the caller
+now, and zero means there is nothing to write.
 
 
 ### Kernels
