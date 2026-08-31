@@ -4928,6 +4928,11 @@ package body Model_Runner.Platform.Device.Products is
          --  so three of the seven find the copy already made and skip it.
          Half_From : Integer := -1;
          Half_Wide : Natural := 0;
+
+         --  Which steps write only the half-precision copy. Worked out
+         --  below from what reads each of them.
+         Halved    : array (1 .. Sequence_Limit) of Boolean :=
+           [others => False];
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -4958,6 +4963,64 @@ package body Model_Runner.Platform.Device.Products is
 
          Bind_Pipeline
            (Item.Buffer, Bind_Point_Compute, Row_Line (Item, Count));
+
+         --  Whether a step's answer is wanted only in half precision --
+         --  which is to say every step that reads it is a tiled product,
+         --  and no tiled product reads the binary32 form.
+         --
+         --  A step like that need not write the binary32 at all. It writes
+         --  the half-precision copy where the conversion would have put it
+         --  and the conversion does not run: two bytes a value instead of
+         --  four, and a whole pass over the activation that does not
+         --  happen. That is the case the fusing measured earlier did not
+         --  cover -- there the normalization wrote both, so the work moved
+         --  rather than went.
+         declare
+            function Only_Halved (Which : Natural) return Boolean is
+               Asked : Natural := 0;
+            begin
+               if Steps.Items (Which).Kept then
+                  return False;
+               end if;
+
+               for Later in Which + 1 .. Steps.Held loop
+                  declare
+                     That : Step renames Steps.Items (Later);
+
+                     Reads_It : constant Boolean :=
+                       That.Reads = Which
+                       or else That.Reads_Two = Which
+                       or else ((That.Chained or else That.Blends
+                                 or else That.Attends)
+                                and then That.Reads = 0
+                                and then Later = Which + 1);
+                  begin
+                     if Reads_It then
+                        Asked := Asked + 1;
+
+                        if not Uses_Matrix (Item, That.Packing, That.Rows,
+                                            That.Columns, Count)
+                        then
+                           return False;
+                        end if;
+                     end if;
+                  end;
+               end loop;
+
+               --  Nothing reading it is not a licence to write nothing.
+               return Asked > 0;
+            end Only_Halved;
+         begin
+            for Which in 1 .. Steps.Held loop
+               Halved (Which) :=
+                 (Steps.Items (Which).Norms or else Steps.Items (Which).Blends)
+                 and then Item.Half_Buffer /= Null_Handle
+                 and then Item.Half_Bytes
+                          >= Interfaces.Unsigned_64 (Steps.Items (Which).Rows)
+                             * Interfaces.Unsigned_64 (Whole_Tiles (Count)) * 2
+                 and then Only_Halved (Which);
+            end loop;
+         end;
 
          for Index in 1 .. Steps.Held loop
             declare
@@ -5160,7 +5223,12 @@ package body Model_Runner.Platform.Device.Products is
                         Columns => (if This.Lifted then 1 else 0),
                         Count   => C.unsigned (Count),
                         First   => Bits (This.Epsilon),
-                        Packing => 0,
+
+                        --  Positions the half-precision copy is to hold,
+                        --  and zero where there is none to write.
+                        Packing =>
+                          (if Halved (Index)
+                           then C.unsigned (Whole_Tiles (Count)) else 0),
 
                         --  Where the weight begins in the buffer it shares
                         --  with whatever else the device kept, in elements
@@ -5173,9 +5241,20 @@ package body Model_Runner.Platform.Device.Products is
 
                      --  A workgroup to a position: its lanes fetch the
                      --  row together and one of them adds it up in order.
-                     --  See the shader.
-                     Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
+                     --  See the shader. Over the rounded-up count where
+                     --  the copy is being written, because the positions
+                     --  past the batch write the zeros it needs.
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned (if Halved (Index)
+                                    then Whole_Tiles (Count) else Count),
+                        1, 1);
                   end;
+
+                  if Halved (Index) then
+                     Half_From := Index;
+                     Half_Wide := This.Rows;
+                  end if;
 
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
@@ -5195,19 +5274,31 @@ package body Model_Runner.Platform.Device.Products is
                      --  worth: the combining is elementwise and the arms of
                      --  a batch are as long as the batch is.
                      Span : constant Natural := This.Rows * Count;
+                     Room : constant Natural :=
+                       This.Rows * Whole_Tiles (Count);
+
+                     Over : constant Natural :=
+                       (if Halved (Index) then Room else Span);
 
                      Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (Span),
                         Columns => C.unsigned (This.Unit),
+                        Count   =>
+                          (if Halved (Index) then C.unsigned (Room) else 0),
                         others  => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
-                        C.unsigned ((Span + Group_Size - 1)
+                        C.unsigned ((Over + Group_Size - 1)
                                     / Group_Size), 1, 1);
                   end;
+
+                  if Halved (Index) then
+                     Half_From := Index;
+                     Half_Wide := This.Rows;
+                  end if;
 
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,

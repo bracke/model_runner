@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Three of the four activations a layer converts are never read in binary32,
+  so they are no longer written in it: the 1419-token device prompt reads
+  1577 tokens a second and the gap to llama.cpp is 1.12**, from 1.15. Ahead
+  in each of three alternated rounds — 0.897, 0.905 and 0.905 s against
+  0.938, 0.940 and 0.944 — four per cent, same tokens. The 110-token prompt
+  goes 0.112 to 0.107.
+
+  A normalization is read by the query, key and value; the second by both
+  feed-forward arms; the gated middle by the projection down. All of those
+  are tiles, and a tile's operand is half precision — it reads the copy and
+  never the original. The engine walks the steps after each one and where
+  every reader is a tiled product and the host keeps none of it, the step
+  writes **only** the copy: two bytes a value instead of four, into the place
+  the conversion would have put it, and the conversion does not run.
+
+  **This is why the fusing two entries ago was level and this is not.**
+  Writing the copy *as well* adds a store and removes a pass, and on a part
+  where everything is at the bus those cancel; writing it *instead* removes
+  a store and a pass and adds nothing. The question is not whether a kernel
+  can write half precision but whether anything wants the binary32 — and the
+  engine already had what it needed to answer it, in the same
+  back-references it uses to place a barrier.
+
 - **The repetition penalty asked its question two million times a token; it
   asks it thirty-two thousand times now. The device generates at 50.6 tokens
   a second and the gap to llama.cpp is 1.10**, from 1.20. Ahead in each of

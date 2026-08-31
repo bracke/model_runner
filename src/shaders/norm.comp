@@ -30,6 +30,8 @@
 //  waiting at a barrier. Only the fold puts them to work.
 
 #extension GL_ARB_gpu_shader_fp64 : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#extension GL_EXT_shader_16bit_storage : require
 
 const uint LANES = 256u;
 
@@ -41,6 +43,13 @@ layout(local_size_x = LANES) in;
 layout(std430, binding = 0) readonly  buffer Weight { float g[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
 layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+
+//  And the same answer in half precision, which is what the matrix
+//  instruction's operand takes. Where everything that reads this
+//  normalization is a tiled product, the binary32 answer above is written
+//  and never read -- so this is written instead of it, not beside it, and
+//  the conversion that used to make it does not run at all.
+layout(std430, binding = 3) writeonly buffer Halves { float16_t h[]; };
 
 layout(push_constant) uniform Shape {
     //  Components a position holds.
@@ -57,7 +66,16 @@ layout(push_constant) uniform Shape {
     //  the block this shares with the other kernels is words.
     uint epsilon;
 
-    uint unused_packing;
+    //  Positions the half-precision copy is to hold, which is the batch
+    //  rounded up to a whole tile: the positions between that and the count
+    //  are the ones the rounding invented and they get zeros, because the
+    //  tile has no test for a column it does not have.
+    //
+    //  Zero means write the binary32 answer as this always did. A run whose
+    //  products all take the row shader has no half-precision buffer at
+    //  all, and the binding this would write through is then the batch's
+    //  own -- so the caller says, and this does not guess from a binding.
+    uint room;
 
     //  Where the weight begins in the buffer the device kept it in, in
     //  elements: a kept weight shares its buffer with others.
@@ -70,11 +88,25 @@ void main() {
     uint slot = gl_WorkGroupID.x;
     uint lane = gl_LocalInvocationID.x;
 
-    if (slot >= shape.count) {
+    bool halved = shape.room > 0u;
+    uint limit  = halved && shape.room > shape.count
+                  ? shape.room : shape.count;
+
+    if (slot >= limit) {
         return;
     }
 
     uint at = slot * shape.width;
+
+    //  A position the rounding invented: zeros in the copy and none of the
+    //  arithmetic below.
+    if (slot >= shape.count) {
+        for (uint c = lane; c < shape.width; c += LANES) {
+            h[at + c] = float16_t (0.0);
+        }
+
+        return;
+    }
 
     //  A stride a lane, so that the lanes of a turn read neighbours.
     double mine = 0.0LF;
@@ -116,8 +148,14 @@ void main() {
     for (uint c = lane; c < shape.width; c += LANES) {
         float scaled = float (double (x[at + c]) * gain);
 
-        y[at + c] = shape.lifted != 0u
-                    ? scaled * (1.0 + g[shape.base + c])
-                    : scaled * g[shape.base + c];
+        float made = shape.lifted != 0u
+                     ? scaled * (1.0 + g[shape.base + c])
+                     : scaled * g[shape.base + c];
+
+        if (halved) {
+            h[at + c] = float16_t (made);
+        } else {
+            y[at + c] = made;
+        }
     }
 }

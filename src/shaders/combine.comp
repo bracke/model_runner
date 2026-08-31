@@ -16,11 +16,22 @@
 //  invocation reads only the element it writes, so overlapping them is safe
 //  and saves a buffer.
 
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#extension GL_EXT_shader_16bit_storage : require
+
 layout(local_size_x = 256) in;
 
 layout(std430, binding = 0) readonly  buffer Gate { float g[]; };
 layout(std430, binding = 1) readonly  buffer Up   { float u[]; };
 layout(std430, binding = 2) writeonly buffer Out  { float y[]; };
+
+//  And the same answer in half precision. The gated middle of a
+//  feed-forward is read by the projection down and by nothing else, and
+//  that projection is a tile whose operand is half precision -- so where
+//  the caller says so this writes the copy the tile reads instead of the
+//  binary32 nothing would look at, and the conversion that used to stand
+//  between them does not run.
+layout(std430, binding = 3) writeonly buffer Halves { float16_t h[]; };
 
 layout(push_constant) uniform Shape {
     //  How many elements each arm holds.
@@ -43,7 +54,12 @@ layout(push_constant) uniform Shape {
     //  here, and named so that the block matches the one the other shader
     //  takes -- the two share a pipeline layout, and a layout that differed
     //  between them would need a second one for no reason.
-    uint unused_count;
+    //  Values the half-precision copy is to hold, which is the batch
+    //  rounded up to a whole tile times the width. What lies between that
+    //  and width gets zeros: the tile has no test for a column it does not
+    //  have. Zero means write the binary32 answer as this always did.
+    uint room;
+
     uint unused_first;
     uint unused_packing;
     uint unused_base;
@@ -65,19 +81,36 @@ float gaussian(float x) {
 }
 
 void main() {
-    uint index = gl_GlobalInvocationID.x;
+    uint index  = gl_GlobalInvocationID.x;
+    bool halved = shape.room > 0u;
+    uint limit  = halved && shape.room > shape.width
+                  ? shape.room : shape.width;
+
+    if (index >= limit) {
+        return;
+    }
+
+    //  A value the rounding invented: zero in the copy and nothing read.
     if (index >= shape.width) {
+        h[index] = float16_t (0.0);
         return;
     }
 
     float gate = g[index];
+    float made;
 
     if (shape.unit == 2) {
-        y[index] = gate + u[index];
-        return;
+        made = gate + u[index];
+    } else {
+        float activated =
+          shape.unit == 0 ? sigmoid_weighted(gate) : gaussian(gate);
+
+        made = activated * u[index];
     }
 
-    float activated = shape.unit == 0 ? sigmoid_weighted(gate) : gaussian(gate);
-
-    y[index] = activated * u[index];
+    if (halved) {
+        h[index] = float16_t (made);
+    } else {
+        y[index] = made;
+    }
 }
