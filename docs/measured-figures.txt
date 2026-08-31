@@ -2605,6 +2605,60 @@
 #   5f85f06494f88de4, 7fbdc947563a2fde. The sweep reads 28344 sequences,
 #   none outside tolerance.
 #
+# 2026-08-31, the rest of the host time, accounted and not found in one
+# place.
+#
+#   After the rotation table was cached, the prompt was taken apart again,
+#   this time from the caller's side down. Probes at three levels: the
+#   layer loop in the batched evaluator, Whole_Layer around its call to
+#   Products.Run, and Run around its wait. One 1419-token device prompt,
+#   --repeats 1, so the figures carry the one-time weight upload of about
+#   a third of a second inside Run.
+#
+#     the prompt                             1.500 s
+#     the layer loop, twelve batches of
+#       twenty-two layers                    1.458
+#         before the device call (pre)         0.026
+#         inside Whole_Layer                   1.407
+#           building the seventeen steps         0.007
+#           inside Run                           1.386
+#           the answers out of it                0.013
+#         after it (post)                      0.025
+#     outside the layer loop                 0.043
+#
+#   And inside Run, from the probe of the sitting before: the wait 1.093,
+#   the command buffer recorded 0.010, the activation over 0.009, the
+#   answers back 0.021, and the first-touch upload the rest.
+#
+#   So with the upload netted out, of a prompt of about 1.17 s the host
+#   spends something like a hundred and ten to a hundred and thirty
+#   milliseconds outside the wait, and it is in five places with nothing
+#   above forty-five:
+#
+#     outside the layer loop        43 ms   the embedding copied in, the
+#                                           last position projected out,
+#                                           the batch set up
+#     the answers back              21 ms   a megabyte a layer out of the
+#                                           mapped result buffer
+#     after the device call         25 ms   the keys and values into the
+#                                           host's own cache
+#     the command buffer recorded   10 ms
+#     the activation over            9 ms
+#     building the seventeen steps    7 ms
+#     before the device call          3 ms  (twenty-three more on the first
+#                                           batch, which is the table's
+#                                           allocation and its first touch)
+#
+#   The sequence building was the thing worth suspecting and it is seven
+#   milliseconds. There is no lever left here: the largest piece is the
+#   work between batches, and the next is the megabyte a layer that comes
+#   back because a layer's answer is handed to the host before the next
+#   layer sends it again. Removing that one is the activation kept on the
+#   device across layers, which was costed earlier in this file at about
+#   five per cent and needs the submissions chained behind a semaphore.
+#
+#   Nothing kept, nothing restamped: the tree is as commit d9a3085 left it.
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
