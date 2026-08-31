@@ -326,6 +326,8 @@ package body Model_Runner.Sampling is
          Item.Stepped.all := [others => False];
          Item.History :=
            new History_Array (0 .. Natural'Max (Config.Repeat_Window, 1) - 1);
+         Item.Ordered :=
+           new History_Array (0 .. Natural'Max (Config.Repeat_Window, 1) - 1);
          Item.History.all := [others => Model_Runner.Tokenizer.No_Token];
       exception
          when Storage_Error =>
@@ -338,6 +340,7 @@ package body Model_Runner.Sampling is
 
       Item.Used := 0;
       Item.Next_Slot := 0;
+      Item.Ordered_Held := 0;
       Item.Mu := 2.0 * Config.Mirostat_Tau;
       Item.Open_Flag := True;
       Status := E.Success;
@@ -354,6 +357,7 @@ package body Model_Runner.Sampling is
       end if;
       if Item.History /= null then
          Free_History (Item.History);
+         Free_History (Item.Ordered);
       end if;
       if Item.Chosen /= null then
          Free_Candidates (Item.Chosen);
@@ -397,6 +401,7 @@ package body Model_Runner.Sampling is
    begin
       Item.Used := 0;
       Item.Next_Slot := 0;
+      Item.Ordered_Held := 0;
       Item.Mu := 2.0 * Item.Settings.Mirostat_Tau;
       Seed_Generator (Item.State, Item.Seed);
    end Reset;
@@ -456,6 +461,8 @@ package body Model_Runner.Sampling is
    -- Record_Token --
    -------------------
 
+   procedure Order_History (Item : in out Sampler);
+
    procedure Record_Token (Item : in out Sampler; Token : Token_Id) is
    begin
       if Item.History = null or else Item.Settings.Repeat_Window = 0 then
@@ -467,6 +474,8 @@ package body Model_Runner.Sampling is
       if Item.Used < Item.History.all'Length then
          Item.Used := Item.Used + 1;
       end if;
+
+      Order_History (Item);
    end Record_Token;
 
    --  How many times a token appears in the recent history.
@@ -486,17 +495,74 @@ package body Model_Runner.Sampling is
    end Occurrences;
 
    --  Report whether a token appears in the recent history.
-   function In_History (Item : Sampler; Token : Token_Id) return Boolean is
+   --  The window sorted and deduplicated, which Record_Token does once for
+   --  every question In_History is then asked -- and it is asked once a
+   --  token of the vocabulary.
+   --
+   --  An insertion sort because the window is sixty-four entries by default
+   --  and never large: what it costs is bounded by the window and what it
+   --  saves is bounded by the vocabulary, and the vocabulary is five
+   --  hundred times the window.
+   procedure Order_History (Item : in out Sampler) is
+      Held : Natural := 0;
    begin
-      if Item.History = null then
-         return False;
+      if Item.Ordered = null then
+         Item.Ordered_Held := 0;
+         return;
       end if;
 
       for Index in 0 .. Item.Used - 1 loop
-         if Item.History.all (Index) = Token then
-            return True;
-         end if;
+         declare
+            Token : constant Token_Id := Item.History.all (Index);
+            Place : Natural := Held;
+         begin
+            while Place > 0
+              and then Item.Ordered.all (Place - 1) > Token
+            loop
+               Item.Ordered.all (Place) := Item.Ordered.all (Place - 1);
+               Place := Place - 1;
+            end loop;
+
+            --  Repeats are dropped: the question is membership, and
+            --  Occurrences counts for itself.
+            if Place > 0 and then Item.Ordered.all (Place - 1) = Token then
+               while Place < Held loop
+                  Item.Ordered.all (Place) := Item.Ordered.all (Place + 1);
+                  Place := Place + 1;
+               end loop;
+            else
+               Item.Ordered.all (Place) := Token;
+               Held := Held + 1;
+            end if;
+         end;
       end loop;
+
+      Item.Ordered_Held := Held;
+   end Order_History;
+
+   function In_History (Item : Sampler; Token : Token_Id) return Boolean is
+      Low  : Natural := 0;
+      High : Integer := Item.Ordered_Held - 1;
+   begin
+      if Item.Ordered = null or else Item.Ordered_Held = 0 then
+         return False;
+      end if;
+
+      while Low <= High loop
+         declare
+            Middle : constant Natural := Low + (High - Low) / 2;
+            Here   : constant Token_Id := Item.Ordered.all (Middle);
+         begin
+            if Here = Token then
+               return True;
+            elsif Here < Token then
+               Low := Middle + 1;
+            else
+               High := Middle - 1;
+            end if;
+         end;
+      end loop;
+
       return False;
    end In_History;
 

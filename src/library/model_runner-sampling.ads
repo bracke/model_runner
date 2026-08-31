@@ -437,6 +437,18 @@ private
       History    : History_Array_Access := null;
       Used       : Natural := 0;
       Next_Slot  : Natural := 0;
+
+      --  The same window, sorted and without repeats, so that asking
+      --  whether a token is in it is a binary search rather than a walk.
+      --
+      --  The repetition penalty is on by default and the question is asked
+      --  once for every token of the vocabulary at every step: thirty-two
+      --  thousand walks of a sixty-four-entry ring is two million
+      --  comparisons a token, which measured a fifth of everything a
+      --  generated token spends off the device. Sorting the window costs a
+      --  couple of thousand operations once a token.
+      Ordered    : History_Array_Access := null;
+      Ordered_Held : Natural := 0;
       Masked     : Mask_Array_Access := null;
 
       --  The masks that belong to one step, kept apart from the permanent

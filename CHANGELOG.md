@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The repetition penalty asked its question two million times a token; it
+  asks it thirty-two thousand times now. The device generates at 50.6 tokens
+  a second and the gap to llama.cpp is 1.10**, from 1.20. Ahead in each of
+  three alternated rounds — 1.239, 1.251 and 1.250 s against 1.279, 1.282
+  and 1.283 — and bit-identical.
+
+  The 2.8 ms of a token that is no kernel was blamed on the twenty-two
+  submissions. It is not them. A profile with every kernel voided puts the
+  model's one-time 1.1 GB upload at the top and the host's correct idle
+  under it; writing every descriptor **twice** costs nothing (1.264 s against
+  1.270). What the profile names instead is `Sampling.Adjusted` at 6.8 per
+  cent: the repetition penalty is on by default over a 64-token window, and
+  "is this token in the window?" was a walk of the window asked once for
+  every token of the vocabulary. The window is sorted and deduplicated once a
+  token now, in the one place the history changes, and the question is a
+  binary search.
+
+  **The check did not fire on it.** The sampler was in no group's source
+  list, so a change that made every generated figure faster passed the gate
+  in silence — the same repair `model_runner-llama.ads` needed two commits
+  ago, and the second time in three days. It is in the five groups that
+  publish a generating figure now.
+
 - **A generated token is one kernel: `row_product` is 86 per cent of it and
   everything else measures zero.** Priced by voiding each kernel in turn
   over sixty-four tokens: 1.270 s as it is, **0.181 s with the row product
