@@ -47,6 +47,7 @@ package body Model_Runner.Platform.Device.Products is
    Structure_Submit            : constant := 4;
    Structure_Memory_Allocate   : constant := 5;
    Structure_Fence_Create      : constant := 8;
+   Structure_Semaphore_Create  : constant := 9;
    Structure_Buffer_Create     : constant := 12;
    Structure_Shader_Create     : constant := 16;
    Structure_Stage_Create      : constant := 18;
@@ -1718,7 +1719,7 @@ package body Model_Runner.Platform.Device.Products is
          --  longest sequence, in one pool: three storage descriptors each.
          Sizes   : aliased Pool_Size :=
            (Kind  => Descriptor_Storage,
-            Count => C.unsigned (4 * (1 + Sequence_Limit)));
+            Count => C.unsigned (4 * (1 + 2 * Sequence_Limit)));
          Request : aliased Descriptor_Pool_Info;
       begin
          if Create = null then
@@ -1726,7 +1727,7 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Request.Max_Sets := C.unsigned (1 + Sequence_Limit);
+         Request.Max_Sets := C.unsigned (1 + 2 * Sequence_Limit);
          Request.Sizes := Sizes'Address;
 
          if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
@@ -1794,6 +1795,36 @@ package body Model_Runner.Platform.Device.Products is
          Item.Sets := Given;
       end;
 
+      --  And a second array of them, for the sequence the host records
+      --  while the device is still on the one before it.
+      declare
+         Allocate : constant Allocate_Sets_Call :=
+           To_Allocate_Sets (Point ("vkAllocateDescriptorSets"));
+
+         Layouts : aliased array (1 .. Sequence_Limit) of Address :=
+           [others => Item.Set_Layout];
+         Given   : Set_Array := [others => Null_Handle];
+         First   : aliased Address := Null_Handle
+           with Address => Given (Given'First)'Address;
+         Request : aliased Descriptor_Set_Info;
+      begin
+         if Allocate = null then
+            Close (Item);
+            return;
+         end if;
+
+         Request.Pool := Item.Pool;
+         Request.Count := C.unsigned (Sequence_Limit);
+         Request.Layouts := Layouts (Layouts'First)'Address;
+
+         if Allocate (Item.Logical, Request'Address, First'Access) /= 0 then
+            Close (Item);
+            return;
+         end if;
+
+         Item.Sets_Two := Given;
+      end;
+
       --  A pool of commands and one buffer to record into.
       declare
          Create : constant Create_Call :=
@@ -1839,6 +1870,27 @@ package body Model_Runner.Platform.Device.Products is
          Item.Buffer := Made;
       end;
 
+      declare
+         Allocate : constant Allocate_Buffers_Call :=
+           To_Allocate_Buffers (Point ("vkAllocateCommandBuffers"));
+
+         Request : aliased Command_Buffer_Info;
+      begin
+         if Allocate = null then
+            Close (Item);
+            return;
+         end if;
+
+         Request.Pool := Item.Commands;
+
+         if Allocate (Item.Logical, Request'Address, Made'Access) /= 0 then
+            Close (Item);
+            return;
+         end if;
+
+         Item.Buffer_Two := Made;
+      end;
+
       --  And something to wait on.
       declare
          Create : constant Create_Call :=
@@ -1859,6 +1911,41 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Item.Fence := Made;
+
+         if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
+            /= 0
+         then
+            Close (Item);
+            return;
+         end if;
+
+         Item.Fence_Two := Made;
+      end;
+
+      --  And what one submission signals for the next to wait on. Two
+      --  submissions to one queue are not ordered against each other
+      --  unless they are made to be, and the second reads what the first
+      --  left at the front of the result buffer.
+      declare
+         Create : constant Create_Call :=
+           To_Create (Point ("vkCreateSemaphore"));
+
+         Request : aliased Fence_Create_Info :=
+           (Kind => Structure_Semaphore_Create, others => <>);
+      begin
+         if Create = null then
+            Close (Item);
+            return;
+         end if;
+
+         if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
+            /= 0
+         then
+            Close (Item);
+            return;
+         end if;
+
+         Item.Signal := Made;
       end;
 
       Item.Slice := Slice;
@@ -1888,6 +1975,10 @@ package body Model_Runner.Platform.Device.Products is
       Item.Kept_Bytes := 0;
    end Forget_Matrices;
 
+   --  Declared here because Close needs it and it is written below, with
+   --  the other two of everything a submission holds.
+   procedure Settle (Item : in out Engine; Ok : out Boolean);
+
    procedure Close (Item : in out Engine) is
       --  Whatever this engine was opened on, which is nothing at all for an
       --  engine that never was.
@@ -1906,6 +1997,15 @@ package body Model_Runner.Platform.Device.Products is
       end Give_Back;
    begin
       Instance_Of := Item.Instance;
+
+      --  Nothing may be in flight: what follows destroys the fences and the
+      --  semaphore a submission is still holding, and gives back the memory
+      --  it is still reading.
+      declare
+         Settled : Boolean;
+      begin
+         Settle (Item, Settled);
+      end;
 
       --  Everything the device was holding for a model, then the two that
       --  change every call.
@@ -1980,8 +2080,20 @@ package body Model_Runner.Platform.Device.Products is
       --  with its own, so neither is given back on its own.
       Give_Back (Item.Fence, "vkDestroyFence");
       Item.Buffer := Null_Handle;
+      Item.Buffer_Two := Null_Handle;
+
+      --  Nothing is in flight and nothing has signalled: an engine opened
+      --  after this one gets a fresh semaphore, and a submission that
+      --  waited on it because this engine had armed the old one would wait
+      --  for something that will never be signalled.
+      Item.Pending := False;
+      Item.Pending_Two := False;
+      Item.Armed := False;
+      Item.Sets_Two := [others => Null_Handle];
       Give_Back (Item.Commands, "vkDestroyCommandPool");
       Item.Descriptor := Null_Handle;
+      Give_Back (Item.Signal, "vkDestroySemaphore");
+      Give_Back (Item.Fence_Two, "vkDestroyFence");
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
       Give_Back (Item.Tile_Line, "vkDestroyPipeline");
       Give_Back (Item.Group_Line, "vkDestroyPipeline");
@@ -2426,7 +2538,74 @@ package body Model_Runner.Platform.Device.Products is
    --  @param Ok False when the device did not run it.
    --  @param Cancelled True when a caller asked to stop while it ran.
    --  @param Cancel Token a caller may set to ask for a stop.
-   procedure Submit_And_Wait
+   --  Hand a recorded buffer over, without waiting for it.
+   --
+   --  It waits on what the submission before it signals and signals for the
+   --  one after, because two submissions to one queue are not ordered
+   --  against each other unless they are made to be -- and the sequence
+   --  after this one reads what this one leaves at the front of the result
+   --  buffer.
+   procedure Hand_Over (Item : in out Engine; Ok : out Boolean) is
+      Submit : constant Submit_Call := To_Submit (Point ("vkQueueSubmit"));
+      Reset  : constant Reset_Fences_Call :=
+        To_Reset_Fences (Point ("vkResetFences"));
+
+      Buffer_Handle : aliased Address := Item.Buffer;
+      Fence_Handle  : aliased Address := Item.Fence;
+      Wait_Handle   : aliased Address := Item.Signal;
+      Signal_Handle : aliased Address := Item.Signal;
+      Stage         : aliased C.unsigned := Pipeline_Stage_Compute;
+      Request       : aliased Submit_Info;
+   begin
+      Ok := False;
+
+      if Submit = null or else Reset = null then
+         return;
+      end if;
+
+      Request.Buffers := Buffer_Handle'Address;
+
+      --  Only where something has signalled it and nothing has waited yet.
+      if Item.Armed then
+         Request.Wait_Count := 1;
+         Request.Waits := Wait_Handle'Address;
+         Request.Wait_Stages := Stage'Address;
+      end if;
+
+      Request.Signal_Count := 1;
+      Request.Signals := Signal_Handle'Address;
+
+      if Reset (Item.Logical, 1, Fence_Handle'Address) /= 0
+        or else Submit (Item.Queue, 1, Request'Address, Item.Fence) /= 0
+      then
+         return;
+      end if;
+
+      Item.Pending := True;
+      Item.Armed := True;
+      Ok := True;
+   end Hand_Over;
+
+   --  The other of the two of everything a submission holds.
+   procedure Swap_Slots (Item : in out Engine) is
+      Buffer  : constant Address := Item.Buffer;
+      Fence   : constant Address := Item.Fence;
+      Pending : constant Boolean := Item.Pending;
+      Sets    : constant Set_Array := Item.Sets;
+   begin
+      Item.Buffer := Item.Buffer_Two;
+      Item.Fence := Item.Fence_Two;
+      Item.Pending := Item.Pending_Two;
+      Item.Sets := Item.Sets_Two;
+
+      Item.Buffer_Two := Buffer;
+      Item.Fence_Two := Fence;
+      Item.Pending_Two := Pending;
+      Item.Sets_Two := Sets;
+   end Swap_Slots;
+
+   --  Wait for what this slot last handed over, and nothing else.
+   procedure Await
      (Item      : in out Engine;
       Ok        : out Boolean;
       Cancelled : out Boolean;
@@ -2436,30 +2615,19 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
       Cancelled := False;
 
-      --  Hand it over and wait.
+      if not Item.Pending then
+         return;
+      end if;
+
       declare
-         Submit : constant Submit_Call := To_Submit (Point ("vkQueueSubmit"));
          Wait   : constant Wait_Call := To_Wait (Point ("vkWaitForFences"));
-         Reset  : constant Reset_Fences_Call :=
-           To_Reset_Fences (Point ("vkResetFences"));
 
          Ready  : constant Fence_Status_Call :=
            To_Fence_Status (Point ("vkGetFenceStatus"));
 
-         Buffer_Handle : aliased Address := Item.Buffer;
          Fence_Handle  : aliased Address := Item.Fence;
-         Request       : aliased Submit_Info;
       begin
-         if Submit = null or else Wait = null or else Reset = null then
-            Ok := False;
-            return;
-         end if;
-
-         Request.Buffers := Buffer_Handle'Address;
-
-         if Reset (Item.Logical, 1, Fence_Handle'Address) /= 0
-           or else Submit (Item.Queue, 1, Request'Address, Item.Fence) /= 0
-         then
+         if Wait = null then
             Ok := False;
             return;
          end if;
@@ -2578,6 +2746,8 @@ package body Model_Runner.Platform.Device.Products is
                return;
             end if;
 
+            Item.Pending := False;
+
             if Stopped then
                Cancelled := True;
                Ok := False;
@@ -2586,7 +2756,46 @@ package body Model_Runner.Platform.Device.Products is
          end;
       end;
 
+   end Await;
+
+   procedure Submit_And_Wait
+     (Item      : in out Engine;
+      Ok        : out Boolean;
+      Cancelled : out Boolean;
+      Cancel    : Model_Runner.Cancellation.Token_Reference)
+   is
+   begin
+      Cancelled := False;
+      Hand_Over (Item, Ok);
+
+      if not Ok then
+         return;
+      end if;
+
+      Await (Item, Ok, Cancelled, Cancel);
    end Submit_And_Wait;
+
+   --  Everything in flight finished, which is what the host must do before
+   --  it writes anything a submission may still be reading -- the
+   --  activation it sends over, a buffer it grows, a matrix it gives back.
+   procedure Settle (Item : in out Engine; Ok : out Boolean) is
+      Gone : Boolean;
+   begin
+      Ok := True;
+
+      if Item.Pending then
+         Await (Item, Ok, Gone, null);
+         if not Ok then
+            return;
+         end if;
+      end if;
+
+      if Item.Pending_Two then
+         Swap_Slots (Item);
+         Await (Item, Ok, Gone, null);
+         Swap_Slots (Item);
+      end if;
+   end Settle;
 
    ------------------
    -- Tile_Product --
@@ -2953,6 +3162,19 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
+         --  This path records into the same buffer a sequence may
+         --  still be executing from, and waits for its own work, so
+         --  everything in flight finishes first.
+         declare
+            Settled : Boolean;
+         begin
+            Settle (Item, Settled);
+
+            if not Settled then
+               return;
+            end if;
+         end;
+
          if Reset_Buffer (Item.Buffer, 0) /= 0
            or else Start (Item.Buffer, Began'Address) /= 0
          then
@@ -3210,6 +3432,47 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Put_Cache;
 
+   ---------------
+   -- Get_Cache --
+   ---------------
+
+   procedure Get_Cache
+     (Item     : Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : out Model_Runner.Numerics.Real_Array;
+      Ok       : out Boolean)
+   is
+      use type System.Storage_Elements.Integer_Address;
+
+      At_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (At_Value) * 4;
+      Span    : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Values'Length) * 4;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.Cache_At = Null_Handle
+        or else Values'Length = 0
+        or else At_Byte + Span > Item.Cache_Elements * 4
+      then
+         return;
+      end if;
+
+      declare
+         Room : Model_Runner.Numerics.Real_Array (Values'Range)
+           with Import,
+                Address =>
+                  System.Storage_Elements.To_Address
+                    (System.Storage_Elements.To_Integer (Item.Cache_At)
+                     + System.Storage_Elements.Integer_Address (At_Byte));
+      begin
+         Values := Room;
+      end;
+
+      Ok := True;
+   end Get_Cache;
+
    ------------
    -- Attend --
    ------------
@@ -3402,6 +3665,19 @@ package body Model_Runner.Platform.Device.Products is
          then
             return;
          end if;
+
+         --  This path records into the same buffer a sequence may
+         --  still be executing from, and waits for its own work, so
+         --  everything in flight finishes first.
+         declare
+            Settled : Boolean;
+         begin
+            Settle (Item, Settled);
+
+            if not Settled then
+               return;
+            end if;
+         end;
 
          if Reset_Buffer (Item.Buffer, 0) /= 0
            or else Start (Item.Buffer, Began'Address) /= 0
@@ -4195,6 +4471,22 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      --  The other of the two of everything a submission holds, and the
+      --  wait for whatever that slot last handed over -- which is the
+      --  sequence before the one before this, long finished in the usual
+      --  case. Nothing else waits: the sequence just before this one is
+      --  still running, and the device is meant to be.
+      Swap_Slots (Item);
+
+      if Item.Pending then
+         Await (Item, Good, Cancelled, Cancel);
+
+         if Cancelled or else not Good then
+            Ok := Good;
+            return;
+         end if;
+      end if;
+
       --  Carried out, the last step writes straight into the room the next
       --  sequence reads its activation from, and there is nothing to copy.
       --  Safe because the only step that reads that room is the first join,
@@ -4207,7 +4499,11 @@ package body Model_Runner.Platform.Device.Products is
 
       Item.Clock := Item.Clock + 1;
 
-      Pinned := Item.Clock;
+      --  A matrix the sequence still in flight is reading may not be given
+      --  back either, so the floor is one clock lower where there is one.
+      Pinned :=
+        (if Item.Pending_Two and then Item.Clock > 1
+         then Item.Clock - 1 else Item.Clock);
 
       --  Every matrix in place before the first dispatch is written down.
       --  This is the whole point of the arrangement: acquiring a matrix can
@@ -4346,8 +4642,14 @@ package body Model_Runner.Platform.Device.Products is
          if Carry_In then
             Good := True;
          else
-            Standing (Item, Item.Vector_Memory, Item.Vector_At,
-                      Item.Vector_Bytes, Good);
+            --  The host is about to write a buffer a submission may still
+            --  be reading.
+            Settle (Item, Good);
+
+            if Good then
+               Standing (Item, Item.Vector_Memory, Item.Vector_At,
+                         Item.Vector_Bytes, Good);
+            end if;
          end if;
 
          if Good and then not Carry_In then
@@ -4932,8 +5234,31 @@ package body Model_Runner.Platform.Device.Products is
          end if;
       end;
 
-      --  Once, for all of them.
-      Submit_And_Wait (Item, Good, Cancelled, Cancel);
+      --  Once, for all of them -- and handed over rather than waited for.
+      --  A sequence that keeps nothing and leaves its answer on the device
+      --  is one the host has no reason to wait for, and not waiting is the
+      --  whole of this: the device starts the next one the moment it
+      --  finishes this, instead of standing idle while the host wakes up,
+      --  records and submits.
+      declare
+         Reads_Back : Boolean := not Carry_Out;
+      begin
+         for Index in 1 .. Steps.Held loop
+            --  A borrowed matrix is given back at the end of this call, and
+            --  it may not be given back while the device is still reading
+            --  it -- so a sequence that borrowed anything waits.
+            Reads_Back :=
+              Reads_Back or else Steps.Items (Index).Kept
+              or else Places (Index).Borrowed;
+         end loop;
+
+         Hand_Over (Item, Good);
+
+         if Good and then Reads_Back then
+            Await (Item, Good, Cancelled, Cancel);
+         end if;
+      end;
+
       if not Good then
          Release_All;
          return;

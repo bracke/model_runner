@@ -6276,7 +6276,17 @@ package body Model_Runner.Llama is
       --  False at the start of every batch: the first layer reads the
       --  embedding, which the host has.
       Carrying : constant Boolean := True;
+      Deferring : constant Boolean := True;
       Carried : Boolean := False;
+
+      --  Which layers left their keys and values in the device's cache
+      --  without also sending them back through the result buffer. The
+      --  host keeps its own copy of the cache for a session that later
+      --  runs on the processor, and those layers' share of it is read out
+      --  of the device once, after the batch, rather than a layer at a
+      --  time while the batch is waiting on each of them.
+      Deferred : array (Source.Layers.all'Range) of Boolean :=
+        [others => False];
 
       --  Whether a layer is one the device takes whole. Asked of the next
       --  layer as well as of this one, because a layer that hands its
@@ -6861,12 +6871,15 @@ package body Model_Runner.Llama is
                         --  device on the layer before as well, which
                         --  Carried says.
                         Carry_In  => Carried,
+                        Mirror    => not Deferring,
                         Carry_Out =>
                           Carrying
                           and then Index < Source.Layers.all'Last
                           and then Whole_Layer_Fits
                                      (Source.Layers.all (Index + 1)));
                   end if;
+
+                  Deferred (Index) := Deferring and then Whole_Layer_Done;
 
                   Carried :=
                     Carrying
@@ -7434,6 +7447,46 @@ package body Model_Runner.Llama is
 
             end if;
          end;
+      end loop;
+
+      --  The host's own copy of the cache, brought up to date out of the
+      --  device's, for the layers that did not send it back a step at a
+      --  time. The same bytes; the difference is that the batch did not
+      --  wait on any of them.
+      for Index in Source.Layers.all'Range loop
+         if Deferred (Index) then
+            declare
+               Base : constant Element_Count :=
+                 Element_Count (Index) * Element_Count (Item.Context)
+                 * KV_Width
+                 + Element_Count (Item.Committed) * KV_Width;
+
+               V_At : constant Element_Count :=
+                 Element_Count (Index) * Element_Count (Item.Context)
+                 * V_Width
+                 + Element_Count (Item.Committed) * V_Width;
+
+               Read : Boolean;
+            begin
+               Model_Runner.Backend.Device.Get_Cache
+                 (Base,
+                  Item.Keys.all (Base .. Base + Count * KV_Width - 1), Read);
+
+               if Read then
+                  Model_Runner.Backend.Device.Get_Cache
+                    (Item.Keys.all'Length + V_At,
+                     Item.Values.all (V_At .. V_At + Count * V_Width - 1),
+                     Read);
+               end if;
+
+               if not Read then
+                  Release;
+                  Item.Current := Failed;
+                  Status := E.Make (E.Backend_Closed);
+                  return;
+               end if;
+            end;
+         end if;
       end loop;
 
       if E.Is_Error (Status) then

@@ -1664,6 +1664,27 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Put_Cache (Room, Values, Ok);
       Assert (Ok, "a device that took the keys would not take the values");
 
+      --  And back out again, which is how a batch that let the device keep
+      --  its keys and values brings the host's own copy of the cache up to
+      --  date afterwards. What went in is what comes out.
+      declare
+         Read : Model_Runner.Numerics.Real_Array (Keys'Range) :=
+           [others => 0.0];
+      begin
+         Model_Runner.Backend.Device.Get_Cache (0, Read, Ok);
+         Assert (Ok, "a device that took the keys would not give them back");
+         declare
+            Same : Boolean := True;
+         begin
+            for Index in Keys'Range loop
+               Same := Same and then Read (Index) = Keys (Index);
+            end loop;
+
+            Assert (Same,
+                    "the keys read out of the cache are not the keys put in");
+         end;
+      end;
+
       Model_Runner.Backend.Device.Attend
         (Query      => Query,
          Heads      => 1,

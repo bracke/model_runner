@@ -211,6 +211,23 @@ package Model_Runner.Backend.Device is
       Values   : Model_Runner.Tensors.Real_Array;
       Ok       : out Boolean);
 
+   --  And back out of it, which is how the host's copy of the cache is
+   --  brought up to date after a batch the device took whole.
+   --
+   --  A layer's keys and values used to come back through the result
+   --  buffer step by step, because the host keeps a copy for a session
+   --  that later runs on the processor. They are already in the cache the
+   --  device holds; this reads them from there once a batch instead of
+   --  once a layer, which is the same bytes and none of the waiting.
+   --
+   --  @param At_Value Where in the cache to read from.
+   --  @param Values Receives what is there.
+   --  @param Ok True when it was read.
+   procedure Get_Cache
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : out Model_Runner.Tensors.Real_Array;
+      Ok       : out Boolean);
+
    --  One position attending to the cache the device holds.
    --
    --  Only the queries go over and only the blend comes back. The arguments
@@ -564,6 +581,11 @@ package Model_Runner.Backend.Device is
    --  batch reads what the host sent and the last writes what the host
    --  reads; the ones between need neither.
    --
+   --  @param Mirror True where Keys and Values are to be filled. False
+   --    where the caller will read them out of the device's own cache
+   --    afterwards instead, which is the same bytes without a step of
+   --    this layer's waiting for them.
+   --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
    --  and the host's copy is the thing carrying does not write.
@@ -608,7 +630,8 @@ package Model_Runner.Backend.Device is
       Max_Bias       : Model_Runner.Numerics.Real := 0.0;
       Cancel         : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In       : Boolean := False;
-      Carry_Out      : Boolean := False);
+      Carry_Out      : Boolean := False;
+      Mirror         : Boolean := True);
 
    --  A gated feed-forward block, whole, in one submission.
    --

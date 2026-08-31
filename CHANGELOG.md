@@ -7,6 +7,38 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The engine holds two of everything a submission holds, and a layer hands
+  its work over without waiting: the 1419-token device prompt reads 1.041 s
+  against 1.113**, better in each of three alternated rounds with clean
+  separation. The device reads it at **1354 tokens a second** and the gap to
+  llama.cpp falls from 1.36 times to **1.30** — from 2.32 when this began.
+  293 tests pass, the sweep reads 28344 sequences with none outside
+  tolerance, and every digest held.
+
+  Of the time a layer spent inside its wait, 94 per cent was the device
+  computing and 6 was the gap around it — the device finishing, the host
+  waking, recording, submitting, and the device starting again. **68
+  milliseconds a prompt in which nothing computes.**
+
+  It needed the two changes before it: a layer that leaves its answer on the
+  device and its keys and values in the device's own cache has nothing the
+  host wants, so `Run` waits only where a step is kept, a matrix was
+  borrowed, or the answer is the last one.
+
+  Two command buffers, because one may not be re-recorded while it executes.
+  Two sets of descriptors, because they may not be written while a
+  submission reads them. Two fences. And **one semaphore, not two** — a
+  binary semaphore may not be signalled while already signalled, and a
+  signal nothing waits for leaves it that way, so waiting and signalling the
+  same one in the same submission is what keeps it balanced. Two semaphores
+  deadlocked the device tests, and a flag left set across a close deadlocked
+  them again.
+
+  The eviction floor drops one clock where a sequence is still in flight, a
+  sequence that borrowed a matrix waits before giving it back, and anything
+  writing what a submission may read — the activation, a grown buffer, a
+  closing engine — settles everything in flight first.
+
 - **A layer's answer stays on the device for the next layer to read: the
   1419-token device prompt reads 1.105 s against 1.134**, better in each of
   three alternated rounds with clean separation. The device reads that

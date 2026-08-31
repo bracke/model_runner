@@ -529,6 +529,23 @@ package body Model_Runner.Backend.Device is
       Products.Put_Cache (Engine, At_Value, Values, Ok);
    end Put_Cache;
 
+   ---------------
+   -- Get_Cache --
+   ---------------
+
+   procedure Get_Cache
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : out T.Real_Array;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Get_Cache (Engine, At_Value, Values, Ok);
+   end Get_Cache;
+
    ------------
    -- Attend --
    ------------
@@ -1305,7 +1322,8 @@ package body Model_Runner.Backend.Device is
       Max_Bias       : Model_Runner.Numerics.Real := 0.0;
       Cancel         : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In       : Boolean := False;
-      Carry_Out      : Boolean := False)
+      Carry_Out      : Boolean := False;
+      Mirror         : Boolean := True)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -1438,7 +1456,7 @@ package body Model_Runner.Backend.Device is
       Products.Add_Chained_Product
         (Steps, Value.Base, Value.Span, Value.Offset, V_P,
          Natural (Value.Rows), Natural (Value.Columns), Added,
-         Key => At_Offset (Value.Base, Value.Offset), Kept => True,
+         Key => At_Offset (Value.Base, Value.Offset), Kept => Mirror,
          From_Step => 1);
       if not Added then
          return;
@@ -1468,7 +1486,7 @@ package body Model_Runner.Backend.Device is
          Products.Add_Rotation
            (Steps, At_Turn, Span, 0, Natural (Key.Rows),
             Natural (Key.Rows) / Head_Size, Rotary, Pairing, Added,
-            From_Step => 3, Kept => True);
+            From_Step => 3, Kept => Mirror);
          if not Added then
             return;
          end if;
@@ -1602,16 +1620,20 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Values.all (Values.all'First
-                  .. Values.all'First + Slots * Value.Rows - 1) :=
-        Landing.all (Landing.all'First + At_Values
-                     .. Landing.all'First + At_Values
-                        + Slots * Value.Rows - 1);
+      --  The keys and the values, where the caller wants them here rather
+      --  than out of the device's own cache afterwards.
+      if Mirror then
+         Values.all (Values.all'First
+                     .. Values.all'First + Slots * Value.Rows - 1) :=
+           Landing.all (Landing.all'First + At_Values
+                        .. Landing.all'First + At_Values
+                           + Slots * Value.Rows - 1);
 
-      Keys.all (Keys.all'First .. Keys.all'First + Slots * Key.Rows - 1) :=
-        Landing.all (Landing.all'First + At_Keys
-                     .. Landing.all'First + At_Keys
-                        + Slots * Key.Rows - 1);
+         Keys.all (Keys.all'First .. Keys.all'First + Slots * Key.Rows - 1) :=
+           Landing.all (Landing.all'First + At_Keys
+                        .. Landing.all'First + At_Keys
+                           + Slots * Key.Rows - 1);
+      end if;
 
       --  The answer, where the host is the one that reads it next. Carried
       --  out it stays on the device and Landing holds nothing for it.

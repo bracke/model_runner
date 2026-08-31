@@ -766,6 +766,26 @@ package Model_Runner.Platform.Device.Products is
       Values   : Model_Runner.Numerics.Real_Array;
       Ok       : out Boolean);
 
+   --  And back out of it, which is how the host's own copy of the cache is
+   --  brought up to date without the device sending it a layer at a time.
+   --
+   --  The keys and the values a layer writes used to come back through the
+   --  result buffer, step by step, because the host keeps a copy for a
+   --  session that later runs on the processor. They are already in the
+   --  cache the device holds, and this reads them from there in one go at
+   --  the end of a batch instead -- the same bytes and none of the waiting,
+   --  and the waiting is what a chained submission cannot do.
+   --
+   --  @param Item Ready engine with a cache reserved.
+   --  @param At_Value Where in the cache to read from, in elements.
+   --  @param Values Receives what is there.
+   --  @param Ok False where there is no cache or it is too small.
+   procedure Get_Cache
+     (Item     : Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : out Model_Runner.Numerics.Real_Array;
+      Ok       : out Boolean);
+
    --  Attend against the cache the device already holds.
    --
    --  As Attend, without the cache crossing the interface: only the queries
@@ -1087,9 +1107,48 @@ private
       --  The sets a sequence binds, one per product. Null until a device is
       --  open, and given back with the pool rather than one at a time.
       Sets       : Set_Array := [others => System.Null_Address];
+
+      --  And a second of everything a submission holds while it runs, so
+      --  that the host may record and submit the next sequence while the
+      --  device is still on this one.
+      --
+      --  A layer used to wait on its own fence before the host would start
+      --  the next: the device finished, the host woke, recorded, submitted,
+      --  and the device started again. That gap is sixty-eight
+      --  milliseconds of a fourteen-hundred-token prompt -- six per cent of
+      --  it -- and nothing computes during it. Two of each means the host
+      --  is always a sequence ahead.
+      --
+      --  Two command buffers because one may not be re-recorded while it
+      --  executes; two sets of descriptors because they may not be written
+      --  while a submission reads them; two fences to tell the two apart;
+      --  and two semaphores because two submissions to one queue are not
+      --  ordered against each other unless they are made to be, and the
+      --  second reads what the first wrote.
+      Sets_Two   : Set_Array := [others => System.Null_Address];
       Commands   : System.Address := System.Null_Address;
       Buffer     : System.Address := System.Null_Address;
+      Buffer_Two : System.Address := System.Null_Address;
+
+      --  Whether the fence beside each of those has a submission behind it
+      --  that nothing has waited for yet.
+      Pending     : Boolean := False;
+      Pending_Two : Boolean := False;
+
+      --  What a submission signals, and what the one after it waits on.
+      --
+      --  One of them rather than two, and every submission both waits on it
+      --  and signals it again. A binary semaphore may not be signalled
+      --  while it is already signalled, and a signal nothing waits for --
+      --  the last sequence of a batch, say -- would leave it that way; the
+      --  wait and the signal in the same submission keep it balanced
+      --  whatever the sequence before it did.
+      Signal     : System.Address := System.Null_Address;
+
+      --  Whether it has been signalled by something and not yet waited for.
+      Armed      : Boolean := False;
       Fence      : System.Address := System.Null_Address;
+      Fence_Two  : System.Address := System.Null_Address;
 
       --  What the device says its largest heap is, and the share of it these
       --  matrices may take.
