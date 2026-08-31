@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The attending tile takes sixty-four cached positions rather than
+  thirty-two, which is worth one per cent**: 1.025, 1.032, 1.033 and 1.046 s
+  against 1.041, 1.043 and 1.046 — never behind in four rounds, ahead in
+  three. Small enough to say plainly; kept because it never loses and
+  because sixty-four is the tile the scalar kernel beside it already walks.
+  A hundred and twenty-eight is worse, 1.058 s: a tile's scores live in
+  shared memory and doubling them costs more occupancy than the halved tile
+  count buys. The device reads the 1419-token prompt at **1364 tokens a
+  second** and the gap to llama.cpp is **1.29**.
+
+  **The attending kernel has no large overhead left in it.** It runs at 3.95
+  microseconds a position a layer against llama.cpp's 2.85, and each piece
+  that might account for that has now been priced: the round trip the
+  weighted values make through shared memory is 0.5 per cent, the tile width
+  1.0, and a wider tile than that is negative. The two-pass form — walk the
+  tiles once for each row's largest score and once to weigh against it, so
+  nothing is rescaled and the answer stays in the accumulators — removes
+  only that half per cent and adds a whole second pass. It was built earlier
+  in this work and measured slower; this says why it always would be.
+
 - **The engine holds two of everything a submission holds, and a layer hands
   its work over without waiting: the 1419-token device prompt reads 1.041 s
   against 1.113**, better in each of three alternated rounds with clean

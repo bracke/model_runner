@@ -6647,8 +6647,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.427 s
-and 64 in 1.928 s on the processor, 0.113 s and 1.343 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.414 s
+and 64 in 1.922 s on the processor, 0.116 s and 1.333 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -6661,13 +6661,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 691.5 t/s rather
-than 347.1 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 704.8 t/s rather
+than 368.6 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 47.7 t/s
-now, against 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 48.0 t/s
+now, against 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -8836,6 +8836,39 @@ so the floor under the eviction clock is one lower where there is one; a
 sequence that borrowed anything waits before it hands it back; and anything
 that writes what a submission may be reading -- the activation sent over, a
 buffer grown, an engine closing -- settles everything in flight first.
+
+
+### Sixty-four cached positions to an attending tile, and where that kernel stops
+
+The attending tile takes sixty-four cached positions at a time rather than
+thirty-two, which halves everything a tile pays once -- its barriers, its
+reductions, the round trip its weighted values make through shared memory.
+**It is worth one per cent**: 1.025, 1.032, 1.033 and 1.046 seconds against
+1.041, 1.043 and 1.046, never behind in four rounds and ahead in three.
+That is small enough to say plainly. It is kept because it never loses, and
+because sixty-four is the tile the scalar kernel beside it already walks.
+
+A hundred and twenty-eight is worse -- 1.058 s -- because a tile's scores
+are held in shared memory and doubling them costs more occupancy than the
+halved tile count buys.
+
+**What that leaves is a kernel with no large overhead in it.** Attention is
+3.95 microseconds a position a layer against llama.cpp's 2.85, and the
+pieces that might account for the difference have each been priced now:
+
+| | |
+|---|---:|
+| the round trip the weighted values make, removed entirely | 0.5 % |
+| sixty-four cached positions to a tile rather than thirty-two | 1.0 % |
+| a hundred and twenty-eight | −1.5 % |
+
+That round trip is the one thing a two-pass form would remove: walk the
+tiles once for each row's largest score and once to weigh against it, and
+nothing is ever rescaled, so the answer stays in the cooperative matrices
+from the first tile to the last. It was built that way earlier in this work
+and measured slower, and the half per cent above says why it always would
+be -- what it removes is that, and what it adds is a whole second pass over
+the scores.
 
 
 ### Kernels

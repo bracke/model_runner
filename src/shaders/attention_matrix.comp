@@ -123,7 +123,7 @@ layout(push_constant) uniform Shape {
 //  the widest head this compilation stages. All three are multiples of the
 //  instruction's sixteen.
 const uint BR = 16u;
-const uint BC = 32u;
+const uint BC = 64u;
 const uint DM = 64u;
 
 //  The keys and the values, as the instruction reads them, in the same
@@ -138,7 +138,7 @@ shared float16_t qs[BR * DM];
 //  The scores of a tile, and at the very end the answer on its way out of
 //  the cooperative matrices. The answer is the wider of the two, which is
 //  what this is sized for.
-shared float ss[BR * DM];
+shared float ss[BR * (DM > BC ? DM : BC)];
 
 //  The weights, in what the instruction reads.
 shared float16_t ps[BR * BC];
@@ -292,9 +292,7 @@ void main() {
         //  largest score and the sum of its weights through a reduction
         //  over their half of the subgroup.
         [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
-            uint  r     = (lane >> 5u) + 2u * i;
-            uint  step  = base + col;
-            float score = -1.0 / 0.0;
+            uint r = (lane >> 5u) + 2u * i;
 
             uint slot = min (block * BR + r, shape.positions - 1u);
             uint la   = shape.last + (shape.causal != 0u ? slot : 0u);
@@ -304,32 +302,54 @@ void main() {
                 fi = la + 1u > shape.window ? la + 1u - shape.window : 0u;
             }
 
-            if (step >= fi && step <= la) {
-                score = ss[r * BC + col] * shape.scale;
+            //  This invocation's columns of the row: one where a tile is
+            //  as wide as the half of a subgroup that shares the row, and
+            //  as many more as the tile is wider.
+            float mine[BC / 32u];
+            float best = -1.0 / 0.0;
 
-                if (slope > 0.0) {
-                    uint asking = shape.causal != 0u
-                                  ? la
-                                  : shape.last - (shape.positions - 1u) + slot;
+            [[unroll]] for (uint c = 0u; c < BC / 32u; c++) {
+                uint  at    = c * 32u + col;
+                uint  step  = base + at;
+                float score = -1.0 / 0.0;
 
-                    score -= slope * float (abs (int (step) - int (asking)));
+                if (step >= fi && step <= la) {
+                    score = ss[r * BC + at] * shape.scale;
+
+                    if (slope > 0.0) {
+                        uint asking =
+                          shape.causal != 0u
+                          ? la
+                          : shape.last - (shape.positions - 1u) + slot;
+
+                        score -=
+                          slope * float (abs (int (step) - int (asking)));
+                    }
+
+                    if (shape.cap > 0.0) {
+                        score = shape.cap * tanh (score / shape.cap);
+                    }
                 }
 
-                if (shape.cap > 0.0) {
-                    score = shape.cap * tanh (score / shape.cap);
-                }
+                mine[c] = score;
+                best = max (best, score);
             }
 
-            float raised = max (top[i], subgroupClusteredMax (score, 32u));
+            float raised = max (top[i], subgroupClusteredMax (best, 32u));
             bool  empty  = isinf (raised) && raised < 0.0;
 
             carry[i] = empty ? 1.0 : exp (top[i] - raised);
 
-            float w = empty ? 0.0 : exp (score - raised);
+            float run = 0.0;
 
-            ps[r * BC + col] = float16_t (w);
+            [[unroll]] for (uint c = 0u; c < BC / 32u; c++) {
+                float w = empty ? 0.0 : exp (mine[c] - raised);
 
-            total[i] = total[i] * carry[i] + subgroupClusteredAdd (w, 32u);
+                ps[r * BC + c * 32u + col] = float16_t (w);
+                run += w;
+            }
+
+            total[i] = total[i] * carry[i] + subgroupClusteredAdd (run, 32u);
             top[i]   = raised;
         }
 
