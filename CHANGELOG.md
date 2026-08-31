@@ -7,6 +7,40 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Five hundred and twelve bits, on a part that has none.** A profile of
+  the processor's 1419-token prompt puts 62.3 per cent in the strip kernel
+  and **14.1 in attention** — `head_scores` 6.5, `blend_run` 5.6,
+  `blend_exact` 1.9 — which is larger than the 1.11 times that prompt is
+  behind. And nothing in this library uses a 512-bit lane: every
+  hand-written vector kernel is `ymm`.
+
+  So the blending run was widened — eight `vfmadd231ps` a position, carrying
+  65 per cent of that kernel, become four in `zmm`. **Bit-exact**, and not by
+  luck: every component accumulates the same terms in the same order, and
+  only how many a register holds changed. And **slower**: 6.176, 6.266 and
+  6.166 s against 6.049, 6.086 and 6.199, behind in two rounds of three.
+  **Zen 4 runs a 512-bit instruction on 256-bit hardware**, two passes each,
+  so halving the instructions leaves the cycles and adds the transitions.
+  Which is why the byte dot product *is* worth `-march=x86-64-v4` and this
+  is not: that is a new instruction, this is only a wider lane. Not kept.
+
+  `head_scores` would not have gone the same way regardless — its annotation
+  is led by six `vhaddps`, the reduction that ends a dot product, which a
+  wider lane lengthens and which would move every processor digest here.
+
+  **The device's `combine` is entirely traffic**: replacing its gated unit
+  with a plain addition costs nothing (0.890 and 0.896 s against 0.892 and
+  0.895) where removing the kernel reads 0.823. The only lever left is fewer
+  bytes — the feed-forward arms in half precision, ~23 MB a layer, which
+  changes what the program computes.
+
+  **And the processor's two small kernels are at 128 bits**: `quantize_blocks`
+  (2 %) is `addps`/`cmpleps`/`movups` on `xmm`, `mat_mul_range_packed` (3.4 %)
+  moves its tile 64 bits at a time. Neither unit gets wide flags, deliberately
+  — the wide code is isolated and chosen at run time so the binary runs
+  anywhere. They want the treatment the row kernels have, widened to 256 and
+  no further.
+
 - **The workers are not spinning for nothing, and generating saturates this
   part at three cores of seven.** A profile of the processor generating puts
   73.5 per cent in the eight-bit row kernel and 12.1 in the worker loop,

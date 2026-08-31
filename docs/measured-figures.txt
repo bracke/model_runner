@@ -4189,6 +4189,87 @@
 #   load:  under 1.4 throughout
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-01, five hundred and twelve bits on a part that has none; and
+# what is left in the two elementwise kernels.
+#
+#   A profile of the processor reading the 1419-token prompt:
+#
+#     deep__rows_by_strips         62.3 %
+#     kernels__head_scores          6.5 %
+#     kernels__blend_run            5.6 %
+#     deep__rows                    5.5 %
+#     backend__cpu__worker          4.1 %
+#     tensors__mat_mul_range_packed 3.4 %
+#     quantize_blocks               2.0 %
+#     llama__blend_exact            1.9 %
+#     kernels__silu                 1.1 %
+#
+#   Attention is 14.1 per cent of it, which is more than the 1.11 times that
+#   prompt is behind, and it is the largest thing on that side that is not
+#   the hand-written strip kernel.
+#
+#   Nothing in this library uses a five-hundred-and-twelve-bit lane. Every
+#   hand-written vector kernel is ymm, and the three files model_runner.gpr
+#   gives -march=x86-64-v3 and -v4 to are quantization units.
+#
+#   So the blending run was widened. It weighs a whole head of values
+#   against one score -- eight vfmadd231ps a position, which carry
+#   sixty-five per cent of that kernel's samples by annotation -- and four
+#   in zmm do the same work. Gated on Platform.Byte_Products, which is the
+#   same test the v4 compilation uses and means the whole of that set.
+#
+#   Bit-exact, and not by luck: every component of the sum accumulates the
+#   same terms in the same order, and only how many of them a register holds
+#   has changed. 1a26d24d33b8957b and 3248ac1bb7011de0 throughout.
+#
+#   Alternated, medians of three, the 1419-token processor prompt:
+#     two hundred and fifty-six bits   6.049, 6.086, 6.199 s
+#     five hundred and twelve          6.176, 6.266, 6.166 s
+#   Behind in two rounds of three, about one and a half per cent.
+#
+#   Zen 4 executes a five-hundred-and-twelve-bit instruction on
+#   two-hundred-and-fifty-six-bit hardware, two passes to the instruction,
+#   so halving the instruction count leaves the cycle count where it was and
+#   adds the transitions. Which is exactly why the byte dot product in the
+#   quantization units is worth compiling for x86-64-v4 and this is not:
+#   that is a new instruction doing four multiplies in a lane, and this is
+#   only a wider lane. Not kept.
+#
+#   head_scores would not have gone the same way even if the lanes had paid.
+#   Its annotation is led not by its multiply-adds but by six vhaddps -- the
+#   horizontal reduction that ends every dot product -- and a wider lane
+#   lengthens that. It would also move every digest this file publishes for
+#   the processor, because a dot product's lanes are added to one another at
+#   the end and their number decides the association.
+#
+#   The device's combining step, eight per cent of a device prompt, is
+#   entirely traffic. Replacing the gated unit -- sigmoid-weighted or
+#   Gaussian on one arm -- with a plain addition:
+#     the unit there   0.892, 0.895 s
+#     the unit gone    0.890, 0.896 s
+#     the whole gone   0.823, 0.823 s
+#   The arithmetic is nothing and the kernel is 0.070 s of reading two arms
+#   and writing one. The only lever left is fewer bytes: the two
+#   feed-forward arms exchanging half precision rather than binary32, about
+#   twenty-three megabytes a layer. That changes what the program computes
+#   and would be the sweep's to judge rather than a digest's.
+#
+#   And the processor's two small kernels are at a hundred and twenty-eight
+#   bits. quantize_blocks annotates as addps, cmpleps and movups on xmm --
+#   which is the SSE2 baseline this library compiles to -- and
+#   mat_mul_range_packed moves its tile with movsd and movhpd, sixty-four
+#   bits at a time. Neither unit gets wide flags, and that is deliberate:
+#   the wide code is isolated into units chosen at run time so that the
+#   binary runs on a processor that has none of it. What those two want is
+#   the treatment the row kernels already have, a wide variant beside the
+#   baseline -- and the measurement above says to widen them to two hundred
+#   and fifty-six bits and stop.
+#
+#   Nothing kept, nothing restamped: the tree is as commit f6c5ae1 left it.
+#
+#   load:  under 1.4 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

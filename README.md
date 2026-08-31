@@ -9579,6 +9579,70 @@ twelve tokens, so it is arithmetic where generating is traffic.
 wall both of them are near. The prompt is 1.11 times behind with real
 scaling still in it, and that is where the row kernel is worth attacking.
 
+### Five hundred and twelve bits, on a part that has none
+
+A profile of the processor reading the 1419-token prompt puts 62.3 per cent
+in the eight-bit strip kernel and **14.1 per cent in attention** --
+`head_scores` at 6.5, `blend_run` at 5.6, `blend_exact` at 1.9. That is the
+largest thing on that side which is not the hand-written strip kernel, and
+it is larger than the gap it sits in: the whole processor prompt is 1.11
+times behind.
+
+**Nothing in this library uses a five-hundred-and-twelve-bit lane.** Every
+hand-written vector kernel here is `ymm` -- two hundred and fifty-six bits
+-- on a processor that has `zmm`, and the three files the project file gives
+`-march=x86-64-v3` and `-v4` to are quantization units, not these.
+
+So the blending run was widened. It weighs a whole head of values against
+one score -- eight `vfmadd231ps` a position, which carry sixty-five per cent
+of that kernel's samples -- and four of them in `zmm` do the same work. It
+is **bit-exact**, and that is not luck: every component of the sum
+accumulates the same terms in the same order, and only how many of them a
+register holds has changed. A dot product would not be, because its lanes
+are added to one another at the end and their number decides the
+association.
+
+It is **slower**: 6.176, 6.266 and 6.166 seconds against 6.049, 6.086 and
+6.199, behind in two rounds of three, with `1a26d24d33b8957b` throughout.
+
+**Zen 4 executes a five-hundred-and-twelve-bit instruction on
+two-hundred-and-fifty-six-bit hardware**, two passes to the instruction, so
+halving the instruction count leaves the cycle count where it was and adds
+the transitions. Which is why the byte dot product in the quantization units
+*is* worth compiling for `x86-64-v4` and this is not: that is a new
+instruction doing four multiplies in a lane, and this is only a wider lane.
+
+And `head_scores` would not have gone the same way even if the lanes had
+paid. Its annotation is not led by its multiply-adds but by six `vhaddps` --
+the horizontal reduction that ends every dot product. Widening the lanes
+makes that reduction longer, and it would move every digest this file
+publishes for the processor.
+
+### What is left in the two elementwise kernels
+
+The device's combining step is eight per cent of a prompt, and it is
+**entirely traffic**. Replacing its gated unit -- the sigmoid-weighted or
+Gaussian function on one arm -- with a plain addition costs nothing: 0.890
+and 0.896 seconds against 0.892 and 0.895, where taking the whole kernel out
+reads 0.823. Two arms in and one out is what it costs, and the only lever
+left is fewer bytes: the two feed-forward arms exchanging half precision
+rather than binary32, about twenty-three megabytes a layer, which changes
+what the program computes and so would be the sweep's to judge rather than a
+digest's.
+
+The processor's two small kernels are a different matter and the same
+sentence as the section above. `quantize_blocks` is two per cent of a
+processor prompt and its annotation is `addps`, `cmpleps`, `movups` on
+**`xmm`** -- a hundred and twenty-eight bits, which is the baseline this
+library compiles to. `mat_mul_range_packed` is three and a half per cent and
+moves its tile with `movsd` and `movhpd`, sixty-four bits at a time. Neither
+is in a unit the project file gives wide lanes to, and that is deliberate:
+the wide code is isolated into units chosen at run time so that the binary
+runs on a processor that has none of it. What those two want is the same
+treatment the row kernels already have -- a wide variant beside the
+baseline, chosen when the host says yes -- and the measurement above says to
+widen them to two hundred and fifty-six bits and stop there.
+
 And the normalization's six per cent of a device prompt is neither of the
 two things it looked like. Its second read of the row was refused last
 section for occupancy. Its fold -- two hundred and fifty-six lanes halved
