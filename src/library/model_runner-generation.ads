@@ -157,11 +157,14 @@ package Model_Runner.Generation is
       --  reads 1.899 s at thirty-two and 1.730 s at the cap.
       --
       --  What it costs is how often a run can be cancelled and how often it
-      --  reports progress while reading a prompt: a hundred and twenty-eight
-      --  tokens rather than thirty-two, which on this model is about a
-      --  second of wall. A caller who wants a finer grain than that asks for
-      --  a smaller batch and pays for it in prefill.
-      Batch_Size : Natural := 128;
+      --  reports progress while reading a prompt: five hundred and twelve
+      --  tokens rather than thirty-two, which on this model is about half a
+      --  second of wall on the device and four on the processor. A caller
+      --  who wants a finer grain than that asks for a smaller batch and pays
+      --  for it in prefill -- a batch is one pass over the weights, so four
+      --  batches of a hundred and twenty-eight read them four times where
+      --  one of five hundred and twelve reads them once.
+      Batch_Size : Natural := 512;
 
       --  Reuse the session's committed context when the tokenized prompt is
       --  an exact prefix extension of it, and re-evaluate only the new

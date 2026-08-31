@@ -896,7 +896,21 @@ package Model_Runner.Llama is
    --  Largest number of tokens one batched call will evaluate. A batch holds
    --  activations for every token in it, so this bounds that working set
    --  rather than letting a long prompt decide it.
-   Max_Batch : constant := 128;
+   --
+   --  Five hundred and twelve, which is where the device measures fastest
+   --  and is what llama.cpp uses for the same job. A batch is one pass over
+   --  the weights, so a 1419-token prompt is three passes here where a
+   --  batch of a hundred and twenty-eight made twelve; the weights are
+   --  nineteen per cent of a device prompt and this is most of what that
+   --  buys. Above five hundred and twelve it goes back: 1.027 s at a
+   --  thousand and twenty-four against 0.987 at five hundred and twelve,
+   --  which is the activations of a batch outgrowing something they were
+   --  fitting in.
+   --
+   --  What it costs is that working set: five hundred and twelve positions
+   --  of the widest vector a layer holds, which for this model is the
+   --  5632-wide feed-forward and eleven megabytes.
+   Max_Batch : constant := 512;
 
    --  Evaluate several consecutive tokens in one pass.
    --

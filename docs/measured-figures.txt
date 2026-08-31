@@ -3188,6 +3188,143 @@
 #   load:  0.63 rising to 2.90, then 1.00 rising to 4.56
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-08-31, a prompt reads the weights three times where it read them
+# twelve; and two careful changes to the decode that measured nothing, which
+# is what found it.
+#
+#   The entry above leaves the matrix product 1.42 times behind and says the
+#   shape is not it. So the decode was taken apart. Replacing it with a
+#   constant takes the 1419-token device prompt from 1.04 s to 0.81 --
+#   twenty-three per cent -- and the disassembly of the executed Q8_0 path
+#   says why it looked like arithmetic:
+#
+#     32 WMMA, 152 VALU, 39 buffer loads, 16 ds_load_b64,
+#     16 ds_store_b16, 2 ds_store_2addr_b64, 41 waits, 28 SALU
+#
+#   Twenty other instructions for every matrix instruction, and a shared
+#   tile written one sixteen-bit value at a time.
+#
+#   Two changes, both of which do what they say and neither of which is
+#   worth anything:
+#
+#     The tile held four values to an element rather than one, padded the
+#     same way, so the decode's sixteen writes become four and the
+#     instruction's loads read the same units. Confirmed: 16 ds_store_b16
+#     and 6 ds_store_2addr_b64 become 2 ds_store_2addr_b64.
+#
+#     The block's scale applied to a whole four-value vector instead of
+#     value by value. Confirmed: 8 v_pk_mul_f16 appear and the VALU count
+#     goes 152 to 144.
+#
+#   Alternated, three rounds, medians of three:
+#     one value at a time   1.025, 1.031, 1.046 s
+#     four out              1.030, 1.039, 1.039 s
+#     four and packed       1.032, 1.029, 1.036 s
+#   Level. Not kept.
+#
+#   So the twenty-three per cent was split, because taking the decode out
+#   had taken the loads that feed it out as well. Keeping the loads and the
+#   scale and throwing away only the conversion chain -- wrong answers on
+#   purpose, and a probe rather than a candidate:
+#
+#     the whole decode                        1.042, 1.052 s
+#     its arithmetic gone, its loads kept     1.010, 1.012 s
+#     both gone                               0.812, 0.807 s
+#
+#   The arithmetic is three and a half per cent and the weight reads are
+#   nineteen. A hundred and twenty instructions of decoding are worth almost
+#   nothing, which is why two careful attempts at them were worth nothing.
+#
+#   And the weights were being read twelve times. A batch is one pass over
+#   the model and Max_Batch was a hundred and twenty-eight, so a 1419-token
+#   prompt made twelve passes where llama.cpp, whose n_ubatch is five
+#   hundred and twelve, makes three.
+#
+#   Swept, medians of three, the device prompt:
+#     128    1.038 s
+#     256    0.991 s
+#     512    0.987 s
+#     1024   1.026 s
+#     1419   1.028 s
+#     2048   1.028 s
+#
+#   Alternated, three rounds on the device and two on the processor:
+#     device 128   1.027, 1.026, 1.036 s
+#     device 512   0.961, 0.995, 0.987 s
+#     cpu 128      6.440, 6.336 s
+#     cpu 512      6.126, 6.248 s
+#   Ahead in all five pairs. Four per cent on the device, three on the
+#   processor, and the same tokens both ways.
+#
+#   Above five hundred and twelve it goes back, which is the part worth
+#   keeping: a batch holds the activations of every position in it, and at a
+#   thousand and twenty-four those stop fitting in whatever they were
+#   fitting in. This is a shape with an optimum rather than a direction, and
+#   the optimum is where the other runtime already had it.
+#
+#   Two faults found on the way, both in the machinery rather than the
+#   engine, and both of the kind this file exists for:
+#
+#     tests speed defaulted --batch-size to a hundred and twenty-eight, a
+#     copy of a default the command had just moved to five hundred and
+#     twelve. A whole sitting was taken at a batch nobody would ever run
+#     before the two numbers were compared. It reads the default out of the
+#     request record now. Second time this tool has differed from the
+#     command it publishes figures for; the first is recorded under "The
+#     device backend".
+#
+#     Max_Batch lives in model_runner-llama.ads, which no group listed. Two
+#     defaults elsewhere moved with it and those were listed, so the check
+#     fired -- by luck. That file is in all five groups now, which is why
+#     these fingerprints differ from the ones the gate named before the
+#     lists were changed.
+#
+#   Also measured and not kept, from the same sitting: llama.cpp reaches its
+#   speed through the cooperative matrix and not through its integer path.
+#   pp1419 -ngl 99 reads 1882 t/s by default, 1800 with
+#   GGML_VK_DISABLE_INTEGER_DOT_PRODUCT and 1263 with
+#   GGML_VK_DISABLE_COOPMAT. Four per cent against thirty-three. A pipeline
+#   per format instead of a six-way branch on a push constant is worth 0.4
+#   per cent -- 1.031, 1.028 against 1.034, 1.034 -- so the branch is not a
+#   cost either.
+#
+#   Five groups moved. One sitting, each part of it started under a load of
+#   1.10:
+#
+#     six-token prompt, 12 generated   cpu 0.425 s wall, 0.065 and 0.357,
+#                                      1.90 s processor
+#                                      device 0.264 s wall, 0.031 and 0.233,
+#                                      0.07 s processor
+#     the same at --arith f32          1.360 s, 10.14 s processor
+#     four tokens, cpu against
+#       reference                      cpu 0.068 and 0.118
+#                                      reference 5.907 and 3.932
+#     110-token prompt                 cpu 0.417 s (0.415), 2.62 s processor
+#                                      device 0.116 s (0.113), 0.02 s
+#     1419-token prompt                cpu 6.106 s, device 0.968 s
+#     64 generated, six-token prompt   cpu 1.950 s, device 1.340 s
+#     twelve tokens at two bits        1.766 s (0.335 and 1.390)
+#     drafted, four proposed a round   3.867 s, 24 proposed, 7 accepted
+#     llama-bench 95b8e33e1, -r 3      pp110 353.57 +/- 25.04 --device none,
+#                                      1606.37 +/- 55.63 -ngl 99
+#                                      pp1419 266.48 +/- 2.08 --device none,
+#                                      1764.35 +/- 1.34 -ngl 99
+#                                      tg64 39.53 and 56.22 beside the short
+#                                      prompt, 39.08 and 55.94 beside the
+#                                      long one
+#                                      pp110 -ngl 0 with a device present
+#                                      827.79 +/- 30.00
+#
+#   Digests held: 33f48397f89839f6, 5abff916f9d83ca6, cbf29ce484222325,
+#   448c2ed68ec342ee, 3248ac1bb7011de0, 1a26d24d33b8957b, 5f85f06494f88de4,
+#   7fbdc947563a2fde.
+#
+#   The device reads the long prompt at 1466 tokens a second and the gap to
+#   llama.cpp is 1.20, from 1.27.
+#
+#   load:  0.79 to 2.52 across the sitting, each part started under 1.10
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
@@ -4743,7 +4880,7 @@ kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/m
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-engine 0B2714FB664CB10C src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+engine 3A368348339748FA src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -5055,7 +5192,7 @@ engine 0B2714FB664CB10C src/library/model_runner-llama.adb src/library/model_run
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-reference BD37B158FD0715E2 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+reference 750A2002C1798048 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -6895,7 +7032,7 @@ reference BD37B158FD0715E2 src/library/model_runner-backend-reference.adb src/li
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-device B066DE852FB0FF1B src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device F6AB10C7ECD025A7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -7242,7 +7379,7 @@ device B066DE852FB0FF1B src/shaders/row_product.comp src/shaders/matrix_product.
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-drafting 3BBEB80F3BF9F867 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+drafting 4DDC0FF47A8B24B1 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -9819,7 +9956,7 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-outside B066DE852FB0FF1B src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside F6AB10C7ECD025A7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #

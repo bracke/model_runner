@@ -39,6 +39,7 @@ with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Numerics;
 with Model_Runner.Llama;
+with Model_Runner.Generation;
 with Model_Runner.Schema;
 with Model_Runner.Tools;
 with Model_Runner.Platform;
@@ -1613,7 +1614,16 @@ begin
             Tokens      => Number ("--max-tokens", 12),
             Threads     => Number ("--threads",
                                    Model_Runner.Platform.Core_Count - 1),
-            Batch       => Number ("--batch-size", 128),
+            --  The command's own default, not a copy of it. This carried
+            --  its own 128 while the command's went to 512, and a sitting
+            --  taken with it measured a batch nobody would ever run --
+            --  which is the same failure this tool was fixed for once
+            --  before, when it read the prompt file differently from the
+            --  command it publishes figures for.
+            Batch       =>
+              Number ("--batch-size",
+                      Model_Runner.Generation.Request'(others => <>)
+                        .Batch_Size),
 
             --  Named with a value like every other option this command
             --  takes, so that a reader who saw --repack in the README does

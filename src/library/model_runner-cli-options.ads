@@ -293,7 +293,7 @@ package Model_Runner.CLI.Options is
       --  The engine's cap, for the reason written above Generation's own
       --  default: it is what measured fastest on both backends, and on the
       --  device by nearly a factor of two.
-      Batch_Size   : Natural := 128;
+      Batch_Size   : Natural := 512;
 
       --  Worker count for matrix-vector products. Zero means "choose from the
       --  processor count"; one means serial execution on the calling task.

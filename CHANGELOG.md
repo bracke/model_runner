@@ -7,6 +7,43 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A prompt reads the weights three times where it read them twelve: the
+  1419-token device prompt goes to 1466 tokens a second and the gap to
+  llama.cpp to 1.20**, from 1.27. `Max_Batch` was 128, so a batch — which is
+  one pass over the whole model — made twelve passes at that length where
+  llama.cpp's `n_ubatch` of 512 makes three. Five hundred and twelve is
+  ahead in every alternated round: 0.961, 0.995 and 0.987 s against 1.027,
+  1.026 and 1.036 on the device, and 6.126 and 6.248 against 6.440 and 6.336
+  on the processor. Four per cent there and three here, same tokens.
+
+  Above 512 it goes back — 1.026 s at 1024 — because a batch holds the
+  activations of every position in it and those stop fitting. An optimum,
+  not a direction, and it sits where the other runtime already had it.
+
+  **Two careful changes to the decode measured nothing, and finding out why
+  is what found this.** Replacing the decode with a constant is worth 23 per
+  cent, and the disassembly showed thirty-two matrix instructions against a
+  hundred and fifty others and a shared tile written one 16-bit value at a
+  time. Holding the tile four values to an element and applying the scale to
+  whole vectors fixed both — confirmed in the disassembly, two wide stores
+  and eight packed multiplies — and read 1.032 s against 1.031. Level, and
+  not kept.
+
+  So the 23 per cent was split, because removing the decode had also removed
+  the loads feeding it: **the arithmetic is 3.5 per cent and the weight
+  reads are 19**. A hundred and twenty instructions of decoding are worth
+  almost nothing; what a prompt does is read the weights.
+
+  **A measuring tool that carried its own default nearly hid it.** `tests
+  speed` defaulted `--batch-size` to 128, a copy of a default the command
+  had just moved, so the first sitting measured a batch nobody would run. It
+  reads the default out of the request record now. Second time this tool has
+  differed from the command it publishes figures for.
+
+  And `Max_Batch` lives in a specification file no fingerprint group listed
+  — two defaults elsewhere moved with it, so the check fired by luck.
+  `model_runner-llama.ads` is in the five groups now.
+
 - **llama.cpp's matrix tile, built here and thirty-one per cent slower; the
   one per cent of it that was worth keeping, kept.** The matrix product is
   seventy-nine per cent of the device's prompt and 1.42 times behind — 3.4
