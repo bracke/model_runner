@@ -5526,6 +5526,36 @@ package body Model_Runner.Llama is
       Scale     : constant Real :=
         Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
 
+      --  Whether the layer before this one left its answer on the device,
+      --  and which layers left their keys and values in the device's own
+      --  cache without also sending them back. A token is twenty-two
+      --  layers and each of them waited on its own fence; carried and
+      --  deferred, only the last one does.
+      Chaining : constant Boolean := True;
+      Carried  : Boolean := False;
+      Deferred : array (Source.Layers.all'Range) of Boolean :=
+        [others => False];
+
+      --  Whether a layer is one the device takes whole. Asked of the next
+      --  layer as well as of this one: a layer that falls back reads the
+      --  host's copy of the activation, and the host's copy is what
+      --  carrying does not write.
+      function Whole_Layer_Fits (L : Layer) return Boolean
+      is (T.Is_Present (L.Gate)
+          and then L.Attention_Norm /= null
+          and then L.Attention_Norm_Bias = null
+          and then L.Feed_Norm /= null
+          and then L.Query_Bias = null
+          and then L.Query_Norm = null
+          and then L.Key_Bias = null
+          and then L.Key_Norm = null
+          and then L.Out_Bias = null
+          and then L.Up_Bias = null
+          and then L.Down_Bias = null
+          and then L.Feed_Norm_Bias = null
+          and then L.Post_Attention_Norm = null
+          and then L.Post_Feed_Norm = null);
+
       --  Where the last phase boundary was, for a caller that asked for a
       --  budget. The batched path keeps one of these too, and the phases
       --  mean the same thing in both -- which is the point: a token and a
@@ -5680,20 +5710,7 @@ package body Model_Runner.Llama is
               and then Settings.Rotary > 0
               and then Element_Count (Settings.Rotary) <= Head_Size
               and then Settings.Experts = 0
-              and then T.Is_Present (Current.Gate)
-              and then Current.Attention_Norm /= null
-              and then Current.Attention_Norm_Bias = null
-              and then Current.Feed_Norm /= null
-              and then Current.Query_Bias = null
-              and then Current.Query_Norm = null
-              and then Current.Key_Bias = null
-              and then Current.Key_Norm = null
-              and then Current.Out_Bias = null
-              and then Current.Up_Bias = null
-              and then Current.Down_Bias = null
-              and then Current.Feed_Norm_Bias = null
-              and then Current.Post_Attention_Norm = null
-              and then Current.Post_Feed_Norm = null
+              and then Whole_Layer_Fits (Current)
               and then Source.Settings.Kind not in Falcon | Phi2
               and then Model_Runner.Backend."="
                          (Item.Owner.Able.Kind,
@@ -5734,6 +5751,20 @@ package body Model_Runner.Llama is
                      Current.Gate, Current.Up, Current.Down,
                      Gate_Unit (Source),
                      Item.Key_Row, Item.Value_Row, Item.Activation, Fused,
+
+                     --  As a batch does: the first layer reads what the
+                     --  host has and the last writes what it reads, and
+                     --  the ones between hand the activation on where it
+                     --  lies and leave their keys and values in the
+                     --  device's own cache. A token is twenty-two layers
+                     --  and each of them waited on its own fence.
+                     Carry_In  => Carried,
+                     Carry_Out =>
+                       Chaining
+                       and then Index < Source.Layers.all'Last
+                       and then Whole_Layer_Fits
+                                  (Source.Layers.all (Index + 1)),
+                     Mirror    => not Chaining,
                      Window   =>
                        (if Settings.Window > 0
                           and then Earliest (Settings,
@@ -5747,18 +5778,30 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
+            Carried :=
+              Chaining
+              and then Fused
+              and then Index < Source.Layers.all'Last
+              and then Whole_Layer_Fits (Source.Layers.all (Index + 1));
+
             if Fused then
-               --  The host keeps its own copy of the cache: the snapshot,
-               --  the eviction and the other two precisions all read it.
-               --  The device wrote its own before it attended.
-               for Offset in 0 .. KV_Width - 1 loop
-                  Item.Keys.all (Slot + Offset) :=
-                    Item.Key_Row.all (Offset);
-               end loop;
-               for Offset in 0 .. V_Width - 1 loop
-                  Item.Values.all (V_Slot + Offset) :=
-                    Item.Value_Row.all (Offset);
-               end loop;
+               --  The host keeps its own copy of the cache -- the
+               --  snapshot, the eviction and the other two precisions all
+               --  read it -- and reads it out of the device's own once the
+               --  token is done rather than a layer at a time, which is
+               --  what lets a layer be handed over without waiting.
+               if Chaining then
+                  Deferred (Index) := True;
+               else
+                  for Offset in 0 .. KV_Width - 1 loop
+                     Item.Keys.all (Slot + Offset) :=
+                       Item.Key_Row.all (Offset);
+                  end loop;
+                  for Offset in 0 .. V_Width - 1 loop
+                     Item.Values.all (V_Slot + Offset) :=
+                       Item.Value_Row.all (Offset);
+                  end loop;
+               end if;
 
                Charge (Item, Attending, Mark);
                goto Layer_Done;
@@ -6158,6 +6201,41 @@ package body Model_Runner.Llama is
 
             <<Layer_Done>>
          end;
+      end loop;
+
+      --  The host's own copy of the cache, brought up to date out of the
+      --  device's for the layers that did not send it back one at a time.
+      --  One position apiece, which is what a token writes.
+      for Index in Source.Layers.all'Range loop
+         if Deferred (Index) then
+            declare
+               At_Key : constant Element_Count :=
+                 Element_Count (Index) * Element_Count (Item.Context)
+                 * KV_Width + Reserved * KV_Width;
+
+               At_Val : constant Element_Count :=
+                 Element_Count (Index) * Element_Count (Item.Context)
+                 * V_Width + Reserved * V_Width;
+
+               Read : Boolean;
+            begin
+               Model_Runner.Backend.Device.Get_Cache
+                 (At_Key,
+                  Item.Keys.all (At_Key .. At_Key + KV_Width - 1), Read);
+
+               if Read then
+                  Model_Runner.Backend.Device.Get_Cache
+                    (Item.Keys.all'Length + At_Val,
+                     Item.Values.all (At_Val .. At_Val + V_Width - 1), Read);
+               end if;
+
+               if not Read then
+                  Item.Current := Failed;
+                  Status := E.Make (E.Backend_Closed);
+                  return;
+               end if;
+            end;
+         end if;
       end loop;
 
       if E.Is_Error (Status) then

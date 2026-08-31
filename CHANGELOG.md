@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A generated token carries its activation from layer to layer too, and
+  the host's copy of its cache is read back once a token rather than once a
+  layer: sixty-four generated tokens on the device read 1.269, 1.273 and
+  1.286 s against 1.351, 1.336 and 1.369** — ahead in each of three
+  alternated rounds, and in five of five in an earlier sitting. Eight pairs,
+  eight wins, about five per cent. The device generates at **48.5 tokens a
+  second**, a fifth clear of llama.cpp's processor row and 1.2 times behind
+  its device one. 293 tests pass and every digest held.
+
+  The batched evaluator got the carry, the deferred mirror and the chaining
+  three commits ago; the one that generates never did, and generating is
+  where the host's share of a token is. A generated token dispatches 18.29
+  ms of work against llama.cpp's 17.9 — level overall, six times faster on
+  attention and twice on the keys and values — while taking 20.8 ms of wall.
+  The kernels were not what was left. Twenty-two layers each waiting on
+  their own fence were.
+
+  The condition that is not obvious: whether a layer may be carried is asked
+  of the **next** layer as well as this one. A layer the device cannot take
+  whole reads the host's copy of the activation, and the host's copy is
+  exactly what carrying does not write.
+
+  Two figures were taken twice and both are recorded rather than the kinder
+  one. Sixty-four generated on the device read 1.319 s in the sitting and
+  1.364 s an hour later on the same binary — a spread as wide as the change
+  itself, which is why the alternated pairs and not the end-to-end cell are
+  what the claim rests on.
+
 - **The attending tile takes sixty-four cached positions rather than
   thirty-two, which is worth one per cent**: 1.025, 1.032, 1.033 and 1.046 s
   against 1.041, 1.043 and 1.046 — never behind in four rounds, ahead in
