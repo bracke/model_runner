@@ -9144,6 +9144,44 @@ both of them is at a local optimum in every direction anyone has thought to
 push it.
 
 
+### The batch was already the right way round
+
+One lever was left on those reads. The instruction's second operand is
+sixteen depths by sixteen vectors, and the half-precision batch is
+vector-major, so reading one is sixteen runs of thirty-two bytes a whole
+vector apart -- four kilobytes on this model. Kept depth-major instead, the
+sixteen vectors a tile wants at one depth would be one contiguous run of two
+hundred and fifty-six bytes. `half_batch.comp` writes that copy and
+`matrix_product.comp` is its only reader, so the change is two shaders and a
+push constant.
+
+It is **thirty-two per cent slower**, and taking it in two pieces says why
+-- the copy alone first, with the reader left as it was, which computes the
+wrong answers on purpose and times the transpose by itself:
+
+| | 1419-token device prompt |
+| --- | ---: |
+| both as they were | **0.966 s** |
+| the copy turned on its side | 1.059 s |
+| and the reader turned with it | 1.271 s |
+
+The copy costs ten per cent, which is the smaller surprise: it runs once per
+product, but that is seven times a layer and twenty-two layers and three
+batches, and turning it round makes its own reads the strided ones.
+
+**The reader costs twenty-two, and that is the thing worth knowing.** The
+turned version reads contiguous memory where the original strides four
+kilobytes, and it is much slower anyway, because the operand's layout is not
+a preference -- `gl_CooperativeMatrixLayoutColumnMajor` is what this
+instruction's second operand natively is on this part, and asking for
+`RowMajor` buys a rearrangement in registers that costs more than every byte
+of locality it wins.
+
+So the batch's vector-major layout was never an accident to be fixed. It is
+the layout the instruction reads for free, and the four-kilobyte stride that
+looks wrong on paper is invisible beside a transpose that is not.
+
+
 ### Kernels
 
 Row dot product, nanoseconds per element, release build, every format the

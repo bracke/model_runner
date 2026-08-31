@@ -3407,6 +3407,55 @@
 #   load:  0.82 to 1.6 across the sitting
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-08-31, the half-precision batch turned depth-major so that a tile's
+# operand would be contiguous: thirty-two per cent slower, and the layout
+# was already the one the instruction wants.
+#
+#   The last lever on the weight-and-activation reads. The instruction's
+#   second operand is sixteen depths by sixteen vectors. The batch is
+#   vector-major, so reading one is sixteen runs of thirty-two bytes a whole
+#   vector apart -- four kilobytes on this model. Kept depth-major, the
+#   sixteen vectors a tile wants at one depth are one contiguous run of two
+#   hundred and fifty-six bytes.
+#
+#   Contained: half_batch.comp writes that copy and matrix_product.comp is
+#   its only reader, so it is two shaders and one push constant. Count is
+#   pushed as the padded width rather than the real one, which the tile
+#   never used.
+#
+#   Taken in two pieces, because a change that loses says nothing about
+#   which part lost. The middle arm turns the copy and leaves the reader,
+#   which computes the wrong answers on purpose -- cda91dab1bdea4fe rather
+#   than 1a26d24d33b8957b -- and times the transpose by itself:
+#
+#     both as they were             0.968, 0.963 s
+#     the copy turned only          1.052, 1.066 s
+#     the reader turned with it     1.273, 1.269 s
+#
+#   The copy is ten per cent. "Once per product" is seven times a layer,
+#   twenty-two layers, three batches -- four hundred and sixty-two
+#   dispatches over a five-hundred-and-twelve by two-thousand-and-forty-
+#   eight activation each -- and turning it round makes its own reads the
+#   strided ones. That is the smaller surprise and it was foreseeable.
+#
+#   The reader is twenty-two, and that is the thing worth writing down. The
+#   turned version reads contiguous memory where the original strides four
+#   kilobytes, and it is much slower anyway.
+#   gl_CooperativeMatrixLayoutColumnMajor is what this instruction's second
+#   operand natively is on this part -- element (k, n) with k contiguous is
+#   the way the lanes already hold it -- and asking for RowMajor buys a
+#   rearrangement in registers that costs more than every byte of locality
+#   it wins.
+#
+#   So the batch's vector-major layout was never an accident to be fixed. It
+#   is the layout the instruction reads for free, and a four-kilobyte stride
+#   that looks wrong on paper is invisible beside a transpose that is not.
+#
+#   Nothing kept, nothing restamped: the tree is as commit c1719b3 left it.
+#
+#   load:  under 1.5 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

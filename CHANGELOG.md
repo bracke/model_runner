@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The half-precision batch turned depth-major, so a tile's operand would
+  be contiguous — thirty-two per cent slower, and the reason is worth
+  keeping.** The instruction's second operand is sixteen depths by sixteen
+  vectors; read out of a vector-major batch that is sixteen runs of
+  thirty-two bytes four kilobytes apart, and out of a depth-major copy it
+  would be one contiguous run of two hundred and fifty-six.
+
+  Taken in two pieces — the copy turned first, with the reader left alone,
+  which computes wrong answers on purpose and times the transpose by itself:
+  0.966 s as they were, 1.059 with the copy turned, 1.271 with both.
+
+  The copy costs ten per cent, because "once per product" is seven times a
+  layer over twenty-two layers and three batches, and turning it round makes
+  its own reads the strided ones. **The reader costs twenty-two**, reading
+  contiguous memory where the original strides four kilobytes:
+  `ColumnMajor` is what this instruction's second operand natively is on
+  this part, and asking for `RowMajor` buys a register rearrangement that
+  costs more than all the locality it wins. The batch was already the right
+  way round. Nothing kept, nothing restamped.
+
 - **A wider tile, now that a batch can fill one — measured, refused, and the
   wall named.** With a batch of 512 the tile could finally be wider than
   128, which would cut the weight reads per answer, and those are a fifth of
