@@ -65,6 +65,13 @@ layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
 layout(std430, binding = 1) readonly  buffer Query { float q[]; };
 layout(std430, binding = 2) writeonly buffer Blend { float y[]; };
 
+//  And the blend in half precision. The projection that reads this blend is
+//  a tile and a tile's operand is half precision, so where the caller says
+//  every reader is one, the binary32 above is written and never looked at.
+//  This is written instead of it and the conversion between them does not
+//  run.
+layout(std430, binding = 3) writeonly buffer Blend_Halves { float16_t hb[]; };
+
 layout(push_constant) uniform Shape {
     uint heads;
     uint head_size;
@@ -148,7 +155,36 @@ void main() {
     uint block = gl_WorkGroupID.y;
     uint lane  = gl_LocalInvocationID.x;
 
-    if (head >= shape.heads || block * BR >= shape.positions) {
+    //  Whether a position sees only what precedes it, and how many
+    //  positions the half-precision copy is to hold -- the batch rounded up
+    //  to a whole tile, or zero for no copy at all.
+    //
+    //  Both come out of one word because this block may not grow: widening
+    //  it by a single field once corrupted a device's answers on a part
+    //  whose limit is four times its size, which is written down in
+    //  docs/measured-figures.txt and not understood. The flag is the low
+    //  bit and the count is the rest.
+    uint causal = shape.causal & 1u;
+    uint room   = shape.causal >> 1u;
+    bool halved = room > 0u;
+
+    uint reach = halved && room > shape.positions ? room : shape.positions;
+
+    if (head >= shape.heads || block * BR >= reach) {
+        return;
+    }
+
+    //  A block wholly past the batch: zeros in the copy, and none of the
+    //  attending below.
+    if (block * BR >= shape.positions) {
+        for (uint at = lane; at < BR * shape.value_size; at += 64u) {
+            uint r = at / shape.value_size;
+            uint c = at % shape.value_size;
+
+            hb[(block * BR + r) * shape.heads * shape.value_size
+               + head * shape.value_size + c] = float16_t (0.0);
+        }
+
         return;
     }
 
@@ -184,8 +220,8 @@ void main() {
     uint slot_low  = min (block * BR, shape.positions - 1u);
     uint slot_high = min (block * BR + BR - 1u, shape.positions - 1u);
 
-    uint last_max = shape.last + (shape.causal != 0u ? slot_high : 0u);
-    uint last_low = shape.last + (shape.causal != 0u ? slot_low  : 0u);
+    uint last_max = shape.last + (causal != 0u ? slot_high : 0u);
+    uint last_low = shape.last + (causal != 0u ? slot_low  : 0u);
 
     uint first_min = shape.first;
     if (shape.window > 0u) {
@@ -295,7 +331,7 @@ void main() {
             uint r = (lane >> 5u) + 2u * i;
 
             uint slot = min (block * BR + r, shape.positions - 1u);
-            uint la   = shape.last + (shape.causal != 0u ? slot : 0u);
+            uint la   = shape.last + (causal != 0u ? slot : 0u);
             uint fi   = shape.first;
 
             if (shape.window > 0u) {
@@ -318,7 +354,7 @@ void main() {
 
                     if (slope > 0.0) {
                         uint asking =
-                          shape.causal != 0u
+                          causal != 0u
                           ? la
                           : shape.last - (shape.positions - 1u) + slot;
 
@@ -428,9 +464,18 @@ void main() {
             uint c    = ch * 32u + col;
             uint slot = block * BR + r;
 
-            if (slot < shape.positions && c < dv) {
-                y[slot * shape.heads * dv + head * dv + c] =
-                    held[ch][i] / total[i];
+            if (c < dv) {
+                uint where = slot * shape.heads * dv + head * dv + c;
+
+                if (slot >= shape.positions) {
+                    if (halved) {
+                        hb[where] = float16_t (0.0);
+                    }
+                } else if (halved) {
+                    hb[where] = float16_t (held[ch][i] / total[i]);
+                } else {
+                    y[where] = held[ch][i] / total[i];
+                }
             }
         }
     }

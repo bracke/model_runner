@@ -5013,7 +5013,18 @@ package body Model_Runner.Platform.Device.Products is
          begin
             for Which in 1 .. Steps.Held loop
                Halved (Which) :=
-                 (Steps.Items (Which).Norms or else Steps.Items (Which).Blends)
+                 (Steps.Items (Which).Norms
+                  or else Steps.Items (Which).Blends
+
+                  --  Attention only where the tile kernel is the one that
+                  --  will run: the scalar one writes the blend the way it
+                  --  always has, and the engine picks between them by the
+                  --  same test.
+                  or else (Steps.Items (Which).Attends
+                           and then Attends_By_Matrix
+                                      (Item, Count,
+                                       Steps.Items (Which).Head_Size,
+                                       Steps.Items (Which).Value_Size)))
                  and then Item.Half_Buffer /= Null_Handle
                  and then Item.Half_Bytes
                           >= Interfaces.Unsigned_64 (Steps.Items (Which).Rows)
@@ -5133,16 +5144,35 @@ package body Model_Runner.Platform.Device.Products is
                         --  and a workgroup goes to each head of each.
                         Positions  => C.unsigned (Count),
                         Window     => C.unsigned (This.Window),
-                        Causal     => (if This.Causal then 1 else 0),
+                        --  The flag in the low bit and, above it, how many
+                        --  positions the half-precision copy is to hold --
+                        --  zero for none. One word rather than two because
+                        --  this block may not grow: widening it by a field
+                        --  once corrupted this device's answers, which
+                        --  docs/measured-figures.txt records and nobody has
+                        --  explained.
+                        Causal     =>
+                          C.unsigned
+                            ((if This.Causal then 1 else 0)
+                             + (if Halved (Index)
+                                then 2 * Whole_Tiles (Count) else 0)),
                         Max_Bias   => C.C_float (This.Max_Bias));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer, C.unsigned (This.Heads),
-                        Attend_Groups (Item, Count, This.Head_Size,
-                                       This.Value_Size), 1);
+                        Attend_Groups
+                          (Item,
+                           (if Halved (Index) then Whole_Tiles (Count)
+                            else Count),
+                           This.Head_Size, This.Value_Size), 1);
                   end;
+
+                  if Halved (Index) then
+                     Half_From := Index;
+                     Half_Wide := This.Rows;
+                  end if;
 
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,

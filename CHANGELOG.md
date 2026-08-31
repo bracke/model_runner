@@ -7,6 +7,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The fourth activation follows the other three, and the conversion kernel
+  stops running altogether.** The attention blend is read by the projection
+  after it and by nothing else, so it too is written only in half precision
+  — where the tile kernel is the one that will attend, which the engine
+  already tests for.
+
+  In time it is **level**: 0.886, 0.900 and 0.905 s against 0.901, 0.904 and
+  0.901, ahead in two rounds of three. Kept for a different reason.
+  **Voiding `half_batch` entirely now leaves the 1419-token prompt at 0.885 s
+  and the 110-token one at 0.105, both still answering their published
+  digests** — a kernel whose absence changes neither the answers nor the time
+  is a kernel that is not being dispatched. A whole pass over every
+  activation of every layer has gone from the measured path. It stays in the
+  program for the single-product path and for producers that feed something
+  which is not a tile.
+
+  The device reads the long prompt at **1591 tokens a second** and the gap to
+  llama.cpp is **1.11**.
+
+  **The first reading of this was taken from a binary that did not contain
+  it.** The build helper swallowed its compiler output, an Ada error failed
+  the build silently, and the measurement ran the previous executable — 0.893
+  s with the digests holding, which is what a correct change looks like. The
+  helper prints its errors now.
+
 - **Three of the four activations a layer converts are never read in binary32,
   so they are no longer written in it: the 1419-token device prompt reads
   1577 tokens a second and the gap to llama.cpp is 1.12**, from 1.15. Ahead
