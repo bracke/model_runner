@@ -9626,9 +9626,52 @@ Gaussian function on one arm -- with a plain addition costs nothing: 0.890
 and 0.896 seconds against 0.892 and 0.895, where taking the whole kernel out
 reads 0.823. Two arms in and one out is what it costs, and the only lever
 left is fewer bytes: the two feed-forward arms exchanging half precision
-rather than binary32, about twenty-three megabytes a layer, which changes
-what the program computes and so would be the sweep's to judge rather than a
-digest's.
+rather than binary32, about twenty-three megabytes a layer. That was built,
+and the section below is what it cost.
+
+### The arms in half precision, and the buffer that ate it
+
+The two arms of a gated feed-forward are read by the step that combines them
+and by nothing else, and that step can read half precision. So the products
+that make them can write half precision -- the same rule as `### The binary32
+nobody reads`, extended one step further: a product whose only reader is a
+combining step that reads halves need not write binary32 either.
+
+Built. The product's accumulator is converted and stored as half precision
+where it is wanted, and the combining step reads both arms out of the
+half-precision buffer instead of through the two bindings it used. **It is
+worth five and a half per cent** -- 0.848, 0.853 and 0.862 seconds against
+0.904, 0.896 and 0.901, ahead in all three rounds -- and the answers change,
+as they must, because the gate's activation is now computed from
+half-precision values.
+
+**And the answers changed every run.** Three runs of the same binary gave
+`2b4795a8775ecaa4`, `70a2599caf019dd7` and `47d5e948c41ae62a`. That is not a
+wrong answer, it is a race, and it was caught only because the measuring
+tool prints a digest for every run rather than a pass or a fail.
+
+The race is the layout. The buffer held one region and everything wrote at
+the front of it, which was safe while only one answer was ever live. Two
+arms need two places -- but three answers are live at once, not two: **the
+normalization both arms read is still sitting there** when the first arm
+writes over it, and whether the second arm reads it before or after is a
+matter of timing.
+
+So three regions. And three regions is where it dies. The buffer goes from
+eleven and a half megabytes to seventeen, and that alone costs
+**twenty-two per cent**: with the arms left in binary32 and nothing changed
+but the size of the allocation, the prompt reads 1.102 and 1.106 seconds
+against 0.901, at the published digest. The same layout at two regions reads
+0.85. It is not the regions and not the arms -- it is the number of bytes
+asked for.
+
+Why a seventeen-megabyte buffer should cost a fifth of a prompt on a part
+that is already holding 1.1 gigabytes of weights is not explained here. It
+is recorded because it is repeatable, controlled, and larger than anything
+else this section has measured.
+
+Five and a half per cent for the arms, twenty-two for the room they need to
+be correct in. Not kept.
 
 ### The activation quantizer, widened and refused
 

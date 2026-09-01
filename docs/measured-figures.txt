@@ -4373,6 +4373,69 @@
 #   load:  under 1.4 throughout
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-01, the feed-forward arms in half precision: worth five and a half
+# per cent, and the buffer they need to be correct in costs twenty-two.
+#
+#   The two arms of a gated feed-forward are read by the step that combines
+#   them and by nothing else, and that step reads half precision already. So
+#   the products that make them need not write binary32 -- the rule of "the
+#   binary32 nobody reads" one step further: a product whose only reader is
+#   a combining step that reads halves.
+#
+#   Built. matrix_product converts its accumulator and stores it where the
+#   answer is wanted; combine reads both arms out of the half-precision
+#   buffer rather than through bindings nought and one; the engine works out
+#   which products qualify by walking the steps after each one, as it
+#   already does for the tiles.
+#
+#   Alternated, medians of three, the 1419-token device prompt:
+#     arms in binary32   0.904, 0.896, 0.901 s
+#     arms in halves     0.848, 0.853, 0.862 s
+#   Five and a half per cent, ahead in all three rounds. The answers change,
+#   as they must: the gate's activation is computed from half-precision
+#   values, so this is the sweep's to judge rather than a digest's.
+#
+#   And the answers changed every run. Three runs of one binary gave
+#   2b4795a8775ecaa4, 70a2599caf019dd7 and 47d5e948c41ae62a. That is not a
+#   wrong answer, it is a race, and it was caught only because the measuring
+#   tool prints a digest for every run rather than a pass or a fail. A
+#   conformance bound would have accepted all three.
+#
+#   The race is the layout. The half-precision buffer held one region and
+#   everything wrote at the front of it, which was safe while only one
+#   answer was ever live at a time. Two arms need two places -- but three
+#   answers are live at once, not two: the normalization both arms read is
+#   still sitting in the first region when the first arm writes over it, and
+#   whether the second arm reads it before or after is timing.
+#
+#   So three regions. And three regions is where it dies. The buffer goes
+#   from eleven and a half megabytes to seventeen, and that alone costs
+#   twenty-two per cent. The control is exact: the arms left in binary32,
+#   the shaders and the engine as they were, and nothing changed but the
+#   bytes asked of Take --
+#
+#     one region and a half (11.5 MB)   0.901 s, digest 1a26d24d33b8957b
+#     three regions          (17.3 MB)  1.102, 1.106 s, same digest
+#
+#   -- and the same layout at two regions read 0.848 with the arms halved.
+#   It is not the regions and not the arms; it is the size of the
+#   allocation.
+#
+#   Why a seventeen-megabyte buffer should cost a fifth of a prompt on a
+#   part already holding 1.1 gigabytes of weights is not explained here.
+#   Something about where an allocation of that size lands -- a memory type,
+#   a page size, a translation structure -- but this measures rather than
+#   explains, and it is recorded because it is repeatable and controlled and
+#   larger than anything else in this section.
+#
+#   Five and a half per cent for the arms, twenty-two for the room they need
+#   to be correct in. Not kept.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 09f195f left it.
+#
+#   load:  under 1.4 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

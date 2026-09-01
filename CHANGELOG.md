@@ -7,6 +7,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The feed-forward arms in half precision: worth 5.5 per cent, and the
+  buffer it needs to be correct in costs 22.** The two arms are read by the
+  step that combines them and by nothing else, and that step can read
+  halves — so the products that make them need not write binary32. The same
+  rule as "the binary32 nobody reads", one step further.
+
+  Built, and it works: 0.848, 0.853 and 0.862 s against 0.904, 0.896 and
+  0.901, ahead in all three rounds, with the answers changing as they must.
+
+  **And changing every run** — `2b4795a8775ecaa4`, `70a2599caf019dd7`,
+  `47d5e948c41ae62a` from one binary. Not a wrong answer but a race, caught
+  only because the tool prints a digest for every run. The half-precision
+  buffer held one region and everything wrote at its front, which was safe
+  while one answer was live; two arms need two places, and **three answers
+  are live at once** — the normalization both arms read is still there when
+  the first arm writes over it.
+
+  Three regions fixes the race and kills the change. The buffer goes from
+  11.5 MB to 17, and **that alone costs 22 per cent**: with the arms left in
+  binary32 and nothing changed but the size of the allocation, the prompt
+  reads 1.102 and 1.106 s against 0.901 at the published digest. Not the
+  regions, not the arms — the number of bytes asked for. Why a 17 MB buffer
+  should cost a fifth of a prompt on a part already holding 1.1 GB of
+  weights is not explained; it is recorded because it is repeatable and
+  controlled. Not kept.
+
 - **The activation quantizer widened: worth 0.7 per cent, and it does not
   answer the same.** `quantize_blocks` runs on 128-bit `xmm` because its
   unit compiles at baseline. Compiled for `x86-64-v3` as a probe — not
