@@ -142,6 +142,50 @@ package Model_Runner.Kernels is
       Scores   : in out Real_Array;
       At_Score : Element_Count);
 
+   --  The same, for every head of a share against one block of keys.
+   --
+   --  Head_Scores is sixty-four multiply-adds behind ten arguments and six
+   --  reach comparisons, and a caller that walks thirty-two heads over a
+   --  block of eight keys pays that thirty-two times for arithmetic that is
+   --  one turn of the loop inside. Here the reach is proved once for the
+   --  whole head range and the run is issued in place, head after head.
+   --
+   --  Head H reads its query at At_Query + H * Span, its keys at At_Key +
+   --  (H / Share) * Span -- Share being how many heads share a group of
+   --  keys -- and writes its scores at At_Score + H * Room. Every score is
+   --  bit for bit what Head_Scores gives for the same head.
+   --
+   --  @param Query Vector the query heads are taken from.
+   --  @param At_Query Index head zero's first component would have.
+   --  @param Keys Vector the key rows are taken from.
+   --  @param At_Key Index of the block's first key row, group zero.
+   --  @param Stride Elements between one key row and the next.
+   --  @param Steps How many keys in the block.
+   --  @param Span Width of a head.
+   --  @param From_Head First head to score.
+   --  @param To_Head Last head to score.
+   --  @param Share How many heads share a group of keys.
+   --  @param Room Elements between one head's scores and the next.
+   --  @param Scale Multiplied into every score.
+   --  @param Scores Receives the runs.
+   --  @param At_Score Index head zero's first score would have.
+   procedure Head_Scores_Across
+     (Query     : Real_Array;
+      At_Query  : Element_Count;
+      Keys      : Real_Array;
+      At_Key    : Element_Count;
+      Stride    : Element_Count;
+      Steps     : Element_Count;
+      Span      : Element_Count;
+      From_Head : Element_Count;
+      To_Head   : Element_Count;
+      Share     : Element_Count;
+      Room      : Element_Count;
+      Scale     : Real;
+      Scores    : in out Real_Array;
+      At_Score  : Element_Count);
+
+
    --  One run of an attention head's output: a span of components summed
    --  over a span of positions, each position's values scaled by its score.
    --

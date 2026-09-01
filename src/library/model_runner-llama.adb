@@ -2985,44 +2985,29 @@ package body Model_Runner.Llama is
       --  Eight positions at a time has both: the eight key rows a block
       --  needs are eight kilobytes for this architecture and stay in the
       --  nearest cache while all thirty-two heads read them, and each head
-      --  gets its eight scores from one call with one fold at the end.
-      declare
-         Block   : constant Element_Count := 8;
-         At_Step : Element_Count := First;
-      begin
-         while At_Step <= Last loop
-            declare
-               Take : constant Element_Count :=
-                 Element_Count'Min (Block, Last - At_Step + 1);
-            begin
-               for Head in From_Head .. To_Head loop
-                  declare
-                     Group  : constant Element_Count := Head / Group_Size;
-                     Origin : constant Element_Count :=
-                       Keys'First + K_Base + At_Step * KV_Width
-                       + Group * Head_Size;
-                     Q_At   : constant Element_Count :=
-                       Query'First + Head * Head_Size;
-                  begin
-                     K.Head_Scores
-                       (Query    => Query,
-                        At_Query => Q_At,
-                        Keys     => Keys,
-                        At_Key   => Origin,
-                        Stride   => KV_Width,
-                        Steps    => Take,
-                        Span     => Head_Size,
-                        Scale    => Scale,
-                        Scores   => Scores,
-                        At_Score =>
-                          Scores'First + Head * Score_Room + At_Step);
-                  end;
-               end loop;
-
-               At_Step := At_Step + Take;
-            end;
-         end loop;
-      end;
+      --  gets its eight scores from one run with one fold at the end.
+      --
+      --  Both loops are inside the kernel now and neither is written here.
+      --  They were: a block loop around a head loop around a call, and the
+      --  call was ten arguments and six reach comparisons and three index
+      --  checks in front of sixty-four multiply-adds. Handing it the whole
+      --  range instead proves the reach once and issues the runs in place,
+      --  which is four per cent of the instructions a prompt executes.
+      K.Head_Scores_Across
+        (Query     => Query,
+         At_Query  => Query'First,
+         Keys      => Keys,
+         At_Key    => Keys'First + K_Base + First * KV_Width,
+         Stride    => KV_Width,
+         Steps     => Last - First + 1,
+         Span      => Head_Size,
+         From_Head => From_Head,
+         To_Head   => To_Head,
+         Share     => Group_Size,
+         Room      => Score_Room,
+         Scale     => Scale,
+         Scores    => Scores,
+         At_Score  => Scores'First + First);
 
       for Head in From_Head .. To_Head loop
          declare

@@ -7,6 +7,45 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Both of attention's loops moved into the kernel that scores — four per
+  cent of every instruction a prompt executes.** A profile of the long prompt
+  put `head_scores` at 6.7 per cent of the processor's time and **forty-six
+  per cent of that kernel's samples outside its run**: ten arguments, six
+  reach comparisons, an index check on each of three arrays every time an
+  address was taken, a frame — in front of sixty-four multiply-adds, because
+  the caller walks one block of eight keys against one head and that is one
+  turn of the loop inside.
+
+  `Head_Scores_Across` takes the head range and the whole key run, proves the
+  reach once for the widest head and the last key, and issues the run in
+  place — block outside and head inside, the order the caller had. The run is
+  a constant both procedures share, so it is the same instructions in the
+  same order and **every score is bit for bit what it was**.
+
+  Counted rather than timed, alternated twice: **1032.5 → 991.4 billion
+  instructions** and **379.4 → 373.4 billion cycles**, both reproducing to
+  five figures. Nine wall-clock runs over three rounds read 6.057 s against
+  5.952 — 1.7 per cent, and inside the spread on its own. The counters settle
+  this one and the clock does not.
+
+  Inside the kernel the multiply-adds went from 39 per cent of the samples to
+  51 and the prologue from 46 to 30. What is left is at both walls at once:
+  sixty-four loads and sixty-four multiply-adds to a block on a part that
+  does two of each a cycle.
+
+  The list this came from said the cost was the horizontal fold, eight
+  reductions where one transposed fold would do. **That was wrong** — the
+  transposed fold has been there for months and costs about seven per cent of
+  the kernel. The profile said something else and the profile was right.
+
+  `src/library/model_runner-kernels.ads` was in no fingerprint group's source
+  list, so a change to it would have passed the gate in silence. It is in the
+  five groups that name the body now.
+
+  The processor reads the 1419-token prompt at **260.4 tokens a second**
+  against llama.cpp's 270.0 — a gap of **1.04**, the closest either side of
+  that comparison has been at either length.
+
 - **The feed-forward arms in half precision — kept, worth 4.5 per cent, and
   the entry below it corrected.** The two arms are read by the step that
   combines them and by nothing else, and that step reads halves — so the

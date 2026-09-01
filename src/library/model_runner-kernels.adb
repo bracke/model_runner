@@ -183,6 +183,132 @@ package body Model_Runner.Kernels is
    Held_Span : constant Element_Count := 64;
    Held_Keys : constant Element_Count := 8;
 
+   --  The run itself, named because two procedures issue it: one
+   --  group of eight keys against a query head held in registers,
+   --  and the loop around it. Sharing the text is what makes the
+   --  two bit for bit the same arithmetic rather than two copies
+   --  that have to be kept so.
+   --
+   --  %0 counts the groups, %1 walks the keys, %2 the scores, %3 is
+   --  the query head, %4 the bytes between key rows and %5 the
+   --  scale.
+   Score_Run : constant String :=
+     "vmovups 0(%3), %%ymm8"                     & ASCII.LF
+     & "vmovups 32(%3), %%ymm9"                  & ASCII.LF
+     & "vmovups 64(%3), %%ymm10"                 & ASCII.LF
+     & "vmovups 96(%3), %%ymm11"                 & ASCII.LF
+     & "vmovups 128(%3), %%ymm12"                & ASCII.LF
+     & "vmovups 160(%3), %%ymm13"                & ASCII.LF
+     & "vmovups 192(%3), %%ymm14"                & ASCII.LF
+     & "vmovups 224(%3), %%ymm15"                & ASCII.LF
+     & "1:"                                      & ASCII.LF
+     & "vxorps %%ymm0, %%ymm0, %%ymm0"           & ASCII.LF
+     & "vxorps %%ymm1, %%ymm1, %%ymm1"           & ASCII.LF
+     & "vxorps %%ymm2, %%ymm2, %%ymm2"           & ASCII.LF
+     & "vxorps %%ymm3, %%ymm3, %%ymm3"           & ASCII.LF
+     & "vxorps %%ymm4, %%ymm4, %%ymm4"           & ASCII.LF
+     & "vxorps %%ymm5, %%ymm5, %%ymm5"           & ASCII.LF
+     & "vxorps %%ymm6, %%ymm6, %%ymm6"           & ASCII.LF
+     & "vxorps %%ymm7, %%ymm7, %%ymm7"           & ASCII.LF
+     & "vfmadd231ps 0(%1), %%ymm8, %%ymm0"       & ASCII.LF
+     & "vfmadd231ps 32(%1), %%ymm9, %%ymm0"      & ASCII.LF
+     & "vfmadd231ps 64(%1), %%ymm10, %%ymm0"     & ASCII.LF
+     & "vfmadd231ps 96(%1), %%ymm11, %%ymm0"     & ASCII.LF
+     & "vfmadd231ps 128(%1), %%ymm12, %%ymm0"    & ASCII.LF
+     & "vfmadd231ps 160(%1), %%ymm13, %%ymm0"    & ASCII.LF
+     & "vfmadd231ps 192(%1), %%ymm14, %%ymm0"    & ASCII.LF
+     & "vfmadd231ps 224(%1), %%ymm15, %%ymm0"    & ASCII.LF
+     & "addq %4, %1"                             & ASCII.LF
+     & "vfmadd231ps 0(%1), %%ymm8, %%ymm1"       & ASCII.LF
+     & "vfmadd231ps 32(%1), %%ymm9, %%ymm1"      & ASCII.LF
+     & "vfmadd231ps 64(%1), %%ymm10, %%ymm1"     & ASCII.LF
+     & "vfmadd231ps 96(%1), %%ymm11, %%ymm1"     & ASCII.LF
+     & "vfmadd231ps 128(%1), %%ymm12, %%ymm1"    & ASCII.LF
+     & "vfmadd231ps 160(%1), %%ymm13, %%ymm1"    & ASCII.LF
+     & "vfmadd231ps 192(%1), %%ymm14, %%ymm1"    & ASCII.LF
+     & "vfmadd231ps 224(%1), %%ymm15, %%ymm1"    & ASCII.LF
+     & "addq %4, %1"                             & ASCII.LF
+     & "vfmadd231ps 0(%1), %%ymm8, %%ymm2"       & ASCII.LF
+     & "vfmadd231ps 32(%1), %%ymm9, %%ymm2"      & ASCII.LF
+     & "vfmadd231ps 64(%1), %%ymm10, %%ymm2"     & ASCII.LF
+     & "vfmadd231ps 96(%1), %%ymm11, %%ymm2"     & ASCII.LF
+     & "vfmadd231ps 128(%1), %%ymm12, %%ymm2"    & ASCII.LF
+     & "vfmadd231ps 160(%1), %%ymm13, %%ymm2"    & ASCII.LF
+     & "vfmadd231ps 192(%1), %%ymm14, %%ymm2"    & ASCII.LF
+     & "vfmadd231ps 224(%1), %%ymm15, %%ymm2"    & ASCII.LF
+     & "addq %4, %1"                             & ASCII.LF
+     & "vfmadd231ps 0(%1), %%ymm8, %%ymm3"       & ASCII.LF
+     & "vfmadd231ps 32(%1), %%ymm9, %%ymm3"      & ASCII.LF
+     & "vfmadd231ps 64(%1), %%ymm10, %%ymm3"     & ASCII.LF
+     & "vfmadd231ps 96(%1), %%ymm11, %%ymm3"     & ASCII.LF
+     & "vfmadd231ps 128(%1), %%ymm12, %%ymm3"    & ASCII.LF
+     & "vfmadd231ps 160(%1), %%ymm13, %%ymm3"    & ASCII.LF
+     & "vfmadd231ps 192(%1), %%ymm14, %%ymm3"    & ASCII.LF
+     & "vfmadd231ps 224(%1), %%ymm15, %%ymm3"    & ASCII.LF
+     & "addq %4, %1"                             & ASCII.LF
+     & "vfmadd231ps 0(%1), %%ymm8, %%ymm4"       & ASCII.LF
+     & "vfmadd231ps 32(%1), %%ymm9, %%ymm4"      & ASCII.LF
+     & "vfmadd231ps 64(%1), %%ymm10, %%ymm4"     & ASCII.LF
+     & "vfmadd231ps 96(%1), %%ymm11, %%ymm4"     & ASCII.LF
+     & "vfmadd231ps 128(%1), %%ymm12, %%ymm4"    & ASCII.LF
+     & "vfmadd231ps 160(%1), %%ymm13, %%ymm4"    & ASCII.LF
+     & "vfmadd231ps 192(%1), %%ymm14, %%ymm4"    & ASCII.LF
+     & "vfmadd231ps 224(%1), %%ymm15, %%ymm4"    & ASCII.LF
+     & "addq %4, %1"                             & ASCII.LF
+     & "vfmadd231ps 0(%1), %%ymm8, %%ymm5"       & ASCII.LF
+     & "vfmadd231ps 32(%1), %%ymm9, %%ymm5"      & ASCII.LF
+     & "vfmadd231ps 64(%1), %%ymm10, %%ymm5"     & ASCII.LF
+     & "vfmadd231ps 96(%1), %%ymm11, %%ymm5"     & ASCII.LF
+     & "vfmadd231ps 128(%1), %%ymm12, %%ymm5"    & ASCII.LF
+     & "vfmadd231ps 160(%1), %%ymm13, %%ymm5"    & ASCII.LF
+     & "vfmadd231ps 192(%1), %%ymm14, %%ymm5"    & ASCII.LF
+     & "vfmadd231ps 224(%1), %%ymm15, %%ymm5"    & ASCII.LF
+     & "addq %4, %1"                             & ASCII.LF
+     & "vfmadd231ps 0(%1), %%ymm8, %%ymm6"       & ASCII.LF
+     & "vfmadd231ps 32(%1), %%ymm9, %%ymm6"      & ASCII.LF
+     & "vfmadd231ps 64(%1), %%ymm10, %%ymm6"     & ASCII.LF
+     & "vfmadd231ps 96(%1), %%ymm11, %%ymm6"     & ASCII.LF
+     & "vfmadd231ps 128(%1), %%ymm12, %%ymm6"    & ASCII.LF
+     & "vfmadd231ps 160(%1), %%ymm13, %%ymm6"    & ASCII.LF
+     & "vfmadd231ps 192(%1), %%ymm14, %%ymm6"    & ASCII.LF
+     & "vfmadd231ps 224(%1), %%ymm15, %%ymm6"    & ASCII.LF
+     & "addq %4, %1"                             & ASCII.LF
+     & "vfmadd231ps 0(%1), %%ymm8, %%ymm7"       & ASCII.LF
+     & "vfmadd231ps 32(%1), %%ymm9, %%ymm7"      & ASCII.LF
+     & "vfmadd231ps 64(%1), %%ymm10, %%ymm7"     & ASCII.LF
+     & "vfmadd231ps 96(%1), %%ymm11, %%ymm7"     & ASCII.LF
+     & "vfmadd231ps 128(%1), %%ymm12, %%ymm7"    & ASCII.LF
+     & "vfmadd231ps 160(%1), %%ymm13, %%ymm7"    & ASCII.LF
+     & "vfmadd231ps 192(%1), %%ymm14, %%ymm7"    & ASCII.LF
+     & "vfmadd231ps 224(%1), %%ymm15, %%ymm7"    & ASCII.LF
+     & "addq %4, %1"                             & ASCII.LF
+     --  Eight accumulators folded together: pairs within each
+     --  half, then pairs of those, then the two halves added.
+     --  Twelve instructions where eight separate folds are
+     --  forty-eight, and two dependent chains where there are
+     --  eight.
+     & "vhaddps %%ymm1, %%ymm0, %%ymm0"          & ASCII.LF
+     & "vhaddps %%ymm3, %%ymm2, %%ymm2"          & ASCII.LF
+     & "vhaddps %%ymm5, %%ymm4, %%ymm4"          & ASCII.LF
+     & "vhaddps %%ymm7, %%ymm6, %%ymm6"          & ASCII.LF
+     & "vhaddps %%ymm2, %%ymm0, %%ymm0"          & ASCII.LF
+     & "vhaddps %%ymm6, %%ymm4, %%ymm4"          & ASCII.LF
+     & "vextractf128 $1, %%ymm0, %%xmm1"         & ASCII.LF
+     & "vaddps %%xmm1, %%xmm0, %%xmm0"           & ASCII.LF
+     & "vextractf128 $1, %%ymm4, %%xmm5"         & ASCII.LF
+     & "vaddps %%xmm5, %%xmm4, %%xmm4"           & ASCII.LF
+     & "vbroadcastss %5, %%xmm6"                 & ASCII.LF
+     & "vmulps %%xmm6, %%xmm0, %%xmm0"           & ASCII.LF
+     & "vmulps %%xmm6, %%xmm4, %%xmm4"           & ASCII.LF
+     & "vmovups %%xmm0, (%2)"                    & ASCII.LF
+     & "vmovups %%xmm4, 16(%2)"                  & ASCII.LF
+     & "addq $32, %2"                            & ASCII.LF
+     & "decq %0"                                 & ASCII.LF
+     & "jnz 1b"                                  & ASCII.LF
+     & "vzeroupper"                              & ASCII.LF
+     & "vzeroupper";
+
+
    procedure Head_Scores
      (Query    : Real_Array;
       At_Query : Element_Count;
@@ -219,8 +345,6 @@ package body Model_Runner.Kernels is
 
       if Groups > 0 then
          declare
-            LF : constant Character := ASCII.LF;
-
             Key_At   : System.Address := Keys (At_Key)'Address;
             Left     : Interfaces.Unsigned_64 :=
               Interfaces.Unsigned_64 (Groups);
@@ -231,120 +355,7 @@ package body Model_Runner.Kernels is
             Times    : constant N.Real := Scale;
          begin
             System.Machine_Code.Asm
-              (--  The whole query head, once for the run.
-               "vmovups 0(%3), %%ymm8"            & LF
-               & "vmovups 32(%3), %%ymm9"           & LF
-               & "vmovups 64(%3), %%ymm10"           & LF
-               & "vmovups 96(%3), %%ymm11"           & LF
-               & "vmovups 128(%3), %%ymm12"          & LF
-               & "vmovups 160(%3), %%ymm13"          & LF
-               & "vmovups 192(%3), %%ymm14"          & LF
-               & "vmovups 224(%3), %%ymm15"          & LF
-               & "1:"                                    & LF
-               & "vxorps %%ymm0, %%ymm0, %%ymm0"  & LF
-               & "vxorps %%ymm1, %%ymm1, %%ymm1"  & LF
-               & "vxorps %%ymm2, %%ymm2, %%ymm2"  & LF
-               & "vxorps %%ymm3, %%ymm3, %%ymm3"  & LF
-               & "vxorps %%ymm4, %%ymm4, %%ymm4"  & LF
-               & "vxorps %%ymm5, %%ymm5, %%ymm5"  & LF
-               & "vxorps %%ymm6, %%ymm6, %%ymm6"  & LF
-               & "vxorps %%ymm7, %%ymm7, %%ymm7"  & LF
-               & "vfmadd231ps 0(%1), %%ymm8, %%ymm0"   & LF
-               & "vfmadd231ps 32(%1), %%ymm9, %%ymm0"   & LF
-               & "vfmadd231ps 64(%1), %%ymm10, %%ymm0"   & LF
-               & "vfmadd231ps 96(%1), %%ymm11, %%ymm0"   & LF
-               & "vfmadd231ps 128(%1), %%ymm12, %%ymm0"  & LF
-               & "vfmadd231ps 160(%1), %%ymm13, %%ymm0"  & LF
-               & "vfmadd231ps 192(%1), %%ymm14, %%ymm0"  & LF
-               & "vfmadd231ps 224(%1), %%ymm15, %%ymm0"  & LF
-               & "addq %4, %1"                          & LF
-               & "vfmadd231ps 0(%1), %%ymm8, %%ymm1"   & LF
-               & "vfmadd231ps 32(%1), %%ymm9, %%ymm1"   & LF
-               & "vfmadd231ps 64(%1), %%ymm10, %%ymm1"   & LF
-               & "vfmadd231ps 96(%1), %%ymm11, %%ymm1"   & LF
-               & "vfmadd231ps 128(%1), %%ymm12, %%ymm1"  & LF
-               & "vfmadd231ps 160(%1), %%ymm13, %%ymm1"  & LF
-               & "vfmadd231ps 192(%1), %%ymm14, %%ymm1"  & LF
-               & "vfmadd231ps 224(%1), %%ymm15, %%ymm1"  & LF
-               & "addq %4, %1"                          & LF
-               & "vfmadd231ps 0(%1), %%ymm8, %%ymm2"   & LF
-               & "vfmadd231ps 32(%1), %%ymm9, %%ymm2"   & LF
-               & "vfmadd231ps 64(%1), %%ymm10, %%ymm2"   & LF
-               & "vfmadd231ps 96(%1), %%ymm11, %%ymm2"   & LF
-               & "vfmadd231ps 128(%1), %%ymm12, %%ymm2"  & LF
-               & "vfmadd231ps 160(%1), %%ymm13, %%ymm2"  & LF
-               & "vfmadd231ps 192(%1), %%ymm14, %%ymm2"  & LF
-               & "vfmadd231ps 224(%1), %%ymm15, %%ymm2"  & LF
-               & "addq %4, %1"                          & LF
-               & "vfmadd231ps 0(%1), %%ymm8, %%ymm3"   & LF
-               & "vfmadd231ps 32(%1), %%ymm9, %%ymm3"   & LF
-               & "vfmadd231ps 64(%1), %%ymm10, %%ymm3"   & LF
-               & "vfmadd231ps 96(%1), %%ymm11, %%ymm3"   & LF
-               & "vfmadd231ps 128(%1), %%ymm12, %%ymm3"  & LF
-               & "vfmadd231ps 160(%1), %%ymm13, %%ymm3"  & LF
-               & "vfmadd231ps 192(%1), %%ymm14, %%ymm3"  & LF
-               & "vfmadd231ps 224(%1), %%ymm15, %%ymm3"  & LF
-               & "addq %4, %1"                          & LF
-               & "vfmadd231ps 0(%1), %%ymm8, %%ymm4"   & LF
-               & "vfmadd231ps 32(%1), %%ymm9, %%ymm4"   & LF
-               & "vfmadd231ps 64(%1), %%ymm10, %%ymm4"   & LF
-               & "vfmadd231ps 96(%1), %%ymm11, %%ymm4"   & LF
-               & "vfmadd231ps 128(%1), %%ymm12, %%ymm4"  & LF
-               & "vfmadd231ps 160(%1), %%ymm13, %%ymm4"  & LF
-               & "vfmadd231ps 192(%1), %%ymm14, %%ymm4"  & LF
-               & "vfmadd231ps 224(%1), %%ymm15, %%ymm4"  & LF
-               & "addq %4, %1"                          & LF
-               & "vfmadd231ps 0(%1), %%ymm8, %%ymm5"   & LF
-               & "vfmadd231ps 32(%1), %%ymm9, %%ymm5"   & LF
-               & "vfmadd231ps 64(%1), %%ymm10, %%ymm5"   & LF
-               & "vfmadd231ps 96(%1), %%ymm11, %%ymm5"   & LF
-               & "vfmadd231ps 128(%1), %%ymm12, %%ymm5"  & LF
-               & "vfmadd231ps 160(%1), %%ymm13, %%ymm5"  & LF
-               & "vfmadd231ps 192(%1), %%ymm14, %%ymm5"  & LF
-               & "vfmadd231ps 224(%1), %%ymm15, %%ymm5"  & LF
-               & "addq %4, %1"                          & LF
-               & "vfmadd231ps 0(%1), %%ymm8, %%ymm6"   & LF
-               & "vfmadd231ps 32(%1), %%ymm9, %%ymm6"   & LF
-               & "vfmadd231ps 64(%1), %%ymm10, %%ymm6"   & LF
-               & "vfmadd231ps 96(%1), %%ymm11, %%ymm6"   & LF
-               & "vfmadd231ps 128(%1), %%ymm12, %%ymm6"  & LF
-               & "vfmadd231ps 160(%1), %%ymm13, %%ymm6"  & LF
-               & "vfmadd231ps 192(%1), %%ymm14, %%ymm6"  & LF
-               & "vfmadd231ps 224(%1), %%ymm15, %%ymm6"  & LF
-               & "addq %4, %1"                          & LF
-               & "vfmadd231ps 0(%1), %%ymm8, %%ymm7"   & LF
-               & "vfmadd231ps 32(%1), %%ymm9, %%ymm7"   & LF
-               & "vfmadd231ps 64(%1), %%ymm10, %%ymm7"   & LF
-               & "vfmadd231ps 96(%1), %%ymm11, %%ymm7"   & LF
-               & "vfmadd231ps 128(%1), %%ymm12, %%ymm7"  & LF
-               & "vfmadd231ps 160(%1), %%ymm13, %%ymm7"  & LF
-               & "vfmadd231ps 192(%1), %%ymm14, %%ymm7"  & LF
-               & "vfmadd231ps 224(%1), %%ymm15, %%ymm7"  & LF
-               & "addq %4, %1"                          & LF
-               --  Eight accumulators folded together: pairs within each
-               --  half, then pairs of those, then the two halves added.
-               --  Twelve instructions where eight separate folds are
-               --  forty-eight, and two dependent chains where there are
-               --  eight.
-               & "vhaddps %%ymm1, %%ymm0, %%ymm0"        & LF
-               & "vhaddps %%ymm3, %%ymm2, %%ymm2"        & LF
-               & "vhaddps %%ymm5, %%ymm4, %%ymm4"        & LF
-               & "vhaddps %%ymm7, %%ymm6, %%ymm6"        & LF
-               & "vhaddps %%ymm2, %%ymm0, %%ymm0"        & LF
-               & "vhaddps %%ymm6, %%ymm4, %%ymm4"        & LF
-               & "vextractf128 $1, %%ymm0, %%xmm1"       & LF
-               & "vaddps %%xmm1, %%xmm0, %%xmm0"         & LF
-               & "vextractf128 $1, %%ymm4, %%xmm5"       & LF
-               & "vaddps %%xmm5, %%xmm4, %%xmm4"         & LF
-               & "vbroadcastss %5, %%xmm6"               & LF
-               & "vmulps %%xmm6, %%xmm0, %%xmm0"         & LF
-               & "vmulps %%xmm6, %%xmm4, %%xmm4"         & LF
-               & "vmovups %%xmm0, (%2)"                  & LF
-               & "vmovups %%xmm4, 16(%2)"                & LF
-               & "addq $32, %2"                          & LF
-               & "decq %0"                               & LF
-               & "jnz 1b"                                & LF
-               & "vzeroupper",
+              (Score_Run,
                Outputs =>
                  [Interfaces.Unsigned_64'Asm_Output ("+r", Left),
                   System.Address'Asm_Output ("+r", Key_At),
@@ -370,6 +381,157 @@ package body Model_Runner.Kernels is
            * Scale;
       end loop;
    end Head_Scores;
+
+   ------------------------
+   -- Head_Scores_Across --
+   ------------------------
+
+   procedure Head_Scores_Across
+     (Query     : Real_Array;
+      At_Query  : Element_Count;
+      Keys      : Real_Array;
+      At_Key    : Element_Count;
+      Stride    : Element_Count;
+      Steps     : Element_Count;
+      Span      : Element_Count;
+      From_Head : Element_Count;
+      To_Head   : Element_Count;
+      Share     : Element_Count;
+      Room      : Element_Count;
+      Scale     : Real;
+      Scores    : in out Real_Array;
+      At_Score  : Element_Count)
+   is
+      --  The one procedure in this package that suppresses them, and only
+      --  after the block below has proved what they would check.
+      --
+      --  A profile said why. This kernel is sixty-four multiply-adds behind
+      --  a key block and a head, and with the loops outside it forty-six per
+      --  cent of its samples were getting there rather than arithmetic: ten
+      --  arguments and six reach comparisons a head, and an index check on
+      --  each of the three arrays every time an address was taken. Moving
+      --  the two loops in here left thirty per cent, and it was the checks.
+      --
+      --  So the reach is proved once for the widest head and the last key
+      --  this call will touch -- the same footing the row kernels and the
+      --  blend in Model_Runner.Llama stand on -- and what the loops then
+      --  form is a fixed function of the block and the head they are on. A
+      --  call that would step outside returns having written nothing.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Top    : constant Element_Count :=
+        (if Share = 0 then 0 else To_Head / Share);
+      Groups : Element_Count := 0;
+      Done   : Element_Count := 0;
+   begin
+      if To_Head < From_Head or else Share = 0 or else Steps = 0 then
+         return;
+      end if;
+
+      if Span = 0
+        or else Stride < Span
+        or else At_Query < Query'First
+        or else At_Key < Keys'First
+        or else At_Score < Scores'First
+        or else At_Query - Query'First + To_Head * Span + Span
+                  > Element_Count (Query'Length)
+        or else At_Key - Keys'First + (Steps - 1) * Stride + Top * Span
+                  + Span > Element_Count (Keys'Length)
+        or else At_Score - Scores'First + To_Head * Room + Steps
+                  > Element_Count (Scores'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span = Held_Span then
+         Groups := Steps / Held_Keys;
+      end if;
+
+      --  Blocks of eight keys outside and the heads inside, which is the
+      --  order the caller had and the order the cache wants: the eight key
+      --  rows a block needs stay in the nearest cache while every head of
+      --  the share reads them.
+      if Groups > 0 then
+         declare
+            First_Group : constant Element_Count := From_Head / Share;
+            First_Rest  : constant Element_Count :=
+              Share - From_Head mod Share;
+            Apart       : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Stride * (N.Real'Size / 8));
+            Times       : constant N.Real := Scale;
+         begin
+            for Block in 0 .. Groups - 1 loop
+               declare
+                  Origin : constant Element_Count :=
+                    At_Key + Block * Held_Keys * Stride;
+                  Score  : constant Element_Count :=
+                    At_Score + Block * Held_Keys;
+                  Group  : Element_Count := First_Group;
+                  Rest   : Element_Count := First_Rest;
+               begin
+                  for Head in From_Head .. To_Head loop
+                     declare
+                        Key_At   : System.Address :=
+                          Keys (Origin + Group * Span)'Address;
+                        Left     : Interfaces.Unsigned_64 := 1;
+                        Query_At : constant System.Address :=
+                          Query (At_Query + Head * Span)'Address;
+                        Out_At   : System.Address :=
+                          Scores (Score + Head * Room)'Address;
+                     begin
+                        System.Machine_Code.Asm
+                          (Score_Run,
+                           Outputs  =>
+                             [Interfaces.Unsigned_64'Asm_Output ("+r", Left),
+                              System.Address'Asm_Output ("+r", Key_At),
+                              System.Address'Asm_Output ("+r", Out_At)],
+                           Inputs   =>
+                             [System.Address'Asm_Input ("r", Query_At),
+                              Interfaces.Unsigned_64'Asm_Input ("r", Apart),
+                              N.Real'Asm_Input ("m", Times)],
+                           Clobber  =>
+                             "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, "
+                             & "ymm7, ymm8, ymm9, ymm10, ymm11, ymm12, "
+                             & "ymm13, ymm14, ymm15, cc, memory",
+                           Volatile => True);
+                     end;
+
+                     Rest := Rest - 1;
+
+                     if Rest = 0 then
+                        Group := Group + 1;
+                        Rest := Share;
+                     end if;
+                  end loop;
+               end;
+            end loop;
+         end;
+
+         Done := Groups * Held_Keys;
+      end if;
+
+      --  Whatever the blocks did not cover -- a width that is not
+      --  sixty-four, a run shorter than eight, or a host without the lanes
+      --  -- a score at a time, which is what Head_Scores does with the
+      --  same remainder and the same expression.
+      for Head in From_Head .. To_Head loop
+         declare
+            Origin : constant Element_Count :=
+              At_Key + (Head / Share) * Span;
+            Q_At   : constant Element_Count := At_Query + Head * Span;
+            S_At   : constant Element_Count := At_Score + Head * Room;
+         begin
+            for Step in Done .. Steps - 1 loop
+               Scores (S_At + Step) :=
+                 Head_Dot (Query, Q_At, Keys, Origin + Step * Stride, Span)
+                 * Scale;
+            end loop;
+         end;
+      end loop;
+   end Head_Scores_Across;
+
 
    ---------------
    -- Blend_Run --

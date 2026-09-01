@@ -6081,6 +6081,154 @@ package body Tests.Inference_Cases is
               "a step was not compared");
    end Score_Runs_Agree;
 
+   --  Every head at once answers what one head at a time answers.
+   --
+   --  Head_Scores_Across is the same run issued from the same string, so
+   --  this is a bit-for-bit comparison rather than a bounded one: what it
+   --  is really checking is the address arithmetic that replaced the two
+   --  loops in the caller. A head reads its query at one offset, its keys
+   --  at another that only moves every Share heads, and writes at a third,
+   --  and getting any of the three wrong gives a plausible run of numbers
+   --  in the wrong place.
+   --
+   --  From_Head is not a multiple of Share on purpose. The heads are shared
+   --  out between workers without regard for the groups, so a slice that
+   --  starts partway into a group is the ordinary case rather than an edge
+   --  one, and it is the case the group counter inside can get wrong.
+   --
+   --  A run that is not a multiple of eight and a head that is not
+   --  sixty-four wide are here for the same reason they are in the test
+   --  above: both take the tail path, which is what every host without the
+   --  wide lanes takes for everything.
+   procedure Scores_Across_Heads_Agree
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package MK renames Model_Runner.Kernels;
+
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+
+      Heads  : constant N.Element_Count := 8;
+      Share  : constant N.Element_Count := 3;
+      Room   : constant N.Element_Count := 40;
+      Steps  : constant N.Element_Count := 27;
+      Stride : constant N.Element_Count := 256;
+
+      Spans : constant array (1 .. 2) of N.Element_Count := [64, 40];
+
+      Query : N.Real_Array (0 .. Heads * 64 - 1);
+      Keys  : N.Real_Array (0 .. Stride * Steps - 1);
+
+      Seen : Natural := 0;
+   begin
+      for Index in Query'Range loop
+         Query (Index) :=
+           N.Real (Integer (Index) mod 13) * 0.25 - 1.5;
+      end loop;
+
+      for Index in Keys'Range loop
+         Keys (Index) :=
+           N.Real (Integer (Index) mod 17) * 0.125 - 1.0
+           + N.Real (Integer (Index) mod 5) * 0.03125;
+      end loop;
+
+      MK.Use_Wide_Lanes (Wide);
+
+      for Span of Spans loop
+         declare
+            Scale : constant N.Real := 0.125;
+            First : constant N.Element_Count := 2;
+            Last  : constant N.Element_Count := Heads - 1;
+
+            Across : N.Real_Array (0 .. Heads * Room - 1) := [others => 9.0];
+            Apiece : N.Real_Array (0 .. Heads * Room - 1) := [others => 9.0];
+         begin
+            MK.Head_Scores_Across
+              (Query     => Query,
+               At_Query  => 0,
+               Keys      => Keys,
+               At_Key    => 0,
+               Stride    => Stride,
+               Steps     => Steps,
+               Span      => Span,
+               From_Head => First,
+               To_Head   => Last,
+               Share     => Share,
+               Room      => Room,
+               Scale     => Scale,
+               Scores    => Across,
+               At_Score  => 0);
+
+            for Head in First .. Last loop
+               MK.Head_Scores
+                 (Query    => Query,
+                  At_Query => Head * Span,
+                  Keys     => Keys,
+                  At_Key   => (Head / Share) * Span,
+                  Stride   => Stride,
+                  Steps    => Steps,
+                  Span     => Span,
+                  Scale    => Scale,
+                  Scores   => Apiece,
+                  At_Score => Head * Room);
+            end loop;
+
+            for Index in Across'Range loop
+               Assert (Across (Index) = Apiece (Index),
+                       "the heads taken together and one at a time "
+                       & "disagree at span"
+                       & N.Element_Count'Image (Span) & " element"
+                       & N.Element_Count'Image (Index) & ":"
+                       & N.Real'Image (Across (Index)) & " against"
+                       & N.Real'Image (Apiece (Index)));
+               Seen := Seen + 1;
+            end loop;
+
+            --  And the heads outside the slice were not written.
+            for Head in 0 .. First - 1 loop
+               for Step in 0 .. Room - 1 loop
+                  Assert (Across (Head * Room + Step) = 9.0,
+                          "a head outside the slice was scored");
+               end loop;
+            end loop;
+         end;
+      end loop;
+
+      --  A call that would read past the keys, or write past the scores,
+      --  leaves them alone rather than reading what it was not given.
+      declare
+         Room  : constant N.Element_Count := Steps;
+         Run   : N.Real_Array (0 .. Heads * Room - 1) := [others => 9.0];
+
+         function Untouched return Boolean is
+           (for all Score of Run => Score = 9.0);
+      begin
+         MK.Head_Scores_Across
+           (Query, 0, Keys, 0, Stride, Steps + 1, 64,
+            0, Heads - 1, Share, Room, 1.0, Run, 0);
+         Assert (Untouched, "a run past the end of the keys was taken");
+
+         MK.Head_Scores_Across
+           (Query, 0, Keys, 0, 32, Steps, 64,
+            0, Heads - 1, Share, Room, 1.0, Run, 0);
+         Assert (Untouched, "a stride narrower than the head was taken");
+
+         MK.Head_Scores_Across
+           (Query, 0, Keys, 0, Stride, Steps, 64,
+            0, Heads, Share, Room, 1.0, Run, 0);
+         Assert (Untouched, "a head past the end of the queries was taken");
+
+         MK.Head_Scores_Across
+           (Query, 0, Keys, 0, Stride, Steps, 64,
+            0, Heads - 1, 0, Room, 1.0, Run, 0);
+         Assert (Untouched, "a share of no heads was taken");
+      end;
+
+      Assert (Seen = Natural (Heads * Room) * Spans'Length,
+              "a score was not compared");
+   end Scores_Across_Heads_Agree;
+
    --  The vectorized exponential answers what the library's does.
    --
    --  Not bit for bit and not meant to be: this is a degree five polynomial
@@ -6339,6 +6487,10 @@ package body Tests.Inference_Cases is
         (T, Score_Runs_Agree'Access,
          "a run of attention scores answers what the same scores answer "
          & "taken one at a time");
+      Register_Routine
+        (T, Scores_Across_Heads_Agree'Access,
+         "a slice of heads scored together answers what the same heads "
+         & "answer one at a time");
       Register_Routine
         (T, The_Exponential_Agrees'Access,
          "the vectorized exponential answers what the library's does, over "
