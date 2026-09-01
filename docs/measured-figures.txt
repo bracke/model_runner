@@ -5070,6 +5070,62 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0, with Q2_K as the draft
 #
+# 2026-09-01, three more attempts on the two remaining gaps, all level.
+#
+#   The generating side, after the page tables and the accumulator. A
+#   software prefetch of the weights, one instruction in an eleven-
+#   instruction loop, at two distances:
+#
+#     as it is         1.869, 1.906, 1.876 s generating
+#     256 bytes ahead  1.870, 1.876, 1.866
+#     512 bytes ahead  1.871, 1.870, 1.872
+#
+#   Level at both distances, and bit for bit the same answer. The rows a
+#   worker walks are contiguous and the hardware prefetcher has them
+#   already; there was nothing for the instruction to ask for.
+#
+#   So the generating gap -- 40 GB/s against llama.cpp's 46 for the same
+#   bytes -- is now three things it is not. Not the page tables, at eight
+#   tenths of one per cent. Not the accumulator chain, which is worth
+#   seventeen per cent at one worker and one at seven and cannot be taken
+#   anyway. Not the prefetcher.
+#
+#   The device's combining step, and a piece of reasoning that was wrong.
+#   It costs seventy-one milliseconds of a 1419-token device prompt, moves
+#   about 1.06 gigabytes, and so runs at sixteen gigabytes a second on a
+#   part that does several times that. An invocation read two halves and
+#   wrote one -- two bytes a lane -- and that looked like the reason.
+#
+#   It is not. Four values to an invocation, through f16vec4 and vec4
+#   aliases of the same bindings with a guard for a shape that would not
+#   line up, and a dispatch a quarter the size:
+#
+#     one value an invocation   0.844, 0.845, 0.850 s
+#     four                      0.844, 0.846, 0.843
+#
+#   Level, and the generating row and the short prompt level with it. The
+#   mistake was thinking of a lane's access width as the unit. A wave is
+#   sixty-four lanes reading consecutive halves, which is a hundred and
+#   twenty-eight contiguous bytes coalesced into two cache lines whatever
+#   the per-lane width; widening the lane makes fewer, larger requests for
+#   the same bytes, and a kernel with no reuse and nothing to hide behind
+#   them is no better for it.
+#
+#   Nor is it the unit. Replacing the whole activation with an addition --
+#   a build that answers wrongly, and only a ceiling -- reads 0.837 s
+#   against 0.844: seven milliseconds of the seventy-one, a tenth.
+#
+#   Which leaves the sixteen gigabytes a second unexplained, and worth
+#   recording as a bound rather than a bug: `norm` costs sixty-nine
+#   milliseconds and moves about the same, so the two elementwise kernels
+#   sit at the same rate. Whatever holds them is shared, is not their
+#   arithmetic and is not how wide a lane reads.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

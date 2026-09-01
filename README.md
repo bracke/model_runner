@@ -10138,6 +10138,63 @@ because both were written with one accumulator to a row, and either one
 changing alone breaks drafting.
 
 
+### A lane is not the unit, and the prefetcher was already there
+
+Two more attempts on the two gaps that are left, and both are level.
+
+**The prefetch.** After the page tables and the accumulator, the remaining
+guess about the generating side was that the hardware prefetcher cannot keep
+eight workers fed and a `prefetcht0` in the row loop would. One instruction
+added to an eleven-instruction loop, at two distances:
+
+| | generating |
+| --- | ---: |
+| as it is | 1.876 s |
+| 256 bytes ahead | 1.870 s |
+| 512 bytes ahead | 1.871 s |
+
+Level at both, and bit for bit the same answer. A worker walks contiguous
+rows; the prefetcher has them already. So the generating gap -- 40 GB/s
+against llama.cpp's 46 for identical bytes -- is now three things it is
+**not**: not the page tables, at eight tenths of one per cent; not the
+accumulator chain, worth seventeen per cent at one worker and one at seven
+and unavailable anyway; not the prefetcher.
+
+**The device's combining step, and a piece of reasoning that was wrong.** It
+costs seventy-one milliseconds of a 1419-token device prompt and moves about
+1.06 gigabytes, which is sixteen gigabytes a second on a part that does
+several times that. An invocation read two halves and wrote one -- two bytes
+a lane -- and that looked like the reason. Four values to an invocation,
+through `f16vec4` and `vec4` aliases of the same bindings with a guard for a
+shape that would not line up, and a dispatch a quarter the size:
+
+| | 1419-token device prompt |
+| --- | ---: |
+| one value an invocation | 0.845 s |
+| four | 0.844 s |
+
+**Level**, and the generating row and the short prompt level with it.
+
+The mistake was taking a lane's access width as the unit. A wave is
+sixty-four lanes reading consecutive halves, which is a hundred and
+twenty-eight contiguous bytes coalesced into two cache lines *whatever the
+per-lane width is*. Widening the lane makes fewer, larger requests for
+exactly the same bytes, and a kernel with no reuse and nothing to hide behind
+them gains nothing. Coalescing happens across the lanes of a wave, not within
+a lane, and this page had it the other way round for the length of one
+experiment.
+
+Nor is it the unit. Replacing the whole activation with an addition -- a
+build that answers wrongly, so a ceiling and not a change -- reads 0.837 s
+against 0.844: **seven milliseconds of the seventy-one**, a tenth.
+
+Which leaves the sixteen gigabytes a second unexplained, and it is worth
+recording as a bound rather than a bug: `norm` costs sixty-nine milliseconds
+and moves about the same bytes, so the two elementwise kernels sit at the
+same rate. Whatever holds them is shared between them, is not their
+arithmetic, and is not how wide a lane reads.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same

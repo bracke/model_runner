@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A prefetch and a wider lane, both level — and one piece of reasoning
+  corrected.** A `prefetcht0` in the generating row loop, at 256 and 512
+  bytes ahead, reads 1.870 and 1.871 s against 1.876: the hardware
+  prefetcher already has the contiguous rows. The generating gap is now
+  three things it is *not* — the page tables, the accumulator chain, the
+  prefetcher.
+
+  The device's combining step costs 71 ms of a 1419-token prompt and moves
+  ~1.06 GB, which is 16 GB/s. An invocation read two halves and wrote one, so
+  the two-byte lane looked like the reason; four values to an invocation
+  through `f16vec4`/`vec4` aliases reads **0.844 s against 0.845 — level**.
+  The mistake was taking a lane's width as the unit: a wave of 64 lanes
+  reading consecutive halves is 128 contiguous bytes coalesced into two cache
+  lines whatever the per-lane width, so widening it makes fewer, larger
+  requests for the same bytes. Nor is it the arithmetic: replacing the whole
+  activation with an addition buys 7 ms of the 71.
+
+  `norm` costs 69 ms and moves about the same bytes, so both elementwise
+  kernels sit at 16 GB/s. Whatever holds them is shared, is not their
+  arithmetic, and is not the access width.
+
 - **Two accumulators in the generating kernel — 17% at one worker, refused
   because it breaks drafting.** The page-table suspicion is refuted first:
   11.1 million second-level TLB misses over 64 tokens is 173 000 a token, ~0.8%
