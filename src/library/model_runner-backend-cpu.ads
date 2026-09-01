@@ -347,9 +347,22 @@ private
    --  the coordinator is still what opens the barrier and what says the job
    --  is done, and a run with the spin never taken is the run this had
    --  before.
+   --  How many tiles of a product have been handed out so far.
+   --
+   --  A job used to be cut into one contiguous range for every worker,
+   --  decided before any of them started. That is right when the workers
+   --  run at the same speed and wrong when they do not: the job is not
+   --  done until its slowest share is, and on a fifteen-watt part sharing
+   --  its boost between eight cores they do not. This counter is what a
+   --  worker takes its next tile from instead, so a core that finishes
+   --  early takes more and the job ends when the work does rather than
+   --  when the unluckiest range does.
+   type Chunk_Counter is new Integer with Atomic;
+
    type Wake_Signal is limited record
       Ticket : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
       Left   : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
+      Chunk  : aliased Chunk_Counter := 0;
    end record;
 
    type Wake_Access is access all Wake_Signal;

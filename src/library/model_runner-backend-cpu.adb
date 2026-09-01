@@ -1,5 +1,6 @@
 with Ada.Unchecked_Deallocation;
 
+with System.Atomic_Operations.Integer_Arithmetic;
 with System.Machine_Code;
 
 with Model_Runner.Kernels;
@@ -35,6 +36,20 @@ package body Model_Runner.Backend.CPU is
 
    --  Say that a job of this many shares has been posted.
    procedure Announce (Waking : Wake_Access; Shares : Natural);
+
+   package Chunks is new System.Atomic_Operations.Integer_Arithmetic
+     (Chunk_Counter);
+
+   --  Every tile of a product this task can get, one at a time.
+   --
+   --  The grid is anchored at row zero and a tile is never split, so which
+   --  task computes a row does not change how its row is summed and the
+   --  answer is bit for bit what a fixed cut produced. What changes is only
+   --  who does it.
+   procedure Take_Chunks
+     (Waking : Wake_Access;
+      Work   : Job;
+      Grain  : Element_Count);
 
    -----------
    -- Watch --
@@ -84,9 +99,11 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
-      --  The count first and the ticket second, so a worker that wakes on
-      --  the ticket cannot see a count belonging to the job before it.
+      --  The count and the tile counter first and the ticket second, so a
+      --  worker that wakes on the ticket cannot see either belonging to the
+      --  job before it.
       Waking.Left := AC.Atomic_Unsigned (Shares);
+      Waking.Chunk := 0;
       AC.Increment (Waking.Ticket);
    end Announce;
 
@@ -691,6 +708,44 @@ package body Model_Runner.Backend.CPU is
       end if;
    end Take_Share;
 
+   -----------------
+   -- Take_Chunks --
+   -----------------
+
+   procedure Take_Chunks
+     (Waking : Wake_Access;
+      Work   : Job;
+      Grain  : Element_Count)
+   is
+      Step   : constant Element_Count :=
+        (if Grain <= 1 then 1 else Grain);
+      Tiles  : constant Element_Count := (Work.Rows + Step - 1) / Step;
+   begin
+      if Waking = null or else Work.Rows = 0
+        or else Work.Vector = null or else Work.Target = null
+      then
+         return;
+      end if;
+
+      loop
+         declare
+            Mine : constant Chunk_Counter :=
+              Chunks.Atomic_Fetch_And_Add (Waking.Chunk, 1);
+         begin
+            exit when Mine < 0
+              or else Element_Count (Mine) >= Tiles;
+
+            declare
+               First : constant Element_Count := Element_Count (Mine) * Step;
+               Last  : constant Element_Count :=
+                 Element_Count'Min (First + Step - 1, Work.Rows - 1);
+            begin
+               Take_Share (Work, First, Last);
+            end;
+         end;
+      end loop;
+   end Take_Chunks;
+
    task body Worker is
       Position : Worker_Count := 1;
       Control  : Coordinator_Access := null;
@@ -740,14 +795,17 @@ package body Model_Runner.Backend.CPU is
             declare
                First, Last : Element_Count;
             begin
-               Partition
-                 (Current.Rows, Current.Team, Position, First, Last,
-                  Grain =>
-                    (if Current.Work = null
-                     then Model_Runner.Quantization.Integers.Row_Tile
-                     else 1));
+               if Current.Work = null then
+                  Take_Chunks
+                    (Waking, Current,
+                     Model_Runner.Quantization.Integers.Row_Tile);
+               else
+                  Partition
+                    (Current.Rows, Current.Team, Position, First, Last,
+                     Grain => 1);
 
-               Take_Share (Current, First, Last);
+                  Take_Share (Current, First, Last);
+               end if;
             end;
          exception
             --  A worker failure is reported to the coordinator rather than
@@ -910,18 +968,10 @@ package body Model_Runner.Backend.CPU is
       --  whole job waits for it. Pinned to one processor per core, eight
       --  workers measured 3.7x where seven measured 5.0x, which is that
       --  effect with nowhere to hide.
-      declare
-         First, Last : Element_Count;
       begin
-         Partition
-           (Work.Rows, Work.Team, Work.Team, First, Last,
-            Grain => Model_Runner.Quantization.Integers.Row_Tile);
-         if First <= Last
-           and then Work.Vector /= null
-           and then Work.Target /= null
-         then
-            Take_Share (Work, First, Last);
-         end if;
+         Take_Chunks
+           (Item.Waking'Unchecked_Access, Work,
+            Model_Runner.Quantization.Integers.Row_Tile);
       exception
          --  Reported the way a worker's failure is, after the workers are
          --  collected: leaving before they finish would free the vector and
@@ -1031,18 +1081,10 @@ package body Model_Runner.Backend.CPU is
       --  whole job waits for it. Pinned to one processor per core, eight
       --  workers measured 3.7x where seven measured 5.0x, which is that
       --  effect with nowhere to hide.
-      declare
-         First, Last : Element_Count;
       begin
-         Partition
-           (Work.Rows, Work.Team, Work.Team, First, Last,
-            Grain => Model_Runner.Quantization.Integers.Row_Tile);
-         if First <= Last
-           and then Work.Vector /= null
-           and then Work.Target /= null
-         then
-            Take_Share (Work, First, Last);
-         end if;
+         Take_Chunks
+           (Item.Waking'Unchecked_Access, Work,
+            Model_Runner.Quantization.Integers.Row_Tile);
       exception
          --  Reported the way a worker's failure is, after the workers are
          --  collected: leaving before they finish would free the vector and

@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A share a worker, decided before any of them started — 11% of a
+  processor prompt, and the long-prompt row passes llama.cpp.** Reading
+  llama.cpp instead of guessing: its Q8_0 dot product is the same kernel as
+  this one, and it does not repack Q8_0 weights. **The scheduling is the
+  difference.** `ggml_compute_forward_mul_mat` hands out chunks of sixteen
+  rows through an atomic counter; this program cut a product into one
+  contiguous range per worker before any of them started. That is right when
+  the workers run at the same speed, and on a fifteen-watt part sharing its
+  boost between eight cores they do not — a job is not done until its slowest
+  range is.
+
+  A worker takes its next tile from an atomic counter now. The grid is
+  anchored at row zero and a tile is never split, so the answer is **bit for
+  bit** what the fixed cut produced, at every worker count.
+
+  | | 1419-token prompt | 110-token prompt | 64 generated |
+  | --- | ---: | ---: | ---: |
+  | a range a worker | 5.412 s | 0.406 s | 1.916 s |
+  | a tile at a time | **4.796 s** | **0.370 s** | **1.893 s** |
+
+  **The processor reads the long prompt at 292.3 t/s against llama.cpp's
+  268.8 — 1.09 times faster**, where it was level one commit ago and 2.7
+  behind when this work began. Seven workers against one now reads 5.03x
+  where the sitting before read 4.11x.
+
+  Worth naming: three of the last five things tried on the processor were
+  arithmetic and all three were level or refused. This one is the same
+  instructions in the same order, handed out differently — and no profile
+  would have found it, because it is not a symbol, it is workers idle in a
+  spin loop.
+
 - **The memory kind, level — and the figure the item was ranked on was
   wrong.** The device's elementwise kernels were the widest unexplained
   number on that side, and the last untested explanation was the memory:
