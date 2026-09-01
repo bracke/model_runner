@@ -76,6 +76,58 @@ package body Model_Runner.Quantization.Integers.Kernels is
       end if;
    end Scale_At;
 
+   --  The same two bytes, taken by the hardware in one go.
+   --
+   --  Scale_At above asks Ada for a sixteen-bit number out of two bytes of
+   --  a Byte_Array, which is two loads, a shift and an or before the
+   --  convert can start: six instructions, and it is called once for every
+   --  block of every row of every product. vpinsrw takes exactly the two
+   --  bytes at the address, which with the zeroing and the convert is
+   --  three, and a generated token executes eight and four tenths per cent
+   --  fewer instructions for it.
+   --
+   --  Only Rows_Singly calls it, and the reason is measured rather than
+   --  cautious. Put in Scale_At, where every format would take it, it is
+   --  worth 1.7 per cent of a Q8_0 generation at the worker count this
+   --  program chooses and 5.6 per cent at one worker -- and it costs Q4_K
+   --  generation twenty-one per cent and a Q4_K prompt fourteen. Three
+   --  instructions on a longer chain: vpinsrw is a load and an insert into
+   --  one register and the convert waits behind both, where two byte loads
+   --  issue beside whatever else is in flight. The eight-bit kernel has the
+   --  work to hide that behind and the k-quant one does not.
+   --
+   --  Exactly two bytes, which matters: the wider load vcvtph2ps offers
+   --  would read eight, and Q6_K keeps its scale in a block's last two.
+   --
+   --  The lanes above the first are zeroed rather than left as they were,
+   --  so the convert is given numbers rather than whatever the register
+   --  held. Only the first is read.
+   function Scale_Pair_At
+     (Data : B.Byte_Array;
+      Here : B.Byte_Index) return N.Real
+     with Inline;
+   pragma Inline_Always (Scale_Pair_At);
+
+   function Scale_Pair_At
+     (Data : B.Byte_Array;
+      Here : B.Byte_Index) return N.Real
+   is
+      LF     : constant Character := ASCII.LF;
+      Result : N.Real;
+   begin
+      --  Not volatile: it reads its operand and writes its answer and does
+      --  nothing else, so the compiler may hoist it, fold two of them
+      --  together, or drop one whose answer goes unread.
+      System.Machine_Code.Asm
+        ("vpxor %0, %0, %0" & LF
+         & "vpinsrw $0, %1, %0, %0" & LF
+         & "vcvtph2ps %0, %0",
+         Outputs => N.Real'Asm_Output ("=x", Result),
+         Inputs  => B.Byte'Asm_Input ("m", Data (Here)));
+
+      return Result;
+   end Scale_Pair_At;
+
    --  The six-bit scale and minimum a Q4_K or Q5_K sub-block carries.
    --
    --  Twelve bytes hold sixteen six-bit numbers: the first four pairs whole
@@ -357,7 +409,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
                     Scales (Scales'First + First / Activation_Block + Block);
 
                   Weighted : constant N.Real :=
-                    Scale_At (Data, At_Byte);
+                    (if Wider then Scale_Pair_At (Data, At_Byte)
+                     else Scale_At (Data, At_Byte));
                begin
                   Row_Scale (Natural (Block)) := Weighted * Scaled;
                   Undo := Undo

@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The block scale in three instructions instead of six, in the one kernel
+  that can spend them — and two corrections to the entry below.** Decoding a
+  Q8_0 block scale with `vpinsrw` rather than two byte loads, a shift and an
+  or takes 8.4% off every instruction a generated token executes. In the
+  shared `Scale_At` it costs Q4_K generation 21%; in `Rows_Singly`, which is
+  Q8_0 and nothing else, it costs nothing and gains. **4.0% at one worker and
+  1.4% at seven**, every reading of one arm below every reading of the other,
+  and bit for bit the same tokens. Generating goes 33.85 → 34.34 t/s, the gap
+  to llama.cpp 1.16 → 1.14.
+
+  **Correction: the generating side is bus-bound, as this repository said
+  before the last entry.** That entry claimed otherwise on an
+  instructions-per-cycle figure of 2.29 — an average over cycles that include
+  seven workers spinning in a four-instruction loop. By worker count: one
+  worker 4.575 s and 16 GB/s at 3.46 instructions a cycle, three 1.894 s and
+  40 GB/s, seven 1.893 s and nothing added. Issue-bound alone, bus-bound in
+  company, corner at three. It explains the four refusals rather than
+  contradicting them.
+
+  **Correction: the 1419-token processor row published last time was an
+  outlier.** It said 260.4 t/s and a gap of 1.04, from a retake reading
+  5.450 s; every other reading of that binary that day lies between 5.9 and
+  6.1, including this sitting's own quiet retake at 6.071. A median of three
+  inside one unusually good window is not a defence against the window. The
+  row now says **233.7 t/s and 1.16**, and the method gains a clause: take a
+  published figure in more than one sitting.
+
+  `Blend_Run` at two positions a turn — twenty-two instructions where two
+  turns were twenty-six, bit-exact — is **0.38% of a prompt's instructions
+  and nothing on the clock**. Not kept.
+
 - **Four ways of making the generating row kernel cheaper, all refused — and
   the diagnosis behind them corrected.** The plan said that kernel copies and
   biases every weight before multiplying it. It reads the wrong kernel: a
