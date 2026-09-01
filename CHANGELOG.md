@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Where the device's gap is now — and a "bound" that was a bug.** Taken
+  again kernel against kernel (ours by removal, llama.cpp's from
+  `GGML_VK_PERF_LOGGER`), the map has changed: **matrix products 595 ms
+  against ~575 — level**, attention 108 against 80, **the normalization 69
+  against 21**, the gated middle and joins 71 against 61, the rotation ahead.
+  The entry that opened this comparison put 84% of the gap in the matrix row
+  at 3.4 teraflops against 4.9; ours is now 4.9 against 5.0.
+
+  The entry before this one called the elementwise kernels' 16 GB/s a bound
+  after ruling out the access width, the arithmetic and the memory kind. It
+  was the shader: llama.cpp's `rms_norm.comp` is binary32 and ours was
+  **binary64 the whole way through**, on a part that runs double at a
+  sixteenth rate. A pairwise fold of 2048 squares carries a few parts in ten
+  million and the epsilon is a thousand times that, so nothing downstream can
+  see it. **0.832 s against 0.843 on the long prompt, 0.101 against 0.103 on
+  the short one**, every digest held — including `cbf29ce484222325`, which
+  both backends print — and the shader stops requiring `shaderFloat64`.
+
+  **Both processor prompt rows are now ahead of llama.cpp** (306.4 t/s
+  against 272.5 at 1419 tokens, 314.3 against 311.0 at 110) and **the
+  device's long prompt is 1.05 behind**, its closest yet.
+
 - **A share a worker, decided before any of them started — 11% of a
   processor prompt, and the long-prompt row passes llama.cpp.** Reading
   llama.cpp instead of guessing: its Q8_0 dot product is the same kernel as

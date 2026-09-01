@@ -16,9 +16,18 @@
 //  those partials in eight halvings. A different association is a different
 //  sum in the last bits, and a layer's normalization feeds everything after
 //  it, so this is one of the few places on the device where the answer is
-//  the conformance sweep's to judge rather than a digest's. It is
-//  accumulated in binary64 all the way through the fold, which is what
-//  keeps the difference in the last bits rather than further up.
+//  the conformance sweep's to judge rather than a digest's.
+//
+//  In binary32, and it used to be binary64 the whole way through the fold.
+//  That was the wrong instrument on this part: a consumer RDNA3 device runs
+//  double precision at a sixteenth of single, and this kernel is eight
+//  squares a lane, eight folding steps and eight scaled stores -- all of
+//  them doubles, on hardware that would rather not. Measured against
+//  llama.cpp's own normalization, which is binary32 and does the same fold,
+//  this one was three times slower for a sum whose error a tree already
+//  bounds: two thousand and forty-eight squares folded pairwise carry a
+//  relative error of a few parts in ten million, and the epsilon added to
+//  the mean is a thousand times that.
 //
 //  Two earlier shapes are what argue for this one. Having a single
 //  invocation walk the whole position -- loads and adds both -- cost three
@@ -29,7 +38,6 @@
 //  because the other two hundred and fifty-five lanes spend the whole sum
 //  waiting at a barrier. Only the fold puts them to work.
 
-#extension GL_ARB_gpu_shader_fp64 : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
 #extension GL_EXT_shader_16bit_storage : require
 
@@ -82,7 +90,7 @@ layout(push_constant) uniform Shape {
     uint base;
 } shape;
 
-shared double partial[LANES];
+shared float partial[LANES];
 
 void main() {
     uint slot = gl_WorkGroupID.x;
@@ -109,10 +117,10 @@ void main() {
     }
 
     //  A stride a lane, so that the lanes of a turn read neighbours.
-    double mine = 0.0LF;
+    float mine = 0.0;
 
     for (uint c = lane; c < shape.width; c += LANES) {
-        double v = double (x[at + c]);
+        float v = x[at + c];
         mine += v * v;
     }
 
@@ -129,24 +137,24 @@ void main() {
 
     barrier();
 
-    double gain =
-      sqrt (partial[0] / double (shape.width)
-            + double (uintBitsToFloat (shape.epsilon)));
+    float gain =
+      sqrt (partial[0] / float (shape.width)
+            + uintBitsToFloat (shape.epsilon));
 
     //  A zero or non-finite scale means the input was degenerate. A unit
     //  gain keeps the layer's output finite so that the caller's own
     //  finiteness check reports the condition rather than the arithmetic
     //  doing it here, which is what the processor's does and for the same
     //  reason.
-    if (gain == 0.0LF || isinf (gain) || isnan (gain)) {
-        gain = 1.0LF;
+    if (gain == 0.0 || isinf (gain) || isnan (gain)) {
+        gain = 1.0;
     } else {
-        gain = 1.0LF / gain;
+        gain = 1.0 / gain;
     }
 
     //  And out, every lane at once: nothing here is serial either.
     for (uint c = lane; c < shape.width; c += LANES) {
-        float scaled = float (double (x[at + c]) * gain);
+        float scaled = x[at + c] * gain;
 
         float made = shape.lifted != 0u
                      ? scaled * (1.0 + g[shape.base + c])

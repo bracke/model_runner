@@ -1572,12 +1572,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.396 s | **0.263 s** |
-| -- evaluating the prompt | 0.053 s | 0.031 s |
-| -- generating | 0.346 s | **0.232 s** |
-| -- processor time | 1.77 s | **0.07 s** |
-| 110-token prompt, nothing generated | 0.361 s | 0.107 s |
-| -- processor time | 2.77 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.393 s | **0.251 s** |
+| -- evaluating the prompt | 0.053 s | 0.033 s |
+| -- generating | 0.340 s | **0.217 s** |
+| -- processor time | 1.76 s | **0.07 s** |
+| 110-token prompt, nothing generated | 0.351 s | **0.095 s** |
+| -- processor time | 2.73 s | **0.01 s** |
 
 All six cells were taken in one sitting on 2026-09-01, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
@@ -1587,8 +1587,8 @@ below, and 0.242 s until `### A generated token carried too` further down
 gave a generated token the carry a batched one already had.
 
 Read the device's generating cell knowing its spread. Over three sittings
-in three days it has read 0.227, 0.227, 0.228, 0.228, 0.231, 0.233, 0.233,
-0.234, 0.236, 0.237 and 0.240 s, and at sixty-four tokens rather than twelve 1.266, 1.266,
+in three days it has read 0.217, 0.227, 0.227, 0.228, 0.228, 0.231, 0.233,
+0.233, 0.234, 0.236, 0.237 and 0.240 s, and at sixty-four tokens rather than twelve 1.266, 1.266,
 1.269, 1.283, 1.319, 1.340, 1.363, 1.364 and 1.373 -- a run-to-run range as wide as most of the
 changes that have moved it. What settles a change of that size is not
 this cell but the alternated pairs under `### A generated token carried
@@ -1596,7 +1596,7 @@ too`, which is why they are there.
 
 **The device wins both runs now, and spends a twentieth of the processor's
 time doing it** on the short run and a hundredth on the long one. Its
-110-token prompt has gone from 1.951 s to 0.107 s. Six changes took the
+110-token prompt has gone from 1.951 s to 0.095 s. Six changes took the
 first two thirds of that, to 0.280 s -- the default batch, the results a
 product reads back, the activation it writes, the kind of memory those
 results are read out of, the width of a workgroup, and -- last and largest -- the batch computed as a
@@ -6531,27 +6531,32 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **305.6 t/s** | 34.7 t/s |
-| llama.cpp, processor | 329.4 t/s | 38.8 t/s |
-| model_runner, device | 1037.7 t/s | **50.3 t/s** |
-| llama.cpp, device | 1578.9 t/s | 55.6 t/s |
+| model_runner, processor | **314.3 t/s** | 34.7 t/s |
+| llama.cpp, processor | 311.0 t/s | 41.0 t/s |
+| model_runner, device | 1170.2 t/s | **54.2 t/s** |
+| llama.cpp, device | 1644.4 t/s | 59.1 t/s |
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **292.3 t/s** | 34.7 t/s |
-| llama.cpp, processor | 268.8 t/s | 38.8 t/s |
-| model_runner, device | **1587.2 t/s** | 50.3 t/s |
-| llama.cpp, device | 1760.0 t/s | 55.6 t/s |
+| model_runner, processor | **306.4 t/s** | 34.7 t/s |
+| llama.cpp, processor | 272.5 t/s | 41.0 t/s |
+| model_runner, device | **1728.4 t/s** | 54.2 t/s |
+| llama.cpp, device | 1823.1 t/s | 59.1 t/s |
 
-**The processor's long-prompt row is ahead of llama.cpp: 292.3 tokens a
-second against 268.8, which is 1.09 times faster.** It was level one commit
-ago and 1.16 behind two ago; what moved it is `### A share a worker, decided
-before any of them started`, below -- eleven per cent of a prompt lost to
-waiting for the slowest of eight fixed ranges. The 110-token row is 1.08
-behind, from 1.39.
+**Both processor prompt rows are ahead of llama.cpp now: 306.4 tokens a
+second against 272.5 at 1419 tokens and 314.3 against 311.0 at 110.** What
+moved them is `### A share a worker, decided before any of them started`,
+below -- eleven per cent of a prompt lost to waiting for the slowest of eight
+fixed ranges. Two commits before that the long row was 1.16 behind and the
+short one 1.39.
+
+**And the device's long prompt is 1.05 behind**, its closest yet, after
+`### Where the device's gap is now, kernel against kernel` found the
+normalization running in binary64 on a part that does it at a sixteenth
+rate.
 
 Both tables are one sitting this time, taken with `llama-bench` on the same
 pass, and the machine was gated to a load under 0.7 and a settled part before
@@ -6575,14 +6580,13 @@ across windows are. The row now says 233.7 and 1.16.
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The processor's long prompt is **ahead by 1.09** where the short one is 1.08
-behind, and the device is **1.11** behind at 1419 tokens against 1.52 at
-110. Attention grows with the square of the context and it
+The processor's long prompt is **ahead by 1.12** and its short one by 1.01,
+and the device is **1.05** behind at 1419 tokens against 1.41 at 110. Attention grows with the square of the context and it
 is the part of a layer this program is furthest behind on, so a table taken
 at a hundred and ten tokens reads a little kinder than the work deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±2.5 on 268.8 at 1419 tokens against ±17 on 329.4 at
+three runs it is **±3.1 on 272.5 at 1419 tokens against ±16 on 311.0 at
 110**, and the same 1419 figure read 224.9 ±20 half an hour earlier on a
 machine that was not quiet -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
@@ -6595,12 +6599,12 @@ section were taken on and dropping it would throw that away, and a reader
 comparing against somebody else's `pp110` needs it. But **the long one is the
 figure to argue about**.
 
-On the processor at 110 tokens: **1.1 times slower generating and 1.1 times
-slower reading a prompt** -- the generating figure has read 1.1 once, 1.2 seven times, 1.3 and 1.4 across sittings, the first four of them
+On the processor at 110 tokens: **1.2 times slower generating and level
+reading a prompt** -- the generating figure has read 1.1 once, 1.2 eight times, 1.3 and 1.4 across sittings, the first four of them
 after `### The wake, not the work`, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, **1.1** and **1.5**,
-where the sittings before this one said 1.1 and 1.6, then 1.1 and 1.5, then 1.1 and 1.5, then 1.1 and 1.5, then 1.1 and 1.6, then 1.1 and 1.5, then 1.2 and 1.4, then 1.2 and 1.7, then 1.2 and 1.6, then 1.2 and 1.6, then 1.2 and 1.7, then 1.3 and 1.7, then 1.2 and 2.1, then 1.3 and 2.1, then 1.3 and 2.3, then 1.2 and 2.4, then 1.3 and 2.5, then 1.3 and 2.7, then 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
+reading of this table said 3.3 and 16. On the device, **1.1** and **1.4**,
+where the sittings before this one said 1.1 and 1.5, then 1.1 and 1.6, then 1.1 and 1.5, then 1.1 and 1.5, then 1.1 and 1.5, then 1.1 and 1.6, then 1.1 and 1.5, then 1.2 and 1.4, then 1.2 and 1.7, then 1.2 and 1.6, then 1.2 and 1.6, then 1.2 and 1.7, then 1.3 and 1.7, then 1.2 and 2.1, then 1.3 and 2.1, then 1.3 and 2.3, then 1.2 and 2.4, then 1.3 and 2.5, then 1.3 and 2.7, then 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
 1.4 and 2.6, then 1.4 and 2.5, then 1.4 and 3.0, then 1.4 and 3.6, then 1.4 and 3.8, then 1.4
 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and
 10.1. Both device rows have moved for a named reason:
@@ -6620,7 +6624,7 @@ prose is what caught it, which is a thing only a person does.
 
 **The device row is now clear of llama.cpp's processor row** -- 50.3 against
 39.2 in this sitting, more than a quarter ahead, where for twenty-one
-sittings the two sat on top of each other: 50.3 against 38.8, 50.3 against 39.2, 50.4 against 39.2, 50.0 against 39.5, 49.9 against 39.4, 50.6 against
+sittings the two sat on top of each other: 50.3 against 38.8, 50.3 against 38.8, 50.3 against 39.2, 50.4 against 39.2, 50.0 against 39.5, 49.9 against 39.4, 50.6 against
 39.2, 50.6 against
 39.4, 46.6 against
 39.4, 47.8 against
@@ -6637,7 +6641,8 @@ between it and llama.cpp's own device figure is 1.2 times.
 The processor's generating row is the other kind of gap. It reads every
 weight once a token and does one multiply with each, so above three workers
 the bus answers rather than the arithmetic: llama.cpp's 39.2 t/s is about 45
-GB/s of this model and 34.7 is about 40. The entry before this one said the
+GB/s of this model and 34.7 is about 40 -- llama.cpp read 41.0 in this
+sitting on a quieter machine, and both sides move together when it is. The entry before this one said the
 counters disproved that, on an instruction-per-cycle figure of 2.29 -- and
 that figure is an average over cycles that include seven workers spinning in
 a four-instruction loop waiting for the next job, which issues at nearly four
@@ -6702,13 +6707,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 701.8 t/s rather
-than 329.4 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 782.1 t/s rather
+than 311.0 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 50.3 t/s
-now, against 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 54.2 t/s
+now, against 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -10194,7 +10199,12 @@ same bytes, so the two elementwise kernels sit at the same rate. Whatever
 holds them is shared between them, is not their arithmetic, and is not how
 wide a lane reads.
 
-**And the sixteen is wrong, which the section below corrects**: it counted
+**And it was a bug after all**, which `### Where the device's gap is now`
+below settles: the normalization was running in binary64 on a part that does
+double precision at a sixteenth rate, and llama.cpp's does the same fold in
+binary32.
+
+**The sixteen is also wrong, which the section below corrects**: it counted
 one dispatch of the combining kernel a layer where there are three -- the
 gated middle and the two residual joins, which are the same two arms in and
 one out on a narrower width and go through the same shader. Counted properly
@@ -10306,6 +10316,65 @@ same instructions in the same order, handed out differently. The profile
 could not have found it either: it does not appear as a symbol, only as
 workers idle in a spin loop that the page above had already decided was
 earning its keep.
+
+
+### Where the device's gap is now, kernel against kernel
+
+`### The tile llama.cpp uses` put eighty-four per cent of the device gap in
+the matrix products and measured our kernel at 3.4 teraflops against theirs
+at 4.9. That was several changes ago and it is no longer where the gap is.
+Taken again -- ours by voiding each shader in turn on the long prompt, theirs
+from `GGML_VK_PERF_LOGGER=1` on the same prompt and the same file:
+
+| | here | llama.cpp | behind |
+| --- | ---: | ---: | ---: |
+| matrix products | 595 ms | ~575 ms | 1.03x |
+| attention | 108 ms | 80 ms | 1.35x |
+| **the normalization** | **69 ms** | **21 ms** | **3.3x** |
+| the gated middle and the joins | 71 ms | 61 ms | 1.16x |
+| the rotation | 10 ms | 15 ms | ahead |
+
+**The matrix row has caught up.** Ours now runs at about 4.9 teraflops and
+theirs at 5.0, which is where their figure was when this comparison began. So
+the tall-tile arguments under `### The tile llama.cpp uses` stand and the
+work they were arguing about is done; what is left is elsewhere.
+
+**And the normalization is three times behind, which is not a bound.** The
+section above this one recorded that kernel and the combining one at sixteen
+gigabytes a second and called it a bound rather than a bug, having ruled out
+the access width, the arithmetic and the memory kind. It was a bug, and the
+comparison found it in one reading: llama.cpp's `rms_norm.comp` is binary32
+and ours was **binary64 the whole way through** -- eight squares a lane,
+eight folding steps and eight scaled stores, all in double precision, on a
+consumer RDNA3 part that runs double at a sixteenth of single.
+
+The double was deliberate and the comment above the shader argued for it: a
+tree fold is a different association from the processor's in-order sum, and
+binary64 kept the difference in the last bits. But the error a tree already
+carries is a few parts in ten million over two thousand and forty-eight
+squares, and the epsilon added to the mean is a thousand times that. Nothing
+downstream can see it.
+
+| | 1419-token prompt | 110-token prompt |
+| --- | ---: | ---: |
+| binary64 | 0.843 s | 0.103 s |
+| binary32 | **0.832 s** | **0.101 s** |
+
+One and three tenths per cent of the long prompt and two of the short one --
+less than the arithmetic suggested, so the double was not the whole of that
+kernel's slowness either. Every digest holds, including `cbf29ce484222325`,
+which both backends print for the 110-token prompt and which is the claim
+under `### The device backend` that the two read the same text. And the
+shader no longer needs `shaderFloat64` at all, which is a device feature it
+had been requiring for a sum that never needed it.
+
+The lane count was swept in the same sitting and is already right: two
+hundred and fifty-six reads 0.832 s where five hundred and twelve reads 0.837
+and a hundred and twenty-eight 0.844.
+
+What is left on that side is now named: **attention at 1.35 times and the
+elementwise kernels at 1.16**, with the matrix products level. It is the
+first time in this file that the device's gap has not been mostly one row.
 
 
 ### The activation quantizer, widened and refused
