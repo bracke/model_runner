@@ -9669,6 +9669,31 @@ show.
 Seven tenths of a per cent, four files of plumbing, and an answer that
 differs. Not built.
 
+**The tile write-back, the other half of the same item, is bit-exact and
+level.** `mat_mul_range_packed` narrows a tile of binary64 accumulators into
+binary32 and lays it out the way the target wants it, and unlike the
+quantizer's rounding there is no emulation to differ: a double narrowed to a
+float is round-to-nearest-even, which is one instruction at any width. The
+digest holds -- `1a26d24d33b8957b` throughout -- and the run does not move:
+6.266, 6.053 and 6.218 seconds against 5.786, 6.137 and 6.220, ahead in one
+round of three.
+
+The profile says why. Its share goes **3.26 per cent to 3.04**, which is
+nothing. The loop writes the target contiguously and reads the tile with a
+stride, and a wider lane does not help a strided read -- this part's gather
+is slow enough that the compiler keeps the paired sixty-four-bit moves
+whichever set it is given. One of the two sides has to be strided, and which
+one is the subject of `### A tile written the way the target is laid out`
+above; widening the lanes does not change that choice, it only makes the
+contiguous side wider while the strided side still decides the pace.
+
+**And the reading that started this was noise.** The first measurement of
+the widened unit read 5.648 seconds against about 6.05 and looked like six
+and a half per cent. Three alternated rounds put it at nothing. The
+processor's prompt column swings by five per cent between sittings -- this
+file has said so for months, and it is the third time in this session that a
+single reading of it has pointed the wrong way.
+
 That is worth setting beside the section above it, because the two are the
 same lesson from opposite ends. Widening the blending run was **bit-exact
 and slower**. Widening the quantizer is **faster and not bit-exact**. Neither

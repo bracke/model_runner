@@ -4323,6 +4323,56 @@
 #   load:  under 1.4 throughout
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-01, the tile write-back widened: bit-exact, level, and a strided
+# read is why.
+#
+#   The entry above widens the activation quantizer and finds seven tenths
+#   of a per cent and a different answer. The other half of that item is
+#   mat_mul_range_packed, three and a half per cent of a processor prompt,
+#   whose annotation is movsd and movhpd -- sixty-four bits at a time.
+#
+#   It narrows a tile of binary64 accumulators into binary32 and lays them
+#   out the way the target wants them. Unlike Real'Rounding there is no
+#   emulation that can differ: a double narrowed to a float is
+#   round-to-nearest-even, which is one instruction at any width. So this
+#   one is bit-exact, and the probe confirms it -- 1a26d24d33b8957b
+#   throughout, where the quantizer's probe moved to b8887185cdd328a7.
+#
+#   Alternated, medians of three, the 1419-token processor prompt, the unit
+#   compiled for x86-64-v3 as a probe:
+#     baseline   5.786, 6.137, 6.220 s
+#     wide       6.266, 6.053, 6.218 s
+#   Ahead in one round of three. Level.
+#
+#   The profile says why: the share moves 3.26 per cent to 3.04, which is
+#   nothing. The loop writes the target contiguously and reads the tile with
+#   a stride of Count, and a wider lane does not help a strided read -- the
+#   gather on this part is slow enough that the compiler keeps the paired
+#   sixty-four-bit moves whichever instruction set it is given.
+#
+#   One of the two sides has to be strided. Which one is the subject of "A
+#   tile written the way the target is laid out" in the README, where the
+#   loops were swapped so that the target is the contiguous side; widening
+#   the lanes does not revisit that choice, it only makes the contiguous
+#   side wider while the strided side still sets the pace.
+#
+#   And the reading that started this was noise. The first measurement of
+#   the widened unit read 5.648 s against about 6.05 and looked like six and
+#   a half per cent; three alternated rounds put it at nothing. The
+#   processor's prompt column swings five per cent between sittings, which
+#   this file has recorded for months, and this is the third time in this
+#   session that a single reading of it has pointed the wrong way -- after
+#   the descriptor probe and the first blend-widening reading.
+#
+#   So both halves of that item are answered: the quantizer is worth seven
+#   tenths of a per cent and does not answer the same, and the write-back is
+#   bit-exact and worth nothing. Neither is built.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 4d7ec90 left it.
+#
+#   load:  under 1.4 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

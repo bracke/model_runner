@@ -27,6 +27,20 @@ Keep a Changelog and the project uses semantic versioning.
   Seven tenths of a per cent, four files of plumbing to get it safely, and a
   different answer. Not built.
 
+  **The tile write-back is bit-exact and level.** `mat_mul_range_packed`
+  narrows binary64 accumulators to binary32, and unlike `Real'Rounding`
+  there is no emulation to differ — a narrowing is round-to-nearest-even,
+  one instruction at any width. Digest held; 6.266, 6.053 and 6.218 s
+  against 5.786, 6.137 and 6.220, ahead in one round of three. Its share
+  moves 3.26 per cent to 3.04: the loop writes contiguously and **reads with
+  a stride**, and a wider lane does not help a strided read. One of the two
+  sides must be strided, which is the subject of an earlier section.
+
+  And the reading that started it — 5.648 s, looking like six and a half per
+  cent — was noise. The processor's prompt column swings five per cent
+  between sittings, and this is the third single reading of it this session
+  to point the wrong way.
+
   Worth setting beside the entry below, because they are the same lesson
   from opposite ends: widening the blending run was **bit-exact and
   slower**; widening the quantizer is **faster and not bit-exact**. In both
