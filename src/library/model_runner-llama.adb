@@ -6649,7 +6649,7 @@ package body Model_Runner.Llama is
             --  project it a second time.
             Whole_Block : Boolean := False;
 
-            --  Three of this block's loops over the batch go to the worker
+            --  Five of this block's loops over the batch go to the worker
             --  pool. They are elementwise: a position's normalization and
             --  its residual join read and write that position's own slice
             --  and no other's, so a share of the batch is the same
@@ -6658,7 +6658,7 @@ package body Model_Runner.Llama is
             --  prompt was here, on one core, while the pool that computes
             --  its attention a few lines below sat idle.
             --
-            --  Not the rotation, which is the fourth such loop: it writes
+            --  Not the rotation, which is the sixth such loop: it writes
             --  the key and value cache, and on a device that is a call
             --  through an engine that is one task's to use.
             --
@@ -6783,6 +6783,67 @@ package body Model_Runner.Llama is
                end loop;
 
                T.Free (Room);
+            end Run;
+
+            --  And the fifth, which was the largest of them and the last to
+            --  be noticed. The feed-forward's activation and the multiply
+            --  that follows it walk a position's whole inner width -- five
+            --  thousand six hundred and thirty-two numbers for this model --
+            --  and a batch of five hundred and twelve of them ran on one
+            --  core while seven waited. Sorted by thread, a profile of a
+            --  1419-token prompt put `silu` and `multiply` on the main task
+            --  and on no worker at all: 1.18 and 0.59 per cent of the
+            --  samples collected, which at 35.66 seconds of processor time
+            --  is about 0.63 seconds of a 5.93-second prompt spent on a
+            --  machine that has eight cores and was using one.
+            --
+            --  Elementwise like the three above it, and shared out the same
+            --  way: a position's slice is read and written by that position
+            --  and no other, so a share is the same arithmetic in the same
+            --  order and the answer is bit for bit what one task produced.
+            type Feed_Share is limited new Workers_CPU.Task_Item with
+               record
+                  --  Whether there is an up projection to multiply in, or
+                  --  only the unit and the bias before it.
+                  Both : Boolean := True;
+               end record;
+
+            overriding procedure Run
+              (Share : in out Feed_Share;
+               From  : Element_Count;
+               To    : Element_Count);
+
+            overriding procedure Run
+              (Share : in out Feed_Share;
+               From  : Element_Count;
+               To    : Element_Count) is
+            begin
+               if From > To then
+                  return;
+               end if;
+
+               for Which in From .. To loop
+                  declare
+                     Origin : constant Element_Count := Slot (Which, Feed);
+                  begin
+                     if Share.Both then
+                        Gate_Activation
+                          (Source, Gate.all (Origin .. Origin + Feed - 1));
+                        K.Multiply
+                          (Gate.all (Origin .. Origin + Feed - 1),
+                           Up.all (Origin .. Origin + Feed - 1));
+                     else
+                        --  Before the unit, as in the single-token path.
+                        if Current.Up_Bias /= null then
+                           K.Add (Gate.all (Origin .. Origin + Feed - 1),
+                                  Current.Up_Bias.all);
+                        end if;
+
+                        Gate_Activation
+                          (Source, Gate.all (Origin .. Origin + Feed - 1));
+                     end if;
+                  end;
+               end loop;
             end Run;
          begin
             --  What the block is given. Every architecture here normalizes
@@ -7419,20 +7480,20 @@ package body Model_Runner.Llama is
                     (Item, Current.Up, Norm, Count, Gate, Status);
                   exit when E.Is_Error (Status);
 
-                  for Which in 0 .. Count - 1 loop
-                     declare
-                        Origin : constant Element_Count := Slot (Which, Feed);
-                     begin
-                        --  Before the unit, as in the single-token path.
-                        if Current.Up_Bias /= null then
-                           K.Add (Gate.all (Origin .. Origin + Feed - 1),
-                                  Current.Up_Bias.all);
-                        end if;
+                  declare
+                     Share  : aliased Feed_Share := (Both => False);
+                     Shared : E.Error_Info;
+                  begin
+                     Workers_CPU.Dispatch_Shares
+                       (Team, Count, Share'Unchecked_Access, Shared);
 
-                        Gate_Activation
-                          (Source, Gate.all (Origin .. Origin + Feed - 1));
-                     end;
-                  end loop;
+                     if E.Is_Error (Shared) then
+                        Release;
+                        Item.Current := Failed;
+                        Status := Shared;
+                        return;
+                     end if;
+                  end;
                elsif Model_Runner.Backend."="
                        (Item.Owner.Able.Kind,
                         Model_Runner.Backend.Backend_Device)
@@ -7458,17 +7519,20 @@ package body Model_Runner.Llama is
                     (Item, Current.Up, Norm, Count, Up, Status);
                   exit when E.Is_Error (Status);
 
-                  for Which in 0 .. Count - 1 loop
-                     declare
-                        Origin : constant Element_Count := Slot (Which, Feed);
-                     begin
-                        Gate_Activation
-                          (Source, Gate.all (Origin .. Origin + Feed - 1));
-                        K.Multiply
-                          (Gate.all (Origin .. Origin + Feed - 1),
-                           Up.all (Origin .. Origin + Feed - 1));
-                     end;
-                  end loop;
+                  declare
+                     Share  : aliased Feed_Share;
+                     Shared : E.Error_Info;
+                  begin
+                     Workers_CPU.Dispatch_Shares
+                       (Team, Count, Share'Unchecked_Access, Shared);
+
+                     if E.Is_Error (Shared) then
+                        Release;
+                        Item.Current := Failed;
+                        Status := Shared;
+                        return;
+                     end if;
+                  end;
                end if;
 
                if not Whole_Block then

@@ -7,6 +7,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The feed-forward's activation was running on one core — 9.7% of a
+  processor prompt, and the long-prompt row is now level with llama.cpp.** A
+  profile sorted by *thread* rather than by symbol shows `silu` and
+  `multiply` on the main task and on **no worker at all**, where every other
+  hot symbol appears on all eight. At 35.66 s of processor time in 5.93 s of
+  wall that is ~0.63 s of the prompt on one core of eight — a batch of 512
+  positions, 5632 numbers each, twenty-two layers over.
+
+  Three of that block's loops already went to the pool; this is the fifth and
+  was never named. It is elementwise like the others, so a share is the same
+  arithmetic in the same order: **`1a26d24d33b8957b` both ways**.
+
+  | | 1419-token prompt | 110-token prompt |
+  | --- | ---: | ---: |
+  | on one core | 5.930 s | 0.468 s |
+  | shared out | **5.355 s** | **0.448 s** |
+
+  **The processor reads the long prompt at 269.1 t/s against llama.cpp's
+  269.8 — a gap of 1.00**, level for the first time on either side of this
+  comparison, where it was 2.7 when this work began. The 110-token row went
+  1.39 → 1.08. The device row is untouched: it takes the whole gated block at
+  once and never runs this loop.
+
+  The method note is the sort order. By symbol these two kernels read 1.8% of
+  a prompt and look like rounding; by thread they are ten per cent of the
+  wall. A symbol's share of the samples is its share of the time only when
+  the samples are spread evenly across threads — and a worker pool is exactly
+  the arrangement where they are not.
+
 - **Three candidates priced, none kept, and the first one's premise
   refuted.** The device prompt was said to carry ~35 ms of fixed cost,
   because 110 and 1419 tokens do not lie on a line through the origin. With
