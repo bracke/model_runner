@@ -6622,10 +6622,16 @@ a pair of figures sitting on top of each other rather than a lead in either
 direction; the last three readings are the first that are not. What is left
 between it and llama.cpp's own device figure is 1.2 times.
 
-The processor's generating row is the other kind of gap. It reads every
-weight once a token and does one multiply with each, so the bus answers
-rather than the arithmetic: llama.cpp's 39.2 t/s is about 45 GB/s of this
-model and 33.6 is about 38. What is left there is a gap in the kernels --
+The processor's generating row is the other kind of gap -- or it was said to
+be. It reads every weight once a token and does one multiply with each, and
+this paragraph read that as the bus answering rather than the arithmetic:
+llama.cpp's 39.2 t/s is about 45 GB/s of this model and 33.6 is about 38.
+**The counters say otherwise.** Sixty-four tokens execute 81.2 billion
+instructions in 35.5 billion cycles, which is 2.29 a cycle, and a kernel
+stalled on memory does not issue at that rate. `### The generating kernel has
+no slack` below is what came of asking, and what it found is that the rate of
+issue is the wall: four attempts cut between four and eighteen per cent of
+the instructions and not one of them cut a cycle. What is left there is a gap in the kernels --
 ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
 and this measures -- rather than a gap in what the program is doing.
 
@@ -9778,6 +9784,89 @@ sixty-four loads to a block, and this part does two of each a cycle, so the
 loads and the arithmetic finish together and neither can be traded for the
 other. Holding two query positions against one block of keys would halve the
 loads, which is exactly the resource that is not scarce.
+
+
+### The generating kernel has no slack, and four ways of finding that out
+
+The list this came from said the generating row product copies and biases
+every weight before it multiplies it, and put the cost at four instructions
+against one. It was reading the wrong kernel. **A generated token does not go
+through the four-row insertion at all**, and the way to be sure is to delete
+its staging loop and count: 81216 million instructions against 81181, four
+hundredths of a per cent. A path that costs nothing to remove is a path
+nothing runs.
+
+What a token runs is `Rows_Singly`, and it is already what the plan wanted:
+the weights are read where the file holds them, the accumulator lives in a
+register from a row's first block to its last, and the loop is eleven
+instructions for every thirty-two multiply-adds.
+
+**And the generating side is not waiting for the bus, which this page has
+said it was.** Sixty-four tokens execute 81.2 billion instructions in 35.5
+billion cycles -- **2.29 instructions a cycle**. A kernel stalled on memory
+does not issue at that rate. The gap to llama.cpp on this row is a gap in
+what the two programs execute, not in what they fetch.
+
+Four changes were then measured against that kernel. **None is kept**, and
+the four together say the same thing.
+
+**The block scale, decoded by the hardware.** `Scale_At` builds a sixteen-bit
+number out of two byte loads, a shift and an or before `vcvtph2ps` can start
+-- six instructions, in a function every block of every row calls.
+`vpinsrw` takes the two bytes at the address directly, which is three.
+
+| | instructions, 64 tokens |
+| --- | ---: |
+| two byte loads, a shift and an or | 81220, 81274, 81204 e6 |
+| the pair loaded by the insertion | 74404, 74411, 74396 e6 |
+
+**Eight and four tenths per cent of every instruction a generated token
+executes**, reproducing to five figures, and bit for bit the same tokens --
+it is the same convert of the same two bytes. It is also not faster: Q8_0
+cycles read 35.50 against 34.77 in one sitting and 35.61 against 35.85 in the
+next, and **Q4_K generation is plainly worse** -- 9.86 billion cycles against
+14.90, and 0.40 s generating against 0.69. The two byte loads issue beside
+everything around them; `vpinsrw` is a load and an insert into one register
+and the convert waits behind both. Fewer instructions on a longer chain.
+
+**The four kilobytes of `rep stosq`.** `Row_Scale` has room for a thousand
+blocks and is zeroed on entry to set the hundred and seventy-six a row
+overwrites, and the instruction is among the ten hottest in a profile of a
+generated token. Alternated, three rounds: 1.893 s generating against 1.870,
+Q4_K level. One and two tenths per cent, under the floor.
+
+**The bias correction as an integer rather than a sum.** The insertion's
+unsigned operand is the weight byte with its sign bit flipped, and what that
+adds comes back out as a running binary64 sum over every block of every row
+-- seven instructions a block, and removing it outright takes twelve per cent
+off the whole run. It need not be a sum: the correction is an integer smaller
+than a million, it depends on the activation block and not on the row, and
+the lane the multiply-add accumulates into can start at it rather than at
+zero. That is a load where the insertion had a `vpxor`.
+
+| | instructions | cycles |
+| --- | ---: | ---: |
+| base | 81220, 81274, 81204 e6 | 35499, 36155, 35264 e6 |
+| the pair loaded and the correction folded in | 66191, 66226, 66165 e6 | 35432, 35420, 34861 e6 |
+
+**Eighteen and a half per cent of the instructions and nothing on the
+clock** -- worse, by one and nine tenths per cent, than the pair-loaded arm
+on its own. The `vpxor` it replaces is a zeroing idiom, which occupies no
+execution unit at all, and the load that replaces it joins the chain the
+multiply-add is already waiting on. It moves the answers too --
+`3740ed87be385f2d` against `3248ac1bb7011de0`, with the suite at 294 of 294
+-- because the correction becomes exact where it was a rounded sum. Being
+more nearly right for nothing is not a reason to change published digests.
+
+So nothing is kept and no figure moves. What is worth keeping is the shape of
+the result: **three of the four cut instructions by four to eighteen per cent
+and not one of them cut cycles**, on a kernel already issuing 2.29
+instructions a cycle. There is no front-end slack left in it. Whatever comes
+next on this side has to shorten a dependency chain or move fewer bytes, and
+counting instructions will not find it -- which is the same lesson `### The
+two loops attention was paying for` teaches from the other end, where four
+per cent of the instructions bought 1.6 per cent of the cycles and was worth
+keeping only because it cost nothing to have.
 
 
 ### The activation quantizer, widened and refused

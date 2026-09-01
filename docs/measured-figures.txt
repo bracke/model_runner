@@ -4613,6 +4613,92 @@
 #   load:  0.45 to 3.72 across the two sittings
 #   model: TinyLlama-1.1B-Chat Q8_0, and Q4_K_M and Q2_K beside it
 #
+# 2026-09-01, four measurements of the generating row kernel, none kept, and
+# a diagnosis corrected.
+#
+#   The list this came from said the generating kernel copies and biases
+#   every weight before multiplying it. It does not. The staging copy is in
+#   the four-row insertion, and a generated token does not go there: deleting
+#   that loop outright moved the instruction count of a sixty-four token run
+#   by four hundredths of a per cent -- 81216 against 81181 million -- which
+#   is how a path is proved cold. What a token runs is Rows_Singly, and that
+#   one already reads the weights where the file holds them, keeps the
+#   accumulator in a register from a row's first block to its last, and
+#   issues eleven instructions for every thirty-two multiply-adds.
+#
+#   What the counters do say is that the generating side is not waiting for
+#   the bus. Sixty-four tokens: 81.2 billion instructions in 35.5 billion
+#   cycles, which is 2.29 a cycle. Reading a gigabyte of weights a token at
+#   about 31 GB/s on a part that does far more, at that rate of issue, is a
+#   program limited by what it executes rather than by what it fetches. This
+#   file has said the other thing for several sittings.
+#
+#   Four things were then measured. All four are refused.
+#
+#   The block scale, decoded by the hardware rather than by Ada. Scale_At
+#   builds a sixteen-bit number out of two byte loads, a shift and an or
+#   before vcvtph2ps can start -- six instructions in a function every block
+#   of every row calls. vpinsrw takes the two bytes at the address directly,
+#   which is three:
+#
+#     a head at a time     81220, 81274, 81204 million instructions
+#     the pair loaded      74404, 74411, 74396
+#
+#   Eight and four tenths per cent of every instruction a generated token
+#   executes, reproducing to five figures, and the tokens are identical
+#   because it is the same convert of the same two bytes. It is not faster.
+#   Q8_0 cycles read 35.50 against 34.77 in one sitting and 35.61 against
+#   35.85 in the next, which is noise around zero, and Q4_K generation is
+#   clearly worse: 9.86 billion cycles against 14.90, and 0.40 s generating
+#   against 0.69. The two byte loads issue in parallel with everything
+#   around them; vpinsrw is a load and an insert into one register, and the
+#   convert waits behind both. Fewer instructions on a longer chain.
+#
+#   The four kilobytes of `rep stosq` at the top of that kernel. Row_Scale
+#   has room for a thousand blocks and is zeroed on entry to set the
+#   hundred and seventy-six a row will overwrite; the instruction was among
+#   the ten hottest in a profile of a generated token. Alternated, three
+#   rounds: 1.893 s generating against 1.870, and Q4_K level. One and two
+#   tenths per cent, under the floor.
+#
+#   The bias correction as an integer rather than a sum. The insertion's
+#   unsigned operand is the weight byte with its sign bit flipped, and what
+#   that adds comes back out as a running binary64 sum over every block of
+#   every row -- seven instructions a block, and removing it outright takes
+#   twelve per cent off the whole run. It need not be a sum at all: the
+#   correction is an integer smaller than a million, it depends on the
+#   activation block and not on the row, and the lane the multiply-add
+#   accumulates into can start at it instead of at zero, which is a load
+#   where the insertion had a xor.
+#
+#     base                 81220, 81274, 81204 million instructions
+#                          35499, 36155, 35264 million cycles
+#     the pair loaded       and the correction folded in
+#                          66191, 66226, 66165 million instructions
+#                          35432, 35420, 34861 million cycles
+#
+#   Eighteen and a half per cent of the instructions and nothing at all on
+#   the clock -- the cycles read one and nine tenths per cent worse than the
+#   pair-loaded arm alone. The xor it replaced is a zeroing idiom, which
+#   costs no execution at all, and the load it becomes goes into the chain
+#   the multiply-add is already waiting on. It moves the answers as well
+#   (3740ed87be385f2d against 3248ac1bb7011de0, and the suite passes at 294
+#   of 294): the correction becomes exact where it was a rounded sum. Being
+#   more nearly right for nothing is not a reason to change published
+#   digests.
+#
+#   Nothing is kept and no figure moves. What is worth keeping is the shape
+#   of the answer: three of the four cut instructions by four to eighteen
+#   per cent and none of them cut cycles, on a kernel issuing 2.29
+#   instructions a cycle. There is no front-end slack left in it. The next
+#   thing to try on this side has to shorten a dependency chain or move
+#   fewer bytes, not execute fewer instructions -- and the entry two above
+#   this one, which cut four per cent of the instructions and 1.6 per cent
+#   of the cycles, is the same lesson read from the other end.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0 and Q4_K_M
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

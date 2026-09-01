@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Four ways of making the generating row kernel cheaper, all refused — and
+  the diagnosis behind them corrected.** The plan said that kernel copies and
+  biases every weight before multiplying it. It reads the wrong kernel: a
+  generated token never enters the four-row insertion, and deleting that
+  staging loop moves the instruction count by **four hundredths of a per
+  cent**. What a token runs already reads the weights in place and keeps its
+  accumulator in a register.
+
+  **The generating side is also not waiting for the bus**, which this
+  repository has claimed for several sittings. Sixty-four tokens execute 81.2
+  billion instructions in 35.5 billion cycles — **2.29 instructions a
+  cycle**. The gap there is in what the two programs execute, not what they
+  fetch.
+
+  Decoding the block scale with `vpinsrw` instead of two byte loads, a shift
+  and an or: **−8.4% of every instruction a token executes**, bit for bit the
+  same tokens, and *not faster* — level on Q8_0 and clearly worse on Q4_K
+  (0.40 s generating against 0.69). Dropping a 4 KB `rep stosq`: 1.2%, under
+  the floor. Folding the bias correction into the multiply-add's own
+  accumulator lane: **−18.5% of the instructions and +1.9% cycles**, because
+  the `vpxor` it replaces is a zeroing idiom that occupies no execution unit
+  and the load that replaces it joins the chain the arithmetic waits on.
+
+  Three of the four cut instructions by four to eighteen per cent and none
+  cut cycles. There is no front-end slack left in that kernel; the next thing
+  to try has to shorten a dependency chain or move fewer bytes.
+
 - **Both of attention's loops moved into the kernel that scores — four per
   cent of every instruction a prompt executes.** A profile of the long prompt
   put `head_scores` at 6.7 per cent of the processor's time and **forty-six
