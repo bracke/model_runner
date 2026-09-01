@@ -90,10 +90,19 @@ layout(std430, binding = 2) writeonly buffer Result  { float     y[]; };
 //  sixteen vectors with zeros.
 layout(std430, binding = 3) readonly  buffer Halves  { float16_t x[]; };
 
+//  And the same buffer written. A product whose answer is read only in half
+//  precision -- the two arms of a gated feed-forward are, because the step
+//  that combines them reads halves -- writes it here instead of writing
+//  binary32 into the result buffer that nothing would then read.
+layout(std430, binding = 3) writeonly buffer Made { float16_t made[]; };
+
 layout(push_constant) uniform Shape {
     uint rows;
     uint columns;
     uint count;
+    //  Where this product's answer goes in the half-precision buffer, in
+    //  halves and plus one, or zero for the binary32 answer this has always
+    //  written. Plus one because zero is a real place.
     uint first;
     uint format;
     uint base;
@@ -950,10 +959,19 @@ void main() {
     //  the tile is stored column major with the row count as its stride.
     for (uint i = 0u; i < AR; ++i) {
         for (uint j = 0u; j < AV; ++j) {
-            coopMatStore(acc[i][j], y,
-                         (vec0 + j * 16u) * shape.rows + row0 + i * 16u,
-                         shape.rows,
-                         gl_CooperativeMatrixLayoutColumnMajor);
+            uint where = (vec0 + j * 16u) * shape.rows
+                         + row0 + i * 16u;
+
+            if (shape.first > 0u) {
+                coopMatStore
+                  (coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                           gl_MatrixUseAccumulator> (acc[i][j]),
+                   made, shape.first - 1u + where, shape.rows,
+                   gl_CooperativeMatrixLayoutColumnMajor);
+            } else {
+                coopMatStore(acc[i][j], y, where, shape.rows,
+                             gl_CooperativeMatrixLayoutColumnMajor);
+            }
         }
     }
 }

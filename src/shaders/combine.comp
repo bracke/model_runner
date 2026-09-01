@@ -33,6 +33,12 @@ layout(std430, binding = 2) writeonly buffer Out  { float y[]; };
 //  between them does not run.
 layout(std430, binding = 3) writeonly buffer Halves { float16_t h[]; };
 
+//  And the same buffer read, for the arms. Where the two products that make
+//  them write half precision -- which they may, because nothing but this
+//  step reads them -- the arms come from here rather than through bindings
+//  nought and one, and half the bytes cross for each.
+layout(std430, binding = 3) readonly  buffer Arms   { float16_t a[]; };
+
 layout(push_constant) uniform Shape {
     //  How many elements each arm holds.
     uint width;
@@ -60,8 +66,12 @@ layout(push_constant) uniform Shape {
     //  have. Zero means write the binary32 answer as this always did.
     uint room;
 
-    uint unused_first;
-    uint unused_packing;
+    //  Where the two arms are in the half-precision buffer, in halves and
+    //  plus one, or zero for arms read as binary32 through bindings nought
+    //  and one. Plus one because zero is a real place.
+    uint gate_at;
+    uint up_at;
+
     uint unused_base;
 } shape;
 
@@ -96,16 +106,19 @@ void main() {
         return;
     }
 
-    float gate = g[index];
+    bool  halves = shape.gate_at > 0u;
+
+    float gate = halves ? float (a[shape.gate_at - 1u + index]) : g[index];
+    float other = halves ? float (a[shape.up_at - 1u + index]) : u[index];
     float made;
 
     if (shape.unit == 2) {
-        made = gate + u[index];
+        made = gate + other;
     } else {
         float activated =
           shape.unit == 0 ? sigmoid_weighted(gate) : gaussian(gate);
 
-        made = activated * u[index];
+        made = activated * other;
     }
 
     if (halved) {

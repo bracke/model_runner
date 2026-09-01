@@ -1574,12 +1574,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.418 s | **0.259 s** |
-| -- evaluating the prompt | 0.066 s | 0.032 s |
-| -- generating | 0.351 s | **0.228 s** |
-| -- processor time | 1.90 s | **0.06 s** |
-| 110-token prompt, nothing generated | 0.439 s | **0.106 s** |
-| -- processor time | 2.83 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.428 s | **0.259 s** |
+| -- evaluating the prompt | 0.063 s | 0.030 s |
+| -- generating | 0.360 s | **0.229 s** |
+| -- processor time | 1.90 s | **0.08 s** |
+| 110-token prompt, nothing generated | 0.455 s | **0.103 s** |
+| -- processor time | 2.84 s | **0.02 s** |
 
 All six cells were taken in one sitting on 2026-08-31, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
@@ -1598,7 +1598,7 @@ too`, which is why they are there.
 
 **The device wins both runs now, and spends a twentieth of the processor's
 time doing it** on the short run and a hundredth on the long one. Its
-110-token prompt has gone from 1.951 s to 0.106 s. Six changes took the
+110-token prompt has gone from 1.951 s to 0.103 s. Six changes took the
 first two thirds of that, to 0.280 s -- the default batch, the results a
 product reads back, the activation it writes, the kind of memory those
 results are read out of, the width of a workgroup, and -- last and largest -- the batch computed as a
@@ -1737,7 +1737,7 @@ why the left column has moved twice in this table's life and the right one has
 barely moved at all. Over eight pairs taken on an earlier and quieter machine
 the processor's short run ranged from 1.42 to 2.17 s and the device's from
 1.21 to 1.80, with the device below the processor in seven of the eight; the
-processor's short run is 0.418 s now and the device's 0.259, both below the
+processor's short run is 0.428 s now and the device's 0.259, both below the
 whole of those ranges, which is the program rather than the machine. The two
 columns have swapped which of them the table is about since that paragraph
 was written: the device wins both runs and the long one by four times.
@@ -6533,33 +6533,33 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **251.1 t/s** | 33.9 t/s |
-| llama.cpp, processor | 343.7 t/s | 39.4 t/s |
-| model_runner, device | 1047.6 t/s | **49.9 t/s** |
-| llama.cpp, device | 1638.7 t/s | 56.2 t/s |
+| model_runner, processor | **242.8 t/s** | 33.5 t/s |
+| llama.cpp, processor | 343.2 t/s | 39.5 t/s |
+| model_runner, device | 1078.4 t/s | **50.0 t/s** |
+| llama.cpp, device | 1577.7 t/s | 56.1 t/s |
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **234.0 t/s** | 33.9 t/s |
-| llama.cpp, processor | 264.5 t/s | 39.3 t/s |
-| model_runner, device | **1590.8 t/s** | 49.9 t/s |
-| llama.cpp, device | 1759.8 t/s | 55.7 t/s |
+| model_runner, processor | **231.6 t/s** | 33.5 t/s |
+| llama.cpp, processor | 265.1 t/s | 38.7 t/s |
+| model_runner, device | **1699.4 t/s** | 50.0 t/s |
+| llama.cpp, device | 1811.0 t/s | 55.8 t/s |
 
 **The longer prompt is the harder one and the quieter one, and it took this
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
 The gap is wider on the device and narrower on the processor: **1.15 times
-there against 1.37 at the shorter length, and 1.11 on the device against
-1.56.** Attention grows with the square of the context and it
+there against 1.41 at the shorter length, and **1.07** on the device against
+1.46.** Attention grows with the square of the context and it
 is the part of a layer this program is furthest behind on, so a table taken
 at a hundred and ten tokens reads a little kinder than the work deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±3 on 264.5 at 1419 tokens against ±29 on 343.7 at
+three runs it is **±1 on 265.1 at 1419 tokens against ±35 on 343.2 at
 110**, and the same 1419 figure read 224.9 ±20 half an hour earlier on a
 machine that was not quiet -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
@@ -6576,8 +6576,8 @@ On the processor at 110 tokens: **1.2 times slower generating and 1.3 times
 slower reading a prompt** -- the generating figure has read 1.2 five times, 1.3 and 1.4 across sittings, the first four of them
 after `### The wake, not the work`, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, **1.1** and **1.6**,
-where the sittings before this one said 1.1 and 1.6, then 1.1 and 1.5, then 1.2 and 1.4, then 1.2 and 1.7, then 1.2 and 1.6, then 1.2 and 1.6, then 1.2 and 1.7, then 1.3 and 1.7, then 1.2 and 2.1, then 1.3 and 2.1, then 1.3 and 2.3, then 1.2 and 2.4, then 1.3 and 2.5, then 1.3 and 2.7, then 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
+reading of this table said 3.3 and 16. On the device, **1.1** and **1.5**,
+where the sittings before this one said 1.1 and 1.6, then 1.1 and 1.6, then 1.1 and 1.5, then 1.2 and 1.4, then 1.2 and 1.7, then 1.2 and 1.6, then 1.2 and 1.6, then 1.2 and 1.7, then 1.3 and 1.7, then 1.2 and 2.1, then 1.3 and 2.1, then 1.3 and 2.3, then 1.2 and 2.4, then 1.3 and 2.5, then 1.3 and 2.7, then 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
 1.4 and 2.6, then 1.4 and 2.5, then 1.4 and 3.0, then 1.4 and 3.6, then 1.4 and 3.8, then 1.4
 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and
 10.1. Both device rows have moved for a named reason:
@@ -6595,9 +6595,10 @@ number in it moved, and it cannot ask the second question without knowing
 which numbers belong to which figure. Reading the table against its own
 prose is what caught it, which is a thing only a person does.
 
-**The device row is now clear of llama.cpp's processor row** -- 49.9 against
-39.4 in this sitting, more than a quarter ahead, where for twenty-one
-sittings the two sat on top of each other: 50.6 against 39.2, 50.6 against
+**The device row is now clear of llama.cpp's processor row** -- 50.0 against
+39.5 in this sitting, more than a quarter ahead, where for twenty-one
+sittings the two sat on top of each other: 49.9 against 39.4, 50.6 against
+39.2, 50.6 against
 39.4, 46.6 against
 39.4, 47.8 against
 39.5, 47.0 against 39.6, 48.5 against 39.7, 48.0 against 39.6, 46.2 against 39.7, 44.4 against 39.6, 48.5 against 40.1, 44.5 against 39.5, 44.4 against 39.3, 45.8 against 39.4, 43.8 against 39.6, 42.3 against 40.4, 40.1
@@ -6612,8 +6613,8 @@ between it and llama.cpp's own device figure is 1.2 times.
 
 The processor's generating row is the other kind of gap. It reads every
 weight once a token and does one multiply with each, so the bus answers
-rather than the arithmetic: llama.cpp's 39.4 t/s is about 45 GB/s of this
-model and 33.9 is about 39. What is left there is a gap in the kernels --
+rather than the arithmetic: llama.cpp's 39.5 t/s is about 45 GB/s of this
+model and 33.5 is about 38. What is left there is a gap in the kernels --
 ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
 and this measures -- rather than a gap in what the program is doing.
 
@@ -6657,8 +6658,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.438 s
-and 64 in 1.887 s on the processor, 0.105 s and 1.283 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.453 s
+and 64 in 1.911 s on the processor, 0.102 s and 1.281 s on the device,
 medians of three as everywhere else here.
 
 **The blend two sections above does not show in this table and cannot**,
@@ -6671,13 +6672,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 819.8 t/s rather
-than 343.7 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 701.4 t/s rather
+than 343.2 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 49.9 t/s
-now, against 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 50.0 t/s
+now, against 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -9629,49 +9630,77 @@ left is fewer bytes: the two feed-forward arms exchanging half precision
 rather than binary32, about twenty-three megabytes a layer. That was built,
 and the section below is what it cost.
 
-### The arms in half precision, and the buffer that ate it
+### The arms in half precision -- and a control that was wrong
 
 The two arms of a gated feed-forward are read by the step that combines them
 and by nothing else, and that step can read half precision. So the products
 that make them can write half precision -- the same rule as `### The binary32
-nobody reads`, extended one step further: a product whose only reader is a
-combining step that reads halves need not write binary32 either.
+nobody reads`, one step further: a product whose only reader is a combining
+step that reads halves need not write binary32 either.
 
-Built. The product's accumulator is converted and stored as half precision
-where it is wanted, and the combining step reads both arms out of the
-half-precision buffer instead of through the two bindings it used. **It is
-worth five and a half per cent** -- 0.848, 0.853 and 0.862 seconds against
-0.904, 0.896 and 0.901, ahead in all three rounds -- and the answers change,
-as they must, because the gate's activation is now computed from
-half-precision values.
+**It is worth four and a half per cent**, and the way there is worth more
+than the number.
 
-**And the answers changed every run.** Three runs of the same binary gave
-`2b4795a8775ecaa4`, `70a2599caf019dd7` and `47d5e948c41ae62a`. That is not a
-wrong answer, it is a race, and it was caught only because the measuring
-tool prints a digest for every run rather than a pass or a fail.
+The first build had the buffer hold two regions, one for each arm.
+Alternated, it read 0.845 and 0.847 seconds against 0.904 and 0.896 -- and
+**the answers changed every run**: `d2c51a052ab789a2`, `e7fae034fbfe106e`,
+and three others besides. That is not a wrong answer, it is a race, and it
+was caught only because the measuring tool prints a digest for every run
+rather than a pass or a fail.
 
-The race is the layout. The buffer held one region and everything wrote at
-the front of it, which was safe while only one answer was ever live. Two
-arms need two places -- but three answers are live at once, not two: **the
-normalization both arms read is still sitting there** when the first arm
-writes over it, and whether the second arm reads it before or after is a
-matter of timing.
+The race is the layout. Two arms need two places, but **three answers are
+live at once**: the normalization both arms read is still sitting in the
+first region when the first arm writes over it, and whether the second arm
+reads it before or after is timing. Three regions, and the race is gone --
+the same digest in five runs.
 
-So three regions. And three regions is where it dies. The buffer goes from
-eleven and a half megabytes to seventeen, and that alone costs
-**twenty-two per cent**: with the arms left in binary32 and nothing changed
-but the size of the allocation, the prompt reads 1.102 and 1.106 seconds
-against 0.901, at the published digest. The same layout at two regions reads
-0.85. It is not the regions and not the arms -- it is the number of bytes
-asked for.
+**And then a control said the three regions cost twenty-two per cent, and
+the control was wrong.** Two readings, taken at `--repeats 1` with no test
+of what else the machine was doing, put a three-region allocation at 1.102
+and 1.106 seconds against 0.901. On that evidence the whole change was
+thrown away and written up as refused.
 
-Why a seventeen-megabyte buffer should cost a fifth of a prompt on a part
-that is already holding 1.1 gigabytes of weights is not explained here. It
-is recorded because it is repeatable, controlled, and larger than anything
-else this section has measured.
+It does not reproduce. The allocation swept over five sizes, medians of
+three, two rounds, with the arms left in binary32 throughout:
 
-Five and a half per cent for the arms, twenty-two for the room they need to
-be correct in. Not kept.
+| half-precision buffer | 1419-token device prompt |
+| --- | ---: |
+| one region | 0.893, 0.894 s |
+| two | 0.882, 0.894 s |
+| three | 0.891, 0.881 s |
+| four | 0.894, 0.910 s |
+| six | 0.890, 0.894 s |
+
+Flat. The size of that allocation costs nothing, and the twenty-two per cent
+was the machine and not the code.
+
+So all four cells were measured together, alternated, each waiting for the
+machine to fall below 1.05:
+
+| | 1419-token device prompt | tokens |
+| --- | ---: | --- |
+| binary32 arms, one region | 0.881, 0.891 s | as published |
+| binary32 arms, three regions | 0.893, 0.885 s | as published |
+| **halved arms, two regions** | 0.845, 0.847 s | **differs every run** |
+| **halved arms, three regions** | **0.851, 0.842 s** | **as published** |
+
+The three-region form is as fast as the racing one and gives the same
+tokens. It is kept. The device reads the long prompt at **1699 tokens a
+second** and the gap to llama.cpp is **1.07**.
+
+**The same tokens, and not by accident.** The digest is of the generated
+text, and the arms crossing in half precision moves the logits in the last
+bits without moving any argmax -- which is what the sweep is for, and it
+reads 28344 sequences across nine architectures and fifteen formats with
+none outside tolerance. That is also why the racing version's digests were
+evidence of a race and not of rounding: rounding does not change the text,
+and garbage does.
+
+**Three readings taken at `--repeats 1` have now pointed the wrong way in
+this section**, and this one nearly cost a change that was correct and worth
+four and a half per cent. The rule this file has had for months -- alternate
+the arms, take medians of three, wait for the machine -- is not a
+formality, and a control deserves it as much as a candidate does.
 
 ### The activation quantizer, widened and refused
 

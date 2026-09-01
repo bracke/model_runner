@@ -1229,6 +1229,12 @@ private
       Half_Memory : System.Address := System.Null_Address;
       Half_Bytes  : Interfaces.Unsigned_64 := 0;
 
+      --  And how much of it one region is. The buffer holds two: a gated
+      --  feed-forward has two arms alive at once, so the products that make
+      --  them cannot both write at the front of it. Everything else uses
+      --  the first region and the second stands empty.
+      Half_Region : Interfaces.Unsigned_64 := 0;
+
       Result_Buffer : System.Address := System.Null_Address;
       Result_Memory : System.Address := System.Null_Address;
       Result_Bytes  : Interfaces.Unsigned_64 := 0;

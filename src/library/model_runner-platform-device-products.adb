@@ -2825,6 +2825,10 @@ package body Model_Runner.Platform.Device.Products is
       Packing : Weight_Packing;
       Base    : Interfaces.Unsigned_64;
       Fresh   : Boolean;
+
+      --  Where the answer goes in the half-precision buffer, in halves and
+      --  plus one, or zero for the binary32 answer into the result buffer.
+      Into    : Interfaces.Unsigned_64;
       Good    : out Boolean)
    is
       Bind_Pipeline : constant Bind_Pipeline_Call :=
@@ -2884,7 +2888,7 @@ package body Model_Runner.Platform.Device.Products is
            (Rows    => C.unsigned (Rows),
             Columns => C.unsigned (Columns),
             Count   => C.unsigned (Count),
-            First   => 0,
+            First   => C.unsigned (Into),
             Packing => C.unsigned (Weight_Packing'Pos (Packing)),
             Base    => C.unsigned (Base));
       begin
@@ -3062,14 +3066,21 @@ package body Model_Runner.Platform.Device.Products is
          Item.Result_Bytes := Result_Bytes;
       end if;
 
-      if Item.Half_Bytes < Half_Bytes then
+      --  Two regions of it, because a gated feed-forward has both its arms
+      --  alive at once and the products that make them cannot both write at
+      --  the front. Everything else uses the first and the second stands
+      --  empty.
+      Item.Half_Region := Half_Bytes;
+
+      if Item.Half_Bytes < 3 * Half_Bytes then
          Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
-         Take (Item, Half_Bytes, Item.Half_Buffer, Item.Half_Memory, Good);
+         Take (Item, 3 * Half_Bytes,
+               Item.Half_Buffer, Item.Half_Memory, Good);
          if not Good then
             Release_Borrowed;
             return;
          end if;
-         Item.Half_Bytes := Half_Bytes;
+         Item.Half_Bytes := 3 * Half_Bytes;
       end if;
 
       --  Still a map and an unmap of its own, unlike the read-back below.
@@ -3201,7 +3212,7 @@ package body Model_Runner.Platform.Device.Products is
          if Tiled then
             Tile_Product
               (Item, Rows, Columns, Count, Vectors_Room, Packing,
-               Weight_Base, Fresh => True, Good => Good);
+               Weight_Base, Fresh => True, Into => 0, Good => Good);
 
             if not Good then
                Release_Borrowed;
@@ -4335,9 +4346,14 @@ package body Model_Runner.Platform.Device.Products is
             if Uses_Matrix (Item, This.Packing, This.Rows,
                             This.Columns, Count)
             then
+               --  What it reads, and what it may be asked to write: a
+               --  product whose answer is wanted only in half precision
+               --  writes it here rather than into the result buffer.
                Half_Bytes := Interfaces.Unsigned_64'Max
                  (Half_Bytes,
-                  Interfaces.Unsigned_64 (This.Columns)
+                  Interfaces.Unsigned_64'Max
+                    (Interfaces.Unsigned_64 (This.Columns),
+                     Interfaces.Unsigned_64 (This.Rows))
                   * Interfaces.Unsigned_64 (Room) * 2);
             end if;
 
@@ -4591,14 +4607,21 @@ package body Model_Runner.Platform.Device.Products is
          Item.Result_Bytes := Result_Bytes;
       end if;
 
-      if Item.Half_Bytes < Half_Bytes then
+      --  Two regions of it, because a gated feed-forward has both its arms
+      --  alive at once and the products that make them cannot both write at
+      --  the front. Everything else uses the first and the second stands
+      --  empty.
+      Item.Half_Region := Half_Bytes;
+
+      if Item.Half_Bytes < 3 * Half_Bytes then
          Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
-         Take (Item, Half_Bytes, Item.Half_Buffer, Item.Half_Memory, Good);
+         Take (Item, 3 * Half_Bytes,
+               Item.Half_Buffer, Item.Half_Memory, Good);
          if not Good then
             Release_All;
             return;
          end if;
-         Item.Half_Bytes := Half_Bytes;
+         Item.Half_Bytes := 3 * Half_Bytes;
       end if;
 
       --  And the angles, where anything turns: written into a standing
@@ -4933,6 +4956,12 @@ package body Model_Runner.Platform.Device.Products is
          --  below from what reads each of them.
          Halved    : array (1 .. Sequence_Limit) of Boolean :=
            [others => False];
+
+         --  And which region of the half-precision buffer each writes
+         --  into. Three, because a gated feed-forward has three answers
+         --  alive at once: the normalization both arms read, and the arms.
+         Region    : array (1 .. Sequence_Limit) of Natural :=
+           [others => 0];
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -4993,7 +5022,15 @@ package body Model_Runner.Platform.Device.Products is
                        or else ((That.Chained or else That.Blends
                                  or else That.Attends)
                                 and then That.Reads = 0
-                                and then Later = Which + 1);
+                                and then Later = Which + 1)
+
+                       --  A combining step that names neither arm reads
+                       --  the two before it, so the further one is two
+                       --  back and not one.
+                       or else (That.Blends
+                                and then That.Reads = 0
+                                and then That.Reads_Two = 0
+                                and then Later = Which + 2);
                   begin
                      if Reads_It then
                         Asked := Asked + 1;
@@ -5030,6 +5067,63 @@ package body Model_Runner.Platform.Device.Products is
                           >= Interfaces.Unsigned_64 (Steps.Items (Which).Rows)
                              * Interfaces.Unsigned_64 (Whole_Tiles (Count)) * 2
                  and then Only_Halved (Which);
+            end loop;
+
+            --  And the two arms of a gated feed-forward. Their only reader
+            --  is the step that combines them, and where that step reads
+            --  half precision they need write nothing else. Both are alive
+            --  at once, so the nearer one goes to the second region.
+            for Which in 1 .. Steps.Held loop
+               if not Halved (Which)
+                 and then not Steps.Items (Which).Kept
+                 and then Uses_Matrix (Item, Steps.Items (Which).Packing,
+                                       Steps.Items (Which).Rows,
+                                       Steps.Items (Which).Columns, Count)
+               then
+                  declare
+                     Only : Integer := -1;
+                     Many : Boolean := False;
+                  begin
+                     for Later in Which + 1 .. Steps.Held loop
+                        declare
+                           That : Step renames Steps.Items (Later);
+
+                           Reads_It : constant Boolean :=
+                             That.Reads = Which
+                             or else That.Reads_Two = Which
+                             or else ((That.Chained or else That.Blends
+                                       or else That.Attends)
+                                      and then That.Reads = 0
+                                      and then Later = Which + 1)
+                             or else (That.Blends
+                                      and then That.Reads = 0
+                                      and then That.Reads_Two = 0
+                                      and then Later = Which + 2);
+                        begin
+                           if Reads_It then
+                              if Only = -1 then
+                                 Only := Later;
+                              else
+                                 Many := True;
+                              end if;
+                           end if;
+                        end;
+                     end loop;
+
+                     if not Many
+                       and then Only > 0
+                       and then Steps.Items (Only).Blends
+                       and then Steps.Items (Only).Unit /= 2
+                       and then Halved (Only)
+                     then
+                        Halved (Which) := True;
+
+                        --  Neither arm may sit where the normalization
+                        --  they both read is still sitting.
+                        Region (Which) := (if Which = Only - 1 then 2 else 1);
+                     end if;
+                  end;
+               end if;
             end loop;
          end;
 
@@ -5310,11 +5404,40 @@ package body Model_Runner.Platform.Device.Products is
                      Over : constant Natural :=
                        (if Halved (Index) then Room else Span);
 
+                     --  Where the two arms are. A gated pair whose
+                     --  products were told to write half precision is read
+                     --  out of the half-precision buffer instead of through
+                     --  bindings nought and one, and half the bytes cross.
+                     Gate_Step : constant Natural :=
+                       (if This.Reads /= 0 then This.Reads
+                        elsif Index > 2 then Index - 2 else 0);
+                     Up_Step   : constant Natural :=
+                       (if This.Reads_Two /= 0 then This.Reads_Two
+                        elsif Index > 1 then Index - 1 else 0);
+
+                     Arms : constant Boolean :=
+                       This.Unit /= 2
+                       and then Gate_Step in 1 .. Steps.Held
+                       and then Up_Step in 1 .. Steps.Held
+                       and then Halved (Gate_Step)
+                       and then Halved (Up_Step);
+
+                     function Sits (Which : Natural)
+                       return Interfaces.Unsigned_64
+                     is (Interfaces.Unsigned_64 (Region (Which))
+                         * (Item.Half_Region / 2) + 1);
+
                      Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (Span),
                         Columns => C.unsigned (This.Unit),
                         Count   =>
                           (if Halved (Index) then C.unsigned (Room) else 0),
+                        First   =>
+                          (if Arms then C.unsigned (Sits (Gate_Step))
+                           else 0),
+                        Packing =>
+                          (if Arms then C.unsigned (Sits (Up_Step))
+                           else 0),
                         others  => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
@@ -5353,6 +5476,11 @@ package body Model_Runner.Platform.Device.Products is
                        (Item, This.Rows, This.Columns, Count,
                         Whole_Tiles (Count), This.Packing,
                         Places (Index).Base, Fresh => not Again,
+                        Into =>
+                          (if Halved (Index)
+                           then Interfaces.Unsigned_64 (Region (Index))
+                                * (Item.Half_Region / 2) + 1
+                           else 0),
                         Good => Done);
 
                      if not Done then
