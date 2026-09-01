@@ -4270,6 +4270,59 @@
 #   load:  under 1.4 throughout
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-01, the activation quantizer widened: seven tenths of a per cent,
+# and it does not answer the same.
+#
+#   The entry above finds quantize_blocks running on a hundred and
+#   twenty-eight bit lanes -- addps, cmpleps and movups on xmm -- because
+#   its unit compiles at the baseline this library targets, while only three
+#   files in the project file carry -march=x86-64-v3 or -v4.
+#
+#   Widened as a probe rather than as a change: the whole unit compiled for
+#   x86-64-v3, which is not shippable, because the binary would then fault
+#   on a processor without that set and the whole point of isolating the
+#   wide code into units chosen at run time is that it does not. The probe
+#   answers what the width is worth before four files of plumbing are
+#   written to get it safely.
+#
+#   It is worth seven tenths of one per cent. The wall clock read 5.809 s
+#   against about 6.05, which looks like four -- but the processor's prompt
+#   column swings by more than that between sittings, and this file has said
+#   so for months. The profile is the honest measure:
+#
+#                          baseline   widened
+#     quantize_blocks         2.0 %    1.27 %
+#     everything else                 unmoved
+#
+#   And it does not answer the same. The 1419-token prompt comes back
+#   b8887185cdd328a7 where it has always been 1a26d24d33b8957b, and
+#   reverting the switch restores it.
+#
+#   Nothing in that unit reduces across lanes: its only accumulation is an
+#   Integer_32 total, which is exact in any order, and Block_Extent takes a
+#   maximum, which is associative. So what changed is the rounding.
+#   Real'Rounding is ties away from zero; the baseline reaches that by
+#   adding and truncating and the vectorised form reaches for a rounding
+#   instruction, and a value landing exactly on a half then goes the other
+#   way. Three million activations a batch is enough for that to show, and
+#   it is a reminder that "no reduction, therefore bit-exact" is not a proof
+#   -- it was the reasoning that made this look safe to widen.
+#
+#   Seven tenths of a per cent, four files of plumbing, and a different
+#   answer. Not built.
+#
+#   Worth setting beside the entry above it, because the two are the same
+#   lesson from opposite ends. Widening the blending run was bit-exact and
+#   slower. Widening the quantizer is faster and not bit-exact. Neither is
+#   what a wider lane was expected to give, and in both the reason is a
+#   property of the instruction rather than of the lane: one is
+#   double-pumped on this part, and the other rounds differently.
+#
+#   Nothing kept, nothing restamped: the tree is as commit 6dbbf11 left it.
+#
+#   load:  under 1.4 throughout
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels D86518E765C42652 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

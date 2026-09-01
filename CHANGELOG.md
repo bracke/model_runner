@@ -7,6 +7,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The activation quantizer widened: worth 0.7 per cent, and it does not
+  answer the same.** `quantize_blocks` runs on 128-bit `xmm` because its
+  unit compiles at baseline. Compiled for `x86-64-v3` as a probe — not
+  shippable, since the binary would then fault on a processor without it —
+  the wall clock read 5.809 s against about 6.05, which looked like four per
+  cent. The profile is the honest measure: **`quantize_blocks` falls from
+  2.0 per cent of the prompt to 1.27** and every other share stands still.
+
+  And the 1419-token prompt comes back `b8887185cdd328a7` where it has
+  always been `1a26d24d33b8957b`; reverting the switch restores it. Nothing
+  in that unit reduces across lanes — its only accumulation is an integer
+  total, exact in any order — so what changed is the rounding.
+  `Real'Rounding` is ties away from zero, which the baseline reaches by
+  adding and truncating and the vectorised form by a rounding instruction; a
+  value landing exactly on a half goes the other way, and three million
+  activations a batch is enough for that to show.
+
+  Seven tenths of a per cent, four files of plumbing to get it safely, and a
+  different answer. Not built.
+
+  Worth setting beside the entry below, because they are the same lesson
+  from opposite ends: widening the blending run was **bit-exact and
+  slower**; widening the quantizer is **faster and not bit-exact**. In both
+  the reason is a property of the instruction rather than of the lane — one
+  is double-pumped, the other rounds differently.
+
 - **Five hundred and twelve bits, on a part that has none.** A profile of
   the processor's 1419-token prompt puts 62.3 per cent in the strip kernel
   and **14.1 in attention** — `head_scores` 6.5, `blend_run` 5.6,

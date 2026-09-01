@@ -9630,6 +9630,8 @@ rather than binary32, about twenty-three megabytes a layer, which changes
 what the program computes and so would be the sweep's to judge rather than a
 digest's.
 
+### The activation quantizer, widened and refused
+
 The processor's two small kernels are a different matter and the same
 sentence as the section above. `quantize_blocks` is two per cent of a
 processor prompt and its annotation is `addps`, `cmpleps`, `movups` on
@@ -9642,6 +9644,37 @@ runs on a processor that has none of it. What those two want is the same
 treatment the row kernels already have -- a wide variant beside the
 baseline, chosen when the host says yes -- and the measurement above says to
 widen them to two hundred and fifty-six bits and stop there.
+
+So the quantizer was widened, as a probe rather than as a change: the whole
+unit compiled for `x86-64-v3`, which is not shippable because the binary
+would then fault on a processor without it, but which answers what the
+width is worth before four files of plumbing are written to get it safely.
+
+**It is worth seven tenths of one per cent.** The wall clock read 5.809
+seconds against about 6.05, which looked like four -- but that column swings
+by more than that between sittings, and the profile is the honest measure:
+`quantize_blocks` falls from **2.0 per cent of the prompt to 1.27**, and
+every other share stands still.
+
+**And it does not answer the same.** The 1419-token prompt comes back
+`b8887185cdd328a7` where it has always been `1a26d24d33b8957b`, and reverting
+the switch brings it back. Nothing in that unit reduces across lanes -- the
+only accumulation in it is an integer total, which is exact in any order --
+so what changed is the rounding. `Real'Rounding` is ties away from zero, and
+the baseline reaches that by adding and truncating where the vectorised form
+reaches for a rounding instruction; a value landing exactly on a half then
+goes the other way. Three million activations a batch is enough for that to
+show.
+
+Seven tenths of a per cent, four files of plumbing, and an answer that
+differs. Not built.
+
+That is worth setting beside the section above it, because the two are the
+same lesson from opposite ends. Widening the blending run was **bit-exact
+and slower**. Widening the quantizer is **faster and not bit-exact**. Neither
+is what the width was expected to give, and in both the reason is a property
+of the instruction rather than of the lane: one is double-pumped, and the
+other rounds differently.
 
 And the normalization's six per cent of a device prompt is neither of the
 two things it looked like. Its second read of the row was refused last
