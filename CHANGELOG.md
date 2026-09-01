@@ -7,6 +7,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Two accumulators in the generating kernel — 17% at one worker, refused
+  because it breaks drafting.** The page-table suspicion is refuted first:
+  11.1 million second-level TLB misses over 64 tokens is 173 000 a token, ~0.8%
+  of the run. What *is* the wall below three workers is the single binary32
+  accumulator per row — consecutive blocks form a dependent multiply-add
+  chain. Two accumulators read 3.657 s against 4.388 at one worker, 1.855
+  against 1.937 at two, and 1.856 against 1.878 at seven: **17% down to 1%,
+  the fewer workers the more**, which is the shape every instruction cut on
+  this side has had.
+
+  It is refused for what it does to the answers, not what it does to the
+  clock. It moves the single-vector kernel only, and `Rows_By_Strips` cannot
+  follow — eighteen accumulators in `ymm8`–`ymm25` already, and doubling them
+  does not fit in 32 registers. The two kernels then sum in different orders,
+  and **drafting depends on their agreeing**: with the change in, the drafted
+  twelve-token run printed `33f48397f89839f6` and the undrafted one
+  `5abff916f9d83ca6` — the guarantee `### Drafting` opens with, false in a
+  published figure.
+
+  Nothing caught it: 294/294, 28344 conformance sequences none outside
+  tolerance, and the with-and-without-a-draft test did not diverge on its own
+  model. The sitting's own table caught it, two digests one line apart.
+
+  The constraint is now written down: `Rows_Singly` and `Rows_By_Strips` must
+  sum a row's blocks in the same order and precision.
+
 - **The feed-forward's activation was running on one core — 9.7% of a
   processor prompt, and the long-prompt row is now level with llama.cpp.** A
   profile sorted by *thread* rather than by symbol shows `silu` and

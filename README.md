@@ -10078,6 +10078,66 @@ time when the samples are not evenly spread across the threads** -- and the
 whole point of a worker pool is that they are not.
 
 
+### Two accumulators, seventeen per cent, and the guarantee that stopped it
+
+The generating side reads 1.17 gigabytes a token and gets 40 GB/s where
+llama.cpp gets 46, so the first suspect was the page tables: 1.17 gigabytes
+through four-kilobyte pages is two hundred and eighty-five thousand of them,
+and a walk apiece would explain a good deal. Counted, it does not. **11.1
+million second-level TLB misses over sixty-four tokens** -- a hundred and
+seventy-three thousand a token, which at twenty-five cycles each is **eight
+tenths of one per cent** of the run.
+
+What is the wall, below three workers, is the accumulator. `Rows_Singly`
+keeps one binary32 accumulator for a row and adds each block into it with a
+fused multiply-add, so consecutive blocks form a dependent chain four cycles
+long apiece. Two accumulators -- even blocks into one, odd into the other,
+folded once at the end -- read:
+
+| workers | one accumulator | two |
+| --- | ---: | ---: |
+| 1 | 4.388 s | **3.657 s** |
+| 2 | 1.937 s | **1.855 s** |
+| 3 | 1.854 s | **1.801 s** |
+| 5 | 1.863 s | **1.829 s** |
+| 7 | 1.878 s | **1.856 s** |
+
+**Seventeen per cent at one worker and one at seven**, and the shape is the
+one every instruction cut on this side has had: the chain is the wall while
+one core is running and the bus is the wall once three are.
+
+**It is refused, and not for the speed.** It moves two digests -- the
+twelve-token run from `33f48397f89839f6` to `5abff916f9d83ca6` and the
+sixty-four-token one from `3248ac1bb7011de0` to `448c2ed68ec342ee` -- and
+both of those are answers this program already gives elsewhere: they are what
+`--arith f32` says and what the device says. The two-accumulator sum is
+*nearer* the exact one, not further from it.
+
+But it moves only the single-vector kernel, and the batch kernel cannot
+follow: `Rows_By_Strips` already holds eighteen accumulators in `ymm8` to
+`ymm25`, one for every row and vector of its tile, and doubling them does not
+fit in thirty-two registers. The two then sum a row's blocks in different
+orders -- **and drafting depends on their agreeing.** A draft proposes a
+token at a time and the model checks several at once, so one answer comes
+from the strip kernel and the other from the single-vector one. In the
+sitting taken with the change in, the drafted twelve-token run printed
+`33f48397f89839f6` and the undrafted one `5abff916f9d83ca6`: the guarantee
+`### Drafting` opens with, false in a published figure.
+
+**Nothing caught it.** The suite passed 294 of 294, the sweep read 28344
+sequences with none outside tolerance, and the test that runs a prompt with
+and without a draft did not diverge on its own model. What caught it was the
+sitting's own table, printing the two digests one line apart -- a person
+reading rather than a check firing, which is the second time on this page
+that has been the case.
+
+So the constraint is worth stating, because nothing enforces it and it is not
+obvious from either kernel: **`Rows_Singly` and `Rows_By_Strips` must sum a
+row's blocks in the same order and the same precision.** They do today
+because both were written with one accumulator to a row, and either one
+changing alone breaks drafting.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same

@@ -5001,6 +5001,75 @@
 #   load:  0.80 at the first reading, 4.78 by the last
 #   model: TinyLlama-1.1B-Chat Q8_0, and Q4_K_M and Q2_K beside it
 #
+# 2026-09-01, two accumulators in the generating kernel: seventeen per cent
+# at one worker, and refused because of what it does to drafting.
+#
+#   First the cheap probe, and it is refuted. The generating side reads
+#   1.17 gigabytes a token through four-kilobyte pages, which is two hundred
+#   and eighty-five thousand of them, and a page walk apiece would be a
+#   plausible reason to be at 40 GB/s where llama.cpp is at 46. Counted:
+#   11.1 million second-level TLB misses over sixty-four tokens, a hundred
+#   and seventy-three thousand a token, which at twenty-five cycles each is
+#   about eight tenths of one per cent of the run. It is not the page
+#   tables.
+#
+#   What it is, below three workers, is the accumulator. Rows_Singly keeps
+#   one binary32 accumulator for a row and adds a block into it with a fused
+#   multiply-add, so consecutive blocks are a dependent chain four cycles
+#   long apiece. Two accumulators, even blocks into one and odd into the
+#   other, folded once at the end:
+#
+#     one worker      4.447, 4.388, 4.367 s generating
+#                     3.641, 3.672 s with two
+#     two workers     1.947, 1.926 s against 1.867, 1.842
+#     three workers   1.883, 1.825 s against 1.801
+#     five workers    1.867, 1.858 s against 1.834, 1.824
+#     seven workers   1.871, 1.888, 1.878 s against 1.998, 1.856, 1.845
+#
+#   Seventeen per cent at one worker, four at two, three at three, two at
+#   five and one at seven. The fewer the workers the more it is worth, which
+#   is the same shape every instruction cut on this side has had: the chain
+#   is the wall while one core is running and the bus is the wall once three
+#   are.
+#
+#   Refused, and the reason is not the speed. It moves two digests -- the
+#   twelve-token run from 33f48397f89839f6 to 5abff916f9d83ca6 and the
+#   sixty-four-token one from 3248ac1bb7011de0 to 448c2ed68ec342ee -- and
+#   both of those are answers this program already gives elsewhere: they are
+#   what --arith f32 says and what the device says. So the two-accumulator
+#   sum is nearer the exact one, not further.
+#
+#   But it moves only the single-vector kernel, and the batch kernel cannot
+#   follow. Rows_By_Strips holds eighteen accumulators in ymm8 to ymm25, one
+#   for every row and vector of its tile, and doubling them does not fit in
+#   thirty-two registers. The two kernels then sum a row's blocks in
+#   different orders -- and drafting depends on their agreeing. In the
+#   sitting taken with the change in, the drafted twelve-token run printed
+#   33f48397f89839f6 and the undrafted one 5abff916f9d83ca6: a draft
+#   proposes a token at a time and the model checks several at once, so one
+#   answer comes from the strip kernel and the other from the single-vector
+#   one. The guarantee this repository states -- that a drafted run produces
+#   exactly what the model would have produced alone -- was false in a
+#   published figure.
+#
+#   Nothing caught it. The suite passed 294 of 294 and the sweep read 28344
+#   sequences with none outside tolerance; the test that runs a prompt with
+#   and without a draft did not diverge on its own model. What caught it was
+#   the sitting's own table, printing the two digests one line apart, which
+#   is a person reading rather than a check firing -- the second time in this
+#   file that has been the case.
+#
+#   So the constraint is worth writing down, because it is not obvious and
+#   nothing enforces it: Rows_Singly and Rows_By_Strips must sum a row's
+#   blocks in the same order and the same precision. They do today because
+#   both were written with one accumulator a row, and either one changing
+#   alone breaks drafting.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0, with Q2_K as the draft
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
