@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Three candidates priced, none kept, and the first one's premise
+  refuted.** The device prompt was said to carry ~35 ms of fixed cost,
+  because 110 and 1419 tokens do not lie on a line through the origin. With
+  every compute shader voided at once the 110-token prompt reads **0.008 s
+  against 0.104** — 92% is in the shaders and 8 ms is the host, the queue and
+  the readback together. The short prompt's gap is `matrix_product` costing
+  **0.80 ms a token against 0.425 at 1419**, which is occupancy, not
+  overhead; and it is not the batch (one batch of 1536 reads 0.845 s against
+  0.831 in three of 512).
+
+  It also found a limit of this repository's main measuring method: at 110
+  tokens each of five small kernels appears to cost ~32 ms alone and all five
+  together cost 35. Single-kernel removal stops measuring the kernel at that
+  length — `place` costs nothing at 1419 tokens and appears to cost 28 ms
+  here. Budgets belong on the long prompt.
+
+  The strip kernel's scale table is worth **3.5% of a processor prompt** as a
+  ceiling, and neither route reaches it: hoisting the per-block activation
+  scales out of the row loop is bit-exact and *slower* (6.083 s against
+  5.929), and moving the multiply into the insertion costs sixteen extra
+  `vmulps` a block against the three or four the table costs, while moving
+  every processor digest.
+
+  `quantize_blocks` and `mat_mul_range_packed` are not overheads. Removing
+  the first makes the prompt **14% slower** (the integer path refuses without
+  a quantized activation); removing the second takes it to 1.541 s, because
+  it dispatches the whole product rather than sitting beside it.
+
 - **The block scale in three instructions instead of six, in the one kernel
   that can spend them — and two corrections to the entry below.** Decoding a
   Q8_0 block scale with `vpinsrw` rather than two byte loads, a shift and an

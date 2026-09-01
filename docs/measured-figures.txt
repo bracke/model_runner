@@ -4832,6 +4832,94 @@
 #   load:  0.23 to 4.07 across the sitting, 0.48 to 0.51 in the quiet window
 #   model: TinyLlama-1.1B-Chat Q8_0, and Q4_K_M and Q2_K beside it
 #
+# 2026-09-01, three items priced, none kept, and one of the three premises
+# was wrong.
+#
+#   The device prompt has no fixed cost worth finding. The list said a
+#   110-token device prompt carries about thirty-five milliseconds that a
+#   1419-token one carries too, from the two lengths not lying on a line
+#   through the origin. Voided every compute shader at once, that prompt
+#   reads 0.008 s against 0.104 -- so ninety-two per cent of it is in the
+#   shaders and eight milliseconds is everything else. There is no fixed
+#   cost outside the work.
+#
+#   Where the short prompt's gap is instead: matrix_product costs 0.088 s of
+#   the 0.104 at 110 tokens and 0.604 of 0.850 at 1419, which is 0.80
+#   milliseconds a token against 0.425. The tile product is one and nine
+#   tenths times as expensive per token at the shorter length, and that is
+#   the whole of the 1.51 against 1.11.
+#
+#   Not the batch, which was the first thing asked. The long prompt in one
+#   batch of 1536 reads 0.845 s against 0.831 in three of 512; at 256 it is
+#   0.852, at 128 0.919, at 64 1.549. The short prompt is one batch at every
+#   size down to 128 and reads 0.102 to 0.103 throughout. Coarser is
+#   slightly worse and finer is much worse, and neither is the fixed cost.
+#
+#   And a limit of the method itself, worth writing down. Voiding one kernel
+#   at a time in the 110-token prompt:
+#
+#     none voided        0.104 s        rotate + place         0.075 s
+#     matrix_product     0.016          + norm                 0.072
+#     attention_matrix   0.072          five small together    0.069
+#     combine            0.073          all six                0.008
+#     norm               0.071
+#     rotate             0.074
+#     place              0.076
+#
+#   Each of the five small kernels appears to cost about thirty-two
+#   milliseconds alone and all five together cost thirty-five. That cannot
+#   be true of any of them. At a prompt this short, removing one kernel
+#   stops measuring that kernel -- place costs nothing at all at 1419
+#   tokens and appears to cost twenty-eight milliseconds here -- and only
+#   the two ends of the table can be trusted. Every earlier budget in this
+#   file was taken on the long prompt, where the same kernels do add up, and
+#   that is the length to take it at.
+#
+#   The strip kernel's scale table, priced and refused. It holds the weight
+#   scale times the activation scale, one number for every row, block and
+#   vector of a panel, and the insertion reads it as the broadcast operand
+#   of its fused multiply-add. Removing the multiply and the load that feeds
+#   it -- a build that answers wrongly, and only a ceiling -- reads:
+#
+#     as it is           5.842, 5.925, 5.853 s
+#                        329821, 329989 million instructions
+#     multiply removed   5.526, 5.686, 5.650 s
+#                        320482, 320493, 320499 million instructions
+#
+#   Three and a half per cent of the prompt and 2.9 of its instructions.
+#   Neither route to it works.
+#
+#   Reading the eight activation scales once for a block rather than once
+#   for each of the panel's four rows is bit for bit the same and slower:
+#   6.083 s against 5.929, and a Q4_K prompt 0.621 against 0.578. GNAT was
+#   already doing it; materializing the eight as an aggregate is what the
+#   change actually added.
+#
+#   Moving the multiply into the insertion does not pay either, and the
+#   arithmetic says so without a build. The table would go entirely: scale
+#   the converted dot product by the weight scale and let the multiply-add
+#   broadcast the activation scale straight out of the per-call table. But
+#   the insertion holds two rows and eight vectors, so that is sixteen extra
+#   vmulps for every block, against three or four instructions the table
+#   costs for the same block -- and it would move every processor digest,
+#   because (W x V) . dot rounds the scales together and V . (W . dot)
+#   rounds the scaled dot. Four times the work to be less exact.
+#
+#   The two small prompt kernels are not overheads at all. quantize_blocks
+#   reads 2.1 per cent of a prompt in a profile; removing it takes the
+#   prompt from 5.888 s to 6.734, because without a quantized activation
+#   the integer path refuses and the floating-point one runs instead. It is
+#   a purchase, not a cost. mat_mul_range_packed reads 3.4 per cent;
+#   removing it takes the prompt to 1.541 s, because it is the procedure
+#   that dispatches the whole product rather than a kernel beside it, and
+#   its share is only the part the strip kernels do not inline. Neither is
+#   a target and neither was ever three per cent of anything.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0 and Q4_K_M
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

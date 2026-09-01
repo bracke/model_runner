@@ -9941,6 +9941,82 @@ any instruction cut. Twenty-five lines of insertion and a branch for a third
 of a per cent is not a trade worth making.
 
 
+### Three items priced, and one premise that was wrong
+
+**The device prompt has no fixed cost.** The 110-token and 1419-token device
+prompts do not lie on a line through the origin -- 0.104 s and 0.850 -- and
+the obvious reading is that a prompt pays something once, about thirty-five
+milliseconds of it, whatever its length. Voided every compute shader at once,
+the 110-token prompt reads **0.008 s**. Ninety-two per cent of it is in the
+shaders and eight milliseconds is everything else: the host, the queue, the
+submissions and the readback together. There is nothing there to remove.
+
+Where the short prompt's gap actually is: `matrix_product` costs 0.088 s of
+the 0.104 at 110 tokens and 0.604 of the 0.850 at 1419 -- **0.80 milliseconds
+a token against 0.425**. The tile product is one and nine tenths times as
+expensive per token at the shorter length, and that is the whole of 1.51
+against 1.11. A 110-column batch gives each dispatch about sixty-four
+workgroups on twelve compute units, where a 1419-token one gives twelve
+times that.
+
+It is not the batch, which was the first thing asked. The long prompt in one
+batch of 1536 reads 0.845 s against 0.831 in three of 512; at 256 it is
+0.852, at 128 0.919, at 64 1.549. The short prompt is one batch at every size
+down to 128 and reads 0.102 to 0.103 throughout.
+
+**And the measurement method has a limit, which this found.** Voiding one
+kernel at a time in the 110-token prompt:
+
+| voided | reads | voided | reads |
+| --- | ---: | --- | ---: |
+| nothing | 0.104 s | rotate + place | 0.075 s |
+| `matrix_product` | 0.016 s | + `norm` | 0.072 s |
+| `attention_matrix` | 0.072 s | the five small together | 0.069 s |
+| `combine` | 0.073 s | all six | **0.008 s** |
+| `norm` | 0.071 s | | |
+| `rotate` | 0.074 s | | |
+| `place` | 0.076 s | | |
+
+Each of the five small kernels appears to cost about thirty-two milliseconds
+on its own, and all five together cost thirty-five. **That cannot be true of
+any of them** -- `place` costs nothing at all at 1419 tokens and appears here
+to cost twenty-eight milliseconds. At a prompt this short, removing one
+kernel stops measuring that kernel, and only the two ends of the table mean
+anything. Every earlier budget on this page was taken on the long prompt,
+where the same kernels do add up, and that is the length to take it at.
+
+**The strip kernel's scale table: three and a half per cent, and no way to
+it.** The table holds the weight scale times the activation scale, one number
+for every row, block and vector of a panel, and the insertion reads it as the
+broadcast operand of its fused multiply-add. Removing the multiply and the
+load that feeds it -- a build that answers wrongly, so a ceiling and not a
+change -- reads 5.526, 5.686 and 5.650 seconds against 5.842, 5.925 and
+5.853, and 320.5 billion instructions against 330.0. Both routes to that
+ceiling fail:
+
+- Reading the eight activation scales once for a block rather than once for
+  each of the panel's four rows is bit for bit the same and **slower**: 6.083
+  s against 5.929, and a Q4_K prompt 0.621 against 0.578. GNAT was already
+  hoisting it; materializing the eight as an aggregate is what the change
+  actually added.
+- Moving the multiply into the insertion removes the table entirely -- scale
+  the converted dot by the weight scale, and let the multiply-add broadcast
+  the activation scale straight out of the per-call table. But the insertion
+  holds two rows and eight vectors, so that is **sixteen extra `vmulps` a
+  block against the three or four the table costs**, and it would move every
+  processor digest besides: `(W × V) · dot` rounds the scales together where
+  `V · (W · dot)` rounds the scaled dot. Four times the work to be less
+  exact.
+
+**The two small prompt kernels are not overheads.** `quantize_blocks` reads
+2.1 per cent of a prompt in a profile; removing it takes the prompt from
+5.888 s to **6.734**, because without a quantized activation the integer path
+refuses and the floating-point one runs instead. It is a purchase, not a
+cost. `mat_mul_range_packed` reads 3.4 per cent; removing it takes the prompt
+to **1.541 s**, because it is the procedure that dispatches the whole product
+rather than a kernel beside it. Neither was ever three per cent of anything.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same
