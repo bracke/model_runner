@@ -10188,11 +10188,66 @@ Nor is it the unit. Replacing the whole activation with an addition -- a
 build that answers wrongly, so a ceiling and not a change -- reads 0.837 s
 against 0.844: **seven milliseconds of the seventy-one**, a tenth.
 
-Which leaves the sixteen gigabytes a second unexplained, and it is worth
-recording as a bound rather than a bug: `norm` costs sixty-nine milliseconds
-and moves about the same bytes, so the two elementwise kernels sit at the
-same rate. Whatever holds them is shared between them, is not their
-arithmetic, and is not how wide a lane reads.
+Which leaves the rate unexplained, and it is worth recording as a bound
+rather than a bug: `norm` costs sixty-nine milliseconds and moves about the
+same bytes, so the two elementwise kernels sit at the same rate. Whatever
+holds them is shared between them, is not their arithmetic, and is not how
+wide a lane reads.
+
+**And the sixteen is wrong, which the section below corrects**: it counted
+one dispatch of the combining kernel a layer where there are three -- the
+gated middle and the two residual joins, which are the same two arms in and
+one out on a narrower width and go through the same shader. Counted properly
+the rate is nearer twenty-eight gigabytes a second. Still under half of what
+this part should do, and no longer the sixth that made it look urgent.
+
+
+### The memory kind, and the number the item was ranked on
+
+The section above leaves the device's two elementwise kernels running slowly
+with the access width and the arithmetic both ruled out, and names the memory
+they live in as the thing never tested. This machine offers eleven kinds over
+two heaps, and three of them matter:
+
+| | properties | heap |
+| --- | --- | --- |
+| type 3 | device-local, host-visible, host-coherent | 1, the device's own |
+| type 5 | host-visible, host-coherent, host-cached | 0, not the device's own |
+| type 0 | device-local and nothing else | 1 |
+
+The engine allocates uploads and scratch out of type 3, results out of type 5
+-- deliberately, because the processor reads a result far more often than the
+device does -- and **nothing at all out of type 0.** The argument for trying
+it: host-coherent is a promise that a processor write is seen without anyone
+being told, and the way a driver keeps that promise is to stop the device
+caching the memory. A scratch buffer nothing maps would then be read through
+to memory on every access, for a guarantee it does not need.
+
+The half-precision buffer is the one to test -- three regions of it, written
+and read by the tile product and the combining step, and nothing maps it.
+Given a kind of its own, through an `Own` field on the engine beside `Upload`
+and `Download`:
+
+| | 1419-token prompt | 64 generated |
+| --- | ---: | ---: |
+| type 3, as it is | 0.855 s | 1.236 s |
+| type 0, its own | 0.847 s | 1.235 s |
+
+**Nine tenths of one per cent and nothing**, which is the noise. Either the
+driver is not giving up the cache for coherence, or these kernels were never
+waiting on it. Not kept.
+
+**And the item was ranked on a number that is wrong.** The sixteen gigabytes
+a second counted one dispatch of the combining kernel a layer. There are
+three: the gated middle, and the two residual joins, which are the same two
+arms in and one out on a narrower width and go through the same shader.
+Counted properly a prompt moves about two gigabytes through it rather than
+one, and the rate is nearer twenty-eight gigabytes a second -- still under
+half of what this part should do, but not the sixth that put it at the top of
+a list.
+
+So four things now do not explain it, and the fourth is that it was never as
+far off as it looked.
 
 
 ### The activation quantizer, widened and refused

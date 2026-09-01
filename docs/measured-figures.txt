@@ -5126,6 +5126,61 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-01, the memory kind, and an arithmetic error in the entry above.
+#
+#   The entry above leaves the device's two elementwise kernels at sixteen
+#   gigabytes a second with the access width and the arithmetic both ruled
+#   out, and names the memory kind as what was never tested. This machine
+#   offers eleven kinds over two heaps, and the ones that matter are three:
+#
+#     type 3  device-local, host-visible, host-coherent   heap 1, the
+#                                                         device's own
+#     type 5  host-visible, host-coherent, host-cached    heap 0, not the
+#                                                         device's own
+#     type 0  device-local and nothing else               heap 1
+#
+#   The engine allocates uploads and scratch out of type 3, results out of
+#   type 5, and nothing at all out of type 0. The argument for trying it:
+#   host-coherent is a promise that a processor write is seen without
+#   anyone being told, and the way a driver keeps that promise is to stop
+#   the device caching the memory -- so a scratch buffer nothing maps might
+#   be read through to memory on every access for a guarantee it does not
+#   need.
+#
+#   The half-precision buffer is the one to test: three regions of it,
+#   read and written by the tile product and by the combining step, and
+#   nothing maps it. Given its own kind, with an Own field on the engine
+#   beside Upload and Download:
+#
+#     type 3, as it is    0.859, 0.845, 0.855 s evaluating the long prompt
+#                         1.236, 1.252, 1.234 s generating
+#     type 0, its own     0.831, 0.847, 0.848 s
+#                         1.254, 1.235, 1.235 s
+#
+#   Nine tenths of one per cent on the prompt and nothing on the
+#   generation, which is the noise. The driver is not giving up the cache
+#   for coherence, or the kernels were never waiting on it. Not kept.
+#
+#   And the entry above overstated the problem it was chasing. Sixteen
+#   gigabytes a second counted one dispatch of the combining kernel a
+#   layer. There are three: the gated middle, and the two residual joins,
+#   which are the same two arms in and one out on a narrower width and go
+#   through the same shader. Counted properly a prompt moves about two
+#   gigabytes through it rather than one, and the rate is nearer
+#   twenty-eight gigabytes a second. That is still under half of what this
+#   part should do, but it is not the sixth that made the item worth
+#   putting at the top of a list, and the item was ranked on a number this
+#   file now corrects.
+#
+#   So: the access width does not explain it, the arithmetic does not, and
+#   the memory kind does not; and the figure it was measured against was
+#   nearly twice too small.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

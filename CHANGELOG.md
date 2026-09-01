@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The memory kind, level — and the figure the item was ranked on was
+  wrong.** The device's elementwise kernels were the widest unexplained
+  number on that side, and the last untested explanation was the memory:
+  this machine offers a device-local kind that is *not* host-visible
+  (type 0), where the engine allocates its scratch out of one that is
+  host-visible and host-coherent (type 3). Coherence is a promise a driver
+  can only keep by not caching, so a scratch buffer nothing maps might be
+  read through to memory for a guarantee it does not need. Given its own
+  kind, the half-precision buffer reads **0.847 s against 0.855 on the long
+  prompt and 1.235 against 1.236 generating** — nine tenths of one per cent
+  and nothing. Not kept.
+
+  The 16 GB/s that made this worth doing counted one dispatch of the
+  combining kernel a layer. **There are three** — the gated middle and the
+  two residual joins, which go through the same shader on a narrower width.
+  Counted properly the rate is nearer **28 GB/s**: still under half of what
+  the part should do, but not the sixth that put it at the top of a list.
+
 - **A prefetch and a wider lane, both level — and one piece of reasoning
   corrected.** A `prefetcht0` in the generating row loop, at 256 and 512
   bytes ahead, reads 1.870 and 1.871 s against 1.876: the hardware
