@@ -10796,6 +10796,63 @@ resident across the dispatches either side of it. That is a size argument
 rather than a kind argument, and it is the next thing to ask.
 
 
+### The size argument, and reading the instruction instead
+
+The section above proposes that the normalization's store is dearer into the
+half-precision buffer than into the result buffer because the first is
+seventeen megabytes and the second four, against a second-level cache of two.
+The batch sets that size -- a region is the widest product's columns times
+the batch rounded to a tile -- so the batch was cut to a quarter and the same
+probe run at both:
+
+| | 1419-token device prompt |
+| --- | ---: |
+| batch 512, writing the halves | 0.848 s |
+| batch 512, writing binary32 | 0.819 s |
+| batch 128, writing the halves | 0.917 s |
+| batch 128, writing binary32 | 0.890 s |
+
+Seventeen megabytes against four and a third -- a fourfold cut in the working
+set -- and the gap is **twenty-nine milliseconds against twenty-seven**. It
+is not the size.
+
+So the instruction was read rather than guessed at. `RADV_DEBUG=asm` prints
+every kernel the driver compiles, and the normalization is the short one with
+a square root in it:
+
+| the shader writes | the driver emits |
+| --- | --- |
+| `h[at + c]` | `buffer_store_b16` |
+| `y[at + c]` | `buffer_store_b32` |
+| `h2[(at + c) / 2]` | `buffer_store_b32` |
+
+Two things follow. **The half store is a real sixteen-bit store**, not a
+read-modify-write of the word around it -- which was the last mechanism that
+would have explained a per-element penalty. And the pair-packed variant
+really did emit the wide store, so when it measured 0.838 against 0.830 it
+was a wide store into the half buffer losing to a narrow one into the same
+buffer, not a failed compilation.
+
+Which leaves the destination and nothing else. A thirty-two-bit store into
+the result buffer is faster than a sixteen-bit store into the half buffer,
+and a thirty-two-bit store into the half buffer is slower than either.
+**Six things have been tried and none is it**: the memory kind at both ends,
+the size of the buffer, the width of the store, what is in it, and the
+barriers -- and the barriers are bounded at twenty-one milliseconds for a
+whole prompt, which is less than the twenty-nine this costs.
+
+What is left is what else touches the buffer inside a submission. The
+half-precision buffer is written by the normalization, read by the tile
+product, written by the tile product and read by the combining step; the
+result buffer, in the faster variant, is touched by nothing else in the
+sequence. That was named a barrier question two sections ago and the barrier
+budget rules it out as one -- so whatever it is, this page does not have a
+name for it yet.
+
+Recorded as an open question with six doors closed, which is worth more than
+a seventh guess.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same

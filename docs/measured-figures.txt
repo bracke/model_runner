@@ -5922,6 +5922,64 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, the size argument, and what the instruction turns out to be.
+#
+#   The entry above proposes that the normalization's store is dearer into
+#   the half-precision buffer than into the result buffer because the first
+#   is seventeen megabytes and the second four, against a second-level cache
+#   of two. The batch is what sets that size -- the region is the widest
+#   product's columns times the batch rounded to a tile -- so the batch was
+#   cut to a quarter and the same probe run at both:
+#
+#     batch 512, writing the halves    0.848 s evaluating the long prompt
+#     batch 512, writing binary32      0.819
+#     batch 128, writing the halves    0.917
+#     batch 128, writing binary32      0.890
+#
+#   Seventeen megabytes against four and a third, a fourfold cut in the
+#   working set, and the gap is twenty-nine milliseconds against
+#   twenty-seven. It is not the size.
+#
+#   So the instruction was read rather than guessed at. RADV_DEBUG=asm on a
+#   device run prints every kernel it compiles; the normalization is the
+#   short one with a square root in it.
+#
+#     writing h[at + c]                buffer_store_b16
+#     writing y[at + c]                buffer_store_b32
+#     writing h2[(at + c) / 2]         buffer_store_b32
+#
+#   Two things follow. The half store is a real sixteen-bit store and not a
+#   read-modify-write of the word around it, which was the last mechanism
+#   that would have explained a per-element penalty. And the pair-packed
+#   variant really did emit the wide store -- so when it measured 0.838
+#   against 0.830 it was a wide store into the half buffer losing to a
+#   narrow one into the same buffer, not a failed compilation.
+#
+#   Which leaves the destination and nothing else. A thirty-two bit store
+#   into the result buffer is faster than a sixteen-bit store into the half
+#   buffer, and a thirty-two bit store into the half buffer is slower than
+#   either. Six things have now been tried and none of them is it: the
+#   memory kind at both ends, the size of the buffer, the width of the
+#   store, what is in it, and the barriers -- and the barriers are bounded
+#   at twenty-one milliseconds for a whole prompt, which is less than the
+#   twenty-nine this costs.
+#
+#   The difference that is left is what else touches the buffer inside a
+#   submission. The half-precision buffer is written by the normalization,
+#   read by the tile product, written by the tile product and read by the
+#   combining step; the result buffer, in the faster variant, is touched by
+#   nothing else in the sequence. That was named two entries ago as a
+#   barrier question and the barrier budget rules it out as one, so
+#   whatever it is, it is not something this file has a name for yet.
+#
+#   Recorded as an open question with six doors closed, which is worth more
+#   than the seventh guess.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

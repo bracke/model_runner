@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The size argument refuted, and the instruction read.** Cutting the batch
+  to a quarter takes the half-precision buffer from 17 MB to 4.3 — a
+  fourfold cut in the working set — and the store penalty is **29 ms against
+  27**. Not the size.
+
+  `RADV_DEBUG=asm` then says what the driver actually emits: `h[at+c]` is
+  `buffer_store_b16`, `y[at+c]` is `buffer_store_b32`, and the pair-packed
+  `h2[(at+c)/2]` is `buffer_store_b32`. So the half store is a real 16-bit
+  store and not a read-modify-write — the last mechanism that would have
+  explained a per-element penalty — and the pair variant really did emit the
+  wide store, so its 0.838 against 0.830 was a wide store into the half
+  buffer losing to a narrow one into the same buffer.
+
+  **Six doors closed**: the memory kind at both ends, the buffer's size, the
+  store's width, its contents, and the barriers (bounded at 21 ms for a whole
+  prompt, less than the 29 this costs). What is left is what else touches the
+  buffer inside a submission, and this repository has no name for it yet.
+
 - **The weights' traffic costs nothing, which takes the bus off the list.**
   Generating reads 1.17 GB of weights a token, and four refused hypotheses
   about that bus never tested the premise. With the insertion's weight cursor
