@@ -10904,6 +10904,53 @@ they closed were closed on an empty room. What is worth keeping is the rule:
 that appears when a buffer stops being written is a saving in the readers.
 
 
+### What a voided kernel really measures
+
+The rule the section above ends on -- a probe that removes a write must be
+asked what reads it -- applies to this page's main instrument. **Every device
+budget here was taken by voiding a kernel and reading the whole run, and every
+kernel in those budgets writes something another one reads.**
+
+So the normalization was measured three ways rather than two:
+
+| | 1419-token device prompt |
+| --- | ---: |
+| as it is | 0.833 s |
+| one store a row and nothing else | 0.829 s |
+| voided entirely | **0.783 s** |
+
+The middle build keeps the kernel's shape and throws away its work: the sum,
+the fold, the gain and a million stores become five hundred and twelve stores
+of two bytes, one to a row, touching every page of the region and putting
+almost nothing in it.
+
+**Four milliseconds is what the normalization does. Forty-six is what its
+output costs the five kernels that read it** -- three projections and two
+arms -- against reading a region nobody wrote. The removal method charges the
+kernel for both and reports fifty.
+
+That is a correction to every figure in `### Where a device prompt goes, every
+kernel taken out in turn` and to the budget under `### Where the device's gap
+is now`. **Those tables say what removing a kernel saves. They do not say what
+the kernel costs**, and for this one the two differ by a factor of twelve.
+
+It also explains a thing recorded here as unexplained. At a 110-token prompt
+each of five small kernels appeared to cost about thirty-two milliseconds
+alone and all five together thirty-five, which could not be true of any of
+them. It is true of none of them: most of each figure is the same downstream
+reads becoming cheap, and removing a second kernel cannot make them cheap
+twice.
+
+What survives is the two ends of such a table -- everything and nothing, both
+real -- and the ordering, which is roughly right because a kernel whose output
+is read more has more readers to make cheap. **What does not survive is the
+share.**
+
+The middle build is the instrument to use from here: keep the writes, throw
+away the work. It is more trouble than an early return, and it is the only one
+of the two that measures a kernel.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same

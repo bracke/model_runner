@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **What a voided kernel really measures — the device budget tables say what
+  removing a kernel saves, not what it costs.** Measured three ways instead
+  of two: the normalization as it is reads **0.833 s**, with its work thrown
+  away but one store a row keeping the region written **0.829**, and voided
+  entirely **0.783**.
+
+  **Four milliseconds is what the kernel does; forty-six is what its output
+  costs the five kernels that read it.** The removal method charges it for
+  both and reports fifty — a factor of twelve.
+
+  That corrects every share in the device budget tables, and explains the
+  110-token non-additivity recorded earlier as unexplained: most of each
+  kernel's figure is the same downstream reads becoming cheap, and removing a
+  second kernel cannot make them cheap twice. The two ends of such a table
+  survive, and the ordering roughly; the shares do not.
+
+  The instrument to use from here: keep the writes, throw away the work.
+
 - **The probe was the bug: there is no thirty-one milliseconds.** Three
   entries chased a store that appeared to cost 29–31 ms, closing six doors on
   it. The seventh test was of the probe itself. Made to write *both* the

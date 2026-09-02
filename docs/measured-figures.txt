@@ -6037,6 +6037,57 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, what a voided kernel really measures, and the budget table it
+# puts in doubt.
+#
+#   The rule the entry above ends on -- a probe that removes a write must be
+#   asked what reads it -- applies to this file's main instrument. Every
+#   device budget here was taken by voiding a kernel and reading the whole
+#   run, and every kernel in that budget writes something another one reads.
+#
+#   So the normalization was measured three ways rather than two:
+#
+#     as it is                          0.833 s evaluating the long prompt
+#     one store a row and nothing else  0.829
+#     voided entirely                   0.783
+#
+#   The middle build keeps the kernel's shape and throws away its work: the
+#   sum, the fold, the gain, and a million stores become five hundred and
+#   twelve stores of two bytes, one to a row, which touches every page of
+#   the region and puts almost nothing in it.
+#
+#   Four milliseconds is what the normalization does. Forty-six is what its
+#   output costs the five kernels that read it -- three projections and two
+#   arms -- against reading a region nobody wrote. The removal method
+#   charges the kernel for both and reports fifty.
+#
+#   Which is a correction to every figure in `### Where a device prompt
+#   goes, every kernel taken out in turn` and to the budget under `### Where
+#   the device's gap is now`. Those tables say what removing a kernel saves.
+#   They do not say what the kernel costs, and for this one the two differ
+#   by a factor of twelve.
+#
+#   It also explains a thing this file recorded as unexplained. At a
+#   110-token prompt each of five small kernels appeared to cost about
+#   thirty-two milliseconds alone and all five together thirty-five, which
+#   could not be true of any of them. It is true of none of them: most of
+#   each figure is the same downstream reads becoming cheap, and removing a
+#   second kernel cannot make them cheap twice.
+#
+#   What survives is the two ends of such a table -- everything, and nothing
+#   -- which are both real, and the ordering, which is roughly right because
+#   a kernel whose output is read more has more readers to make cheap. What
+#   does not survive is the share.
+#
+#   The middle build is the instrument to use from here: keep the writes,
+#   throw away the work. It is more trouble than an early return and it is
+#   the only one of the two that measures a kernel.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
