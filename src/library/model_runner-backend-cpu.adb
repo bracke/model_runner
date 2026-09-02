@@ -180,18 +180,37 @@ package body Model_Runner.Backend.CPU is
    --
    --  A generated token reads every weight of the model once and multiplies
    --  each of them once, so it is the memory path that answers rather than
-   --  the arithmetic -- and that path is saturated well before the cores
-   --  are. Measured over three rounds on sixty-four tokens: 2.303 s at
-   --  three shares, 2.123 at four, 2.144 at five and 2.187 at eight, for
-   --  6.3, 7.3, 8.7 and 12.7 seconds of processor time. Eight is both the
-   --  slowest of those and by far the dearest.
+   --  the arithmetic -- and that path is saturated before the cores are.
    --
-   --  A prompt is the other case and keeps every share: the same sweep
-   --  reads 1.377 s at three against 0.815 at eight, because a batch shares
-   --  one reading of the weights between its tokens and is bound by the
+   --  It was four, and four was measured against a pool that cut a job into
+   --  one fixed range for every share. Under that pool a fifth and a sixth
+   --  share bought nothing and cost a straggler: 2.303 s at three, 2.123 at
+   --  four, 2.144 at five and 2.187 at eight, over three rounds of
+   --  sixty-four tokens. With the shares handed out a tile at a time
+   --  instead, the same sweep reads
+   --
+   --    three   2.047 s   6.77 s of processor time
+   --    four    1.872     7.91
+   --    five    1.812     9.35
+   --    six     1.794    10.88
+   --    eight   1.790    14.08
+   --
+   --  -- and five is the one to take. Alternated against four over three
+   --  rounds, with every reading of one arm below every reading of the
+   --  other, five reads 1.800 s against 1.849 for 9.29 seconds of processor
+   --  time against 7.87: two and seven tenths per cent of the wall for
+   --  eighteen more of the processor. Six reads 1.790 against the same
+   --  1.847 for 10.84 -- three and a tenth for thirty-eight -- and eight is
+   --  level with six again for fifty. Five takes seven eighths of what
+   --  there is to take for less than half of what six spends on it, and on
+   --  a part sharing fifteen watts with a device that is the same trade the
+   --  worker default is chosen on.
+   --
+   --  A prompt is the other case and keeps every share: a batch shares one
+   --  reading of the weights between its tokens and is bound by the
    --  arithmetic instead. So the share count follows the batch, as the row
    --  tile beside it already does.
-   Vector_Team : constant Share_Count := 4;
+   Vector_Team : constant Share_Count := 5;
 
    procedure Partition
      (Rows    : Element_Count;

@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The share count a generated token was tuned to — 2.7%, and the constant
+  was measured against a pool that no longer exists.** A generated token gets
+  four shares where a prompt takes eight, because under the old fixed cut a
+  fifth and a sixth bought nothing and cost a straggler. The atomic-chunk
+  pool replaced that cut two commits ago and this constant was never asked
+  again.
+
+  Swept on the pool that is there now: three shares 2.047 s, four 1.872,
+  **five 1.812**, six 1.794, eight 1.790 — for 6.77, 7.91, 9.35, 10.88 and
+  14.08 s of processor time. Alternated against four over three rounds, every
+  reading of one arm below every reading of the other, **five reads 1.800 s
+  against 1.849** for 9.29 s of processor against 7.87. Six is 3.1% for +38%
+  and eight is level with six for +50%.
+
+  Five takes seven eighths of the gain for less than half of what six spends
+  on it — the trade the worker default is chosen on. The prompt is untouched
+  and the digest holds at every share count.
+
+  Generating: **34.8 t/s, gap 1.18 → 1.12.** Fourth constant in this program
+  found right when it was measured and wrong afterwards: a tuned constant is
+  a measurement, and a measurement has a date.
+
 - **Attention read line by line against llama.cpp's, and nothing to take from
   it.** It is 108 ms of a device prompt against their 80 — the largest named
   item left on that side — so `flash_attn_cm1.comp` was read through rather
