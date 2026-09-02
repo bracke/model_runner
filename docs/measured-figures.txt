@@ -5857,6 +5857,71 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, the weights' traffic costs nothing, and the normalization's
+# store costs more than it did.
+#
+#   Two questions, and the first overturns what this file has said about the
+#   generating row since the counters were first read.
+#
+#   Generating reads every weight once a token -- 1.17 gigabytes -- and the
+#   standing explanation of the gap to llama.cpp has been that the bus
+#   answers rather than the arithmetic. Four hypotheses about that bus have
+#   been refused here: the page tables, the accumulator chain, the
+#   prefetcher and the memory kind. So the traffic itself was removed
+#   instead. The insertion's weight cursor is left at zero, so every block
+#   of every row reads the same thirty-two bytes and the same instructions
+#   run in the same order on data that is always in the nearest cache. The
+#   answers are wrong and finite, which is all a timing needs.
+#
+#     five shares, as it is        1.800 s generating, 9.29 s of processor
+#     five shares, one block       1.804,               9.32
+#     one worker, as it is         4.553
+#     one worker, one block        4.327
+#
+#   A gigabyte and a sixth a token, and taking it away is worth nothing at
+#   the share count this program uses and five per cent at one worker.
+#   Whatever the generating row is waiting for at five shares, it is not the
+#   weights arriving.
+#
+#   That does not say what it is. The arithmetic does not add up either: the
+#   kernel is 79 per cent of the samples and about 380 million instructions
+#   a token, which at five cores and this part's all-core clock is a
+#   quarter of the twenty-eight milliseconds a token takes; the dependent
+#   multiply-add chain is another quarter. Something is being waited for
+#   that is neither the weights, nor the issue rate, nor the chain, and this
+#   entry does not find it. What it does is take the bus off the list, which
+#   four earlier entries assumed and none of them tested.
+#
+#   The second question is the normalization's store, which the entry two
+#   above this one left as the one unexplained number on the device side.
+#   The probe was run again on the build that has it in binary32:
+#
+#     writing the half-precision copy   0.828, 0.831 s evaluating the long
+#                                       prompt
+#     writing the binary32 one          0.800
+#
+#   Thirty-one milliseconds, where the same probe read eleven before the
+#   binary32 change -- so the number grew as the kernel around it shrank,
+#   and it is now nearly four per cent of a device prompt. The probe is not
+#   a change: the tile product's operand must be half precision and the
+#   binary32 copy is what the conversion kernel used to make. It is a
+#   ceiling and a puzzle, and the list of things it is not is unchanged:
+#   not the heap, not the property bits, not the width of the store, not
+#   what is in it, not the barriers.
+#
+#   One thing that has not been tried and fits every reading: the
+#   half-precision buffer is three regions of five and four fifths
+#   megabytes, seventeen in all, where the result buffer is four and a
+#   fifth. Which of them a kernel writes changes what is resident across the
+#   dispatches either side of it, and this part's second-level cache is two
+#   megabytes. That is a size argument rather than a kind argument, and it
+#   is the next thing to ask.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

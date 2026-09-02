@@ -10740,6 +10740,62 @@ proportion is what moved. Generality that costs four and a half per cent and
 unlocks nothing is not kept, for the second time and for the same reason.
 
 
+### The weights' traffic costs nothing, which takes the bus off the list
+
+Generating reads every weight once a token -- a gigabyte and a sixth -- and
+the standing explanation of the gap to llama.cpp on that row has been that
+the bus answers rather than the arithmetic. Four hypotheses about that bus
+have been refused on this page: the page tables, the accumulator chain, the
+prefetcher and the memory kind. **None of them tested the premise.**
+
+So the traffic itself was removed. The insertion's weight cursor is left at
+zero, so every block of every row reads the same thirty-two bytes: the same
+instructions in the same order, on data that never leaves the nearest cache.
+The answers are wrong and finite, which is all a timing needs.
+
+| | generating | processor time |
+| --- | ---: | ---: |
+| five shares, as it is | 1.800 s | 9.29 s |
+| five shares, one block | 1.804 s | 9.32 s |
+| one worker, as it is | 4.553 s | |
+| one worker, one block | **4.327 s** | |
+
+**A gigabyte and a sixth a token, and taking it away is worth nothing at the
+share count this program uses** -- and five per cent at one worker. Whatever
+that row is waiting for at five shares, it is not the weights arriving.
+
+It does not say what it is, and the arithmetic does not close either: the
+kernel is seventy-nine per cent of the samples and about three hundred and
+eighty million instructions a token, which at five cores and this part's
+all-core clock is a quarter of the twenty-eight milliseconds a token takes;
+the dependent multiply-add chain is another quarter. Something is being
+waited for that is neither the weights, nor the issue rate, nor the chain.
+What this entry does is take the bus off the list -- four earlier entries
+assumed it and none of them checked.
+
+**And the normalization's store, again.** `### The normalization taken apart`
+above leaves eleven milliseconds that is not the heap, the property bits, the
+store width, the contents or the barriers. Re-run on the build that does the
+sum in binary32:
+
+| | 1419-token device prompt |
+| --- | ---: |
+| writing the half-precision copy | 0.828 s |
+| writing the binary32 one | **0.800 s** |
+
+**Thirty-one milliseconds, where the same probe read eleven before** -- the
+number grew as the kernel around it shrank, and it is now nearly four per
+cent of a device prompt. The probe is not a change, because the tile
+product's operand must be half precision.
+
+One thing has not been tried and fits every reading: the half-precision
+buffer is three regions of five and four fifths megabytes, **seventeen in
+all**, where the result buffer is four and a fifth -- and this part's
+second-level cache is two. Which of them a kernel writes changes what is
+resident across the dispatches either side of it. That is a size argument
+rather than a kind argument, and it is the next thing to ask.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same

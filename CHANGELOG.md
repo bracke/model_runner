@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The weights' traffic costs nothing, which takes the bus off the list.**
+  Generating reads 1.17 GB of weights a token, and four refused hypotheses
+  about that bus never tested the premise. With the insertion's weight cursor
+  left at zero — every block reading the same thirty-two bytes, same
+  instructions, same order — generating reads **1.804 s against 1.800** at
+  five shares and **4.327 against 4.553** at one worker. A gigabyte and a
+  sixth a token is worth *nothing* at the share count this program uses.
+
+  It does not say what the row *is* waiting for: the kernel is 79% of the
+  samples and ~380 million instructions a token, a quarter of the 28 ms a
+  token takes, and the dependent chain is another quarter.
+
+  **And the normalization's store, re-probed:** writing the binary32 copy
+  instead of the half-precision one reads **0.800 s against 0.828** — 31 ms,
+  where the same probe read 11 before the binary32 sum. Still not the heap,
+  the bits, the width, the contents or the barriers. Untried and fitting
+  every reading: the half buffer is 17 MB against the result buffer's 4.2,
+  and this part's L2 is 2.
+
 - **The step's depth had already been done, and I walked round the guard that
   says so.** The previous entry called the tile's depth the one dimension
   never varied. It was swept on 2026-08-29 — eleven shapes, all answering the
