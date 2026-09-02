@@ -1572,14 +1572,14 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.399 s | **0.260 s** |
-| -- evaluating the prompt | 0.054 s | 0.033 s |
-| -- generating | 0.345 s | **0.227 s** |
-| -- processor time | 2.09 s | **0.06 s** |
-| 110-token prompt, nothing generated | 0.372 s | **0.104 s** |
-| -- processor time | 2.87 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.392 s | **0.262 s** |
+| -- evaluating the prompt | 0.052 s | 0.033 s |
+| -- generating | 0.340 s | **0.229 s** |
+| -- processor time | 2.06 s | **0.08 s** |
+| 110-token prompt, nothing generated | 0.354 s | **0.103 s** |
+| -- processor time | 2.74 s | **0.02 s** |
 
-All six cells were taken in one sitting on 2026-09-01, back to back, at the
+All six cells were taken in one sitting on 2026-09-02, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
 version of this table before last. The generating row is where the last
 change landed: it read 0.378 s until `### The batch that was not there`
@@ -6531,10 +6531,10 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **333.3 t/s** | 34.8 t/s |
-| llama.cpp, processor | 339.5 t/s | 39.2 t/s |
-| model_runner, device | 1549.3 t/s | **50.6 t/s** |
-| llama.cpp, device | 1647.2 t/s | 55.5 t/s |
+| model_runner, processor | **354.8 t/s** | 35.2 t/s |
+| llama.cpp, processor | 346.8 t/s | 39.1 t/s |
+| model_runner, device | **1571.4 t/s** | 51.7 t/s |
+| llama.cpp, device | 1579.1 t/s | 56.7 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
 were measuring a machine that had gone back to sleep -- see `### A prompt too
@@ -6545,18 +6545,20 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **291.4 t/s** | 34.8 t/s |
-| llama.cpp, processor | 269.1 t/s | 39.2 t/s |
-| model_runner, device | **1687.3 t/s** | 50.6 t/s |
-| llama.cpp, device | 1802.4 t/s | 55.5 t/s |
+| model_runner, processor | **292.4 t/s** | 35.2 t/s |
+| llama.cpp, processor | 262.9 t/s | 39.1 t/s |
+| model_runner, device | 1726.3 t/s | 51.7 t/s |
+| llama.cpp, device | 1823.2 t/s | 56.3 t/s |
 
-**The processor's long-prompt row is ahead of llama.cpp: 291.4 tokens a
-second against 269.1.** What moved it is `### A share a worker, decided
+**Both of the processor's prompt rows are ahead of llama.cpp: 292.4 tokens a
+second against 262.9 at 1419, and 354.8 against 346.8 at 110 -- and the
+device's short prompt is level, 1571.4 against 1579.1, inside llama-bench's
+own ten-per-cent spread on that row.** What moved the long one is `### A share a worker, decided
 before any of them started`, below -- eleven per cent of a prompt lost to
 waiting for the slowest of eight fixed ranges. Three commits before that it
 was 1.16 behind.
 
-**And the generating row is 1.12 behind, from 1.18**, after `### The share
+**And the generating row is 1.11 behind, from 1.18**, after `### The share
 count a generated token was tuned to` found that constant had been chosen
 against the pool the same change replaced.
 
@@ -6582,8 +6584,8 @@ across windows are. The row now says 233.7 and 1.16.
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The processor's long prompt is **ahead by 1.08** where its short one is 1.02
-behind, and the device is **1.07** behind at 1419 tokens against 1.06 at
+The processor is **ahead at both prompt lengths** -- 1.11 at 1419 tokens and
+1.02 at 110 -- and the device is **1.06** behind at 1419 tokens and level at
 110. The two short rows read 1.15 and 1.53 until 2026-09-02, and both of those
 were the machine's clock rather than the code's; `### A prompt too short to
 wake the machine` is what they were. Attention grows with the square of the
@@ -6698,9 +6700,11 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.453 s
-and 64 in 1.911 s on the processor, 0.102 s and 1.281 s on the device,
-medians of three as everywhere else here.
+speed` reports seconds and this table reports rates: 110 tokens in 0.310 s
+and 64 in 1.817 s on the processor, 0.070 s and 1.238 s on the device,
+medians of three as everywhere else here. The 110-token file the prompt rows
+use is `speed-prompt-110.txt` rather than `speed-prompt.txt`, for the reason
+`### A prompt too short to wake the machine` gives.
 
 **The blend two sections above does not show in this table and cannot**,
 which is worth saying rather than leaving as a puzzle. Attention grows with
@@ -6712,8 +6716,8 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 676.1 t/s rather
-than 339.5 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 764.3 t/s rather
+than 346.8 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
@@ -11005,6 +11009,63 @@ the staged operands, the four-subgroup attention, the narrow column tile and
 the deeper step were all judged against a map that said the matrix row was
 most of the prompt. It is sixty-one per cent of it, and all the kernels
 together are eighty.
+
+
+### The residual joins folded into the products they follow
+
+A layer joins twice: once to add its input back to what attention made, once
+to add it back to what the feed-forward made. Each was a dispatch of its own
+-- two arms read, a buffer written, and the normalization after it reading
+that buffer back. What that costs, by removal, on the 1419-token device
+prompt:
+
+| | reads |
+| --- | ---: |
+| nothing changed | 0.826 s |
+| the join stops reading the residual | 0.834 s |
+| the join voided entirely | 0.772 s |
+
+**Fifty-four milliseconds, six and a half per cent of the prompt, and none of
+it is the reading**: dropping one of the two arms changed nothing a
+measurement can see. It is the dispatch and the store, and what that store
+costs whoever reads it -- the same shape the normalization's three-way
+measurement found, where a megabyte written and a kilobyte written cost the
+same and writing nothing was what was cheap.
+
+Both joins follow a matrix product immediately, and nothing else reads that
+product on its own, so the product stores the sum instead and the join is not
+dispatched at all. The join's *step* stays in the sequence: a caller writes
+step numbers -- `From_Step => 16, Residual_Step => 11` -- and a step that
+vanished would move every number after it, so the step stays, is marked
+folded, and its place is the product's place. A later step naming the join
+reads what the product wrote.
+
+Measured, three alternated rounds, load under 0.80 before each:
+
+| | folded | as it was | |
+| --- | ---: | ---: | ---: |
+| 1419-token prompt | **0.818 s** | 0.841 s | 2.7 % |
+| 64 tokens generated | **1.263 s** | 1.280 s | 1.3 % |
+
+Twenty-three of the fifty-four. The rest is the store itself, which the
+product still makes -- what the fold removes is a dispatch and a buffer, not
+a write. Every digest is unchanged and equal to what the processor produces
+for the same prompt.
+
+**And the trap, which is worth more than the two per cent.** A layer's last
+step leaves its answer at the front of the result buffer for the next
+sequence to read, and the room reserved there was the activation's own size.
+That was right while the last step was a join, because a join writes the
+columns the batch really holds. A product on the matrix kernel writes the
+columns the rounding invented as well -- a hundred and twenty-eight where the
+batch holds a hundred and ten -- so the folded product's store did not fit,
+the carry was refused rather than trimmed, and the sequence after it read a
+room nothing had written.
+
+What named it was the shape of the wrongness: every batch was wrong except
+one of exactly 128 tokens, which is a whole tile and has no invented columns.
+A single prompt at that length turned an arithmetic suspicion into a rounding
+one. The room is now the wider of the activation and a whole tile's store.
 
 
 ### A prompt too short to wake the machine

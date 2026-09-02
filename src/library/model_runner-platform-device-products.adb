@@ -213,13 +213,13 @@ package body Model_Runner.Platform.Device.Products is
    --  descriptor that is written and not read costs nothing, and a second
    --  layout for the sake of one binding would cost a second pool, a second
    --  set of sets and a second of everything that names one.
-   type Binding_Array is array (1 .. 4) of Set_Layout_Binding;
+   type Binding_Array is array (1 .. 5) of Set_Layout_Binding;
 
    type Set_Layout_Create_Info is record
       Kind     : C.unsigned := Structure_Set_Layout;
       Next     : Address := Null_Handle;
       Flags    : C.unsigned := 0;
-      Count    : C.unsigned := 4;
+      Count    : C.unsigned := 5;
       Bindings : Address := Null_Handle;
    end record
      with Convention => C;
@@ -256,7 +256,7 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   type Buffer_Info_Array is array (1 .. 4) of aliased Buffer_Info;
+   type Buffer_Info_Array is array (1 .. 5) of aliased Buffer_Info;
 
    --  The fourth descriptor of every set: the half-precision copy of the
    --  batch where the engine has one, and the vectors again where it has
@@ -395,7 +395,7 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   type Write_Array is array (1 .. 4) of aliased Write_Descriptor;
+   type Write_Array is array (1 .. 5) of aliased Write_Descriptor;
 
    --  Bytes of push constants, which the layout declares and every dispatch
    --  writes. One number in two places is one number that can differ, so it
@@ -415,7 +415,7 @@ package body Model_Runner.Platform.Device.Products is
    --  them rather than written again.
    Attention_Bytes : constant := 64;
    Shape_Bytes     : constant := Attention_Bytes;
-   Product_Bytes   : constant := 24;
+   Product_Bytes   : constant := 28;
 
    type Push_Range is record
       Stages : C.unsigned := Stage_Compute;
@@ -555,6 +555,10 @@ package body Model_Runner.Platform.Device.Products is
       First   : C.unsigned := 0;
       Packing : C.unsigned := 0;
       Base    : C.unsigned := 0;
+
+      --  Whether the product adds the residual bound beside it before it
+      --  stores, which is a join folded into the product the join followed.
+      Joins   : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -1719,7 +1723,7 @@ package body Model_Runner.Platform.Device.Products is
          --  longest sequence, in one pool: three storage descriptors each.
          Sizes   : aliased Pool_Size :=
            (Kind  => Descriptor_Storage,
-            Count => C.unsigned (4 * (1 + 2 * Sequence_Limit)));
+            Count => C.unsigned (5 * (1 + 2 * Sequence_Limit)));
          Request : aliased Descriptor_Pool_Info;
       begin
          if Create = null then
@@ -2829,6 +2833,10 @@ package body Model_Runner.Platform.Device.Products is
       --  Where the answer goes in the half-precision buffer, in halves and
       --  plus one, or zero for the binary32 answer into the result buffer.
       Into    : Interfaces.Unsigned_64;
+
+      --  Whether a join was folded into this product, so that what it
+      --  stores is its answer plus the residual bound beside it.
+      Joins   : Boolean;
       Good    : out Boolean)
    is
       Bind_Pipeline : constant Bind_Pipeline_Call :=
@@ -2890,7 +2898,8 @@ package body Model_Runner.Platform.Device.Products is
             Count   => C.unsigned (Count),
             First   => C.unsigned (Into),
             Packing => C.unsigned (Weight_Packing'Pos (Packing)),
-            Base    => C.unsigned (Base));
+            Base    => C.unsigned (Base),
+            Joins   => (if Joins then 1 else 0));
       begin
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                Product_Bytes, Shape'Address);
@@ -3138,6 +3147,7 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Told (4) := Half_Descriptor (Item);
+         Told (5) := Told (3);
 
          for Index in Told'Range loop
             if Index in Buffers'Range then
@@ -3150,7 +3160,7 @@ package body Model_Runner.Platform.Device.Products is
             Notes (Index).Buffers := Told (Index)'Address;
          end loop;
 
-         Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+         Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
       end;
 
       --  The work: one group per sixty-four rows, which is what the shader
@@ -3212,7 +3222,8 @@ package body Model_Runner.Platform.Device.Products is
          if Tiled then
             Tile_Product
               (Item, Rows, Columns, Count, Vectors_Room, Packing,
-               Weight_Base, Fresh => True, Into => 0, Good => Good);
+               Weight_Base, Fresh => True, Into => 0, Joins => False,
+               Good => Good);
 
             if not Good then
                Release_Borrowed;
@@ -3231,7 +3242,8 @@ package body Model_Runner.Platform.Device.Products is
                         First   => C.unsigned (First),
                         Packing =>
                           C.unsigned (Weight_Packing'Pos (Packing)),
-                        Base    => C.unsigned (Weight_Base));
+                        Base    => C.unsigned (Weight_Base),
+                        Joins   => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -3622,6 +3634,7 @@ package body Model_Runner.Platform.Device.Products is
          Told (2) := (Item.Vector_Buffer, 0, Query_Bytes);
          Told (3) := (Item.Result_Buffer, 0, Blend_Bytes);
          Told (4) := Half_Descriptor (Item);
+         Told (5) := Told (3);
 
          for Binding in Told'Range loop
             Notes (Binding).Target := Item.Descriptor;
@@ -3629,7 +3642,7 @@ package body Model_Runner.Platform.Device.Products is
             Notes (Binding).Buffers := Told (Binding)'Address;
          end loop;
 
-         Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+         Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
       end;
 
       declare
@@ -3975,12 +3988,33 @@ package body Model_Runner.Platform.Device.Products is
    is
       Other : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
+
+      Room : constant Boolean :=
+        Steps.Held /= 0
+        and then Steps.Held /= Sequence_Limit
+        and then Other <= Steps.Held
+        and then Residual_Step <= Steps.Held;
+
+      --  Folded into the product it follows, where that is what it
+      --  follows. The arm has to be the step immediately before, has to be
+      --  a product rather than one of the other kernels, and has to be a
+      --  product nothing else reads on its own -- which is what Kept being
+      --  false says. Everything else in the sequence stays as it was: the
+      --  step is still counted, so an index a caller wrote still names what
+      --  it named.
+      Foldable : constant Boolean :=
+        Room
+        and then Other = Steps.Held
+        and then not Steps.Items (Other).Kept
+        and then not Steps.Items (Other).Joins
+        and then not Steps.Items (Other).Norms
+        and then not Steps.Items (Other).Blends
+        and then not Steps.Items (Other).Attends
+        and then not Steps.Items (Other).Places
+        and then not Steps.Items (Other).Rotates
+        and then not Steps.Items (Other).Folded;
    begin
-      if Steps.Held = 0
-        or else Steps.Held = Sequence_Limit
-        or else Other > Steps.Held
-        or else Residual_Step > Steps.Held
-      then
+      if not Room then
          Added := False;
          return;
       end if;
@@ -3998,7 +4032,14 @@ package body Model_Runner.Platform.Device.Products is
          At_Vector => From_Vector,
          Kept => Kept,
          Blends => True, Unit => 2, Attends => False,
+         Folded => Foldable,
          others => <>);
+
+      if Foldable then
+         Steps.Items (Other).Joins := True;
+         Steps.Items (Other).Joined := Steps.Held;
+      end if;
+
       Added := True;
    end Add_Join;
 
@@ -4278,8 +4319,23 @@ package body Model_Runner.Platform.Device.Products is
       --  sequence carries in or leaves behind. Nothing else is placed
       --  there, so a sequence may read what the one before it wrote while
       --  writing its own answers past it.
+      --
+      --  Wide enough for a tile's store as well as the activation's own
+      --  size. Where a join is folded into the product before it, the step
+      --  that leaves the answer here is a product rather than a join, and a
+      --  product on the matrix kernel stores the columns the rounding
+      --  invented beside the real ones. A hundred and ten columns of a
+      --  batch rounded to a hundred and twenty-eight is a sixth more than
+      --  the activation measures, and the front has to hold it or the carry
+      --  is refused and the sequence after this one reads a room nothing
+      --  wrote.
       Carry_Room : constant Interfaces.Unsigned_64 :=
-        (Vector_Bytes + Alignment - 1) / Alignment * Alignment;
+        (Interfaces.Unsigned_64'Max
+           (Vector_Bytes,
+            (if Steps.Held = 0 then 0
+             else Interfaces.Unsigned_64 (Steps.Items (Steps.Held).Rows)
+                  * Interfaces.Unsigned_64 (Whole_Tiles (Count)) * 4))
+         + Alignment - 1) / Alignment * Alignment;
 
       Result_Bytes : Interfaces.Unsigned_64 := Carry_Room;
 
@@ -4478,11 +4534,21 @@ package body Model_Runner.Platform.Device.Products is
                Places (Index).Weight :=
                  Interfaces.Unsigned_64 (This.Rows) * Wide;
             end if;
-            Places (Index).At_Byte := Result_Bytes;
-            Places (Index).Bytes := Mine;
+            if This.Folded then
+               --  A join folded into the product before it writes nothing
+               --  of its own: the product's store is the sum, and this
+               --  step's place is that store, so a later step naming this
+               --  one reads what the product wrote.
+               Places (Index).At_Byte := Places (Index - 1).At_Byte;
+               Places (Index).Bytes := Places (Index - 1).Bytes;
+            else
+               Places (Index).At_Byte := Result_Bytes;
+               Places (Index).Bytes := Mine;
 
-            Result_Bytes :=
-              Result_Bytes + (Mine + Alignment - 1) / Alignment * Alignment;
+               Result_Bytes :=
+                 Result_Bytes
+                 + (Mine + Alignment - 1) / Alignment * Alignment;
+            end if;
 
             Wanted := Wanted
               + Model_Runner.Numerics.Element_Count (This.Rows)
@@ -4522,6 +4588,12 @@ package body Model_Runner.Platform.Device.Products is
         and then Places (Steps.Held).Bytes <= Carry_Room
       then
          Places (Steps.Held).At_Byte := 0;
+
+         --  A folded join is the product before it, so moving one moves
+         --  both: the store that has to land at the front is the product's.
+         if Steps.Items (Steps.Held).Folded then
+            Places (Steps.Held - 1).At_Byte := 0;
+         end if;
       end if;
 
       Item.Clock := Item.Clock + 1;
@@ -4768,6 +4840,7 @@ package body Model_Runner.Platform.Device.Products is
                   Offset => Places (Index).At_Byte,
                   Extent => Places (Index).Bytes);
                Told (4) := Half_Descriptor (Item);
+               Told (5) := Told (3);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -4775,7 +4848,7 @@ package body Model_Runner.Platform.Device.Products is
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -4790,6 +4863,7 @@ package body Model_Runner.Platform.Device.Products is
                  (Buffer => Item.Cache_Buffer, Offset => 0,
                   Extent => Item.Cache_Bytes);
                Told (4) := Half_Descriptor (Item);
+               Told (5) := Told (3);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -4797,7 +4871,7 @@ package body Model_Runner.Platform.Device.Products is
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -4812,6 +4886,7 @@ package body Model_Runner.Platform.Device.Products is
                   Offset => Places (Index).At_Byte,
                   Extent => Places (Index).Bytes);
                Told (4) := Half_Descriptor (Item);
+               Told (5) := Told (3);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -4819,7 +4894,7 @@ package body Model_Runner.Platform.Device.Products is
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -4834,6 +4909,7 @@ package body Model_Runner.Platform.Device.Products is
                   Offset => Places (Index).At_Byte,
                   Extent => Places (Index).Bytes);
                Told (4) := Half_Descriptor (Item);
+               Told (5) := Told (3);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -4841,7 +4917,7 @@ package body Model_Runner.Platform.Device.Products is
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -4871,6 +4947,7 @@ package body Model_Runner.Platform.Device.Products is
                   Offset => Places (Index).At_Byte,
                   Extent => Places (Index).Bytes);
                Told (4) := Half_Descriptor (Item);
+               Told (5) := Told (3);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -4878,7 +4955,7 @@ package body Model_Runner.Platform.Device.Products is
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -4895,13 +4972,38 @@ package body Model_Runner.Platform.Device.Products is
                Extent => Places (Index).Bytes);
             Told (4) := Half_Descriptor (Item);
 
+            --  And the residual, where a join was folded into this product:
+            --  what the join would have read as its first arm, bound where
+            --  the product's store can add it.
+            Told (5) :=
+              (if Steps.Items (Index).Joins
+               then Source_Of
+                      (Steps.Items (Index).Joined,
+                       Steps.Items (Steps.Items (Index).Joined).Reads)
+               else Told (3));
+
+            --  And bounded to the columns the batch really holds. A tile
+            --  stores the columns the rounding invented as well as the real
+            --  ones, so it would read a residual for them too -- and what
+            --  lies there is whatever the step before last left, since a
+            --  join writes only the real ones. Bounded here, those reads
+            --  fall outside the range the descriptor names and answer zero,
+            --  which is what the invented columns are meant to hold.
+            if Steps.Items (Index).Joins then
+               Told (5).Extent :=
+                 Interfaces.Unsigned_64'Min
+                   (Told (5).Extent,
+                    Interfaces.Unsigned_64 (Steps.Items (Index).Rows)
+                    * Interfaces.Unsigned_64 (Count) * 4);
+            end if;
+
             for Binding in Told'Range loop
                Notes (Binding).Target := Item.Sets (Index);
                Notes (Binding).Binding := C.unsigned (Binding - 1);
                Notes (Binding).Buffers := Told (Binding)'Address;
             end loop;
 
-            Update (Item.Logical, 4, Notes'Address, 0, Null_Handle);
+            Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
 
             <<Next_Set>>
          end loop;
@@ -5050,6 +5152,8 @@ package body Model_Runner.Platform.Device.Products is
          begin
             for Which in 1 .. Steps.Held loop
                Halved (Which) :=
+                 not Steps.Items (Which).Folded
+                 and then
                  (Steps.Items (Which).Norms
                   or else Steps.Items (Which).Blends
 
@@ -5145,6 +5249,14 @@ package body Model_Runner.Platform.Device.Products is
                Was_From : constant Integer := Half_From;
                Was_Wide : constant Natural := Half_Wide;
             begin
+               --  A folded join is not dispatched at all: the product
+               --  before it stored the sum, and this step's place is that
+               --  store. Nothing is bound, nothing is pushed, and the
+               --  half-precision copy is left as the product left it.
+               if This.Folded then
+                  goto Next_Dispatch;
+               end if;
+
                Half_From := -1;
                Half_Wide := 0;
 
@@ -5164,17 +5276,26 @@ package body Model_Runner.Platform.Device.Products is
                --  arms of a gated feed-forward, which used to run together
                --  and are the bulk of a layer.
                declare
+                  --  A product with a join folded into it reads the
+                  --  residual the join named, which is a step nothing else
+                  --  in this step says it reads.
+                  Joined : constant Natural :=
+                    (if This.Joins
+                     then Steps.Items (This.Joined).Reads else 0);
+
                   Source : constant Natural :=
                     Natural'Max
-                      (Natural'Max
-                         (This.Reads,
-                          (if This.Reads_Two /= 0 then This.Reads_Two
-                           elsif This.Blends then Index - 1 else 0)),
-                       (if This.Blends and then This.Reads_Two = 0
-                        then Index - 1
-                        elsif This.Chained and then This.Reads = 0
-                        then Index - 1
-                        else 0));
+                      (Joined,
+                       Natural'Max
+                         (Natural'Max
+                            (This.Reads,
+                             (if This.Reads_Two /= 0 then This.Reads_Two
+                              elsif This.Blends then Index - 1 else 0)),
+                          (if This.Blends and then This.Reads_Two = 0
+                           then Index - 1
+                           elsif This.Chained and then This.Reads = 0
+                           then Index - 1
+                           else 0)));
                   Wanted : constant Natural :=
                     (if This.Attends then Natural'Max (Source, Cached)
                      else Source);
@@ -5290,7 +5411,8 @@ package body Model_Runner.Platform.Device.Products is
                         --  begins, in halves, which is the one thing this
                         --  kernel needs that the others put nothing in.
                         Base    =>
-                          C.unsigned (Item.Cache_Elements * 2));
+                          C.unsigned (Item.Cache_Elements * 2),
+                          Joins   => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -5317,7 +5439,8 @@ package body Model_Runner.Platform.Device.Products is
 
                         --  The table begins where the buffer does: it is
                         --  written for this call and nothing else is in it.
-                        Base    => 0);
+                        Base    => 0,
+                        Joins   => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -5358,7 +5481,8 @@ package body Model_Runner.Platform.Device.Products is
                         --  with whatever else the device kept, in elements
                         --  rather than bytes because this one reads floats.
                         Base    =>
-                          C.unsigned (Places (Index).Base / 4));
+                          C.unsigned (Places (Index).Base / 4),
+                          Joins   => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -5481,6 +5605,7 @@ package body Model_Runner.Platform.Device.Products is
                            then Interfaces.Unsigned_64 (Region (Index))
                                 * (Item.Half_Region / 2) + 1
                            else 0),
+                        Joins => This.Joins,
                         Good => Done);
 
                      if not Done then
@@ -5504,7 +5629,8 @@ package body Model_Runner.Platform.Device.Products is
                         First   => C.unsigned (First),
                         Packing =>
                           C.unsigned (Weight_Packing'Pos (This.Packing)),
-                        Base    => C.unsigned (Places (Index).Base));
+                        Base    => C.unsigned (Places (Index).Base),
+                        Joins   => (if This.Joins then 1 else 0));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);

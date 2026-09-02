@@ -96,6 +96,16 @@ layout(std430, binding = 3) readonly  buffer Halves  { float16_t x[]; };
 //  binary32 into the result buffer that nothing would then read.
 layout(std430, binding = 3) writeonly buffer Made { float16_t made[]; };
 
+//  And the residual, where this product is one a join followed. A layer
+//  adds its input back to what attention made and to what the feed-forward
+//  made, and those two additions used to be dispatches of their own: two
+//  arms read, a third buffer written, and the normalization after it
+//  reading that third buffer back. Written here instead, the product's own
+//  store carries the sum and the buffer in the middle stops existing --
+//  which is the part that was costing, since a store's price on this device
+//  is what it makes its reader pay rather than the bytes it moves.
+layout(std430, binding = 4) readonly buffer Residual { float rj[]; };
+
 layout(push_constant) uniform Shape {
     uint rows;
     uint columns;
@@ -106,6 +116,10 @@ layout(push_constant) uniform Shape {
     uint first;
     uint format;
     uint base;
+
+    //  Whether the residual above is added to the answer before it is
+    //  stored. Zero for every product that no join followed.
+    uint joins;
 } shape;
 
 //  Rows and vectors of the answer one workgroup computes, and how much of
@@ -968,6 +982,15 @@ void main() {
                            gl_MatrixUseAccumulator> (acc[i][j]),
                    made, shape.first - 1u + where, shape.rows,
                    gl_CooperativeMatrixLayoutColumnMajor);
+            } else if (shape.joins != 0u) {
+                coopmat<float, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseAccumulator> was;
+
+                coopMatLoad(was, rj, where, shape.rows,
+                            gl_CooperativeMatrixLayoutColumnMajor);
+
+                coopMatStore(acc[i][j] + was, y, where, shape.rows,
+                             gl_CooperativeMatrixLayoutColumnMajor);
             } else {
                 coopMatStore(acc[i][j], y, where, shape.rows,
                              gl_CooperativeMatrixLayoutColumnMajor);

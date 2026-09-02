@@ -5,6 +5,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Faster
+
+- **The residual joins folded into the products they follow.** A layer joins
+  twice, and each join was a dispatch: two arms read, a buffer written, and
+  the normalization after it reading that buffer back. By removal they cost
+  **54 ms of a 826 ms device prompt** — and none of it is the reading, since
+  dropping one arm changed nothing measurable. Both joins follow a matrix
+  product nothing else reads, so the product stores the sum and the join is
+  not dispatched. Its step stays in the sequence (callers write step numbers)
+  marked folded, with the product's place.
+
+  **1419-token device prompt 0.818 s against 0.841 (2.7%)**, 64 generated
+  1.263 s against 1.280 (1.3%), every digest unchanged.
+
+  The trap found on the way is worth more: a layer leaves its answer at the
+  front of the result buffer for the next sequence, and the room reserved
+  there was the activation's size — right for a join, which writes the real
+  columns, wrong for a tile product, which writes the invented ones too. The
+  carry was refused rather than trimmed and the next sequence read a room
+  nothing wrote. Every batch was wrong except one of exactly 128 tokens,
+  which is what named it.
+
 ### Measured
 
 - **Both short-prompt rows were measuring a sleeping machine, and both are

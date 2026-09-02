@@ -43,6 +43,11 @@ layout(std430, binding = 0) readonly  buffer Weights { uint  w[]; };
 layout(std430, binding = 1) readonly  buffer Vectors { float x[]; };
 layout(std430, binding = 2) writeonly buffer Result  { float y[]; };
 
+//  The residual, where this product is one a join followed: the sum is
+//  stored rather than the product, and the join's own dispatch and the
+//  buffer between it and the normalization after it both stop existing.
+layout(std430, binding = 4) readonly buffer Residual { float rj[]; };
+
 layout(push_constant) uniform Shape {
     uint rows;
     uint columns;
@@ -67,6 +72,9 @@ layout(push_constant) uniform Shape {
     //  has to be aligned to something larger than a tensor is, so the buffer
     //  starts before the matrix does.
     uint base;
+
+    //  Whether the residual above is added before the answer is stored.
+    uint joins;
 } shape;
 
 const uint FMT_F32    = 0u;
@@ -717,7 +725,9 @@ void main() {
             for (uint lane = 0u; lane < LANES; ++lane) {
                 whole += shares[(gl_LocalInvocationID.x + lane) * GROUP + k];
             }
-            y[(shape.first + k) * shape.rows + row] = whole;
+            uint out_at = (shape.first + k) * shape.rows + row;
+
+            y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
         }
     }
 }

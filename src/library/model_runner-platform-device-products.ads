@@ -1300,6 +1300,26 @@ private
       --  the queries in one array rather than in a buffer of its own.
       At_Vector : Natural := 0;
 
+      --  A join folded into the product it followed, and the two sides of
+      --  that folding.
+      --
+      --  A layer adds its input back twice -- to what attention made and to
+      --  what the feed-forward made -- and each of those used to be a
+      --  dispatch: two arms read, a third buffer written, and the
+      --  normalization after it reading that third buffer back. Where the
+      --  arm is the product immediately before the join and nothing else
+      --  reads that product alone, the product stores the sum instead and
+      --  the join stops being dispatched at all. Its step stays in the
+      --  sequence so that every index a caller wrote keeps meaning what it
+      --  meant, and its place is the product's place, so a later step
+      --  naming the join reads what the product wrote.
+      --
+      --  Joins and Joined are on the product: whether it adds a residual,
+      --  and which step's join said so. Folded is on the join.
+      Joins     : Boolean := False;
+      Joined    : Natural := 0;
+      Folded    : Boolean := False;
+
       --  A normalizing step rather than a product: it reads one step's
       --  result, or the caller's activation, and scales every position of
       --  it by the root of its own mean square and then by a weight the
