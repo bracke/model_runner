@@ -5369,6 +5369,59 @@
 #   load:  0.26 to 1.77 across the sitting
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, the normalization taken apart, and nothing kept.
+#
+#   The item this came from said the normalization was 2.8 times behind and
+#   worth thirty-seven milliseconds, and named the eight barriers of its
+#   fold as the mechanism. Both halves of that were wrong, and the number
+#   was stale: it came from a removal sweep taken several commits before the
+#   binary32 change, and the kernel has been re-measured since.
+#
+#   Taken apart on the long prompt, each part voided in turn against a
+#   0.830-second baseline:
+#
+#     as it is                                   0.830 s
+#     the sum pass gone, a constant gain         0.834
+#     the output pass gone                       0.794
+#     neither pass                               0.795
+#
+#   So the whole kernel is thirty-five milliseconds, not fifty-eight, and
+#   llama.cpp's is twenty-one: 1.7 times behind and fourteen milliseconds of
+#   an 830-millisecond prompt. Not the largest thing left on that side.
+#
+#   And the fold is not any of it. Eight halvings is eight barriers across
+#   four waves; folded in two turns instead -- thirty-two partials to each
+#   of eight lanes, then those eight -- it reads 0.835 against 0.830. The
+#   barriers were free, which is why the subgroup reduction that item was
+#   really proposing was not built.
+#
+#   The sum pass is free too, which the table above says plainly: removing
+#   the first read of the row and the squares makes the kernel no faster.
+#   Everything is in the output pass -- and inside that pass the reads are
+#   free as well. Writing a constant, reading neither the row nor the gain,
+#   still reads 0.832.
+#
+#   So the whole cost of this kernel is its store. And the store is not
+#   slow for its width: a binary32 store of twice the bytes reads 0.819,
+#   eleven milliseconds faster than the half-precision one -- but that
+#   variant writes the result buffer rather than the half-precision buffer,
+#   and packing two halves into one four-byte store of the same buffer
+#   reads 0.838. It is not the width. It is which buffer is written.
+#
+#   Which points somewhere this file has already looked and not found
+#   anything: the result buffer is host-cached memory out of the heap that
+#   is not the device's own, and the half buffer is the device's own and
+#   host-coherent. The entry two above this one moved the half buffer to a
+#   kind that is the device's own and nothing else and measured nothing.
+#   That was the right idea tested at the wrong end -- it looked for a
+#   faster read where the cost is a write -- and it is the open question
+#   this leaves.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

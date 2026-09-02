@@ -10377,6 +10377,61 @@ elementwise kernels at 1.16**, with the matrix products level. It is the
 first time in this file that the device's gap has not been mostly one row.
 
 
+### The normalization taken apart, and it is the store
+
+The section above leaves the normalization 2.8 times behind llama.cpp's and
+names the eight barriers of its fold as the reason. Both halves of that were
+wrong, and the number was stale: fifty-eight milliseconds came from a removal
+sweep taken before the binary32 change, and the kernel has been re-measured
+since.
+
+Taken apart on the long prompt, each part voided in turn against a
+0.830-second baseline:
+
+| | prompt |
+| --- | ---: |
+| as it is | 0.830 s |
+| the sum pass gone, a constant gain | 0.834 s |
+| the output pass gone | **0.794 s** |
+| neither pass | 0.795 s |
+
+**The kernel is thirty-five milliseconds, not fifty-eight**, against
+llama.cpp's twenty-one: 1.7 times behind and fourteen milliseconds of an
+830-millisecond prompt. It is not the largest thing left on that side and the
+item that ranked it first was ranking a number that had already moved.
+
+**The fold is none of it.** Eight halvings is eight barriers across four
+waves, and folded in two turns instead -- thirty-two partials to each of
+eight lanes, then those eight -- it reads 0.835 against 0.830. The barriers
+were free, which is why the subgroup reduction that item was really proposing
+was never built: the cheap version of it already said no.
+
+**The sum pass is free as well**, which the table says plainly: removing the
+first read of the row and all the squares makes the kernel no faster. The
+second read warms nothing the first did not, or rather the first warms
+nothing the second could not do for itself.
+
+Everything is in the output pass -- and inside that pass, **the reads are
+free too**. Writing a constant, reading neither the row nor the gain, still
+reads 0.832.
+
+So the whole cost of this kernel is its store, and the store is not slow for
+its width. A binary32 store of *twice* the bytes reads 0.819, eleven
+milliseconds faster than the half-precision one. But that variant writes the
+result buffer rather than the half-precision buffer -- and packing two halves
+into one four-byte store of the *same* buffer reads 0.838. **It is not the
+width of the store. It is which buffer is written.**
+
+Which points somewhere this page has already looked without finding
+anything. The result buffer is host-cached memory out of the heap that is not
+the device's own; the half-precision buffer is the device's own and
+host-coherent. `### The memory kind, and the number the item was ranked on`
+above moved the half buffer to a kind that is the device's own and nothing
+else, and measured nothing -- but it was looking for a faster **read** where
+the cost turns out to be a **write**. That is the open question this leaves,
+and it is a better-posed one than the item that started this.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same

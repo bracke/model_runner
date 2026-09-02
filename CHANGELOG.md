@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The normalization taken apart — the fold is free, the store is
+  everything, and the item's number was stale.** The 58 ms that ranked this
+  first came from a removal sweep taken before the binary32 change; the
+  kernel is **35 ms** against llama.cpp's 21 — 1.7× and 14 ms of an 830 ms
+  prompt. Voided part by part against 0.830 s: the sum pass gone reads 0.834
+  (free), the output pass gone reads **0.794**, neither reads 0.795.
+
+  The eight barriers named as the mechanism cost nothing — folding in two
+  turns instead reads 0.835 — so the subgroup reduction that item was really
+  proposing was never built. Inside the output pass the reads are free too:
+  writing a constant and reading nothing still reads 0.832.
+
+  **The whole cost is the store, and not for its width.** A binary32 store of
+  twice the bytes reads 0.819 — but it writes the *result* buffer, not the
+  half-precision one, and packing two halves into one four-byte store of the
+  same buffer reads 0.838. It is which buffer is written. The result buffer
+  is host-cached out of the heap that is not the device's own; the
+  half-precision one is the device's own and host-coherent. An earlier entry
+  moved that buffer to a device-only kind and measured nothing — it was
+  looking for a faster read where the cost is a write.
+
 - **Where the device's gap is now — and a "bound" that was a bug.** Taken
   again kernel against kernel (ours by removal, llama.cpp's from
   `GGML_VK_PERF_LOGGER`), the map has changed: **matrix products 595 ms
