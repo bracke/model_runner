@@ -10450,6 +10450,34 @@ barrier in a layer is a barrier over that buffer. The result buffer, in the
 variant that was faster, was touched by nothing else in the sequence. That is
 the next question, and it is about barriers rather than about memory.
 
+**Asked, and it bounds itself.** A layer's steps are a chain -- normalize,
+three projections, rotate, attend, project out, join, normalize, two arms,
+combine, project down, join -- and the engine walks a memory barrier in
+wherever a step reads what a step before it wrote: about ten a layer, so
+something over six hundred in a 1419-token prompt. Removed altogether, which
+answers wrongly and is only a ceiling, the prompt reads **0.809 s against
+0.830** and a generated token 1.199 against 1.225.
+
+**Twenty-one milliseconds, two and a half per cent** -- the whole budget for
+anything barrier-shaped, and the eleven the section above is chasing is half
+of it. It cannot be the count, either: both variants of that experiment issue
+the same barriers in the same places.
+
+Split, by asking for a barrier that orders execution and requests no cache
+work at all -- not correct, and only a measurement -- the prompt reads
+**0.816 s**. So seven milliseconds is the drain, a dispatch waiting for the
+one before it to empty, which is what a chain of dependent steps is; and
+fourteen is the cache work a shader read after a shader write requires on
+this part, because the per-unit vector caches have to be invalidated or one
+compute unit may read a line another wrote. It answered correctly without
+them in that run, which is luck about which lines collided rather than a
+property worth keeping.
+
+Nothing there is removable, and the ceiling is the point: **two and a half
+per cent, most of it required.** The eleven milliseconds is still
+unexplained, and is now bounded by a number small enough that it is not the
+next thing to chase.
+
 
 ### The activation quantizer, widened and refused
 

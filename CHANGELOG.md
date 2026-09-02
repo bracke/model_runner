@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **What the barriers cost, which bounds the question they came from.** A
+  layer walks a memory barrier in wherever a step reads what a step before it
+  wrote — about ten a layer, six hundred in a 1419-token prompt. Removed
+  altogether (wrong answers, a ceiling only): **0.809 s against 0.830**, and
+  1.199 against 1.225 generating. **21 ms, 2.5%** — the whole budget for
+  anything barrier-shaped, and the 11 ms being chased is half of it. It is
+  not the count either: both variants of that experiment issue the same
+  barriers.
+
+  Split with an execution-only barrier that requests no cache work: **0.816
+  s**. So 7 ms is the drain — a dispatch waiting for the one before it — and
+  14 is the cache maintenance a shader-read-after-shader-write requires,
+  because the per-unit vector caches must be invalidated. Nothing there is
+  removable.
+
 - **The normalization taken apart — the fold is free, the store is
   everything, and the item's number was stale.** The 58 ms that ranked this
   first came from a removal sweep taken before the binary32 change; the

@@ -5467,6 +5467,52 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, what the barriers cost, which bounds the question above.
+#
+#   A layer's steps are a chain -- normalize, three projections, rotate,
+#   attend, project out, join, normalize, two arms, combine, project down,
+#   join -- and the engine walks a memory barrier in wherever a step reads
+#   what a step before it wrote. About ten a layer, twenty-two layers, three
+#   batches: something over six hundred in a 1419-token prompt.
+#
+#   Priced by removing them, which answers wrongly and is only a ceiling:
+#
+#     as it is                         0.830 s evaluating the long prompt
+#                                      1.225 s generating
+#     no barriers at all               0.809
+#                                      1.199
+#
+#   Twenty-one milliseconds of eight hundred and thirty, which is two and a
+#   half per cent and the whole budget for anything barrier-shaped. The
+#   eleven milliseconds the entry above is chasing is half of that, and it
+#   cannot be the count: both of those variants issue the same barriers in
+#   the same places.
+#
+#   Split, by asking for one that orders execution and asks for no cache
+#   work -- no memory barrier in the call at all, which is not correct and
+#   is only a measurement:
+#
+#     write-to-read over all memory    0.830 s
+#     execution only                   0.816
+#
+#   So seven milliseconds is the drain -- a dispatch waiting for the one
+#   before it to empty, which is what a chain of dependent steps is -- and
+#   fourteen is the cache work. That fourteen is what a shader read after a
+#   shader write requires on this part: the per-unit vector caches have to be
+#   invalidated or a compute unit may read a line another wrote. It answered
+#   correctly without them in this run, which is luck about which lines
+#   collided and not a property to keep.
+#
+#   Nothing here is removable, and the ceiling is what the entry is worth
+#   writing for: two and a half per cent, most of it required. The eleven
+#   milliseconds remains unexplained, but it is now bounded by a number
+#   small enough that it is not the next thing to chase.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
