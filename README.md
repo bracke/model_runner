@@ -10479,6 +10479,55 @@ unexplained, and is now bounded by a number small enough that it is not the
 next thing to chase.
 
 
+### Attention read line by line, and nothing to take from it
+
+Attention is a hundred and eight milliseconds of a device prompt against
+llama.cpp's eighty -- 1.35 times, twenty-eight milliseconds, and the largest
+named item left on that side. Reading the other runtime's source is what
+closed the processor's prompt two commits ago, so `flash_attn_cm1.comp` was
+read through rather than sampled, beside this kernel.
+
+**They are the same design, step for step:**
+
+| | both kernels |
+| --- | --- |
+| the scores | a cooperative matrix product of the queries against a tile of keys, stored to shared memory |
+| the softmax | read back into ordinary registers, the running maximum and total kept there, everything accumulated so far rescaled by the exponential of the change in maximum |
+| the weighing | a second cooperative matrix product, its result stored to shared memory and added into those same registers |
+
+That last step is the one this page had guessed was theirs alone -- keeping
+the output in registers so it can be rescaled, because a cooperative matrix
+cannot be. It is not. `coopMatStore` into `pvsh` and `Of[r][d] += pvsh[...]`
+is exactly what this kernel does with `pacc` and `ss`. The tile is the same
+too: sixteen query rows by sixty-four cached positions, which
+`get_fa_tuning_params_coopmat1` gives this device and which this kernel
+already used.
+
+The one structural difference is the four subgroups, and `### Attention split
+four ways` above already built that: fourteen per cent slower here.
+
+**The one parameter left unswept is the query block, and it is at its peak.**
+It must be a multiple of sixteen for the instruction, so there are two
+candidates:
+
+| | 1419-token device prompt |
+| --- | ---: |
+| **sixteen query rows** | **0.830 s** |
+| thirty-two | 0.911 s |
+
+Ten per cent worse, which is the answer every taller tile on this device has
+given -- the third such reading, after the hundred-and-twenty-eight-row
+product tile and the staged operands.
+
+So the twenty-eight milliseconds is not the tile, not the structure, not the
+split and not the block. Reading the other runtime's source has twice found
+an answer on the processor side and twice now found nothing here, and that is
+worth recording as a result about the two sides rather than about attention:
+**this program's device kernels are already shaped the way the other
+runtime's are, and where they differ it is because this part was measured
+against the difference.**
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same

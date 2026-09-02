@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Attention read line by line against llama.cpp's, and nothing to take from
+  it.** It is 108 ms of a device prompt against their 80 — the largest named
+  item left on that side — so `flash_attn_cm1.comp` was read through rather
+  than sampled. **The two are the same design step for step**: scores by
+  cooperative matrix into shared memory, softmax read back into registers
+  with a rescale, weighing by a second cooperative matrix stored to shared
+  and added into those registers. The step this page had guessed was theirs
+  alone is `coopMatStore` into `pvsh` and `Of[r][d] += pvsh[...]` — exactly
+  what this kernel does. The tile is the same sixteen-by-sixty-four.
+
+  The one structural difference, four subgroups, was already built and is 14%
+  slower here. The one unswept parameter, the query block, is at its peak:
+  sixteen rows reads **0.830 s** and thirty-two **0.911** — the third taller
+  tile on this device to lose.
+
+  Reading the other runtime's source found the answer twice on the processor
+  side and nothing twice here, which is a result about the two sides: the
+  device kernels are already shaped the way theirs are.
+
 - **What the barriers cost, which bounds the question they came from.** A
   layer walks a memory barrier in wherever a step reads what a step before it
   wrote — about ten a layer, six hundred in a 1419-token prompt. Removed

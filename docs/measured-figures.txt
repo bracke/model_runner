@@ -5513,6 +5513,60 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, attention read line by line against llama.cpp's, and nothing
+# to take from it.
+#
+#   Attention is a hundred and eight milliseconds of a device prompt against
+#   llama.cpp's eighty -- 1.35 times, twenty-eight milliseconds, and the
+#   largest named item left on that side. So flash_attn_cm1.comp was read
+#   through rather than sampled, beside this kernel.
+#
+#   They are the same design, step for step:
+#
+#     the scores            a cooperative matrix product of the queries
+#                           against a tile of keys, stored to shared memory
+#     the softmax           read back into ordinary registers, the running
+#                           maximum and total kept there, everything
+#                           accumulated so far rescaled by the exponential
+#                           of the change in maximum
+#     the weighing          a second cooperative matrix product, its result
+#                           stored to shared memory and added into those
+#                           same registers
+#
+#   That last step is the one this file thought might be theirs alone --
+#   keeping the output in registers so it can be rescaled, because a
+#   cooperative matrix cannot be. It is not: coopMatStore into pvsh and
+#   Of[r][d] += pvsh[...] is exactly what this kernel does with pacc and ss.
+#   The tile is the same too, sixteen query rows by sixty-four cached
+#   positions, which get_fa_tuning_params_coopmat1 gives this device and
+#   which this kernel already used.
+#
+#   The one difference is the four subgroups, and that was built two entries
+#   below this one and is fourteen per cent slower here.
+#
+#   The one parameter left unswept is the query block, and it is at its
+#   peak. It must be a multiple of sixteen for the instruction, so there are
+#   two candidates:
+#
+#     sixteen query rows    0.830 s evaluating the long prompt
+#     thirty-two           0.911
+#
+#   Ten per cent worse, the same answer every taller tile on this device has
+#   given. Sixteen it is.
+#
+#   So the twenty-eight milliseconds is not the tile, not the structure, not
+#   the split and not the block. Reading the other runtime's source has
+#   twice now been the thing that found an answer on the processor side and
+#   twice now found nothing here, which is worth recording as a result about
+#   the two sides rather than about attention: this program's device kernels
+#   are shaped the way the other runtime's are, and where they differ it is
+#   because this part measured against the difference.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
