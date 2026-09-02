@@ -5993,8 +5993,14 @@ package body Model_Runner.Llama is
                Shared : E.Error_Info;
             begin
                if Item.Held /= Exact or else not Resident then
+                  --  How much arithmetic the heads are between them: every
+                  --  head reads the positions the cache holds, a head's
+                  --  worth of each. A generated token early in a
+                  --  conversation is a few hundred thousand elements and
+                  --  the pool is not woken for it.
                   Workers_CPU.Dispatch_Shares
-                    (Item.Team, Heads, Share'Unchecked_Access, Shared);
+                    (Item.Team, Heads, Share'Unchecked_Access, Shared,
+                     Cost => Heads * Reserved * Head_Size);
                   Usable := Share.Ok and then E.Is_Ok (Shared);
                elsif Item.Held = Exact and then Resident
                  and then Settings.Experts = 0

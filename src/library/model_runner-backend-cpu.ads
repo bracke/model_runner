@@ -261,15 +261,29 @@ package Model_Runner.Backend.CPU is
    --  copied and the caller blocks until every worker has finished, so it
    --  stays alive for the whole job.
    --
+   --  Cost is how much arithmetic the whole job is, in elements, and it is
+   --  what decides whether the pool is woken for it at all. A job smaller
+   --  than the wake and the settle it would cost is done here instead --
+   --  which is the same answer to the bit, since every item of these jobs is
+   --  independent of every other and a share is a range of them. A generated
+   --  token's normalizations, joins and gated middles are one position each,
+   --  a few thousand elements against a wake of tens of microseconds, and a
+   --  layer posts five of them.
+   --
+   --  Zero means the caller has not said, and the pool is woken as it always
+   --  was.
+   --
    --  @param Item Pool to run on, or null to run the whole of it here.
    --  @param Items How many items there are.
    --  @param Work What to do with a share of them.
    --  @param Status Success, or the pool refusing.
+   --  @param Cost Elements the whole job touches, or zero for unsaid.
    procedure Dispatch_Shares
      (Item   : Pool_Reference;
       Items  : Element_Count;
       Work   : Task_Item_Access;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Cost   : Element_Count := 0);
 
    --  Allow the products that quantize their activations to a byte.
    --

@@ -212,6 +212,18 @@ package body Model_Runner.Backend.CPU is
    --  tile beside it already does.
    Vector_Team : constant Share_Count := 5;
 
+   --  Below this much arithmetic a job is done by the task that submits it
+   --  rather than shared out.
+   --
+   --  A generated token's small work -- two normalizations, two residual
+   --  joins and the gated middle of the feed-forward -- is one position
+   --  each, a few thousand elements, against a wake and a settle of tens of
+   --  microseconds. Five of those a layer, twenty-two layers, is a hundred
+   --  and ten jobs a token whose arithmetic is a fraction of what posting
+   --  them costs. Measured rather than reasoned: see `### The jobs that were
+   --  not worth waking anyone for` in the README.
+   Inline_Floor : constant Element_Count := 1_048_576;
+
    procedure Partition
      (Rows    : Element_Count;
       Workers : Share_Count;
@@ -614,7 +626,8 @@ package body Model_Runner.Backend.CPU is
      (Item   : Pool_Reference;
       Items  : Element_Count;
       Work   : Task_Item_Access;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      Cost   : Element_Count := 0)
    is
       Job_Of : Job;
       Taken  : Boolean;
@@ -629,7 +642,14 @@ package body Model_Runner.Backend.CPU is
 
       --  No pool, or one worker: the calling task does the whole of it,
       --  which is what the serial matrix path does beside this.
-      if Item = null then
+      --
+      --  And a job too small to be worth waking anyone for, which is the
+      --  same answer by the same code: every item of these jobs is
+      --  independent of every other, so one task running the whole range
+      --  computes what the shares would have computed, element for element.
+      if Item = null
+        or else (Cost /= 0 and then Cost < Inline_Floor)
+      then
          Work.all.Run (0, Items - 1);
          return;
       end if;

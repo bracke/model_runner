@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Faster
 
+- **The pool is not woken for a job smaller than waking it.** The premise was
+  half wrong and that is the useful half: four of the five pieces of small
+  work a generated token does were already inline, because the layer takes
+  `Team := (if Count >= 16 then Item.Team else null)` — and the comment
+  saying so sits two lines above the call this set out to change. What was
+  left is **attention**, which reaches the pool through `Item.Team` with no
+  such test, so a generated token wakes five workers twenty-two times to
+  divide a seventy-position cache.
+
+  `Dispatch_Shares` now takes a `Cost` — the arithmetic of the whole job in
+  elements — and the submitting task does the job alone below a floor.
+  Bit-exact: every item is independent and a share is a range of them.
+  **Attending 0.027 s against 0.053, generating 1.748 s against 1.780
+  (1.8%)**, the long prompt level.
+
+  The floor is bracketed, not reasoned: generating after a 1419-token prompt,
+  where it must not inline, a floor of 8M reads 2.383 s against 1.953 at 1M
+  and 1.919 with no floor at all. A first attempt that also passed the cost
+  at the position-shared sites inlined a 128-position batch's normalizations
+  — real work — and the long prompt read 5.011 s against 4.891.
+
 - **Five jobs a layer where there were two.** The processor's generating row
   was 1.11 behind, and the bus said why: one run moves **38.6 GB/s** of the
   model where two runs together move **43.1** — twelve per cent the part will
