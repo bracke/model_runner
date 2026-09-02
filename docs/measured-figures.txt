@@ -5661,6 +5661,82 @@
 #   load:  0.27 to 5.29 across the sitting
 #   model: TinyLlama-1.1B-Chat Q8_0, and Q4_K_M and Q2_K beside it
 #
+# 2026-09-02, three constants asked again, and all three stand.
+#
+#   The entry above ends by saying a tuned constant is a measurement with a
+#   date. Three more were asked. None of them moves, and two of the three
+#   sweeps are worth having anyway because they say how much the choice
+#   matters.
+#
+#   The chunk grain, which the pool takes a worker's next piece from. It has
+#   never been swept: it was set to the row tile because that is what the
+#   tiling requires as a floor, and the floor was never tested against
+#   anything above it. llama.cpp hands out sixteen rows, and sixty-four for
+#   a large matrix, which is a deliberate two-value choice in
+#   ggml_compute_forward_mul_mat. Two rounds, medians of three:
+#
+#     one tile, 32 rows     4.793, 4.861 s evaluating the long prompt
+#                           1.823, 1.827 s generating
+#                           0.360, 0.372 s at 110 tokens
+#     two tiles, 64         5.010, 5.008    1.834, 1.831    0.393, 0.376
+#     three tiles, 96       5.183, 5.345    1.840, 1.832    0.425, 0.391
+#     four tiles, 128       5.589, 5.544    1.872, 1.873    0.417, 0.444
+#
+#   One tile is the best of them and the curve is monotone: two costs four
+#   per cent of the long prompt, three eight and four fifteen. The floor is
+#   also the optimum, which is luck rather than design -- the grain cannot
+#   go below a tile without splitting one, and splitting one would change
+#   which kernel a row's tile takes and move the answers at different worker
+#   counts. So the constant is right and the reason it is right is not the
+#   reason it was chosen.
+#
+#   The two thresholds that gate the pool. A batch below sixteen positions
+#   keeps its elementwise loops on the calling task; that was measured when
+#   three such loops went to the pool and there are five now. Swept over
+#   one, eight, sixteen and sixty-four, two rounds:
+#
+#     generating   1.800, 1.803, 1.808, 1.804 s
+#                  1.797, 1.801, 1.805, 1.810
+#     drafted      3.044, 3.052, 3.019, 3.051
+#                  3.006, 2.983, 2.964, 3.049
+#
+#   Flat everywhere, which is the answer: a batch of one or five positions
+#   has so little elementwise work that neither sharing it nor keeping it
+#   can be seen. Sixteen stands because nothing argues against it.
+#
+#   The activation quantizer keeps a run under two hundred and fifty-six
+#   blocks to itself, and that one does matter:
+#
+#     sixty-four blocks    1.909 s generating, 10.00 s of processor time
+#     two hundred and      1.801,               9.26
+#       fifty-six
+#     a thousand and       1.797,               9.27
+#       twenty-four
+#
+#   Six per cent worse at sixty-four and level at a thousand: a generated
+#   token's sixty-four blocks are quantized faster than a pool can be told
+#   about them, which is exactly what the constant was put there to say.
+#   Two hundred and fifty-six is on the flat and stays.
+#
+#   And the batch, five hundred and twelve, which was swept on the device
+#   recently and never on the processor since the prompt path changed three
+#   times under it:
+#
+#     256    4.973, 4.685 s cpu    0.863, 0.874 s device
+#     512    4.925, 4.850          0.860, 0.874
+#     768    4.834, 4.835          0.853
+#     1024   4.779, 4.816          0.845, 0.875
+#
+#   Two per cent across a fourfold range with the arms overlapping -- the
+#   256 arm holds both the slowest reading and the fastest. Nothing to
+#   choose, and five hundred and twelve is also what the other runtime uses,
+#   so it stays.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0, with Q2_K as the draft
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Three more constants asked, and all three stand.** The **chunk grain**
+  had never been swept — it was set to the row tile because the tiling
+  requires that as a floor. One tile is also the optimum and the curve is
+  monotone: 4.827 s on the long prompt at one tile, 5.009 at two, 5.264 at
+  three, 5.567 at four. The floor being the optimum is luck rather than
+  design, since the grain cannot go below a tile without moving the answers.
+
+  The **elementwise pool gate** (sixteen positions) is flat from one to
+  sixty-four — 1.797 to 1.810 s generating, 2.964 to 3.052 drafted — because
+  a batch of one or five positions has too little elementwise work to see.
+  The **quantizer's 256-block floor** does matter: 64 blocks costs 6% (1.909
+  s against 1.801) and 1024 is level.
+
+  **`Max_Batch` = 512** is flat from 256 to 1024 on both backends, two per
+  cent with the arms overlapping.
+
 - **The share count a generated token was tuned to — 2.7%, and the constant
   was measured against a pool that no longer exists.** A generated token gets
   four shares where a prompt takes eight, because under the old fixed cut a

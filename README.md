@@ -10575,6 +10575,65 @@ any more, and the pattern is worth naming: **a tuned constant is a
 measurement, and a measurement has a date.**
 
 
+### Three more constants asked, and all three stand
+
+The section above ends by saying a tuned constant is a measurement with a
+date. Three more were asked. None of them moves -- and two of the sweeps are
+worth keeping anyway, because they say how much the choice matters.
+
+**The chunk grain**, which the pool takes a worker's next piece from, had
+never been swept at all: it was set to the row tile because the tiling
+requires that as a floor, and the floor was never tested against anything
+above it. llama.cpp hands out sixteen rows, and sixty-four for a large
+matrix, which is a deliberate two-value choice in
+`ggml_compute_forward_mul_mat`. Two rounds, medians of three:
+
+| grain | 1419-token prompt | 64 generated | 110-token prompt |
+| --- | ---: | ---: | ---: |
+| **one tile, 32 rows** | **4.827 s** | **1.825 s** | **0.366 s** |
+| two tiles, 64 | 5.009 s | 1.833 s | 0.385 s |
+| three tiles, 96 | 5.264 s | 1.836 s | 0.408 s |
+| four tiles, 128 | 5.567 s | 1.873 s | 0.431 s |
+
+One tile is the best of them and the curve is monotone: two costs four per
+cent of the long prompt, three eight and four fifteen. **The floor is also
+the optimum, which is luck rather than design** -- the grain cannot go below
+a tile without splitting one, and splitting one would change which kernel a
+row's tile takes and move the answers at different worker counts. The
+constant is right, and the reason it is right is not the reason it was
+chosen.
+
+**The two thresholds that gate the pool.** A batch below sixteen positions
+keeps its elementwise loops on the calling task, which was measured when
+three such loops went to the pool and there are five now. Swept over one,
+eight, sixteen and sixty-four, generating reads 1.797 to 1.810 seconds and a
+drafted run 2.964 to 3.052 -- flat everywhere, which is itself the answer: a
+batch of one or five positions has so little elementwise work that neither
+sharing it nor keeping it can be seen.
+
+The activation quantizer's floor does matter:
+
+| a run under | 64 generated | processor time |
+| --- | ---: | ---: |
+| sixty-four blocks | 1.909 s | 10.00 s |
+| **two hundred and fifty-six** | **1.801 s** | 9.26 s |
+| a thousand and twenty-four | 1.797 s | 9.27 s |
+
+Six per cent worse at sixty-four and level at a thousand. A generated token's
+sixty-four blocks are quantized faster than a pool can be told about them,
+which is exactly what that constant was put there to say.
+
+**And the batch, five hundred and twelve** -- swept on the device recently
+and never on the processor since the prompt path changed three times under
+it. From 256 to 1024 the long prompt reads 4.685 to 4.973 seconds and the
+device 0.845 to 0.875, two per cent across a fourfold range with the arms
+overlapping: the 256 arm holds both the slowest reading and the fastest.
+Nothing to choose, and 512 is what the other runtime uses as well.
+
+Three constants asked, three unchanged, and the sweeps cost less than the one
+that moved was worth.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same
