@@ -10634,6 +10634,65 @@ Three constants asked, three unchanged, and the sweeps cost less than the one
 that moved was worth.
 
 
+### The short device prompt, and the tile table on the other side
+
+The device's 110-token prompt is 1.53 times behind, the widest ratio in this
+file, and the reason offered was occupancy: a 110-column batch is one column
+tile wide, so a 2048-row product dispatches sixty-four workgroups onto twelve
+compute units. A narrower column tile doubles that.
+
+| column tile | 110 tokens | 1419 tokens |
+| --- | ---: | ---: |
+| a hundred and twenty-eight | **0.101 s** | **0.841 s** |
+| sixty-four | 0.103 s | 0.846 s |
+
+Nothing at the short length and slightly worse at the long one, with twice
+the workgroups. **That is the fourth independent measurement on this device
+to say occupancy is not the constraint**, after the taller product tile, the
+staged operands and the four-subgroup attention.
+
+So the other runtime's short prompt was measured rather than reasoned about,
+with `GGML_VK_PERF_LOGGER` on the same file and the same length, taking the
+warm block:
+
+| | llama.cpp, 110 tokens |
+| --- | ---: |
+| matrix products | 63.1 ms of 74.0 -- **85 %** |
+| the gated middle | 2.70 ms |
+| the residual adds | 1.83 ms |
+| the normalization | 1.93 ms |
+| attention | 1.53 ms |
+| the rotation | 1.22 ms |
+
+**Which is the same shape as ours**: eighty-five per cent matrix products
+there and eighty-five here, 63.1 milliseconds against our 88 of 104. The
+whole of the difference at this length is in the one row -- the row we are
+level with at five hundred and twelve columns.
+
+Their rates by shape say where it goes. At a hundred and ten columns they
+read 2908, 3765, 575 and 4073 gigaflops for the four products a layer makes,
+and at five hundred and twelve 4552, 5581, 2097 and 5002. **They lose between
+a quarter and a third going from 512 columns to 110, and we lose
+forty-seven per cent** -- 0.80 milliseconds a token against 0.425. The narrow
+one, the 256-row key and value projection, is the worst for both: 575
+gigaflops, 8.8 of their 63 milliseconds.
+
+And `ggml-vulkan.cpp` keeps **three tile shapes chosen by the matrix's
+size** where this program has one -- small `{32 rows, 64 columns, 128 deep}`,
+medium `{128, 128, 64}`, large `{128, 256, 64}`. At a hundred and ten columns
+it picks the medium, which is *taller* than ours rather than narrower, and
+the taller tile is what `### The tile llama.cpp uses` already measured at
+thirteen per cent worse on the long prompt.
+
+What is left is the one dimension of the tile this program has never varied:
+**the depth.** All three of their shapes take sixty-four or a hundred and
+twenty-eight columns of the shared dimension at a step where this takes
+thirty-two. Set to sixty-four the shader compiles and the run does not
+complete -- the staging is written for a thirty-two-deep chunk and a
+sixty-four-lane workgroup, so it is shader work rather than a constant. That
+is the only untried thing left in this kernel.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same

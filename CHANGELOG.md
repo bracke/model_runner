@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The short device prompt: the occupancy premise refuted, and the other
+  runtime's tile table read.** Halving the column tile doubles the
+  workgroups and changes nothing — **0.103 s against 0.101** at 110 tokens,
+  0.846 against 0.841 at 1419. Fourth independent measurement on this device
+  that occupancy is not the constraint.
+
+  Measured with `GGML_VK_PERF_LOGGER`, llama.cpp's 110-token prompt is **85%
+  matrix products (63.1 ms of 74.0) — the same shape as ours** (88 of 104).
+  Their rates by shape: 2908/3765/575/4073 GFLOPS at n=110 against
+  4552/5581/2097/5002 at n=512, so they lose a quarter to a third going from
+  512 columns to 110 and **we lose 47%**. The 256-row projection is the worst
+  for both (575 GFLOPS).
+
+  `ggml-vulkan.cpp` keeps **three tile shapes chosen by matrix size** where
+  this has one, and at n=110 it picks the *taller* one — already measured 13%
+  worse here on the long prompt. What is left untried is the tile's **depth**:
+  all three of their shapes take 64 or 128 columns of the shared dimension
+  where this takes 32, and setting it to 64 compiles but does not run, so it
+  is shader work rather than a constant.
+
 - **Three more constants asked, and all three stand.** The **chunk grain**
   had never been swept — it was set to the row tile because the tiling
   requires that as a floor. One tile is also the optimum and the curve is

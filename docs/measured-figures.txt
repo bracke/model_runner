@@ -5737,6 +5737,70 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0, with Q2_K as the draft
 #
+# 2026-09-02, the short device prompt: the premise refuted, and the other
+# runtime's tile table read.
+#
+#   The device's 110-token prompt is 1.53 times behind, the widest ratio in
+#   this file. The reason offered was occupancy: a 110-column batch is one
+#   column tile wide, so a 2048-row product dispatches sixty-four workgroups
+#   onto twelve compute units and the tail is a large part of the whole. A
+#   narrower column tile would double the count.
+#
+#     a hundred and twenty-eight columns   0.101 s at 110 tokens
+#                                          0.841 s at 1419
+#     sixty-four                           0.103
+#                                          0.846
+#
+#   Nothing at 110 and slightly worse at 1419, with twice the workgroups.
+#   That is the fourth independent measurement on this device to say
+#   occupancy is not the constraint, after the taller product tile, the
+#   staged operands and the four-subgroup attention.
+#
+#   So the other runtime's short prompt was measured rather than reasoned
+#   about, with GGML_VK_PERF_LOGGER on the same file and the same length,
+#   taking the warm block:
+#
+#     matrix products    63.1 ms of 74.0    85 per cent
+#     the gated middle    2.70
+#     the residual adds   1.83
+#     the normalization   1.93
+#     attention           1.53
+#     the rotation        1.22
+#
+#   Which is the same shape as ours: eighty-five per cent matrix products
+#   there and eighty-five here, 63.1 milliseconds against our 88 of 104. The
+#   whole of the difference at this length is in the one row, and it is the
+#   row we are level with at five hundred and twelve columns.
+#
+#   Their rates by shape say where it goes. At n=110 they read 2908, 3765,
+#   575 and 4073 gigaflops for the four products a layer makes; at n=512
+#   they read 4552, 5581, 2097 and 5002. So they lose between a quarter and
+#   a third going from five hundred and twelve columns to a hundred and ten,
+#   and we lose forty-seven per cent -- 0.80 milliseconds a token against
+#   0.425. The narrow one, the 256-row key and value projection, is the
+#   worst for both of them: 575 gigaflops, 8.8 of their 63 milliseconds.
+#
+#   And llama.cpp has three tile shapes chosen by the matrix's size where
+#   this program has one -- small {32 rows, 64 columns, 128 deep}, medium
+#   {128, 128, 64}, large {128, 256, 64}. At a hundred and ten columns it
+#   picks the medium, which is taller than ours rather than narrower, and
+#   the taller tile is what this file already measured at thirteen per cent
+#   worse on the long prompt.
+#
+#   What is left of the difference is the one dimension of the tile this
+#   program has never varied: the depth. All three of their shapes take
+#   sixty-four or a hundred and twenty-eight columns of the shared dimension
+#   at a step where this takes thirty-two. Set to sixty-four the shader
+#   compiles and the run does not complete -- the staging is written for a
+#   thirty-two-deep chunk and a sixty-four-lane workgroup, so it is shader
+#   work rather than a constant. That is the next thing to try here and it
+#   is the only untried one left.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
