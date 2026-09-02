@@ -10853,6 +10853,57 @@ Recorded as an open question with six doors closed, which is worth more than
 a seventh guess.
 
 
+### The probe was the bug: there is no thirty-one milliseconds
+
+Three sections above have chased a store. The normalization writes its answer
+into the half-precision buffer, and writing it into the result buffer instead
+reads twenty-nine to thirty-one milliseconds faster; six explanations were
+eliminated -- the memory kind at both ends, the size of the buffer, the width
+of the store, its contents, the barriers. **The seventh test was of the probe
+itself, and it should have been the first.**
+
+**Is the effect general?** The combining step writes the same buffer the same
+way. Given the same treatment -- its answer into the result buffer instead --
+the long device prompt reads 0.829 s against a baseline of 0.828 to 0.848.
+Nothing, where the same change to the normalization is worth twenty-nine
+milliseconds.
+
+**What does the write actually cost?** Made to write *both* -- the halves
+where they belong and the binary32 copy beside them, which is a correct build
+answering `1a26d24d33b8957b` -- it reads 0.838 s. So adding a 4.2-megabyte
+binary32 store to that kernel costs about five milliseconds, where removing a
+2.1-megabyte half store is supposed to save twenty-nine.
+
+**And here is the answer.** In the probe, nothing writes the normalization's
+region of the half buffer at all -- and the three projections and the two
+arms read it. So the region was changed to be written once a row: five
+hundred and twelve stores of two bytes rather than a million, every page
+touched and almost nothing put in it.
+
+| | 1419-token device prompt |
+| --- | ---: |
+| as it is, the whole region written | 0.838 s |
+| one store a row, and the binary32 copy | 0.847 s |
+| no store at all, and the binary32 copy | **0.810 s** |
+
+Writing a megabyte into the region and writing a kilobyte into it cost the
+same. Writing *nothing* into it is what is cheap. **The twenty-nine
+milliseconds is not the store. It is the reads downstream of a region that
+has been written, against reads of one that has not** -- the probe replaced a
+real dependency with reads of memory nobody had touched, and what it measured
+was the normalization's output existing.
+
+That also explains the combining step's result: its region is written by the
+tile products as well, so skipping its own write leaves the region dirty and
+there is nothing to save.
+
+So there is no thirty-one milliseconds and there never was. The sections
+above that call it unexplained were explaining an artefact, and the six doors
+they closed were closed on an empty room. What is worth keeping is the rule:
+**a probe that removes a write must be asked what reads it**, and a saving
+that appears when a buffer stops being written is a saving in the readers.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same

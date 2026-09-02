@@ -5980,6 +5980,63 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, the probe behind three entries was invalid, and there is no
+# thirty-one milliseconds.
+#
+#   Three entries have chased a store: the normalization writes its answer
+#   into the half-precision buffer, and writing it into the result buffer
+#   instead reads twenty-nine to thirty-one milliseconds faster. Six
+#   explanations have been eliminated -- the memory kind at both ends, the
+#   size of the buffer, the width of the store, what is in it, the barriers.
+#   The seventh test was of the probe itself, and it is the one that should
+#   have been done first.
+#
+#   First, is the effect general? The combining step writes the same buffer
+#   the same way. Given the same treatment -- its answer to the result
+#   buffer instead -- the long device prompt reads 0.829 s against a
+#   baseline of 0.828 to 0.848. Nothing, where the same change to the
+#   normalization is worth twenty-nine milliseconds.
+#
+#   Second, what does the write actually cost? Made to write both -- the
+#   halves where they belong and the binary32 copy beside them, which is a
+#   correct build answering 1a26d24d33b8957b -- it reads 0.838. So adding a
+#   4.2-megabyte binary32 store to that kernel costs about five
+#   milliseconds, where removing a 2.1-megabyte half store is supposed to
+#   save twenty-nine.
+#
+#   Third, and this is the answer. In the probe, nothing writes the
+#   normalization's region of the half buffer at all, and the three
+#   projections and the two arms read it. So the region was changed to be
+#   written once a row -- five hundred and twelve stores of two bytes rather
+#   than a million, every page of it touched and almost nothing put in it:
+#
+#     as it is, the whole region written    0.838 s
+#     one store a row, and the binary32     0.847
+#     no store at all, and the binary32     0.810
+#
+#   Writing a megabyte into the region and writing a kilobyte into it cost
+#   the same. Writing nothing into it is what is cheap. **The twenty-nine
+#   milliseconds is not the store; it is the reads downstream of a region
+#   that has been written, against reads of one that has not.** The probe
+#   replaced a real dependency with reads of memory nobody had touched, and
+#   what it measured was the normalization's output existing.
+#
+#   Which also explains the combining step's result: its region is written
+#   by the tile products as well, so skipping its own write leaves the
+#   region dirty and there is nothing to save.
+#
+#   So there is no thirty-one milliseconds and there never was. The entries
+#   above that call it unexplained were explaining an artefact, and the six
+#   doors they closed were closed on an empty room. What is worth keeping is
+#   the rule: a probe that removes a write must be asked what reads it, and
+#   a saving that appears when a buffer stops being written is a saving in
+#   the readers.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

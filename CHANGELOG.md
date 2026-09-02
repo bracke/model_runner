@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The probe was the bug: there is no thirty-one milliseconds.** Three
+  entries chased a store that appeared to cost 29–31 ms, closing six doors on
+  it. The seventh test was of the probe itself. Made to write *both* the
+  halves and the binary32 copy — a correct build — the kernel reads 0.838 s,
+  so adding a 4.2 MB store costs ~5 ms where removing a 2.1 MB one was
+  supposed to save 29. And writing the region **once a row** — 512 stores
+  instead of a million — reads 0.847, while writing nothing reads 0.810.
+
+  Writing a megabyte into the region and a kilobyte into it cost the same;
+  writing nothing is what is cheap. **The saving was in the readers, not the
+  store**: the probe replaced a real dependency with reads of memory nobody
+  had written. The combining step shows no effect for the same reason — its
+  region is written by the tile products anyway.
+
+  The rule worth keeping: a probe that removes a write must be asked what
+  reads it.
+
 - **The size argument refuted, and the instruction read.** Cutting the batch
   to a quarter takes the half-precision buffer from 17 MB to 4.3 — a
   fourfold cut in the working set — and the store penalty is **29 ms against
